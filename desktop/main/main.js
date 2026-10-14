@@ -864,39 +864,90 @@ async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-req
       applyApprovalDecision(decision, 'shell', { command }, conversationId);
     }
   }
-  // Seatbelt 沙箱（M3）：workspace-write/read-only 包裹执行，full-access 直跑
+  // 三平台 OS 级沙箱（2026-10）：macOS Seatbelt / Linux bubblewrap / Windows 受限用户。
+  // 方案对齐 OpenAI Codex（各后端实现见 main/sandbox*.js 顶部注释）。
   // P0-B fail-safe：调用方未显式指定策略时，有项目目录至少 workspace-write，无目录则 read-only。
   // 此前默认 full-access——任何漏传 sandboxPolicy 的新调用链（定时任务/CUA/skill 自造工具）都会无隔离直跑。
   const policy = sandboxPolicy || (cwd ? 'workspace-write' : 'read-only');
+  // sb 仍是 macOS Seatbelt 的专用判定（shouldSandbox 历史上只管 darwin，保留语义不扩散）
   const sb = sandbox.shouldSandbox(policy, cwd);
+  // 三平台各自的「为何没能 OS 级沙箱」原因，用于日志自解释。
+  // Linux 走统一分发读取 bwrap 真实原因；Windows 的就绪态是异步的，此处只能给静态提示。
+  const fallbackReason = process.platform === 'linux'
+    ? (sandbox.osSandboxUsable(policy, cwd).reason || 'bubblewrap 不可用')
+    : (sb.reason || (process.platform === 'win32' ? 'Windows 受限用户沙箱未就绪' : 'seatbelt 不可用'));
+
+  // 守卫 + 直跑：无 OS 级沙箱（或沙箱未就绪/执行失败）时的统一落点。
+  // 守卫先于执行，命中即拒，审批不可绕过。
+  const runFallback = (resolve) => {
+    if (policy !== 'full-access') {
+      // 已确认走到这里 = 本次没有 OS 级沙箱兜底，显式传 backendAvail=false，避免再走平台推断
+      const guard = sandbox.checkCommandGuard(policy, command, process.platform, false, false);
+      if (guard.blocked) {
+        audit('shell', command, guard.reason, 'blocked');
+        resolve({ stdout: '', stderr: guard.reason, exitCode: -1, error: guard.reason, blocked: true });
+        return;
+      }
+      console.warn(`[sandbox] 未沙箱执行（${fallbackReason}）policy=${policy}`);
+    }
+    exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
+      const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error) };
+      audit('shell', command, `exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+      resolve(result);
+    });
+  };
+
+  // ── macOS：Seatbelt ──
   if (sb.use) {
     const profile = sandbox.buildSeatbeltProfile(policy, cwd);
     return new Promise((resolve) => {
       execFile(sandbox.SANDBOX_EXEC, ['-p', profile, '/bin/zsh', '-c', command],
         { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-          const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true };
+          const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'seatbelt' };
           audit('shell', command, `sandbox=${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
           resolve(result);
         });
     });
   }
-  if (policy !== 'full-access') {
-    // P0-F 跨平台兜底：无 OS 级沙箱（非 macOS 或 sandbox-exec 缺失）且策略非 full-access 时，
-    // 危险命令硬拦截。审批不可绕过此守卫（守卫先于审批之后的执行层，命中即拒）。
-    const guard = sandbox.checkCommandGuard(policy, command, process.platform, false);
-    if (guard.blocked) {
-      audit('shell', command, guard.reason, 'blocked');
-      return { stdout: '', stderr: guard.reason, exitCode: -1, error: guard.reason, blocked: true };
+
+  // ── Linux：bubblewrap（ro-bind 全盘 + unshare-all 断网 + seccomp + 项目目录唯一可写）──
+  if (process.platform === 'linux' && policy !== 'full-access') {
+    const built = sandbox.linuxBackend.buildBwrapExec(policy, cwd, command, '/bin/sh');
+    if (built.argv.length) {
+      return new Promise((resolve) => {
+        execFile(built.argv[0], built.argv.slice(1),
+          { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
+            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'bubblewrap' };
+            audit('shell', command, `sandbox=bubblewrap/${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+            resolve(result);
+          });
+      });
     }
-    console.warn(`[sandbox] 未沙箱执行（${sb.reason}）policy=${policy}`);
+    console.warn(`[sandbox] Linux 未走 bubblewrap（${built.reason}），落到命令守卫`);
   }
-  return new Promise((resolve) => {
-    exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-      const result = { stdout: stdout.slice(0, 50000), stderr: stderr.slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error) };
-      audit('shell', command, `exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-      resolve(result);
+
+  // ── Windows：受限专用用户（需一次性管理员设置；未就绪/失败则落到命令守卫）──
+  if (process.platform === 'win32' && policy !== 'full-access') {
+    return new Promise((resolve) => {
+      sandbox.windowsBackend.windowsSandboxReady().then(async (st) => {
+        if (st.ready) {
+          const r = await sandbox.windowsBackend.execAsSandboxUser(command, cwd);
+          if (r.ok) {
+            audit('shell', command, `sandbox=windows-restricted-user/${policy} ok=true`, neededApproval ? 'approved' : 'auto');
+            // schtasks 的 stdout 不易捕获，故以回执形式返回（命令本身的输出由任务体承载）
+            resolve({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: 0, sandboxed: true, sandboxBackend: 'windows-restricted-user' });
+            return;
+          }
+          console.warn(`[sandbox] Windows 受限用户执行失败（${r.error}），落到命令守卫`);
+        } else {
+          console.warn(`[sandbox] Windows 沙箱未就绪（${st.reason}），落到命令守卫`);
+        }
+        runFallback(resolve);
+      });
     });
-  });
+  }
+
+  return new Promise((resolve) => runFallback(resolve));
 }
 ipcMain.handle('tool:shell', (_, payload) => toolShell(payload));
 
@@ -2019,11 +2070,23 @@ ipcMain.handle('mcp:disconnect', async (_, { name }) => {
 //  P0-F：沙箱状态查询（UI 明示隔离能力与兜底状态）
 // ═══════════════════════════════════════════
 ipcMain.handle('sandbox:status', async () => {
-  const available = sandbox.sandboxAvailable();
+  // 2026-10：三平台均已有 OS 级后端，状态不能再只看 macOS Seatbelt。
+  // Windows 的就绪态是异步的（要 net user 查专用用户），在此统一异步确认，
+  // 让 UI 能显示「为什么没隔离 + 下一步怎么做」，而不是一句笼统的「你的系统不支持」。
+  const detected = sandbox.detectBackend();
+  let available = detected.backend !== 'none';
+  let hint = detected.reason;
+  if (detected.backend === 'windows-restricted-user') {
+    const st = await sandbox.windowsBackend.windowsSandboxReady();
+    available = st.ready;
+    hint = st.reason;
+  }
   return {
     ok: true,
     platform: process.platform,
-    available, // OS 级沙箱（仅 macOS Seatbelt）
+    available,            // OS 级沙箱是否就绪（三平台：seatbelt / bubblewrap / windows-restricted-user）
+    backend: detected.backend,
+    hint,                 // 未就绪时的可行动提示（如「apt install bubblewrap」）
     fallbackActive: !available, // 无 OS 级沙箱时启用命令级硬拦截兜底
   };
 });

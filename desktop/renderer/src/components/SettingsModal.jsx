@@ -64,6 +64,15 @@ const MCP_PRESETS = [
 
 const SANDBOX_OPTIONS = SANDBOX_MODES;
 
+// OS 级沙箱后端 → 中文名。用于未就绪时如实告诉用户「本平台本该有哪种隔离」，
+// 而不是笼统地说「你的系统不支持」（三平台后端清单见 main/sandbox.js 的 detectBackend）
+const SANDBOX_BACKEND_LABEL = {
+  seatbelt: 'macOS Seatbelt',
+  bubblewrap: 'Linux bubblewrap',
+  'windows-restricted-user': 'Windows 受限专用用户',
+  none: '当前平台无可用后端',
+};
+
 const APPROVAL_OPTIONS = APPROVAL_MODES;
 
 export default function SettingsModal({
@@ -295,7 +304,8 @@ export default function SettingsModal({
               {sandboxStatus && !sandboxStatus.available && (
                 <div className="mt-3">
                   <InlineAlert type="warn">
-                    <p className="font-medium">当前系统无 OS 级沙箱（仅 macOS 提供 Seatbelt 隔离）</p>
+                    <p className="font-medium">当前系统未就绪 OS 级沙箱（{SANDBOX_BACKEND_LABEL[sandboxStatus?.backend] || '未知后端'}）</p>
+                    {sandboxStatus?.hint && <p className="mt-1 text-text2">{sandboxStatus.hint}</p>}
                     <p className="mt-1 text-text2">已启用命令级硬拦截兜底：危险命令（递归删除、sudo、git push、reset --hard、管道执行远程脚本等）会被直接拒绝，审批通过也无法绕过。这并非 OS 级隔离，请勿在此环境执行不受控代码。</p>
                   </InlineAlert>
                 </div>

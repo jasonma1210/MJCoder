@@ -1,22 +1,42 @@
 const db = require('./index');
 
-// 增量迁移：每个 migration 幂等（IF NOT EXISTS / OR REPLACE），执行记录落 schema_migrations
+// ── P1-2 修复：PostgreSQL 不支持 `ADD COLUMN IF NOT EXISTS` ──
+// 事故背景：本文件原先全部写成 `ALTER TABLE x ADD COLUMN IF NOT EXISTS y ...`。
+// 该语法是 SQLite / MySQL 的方言，**PostgreSQL 并不支持**——在 PG 上首次执行
+// 迁移就会抛 syntax error，而 db/init.js 对该异常执行 process.exit(1)，
+// 结果是「重复启动即崩溃」：库可能已建好一半，但迁移永远报错，服务起不来。
+// 且它「看起来幂等」实则完全不可执行，是最危险的一类假幂等。
+//
+// 正解：先查 information_schema.columns 判断列是否已存在，再决定是否 ALTER。
+// 这样既保持「可重复执行」的幂等语义，又是 PG 原生支持的写法。
+async function addColumnIfMissing(table, column, definition) {
+  const exists = await db.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  if (exists && exists.rows && exists.rows.length > 0) return false; // 已存在，跳过
+  await db.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
+}
+
+// 增量迁移：每个 migration 幂等（列存在性检查 / CREATE IF NOT EXISTS），执行记录落 schema_migrations
 const MIGRATIONS = [
   {
     id: '001_role_and_thread_columns',
     up: async () => {
-      await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'`);
-      await db.query(`ALTER TABLE threads ADD COLUMN IF NOT EXISTS sandbox_policy VARCHAR(30) DEFAULT 'workspace-write'`);
-      await db.query(`ALTER TABLE threads ADD COLUMN IF NOT EXISTS approval_mode VARCHAR(30) DEFAULT 'on-request'`);
-      await db.query(`ALTER TABLE threads ADD COLUMN IF NOT EXISTS git_branch VARCHAR(255)`);
-      await db.query(`ALTER TABLE threads ADD COLUMN IF NOT EXISTS git_sha VARCHAR(64)`);
+      await addColumnIfMissing('users', 'role', `VARCHAR(20) DEFAULT 'user'`);
+      await addColumnIfMissing('threads', 'sandbox_policy', `VARCHAR(30) DEFAULT 'workspace-write'`);
+      await addColumnIfMissing('threads', 'approval_mode', `VARCHAR(30) DEFAULT 'on-request'`);
+      await addColumnIfMissing('threads', 'git_branch', `VARCHAR(255)`);
+      await addColumnIfMissing('threads', 'git_sha', `VARCHAR(64)`);
     },
   },
   {
     id: '002_scheduled_task_runs',
     up: async () => {
-      await db.query(`ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS last_status VARCHAR(20)`);
-      await db.query(`ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS last_result TEXT`);
+      await addColumnIfMissing('scheduled_tasks', 'last_status', `VARCHAR(20)`);
+      await addColumnIfMissing('scheduled_tasks', 'last_result', `TEXT`);
       await db.query(`CREATE TABLE IF NOT EXISTS scheduled_task_runs (
         id SERIAL PRIMARY KEY,
         task_id INTEGER REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
@@ -49,13 +69,13 @@ const MIGRATIONS = [
     id: '004_cloud_tasks',
     up: async () => {
       // 云端委派：任务侧标记执行模式与容器镜像
-      await db.query(`ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) DEFAULT 'local'`);
-      await db.query(`ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS container_image TEXT`);
+      await addColumnIfMissing('scheduled_tasks', 'execution_mode', `VARCHAR(20) DEFAULT 'local'`);
+      await addColumnIfMissing('scheduled_tasks', 'container_image', `TEXT`);
       // 云端运行侧：细粒度状态机 + 沙箱标识 + diff 链接 + 结构化报告
-      await db.query(`ALTER TABLE scheduled_task_runs ADD COLUMN IF NOT EXISTS state VARCHAR(20)`);
-      await db.query(`ALTER TABLE scheduled_task_runs ADD COLUMN IF NOT EXISTS sandbox_id TEXT`);
-      await db.query(`ALTER TABLE scheduled_task_runs ADD COLUMN IF NOT EXISTS diff_url TEXT`);
-      await db.query(`ALTER TABLE scheduled_task_runs ADD COLUMN IF NOT EXISTS report JSONB`);
+      await addColumnIfMissing('scheduled_task_runs', 'state', `VARCHAR(20)`);
+      await addColumnIfMissing('scheduled_task_runs', 'sandbox_id', `TEXT`);
+      await addColumnIfMissing('scheduled_task_runs', 'diff_url', `TEXT`);
+      await addColumnIfMissing('scheduled_task_runs', 'report', `JSONB`);
       await db.query(`CREATE INDEX IF NOT EXISTS idx_task_runs_state ON scheduled_task_runs(state)`);
     },
   },

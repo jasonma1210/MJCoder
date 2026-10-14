@@ -31,18 +31,47 @@
 | 沙箱隔离 | 见下方分档 | 分平台 |
 | 本地审计日志 | 工具调用、插件安装、审批决策全程落盘，可追溯 | 全平台 |
 
-### 沙箱能力按平台分档（重要）
+### 沙箱能力按平台分档
 
-| 平台 | 隔离级别 | 实现 |
-|---|---|---|
-| macOS | **操作系统级** | Seatbelt（`sandbox-exec`）profile 隔离，按 read-only / workspace-write / full-access 三档限制文件系统访问 |
-| Windows / Linux | **命令级硬拦截** | 无 OS 级隔离。通过 30 条危险命令模式（含管道远程执行、`rm` 长选项、凭证外泄等）在执行前硬拦截；审批不可绕过、不可豁免 |
+三平台**均已接通操作系统级隔离**，实现对齐 OpenAI Codex 的公开方案。命令黑名单不再是主力，
+而是 OS 沙箱**不可用时的兜底**——OS 级隔离一旦生效，黑名单自动让位，避免误伤
+`rm -rf ./build` 这类项目内的合理命令。
 
-也就是说：**在 Windows / Linux 上，本项目的沙箱是「命令黑名单 + 审批」，不是操作系统级容器隔离。**
-如果你需要 OS 级隔离，请仅在 macOS 上使用，或在自行评估风险后使用。
+| 平台 | 隔离级别 | 实现 | 就绪条件 |
+|---|---|---|---|
+| macOS | **操作系统级** | Seatbelt（`sandbox-exec` + 生成 profile）：`deny default` + curated 平台策略 + 按 read-only / workspace-write / full-access 三档限制文件写入，全档禁网 | 开箱即用（`≥10.15`） |
+| Linux | **操作系统级** | bubblewrap（`bwrap`）：`--ro-bind / /` 全盘只读、仅项目目录 `--bind` 可写、`--unshare-all`（含 net/pid/ipc/uts/cgroup）、`--tmpfs /tmp`、`--die-with-parent`、`--seccomp` | 装 sandbox：`apt install bubblewrap` / `dnf install bubblewrap` |
+| Windows | **操作系统级** | 受限令牌 + 专用本地用户 + 定向 ACL + 出站防火墙：以 `MJCodeSandboxOffline` 低权用户身份执行（`schtasks /RL LIMITED`），防火墙阻断其全部出网 | **需一次性管理员设置**（见下） |
 
-跨平台 OS 级沙箱（Linux Landlock / Windows AppContainer）在路线图上，尚未实现。
-相关设计取舍记录在 `desktop/main/sandbox.js` 顶部注释中。
+未满足就绪条件时（未装 bwrap、未完成 Windows 设置、容器内禁用 user namespace 等），
+自动降级为**命令级硬拦截**：30 条危险命令模式（含管道远程执行、`rm` 长选项、凭证外泄等）
+在执行前拦截，审批不可绕过、不可豁免。降级原因会打印到日志，形如
+`[sandbox] 未沙箱执行（bwrap 未安装…）policy=workspace-write`。
+
+#### Windows 一次性管理员设置
+
+Windows 后端需要创建专用低权用户与防火墙规则，**必须管理员权限**执行。
+设置命令全部先由 `windowsSandboxPlan()` 生成供人工审计，再逐条执行，任何一步失败即回滚：
+
+```powershell
+# 以管理员身份运行；密码由程序随机生成并经 DPAPI 加密保存，命令行与日志均不落明文
+net user MJCodeSandboxOffline <RANDOM_PASSWORD> /add /passwordchg:no /passwordreq:yes /active:yes
+net localgroup Users MJCodeSandboxOffline /delete
+netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out action=block user=MJCodeSandboxOffline enable=yes
+```
+
+回滚：`netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`、随后删除该用户。
+
+#### 已如实记录的已知局限
+
+- **Windows**：无法阻止对「Everyone SID 已有写权限」目录的写入（world-writable 文件夹）。
+  缓解方式为 workspace-write 档只把项目目录设为可写，其余一律只读。这与 Codex 公开承认的局限相同。
+- **Linux**：容器内（Docker 默认配置）可能禁用 unprivileged user namespace，此时 bwrap 存在也不可用；
+  本项目只做二进制存在性静态探测，运行时失败由 exec 错误路径捕获并降级。
+- **三平台共通**：`full-access` 档按设计不套沙箱、不走命令守卫（它是显式 opt-in，默认策略已被 fail-safe 兜住）。
+
+各后端的设计依据与取舍逐条记录在 `desktop/main/sandbox.js`、`sandboxLinux.js`、`sandboxWindows.js`
+顶部注释中；跨平台行为有 `desktop/test/sandbox-crossplatform.test.js`（61 项断言）守护。
 
 ## 模块构成
 

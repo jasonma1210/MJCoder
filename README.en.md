@@ -32,18 +32,54 @@ which structurally prevents the two from drifting apart.
 | Sandbox isolation | See tiering below | Per-platform |
 | Local audit log | Tool calls, plugin installs, and approval decisions are all persisted and traceable | All |
 
-### Sandbox capability by platform (important)
+### Sandbox capability by platform
 
-| Platform | Isolation level | Implementation |
-|---|---|---|
-| macOS | **OS-level** | Seatbelt (`sandbox-exec`) profile isolation, restricting filesystem access at three levels: read-only / workspace-write / full-access |
-| Windows / Linux | **Command-level hard blocking** | No OS-level isolation. 30 dangerous-command patterns (including piped remote execution, `rm` long options, credential exfiltration, etc.) are hard-blocked before execution; approval cannot be bypassed or exempted |
+**All three platforms now have OS-level isolation**, aligned with OpenAI Codex's published design.
+The command blacklist is no longer the primary mechanism — it is the *fallback* when no OS sandbox is
+available. Once OS-level isolation is active the blacklist steps aside, so legitimate in-project
+commands such as `rm -rf ./build` are not falsely rejected.
 
-In other words: **on Windows / Linux this project's sandbox is a "command blacklist + approval", not an OS-level container isolation.**
-If you need OS-level isolation, use it on macOS only, or proceed after assessing the risk yourself.
+| Platform | Isolation level | Implementation | Ready when |
+|---|---|---|---|
+| macOS | **OS-level** | Seatbelt (`sandbox-exec` + generated profile): `deny default` + curated macOS platform policy, three tiers (read-only / workspace-write / full-access) restricting writes, network denied at every tier | Works out of the box (`>= 10.15`) |
+| Linux | **OS-level** | bubblewrap (`bwrap`): `--ro-bind / /` makes the whole disk read-only, only the project dir is `--bind`ed writable, `--unshare-all` (net/pid/ipc/uts/cgroup), `--tmpfs /tmp`, `--die-with-parent`, `--seccomp` | Install it: `apt install bubblewrap` / `dnf install bubblewrap` |
+| Windows | **OS-level** | Restricted token + dedicated local user + targeted ACL + outbound firewall: commands run as the low-privilege `MJCodeSandboxOffline` user (`schtasks /RL LIMITED`), with all outbound traffic blocked by firewall rule | **Requires a one-time admin setup** (see below) |
 
-Cross-platform OS-level sandboxing (Linux Landlock / Windows AppContainer) is on the roadmap but not yet implemented.
-The relevant design trade-offs are documented at the top of `desktop/main/sandbox.js`.
+When the prerequisites are not met (bwrap missing, Windows setup not done, user namespaces disabled in
+a container, etc.), it automatically degrades to **command-level hard blocking**: 30 dangerous-command
+patterns are blocked before execution, and approval cannot bypass or exempt them. The reason is logged,
+e.g. `[sandbox] 未沙箱执行（bwrap 未安装…）policy=workspace-write`.
+
+#### One-time Windows admin setup
+
+The Windows backend must create a dedicated low-privilege user and firewall rules, which
+**requires administrator rights**. All setup commands are first produced by `windowsSandboxPlan()`
+for human review, then executed one by one; any failing step triggers rollback:
+
+```powershell
+# Run as Administrator. The password is randomly generated and stored DPAPI-encrypted —
+# it never appears in plaintext in the command line or logs.
+net user MJCodeSandboxOffline <RANDOM_PASSWORD> /add /passwordchg:no /passwordreq:yes /active:yes
+net localgroup Users MJCodeSandboxOffline /delete
+netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out action=block user=MJCodeSandboxOffline enable=yes
+```
+
+Rollback: `netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`, then delete the user.
+
+#### Known limitations, honestly documented
+
+- **Windows**: writes to directories that grant write access to the *Everyone* SID cannot be blocked
+  (world-writable folders). Mitigation: the workspace-write tier makes only the project directory
+  writable and everything else read-only. This is the same limitation Codex acknowledges publicly.
+- **Linux**: inside a container (default Docker configuration) unprivileged user namespaces may be
+  disabled, in which case bwrap exists but cannot run. This project only probes for the binary's
+  presence; runtime failures are caught by the exec error path and degraded.
+- **All platforms**: the `full-access` tier intentionally applies neither sandbox nor command guard
+  (it is explicit opt-in; the default policy is already fail-closed).
+
+Design rationale and trade-offs for each backend are documented in the header comments of
+`desktop/main/sandbox.js`, `sandboxLinux.js`, and `sandboxWindows.js`; cross-platform behavior is
+guarded by `desktop/test/sandbox-crossplatform.test.js` (61 assertions).
 
 ## Modules
 
