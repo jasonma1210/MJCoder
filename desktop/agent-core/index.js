@@ -277,6 +277,29 @@ const SUBAGENT_TOOL_NAMES = ['read_file', 'list_dir', 'grep', 'glob', 'git_statu
 const SUBAGENT_TOOLS = BASE_TOOLS.filter((t) => SUBAGENT_TOOL_NAMES.includes(t.function.name));
 const SUBAGENT_DEFAULT_BUDGET = 50000;
 
+// 子代理提前停止时的可行动提示（给父代理的模型看，不是给用户看的）。
+// 此前的失败模式：子代理被轮次/预算熔断后，finalText 里带着「发送『继续』让我接着执行」
+// ——那是对用户说的，对子代理毫无意义（用户无法继续一个不存在的会话），
+// 父代理拿到后往往原样重试同一目标，再耗尽一次，白烧两倍 token。
+function stoppedEarlyHint(budgetKind, tokenExhausted, objective) {
+  const target = String(objective || '').slice(0, 80);
+  if (tokenExhausted || budgetKind === 'tokens') {
+    return `子代理因 token 预算耗尽而停止（目标：${target}）。不要用同一目标重试：`
+      + '请把目标拆成更小、更具体的一步（例如只查某个文件/某个符号），或改由你自己直接用只读工具完成。';
+  }
+  if (budgetKind === 'rounds') {
+    return `子代理因执行轮次用尽而停止（目标：${target}）。通常是目标太大或工具反复失败：`
+      + '请缩小目标范围（指明具体文件/目录），或先自己 read_file 确认路径再派发。';
+  }
+  if (budgetKind === 'repeat') {
+    return `子代理因工具连续失败而停止（目标：${target}）。请先自己验证相关路径/命令是否可用，再决定是否重新派发。`;
+  }
+  if (budgetKind === 'aborted') {
+    return `子代理被中止（目标：${target}）。请检查是否因上层停止信号所致，再决定是否重新派发。`;
+  }
+  return `子代理提前停止（目标：${target}）。请先自行验证目标是否可达，再决定下一步。`;
+}
+
 // token 预算闸的自动压缩救援次数上限（每次救援清零窗口重新计数）
 // 真机复盘：单次救援对文件密集型审查任务不够（逐文件读源码单窗口仍打满），
 // 放宽到 3 次（累计消耗上限 ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
@@ -1089,6 +1112,9 @@ export async function runAgent({
             const subCtl = new AbortController();
             let subTokens = 0;
             let exhausted = false;
+            // 子代理终态快照：onBudget 的最后一次上报带 running:false + budgetKind，
+            // 据此把「为什么停」如实回传给父代理（否则父代理只会盲目重试同一目标）
+            const subFinal = { budgetKind: 'normal', aborted: false, round: 0, windowSpent: 0 };
             const parentContext = convo
               .filter((m) => m.role !== 'system')
               .slice(-6)
@@ -1108,22 +1134,53 @@ export async function runAgent({
               toolHandlers,
               onMessage: (m) => {
                 if (m.role === 'assistant') {
-                  subTokens += (m.tokens_input || 0) + (m.tokens_output || 0);
+                  // 2026-10-15 修复：此前只累计 provider 回传的 usage——
+                  // 部分兼容端点流式响应不带 usage（stream_options 被忽略），
+                  // 于是 subTokens 恒为 0：预算闸形同虚设，tokens_used 也恒 0，
+                  // 上层看到的正是「0 token 就耗尽/毫无消耗」的假象。
+                  // 兜底：无 usage 时按内容长度估算（≈4 字符/token），保证闸始终有效。
+                  const reported = (m.tokens_input || 0) + (m.tokens_output || 0);
+                  const estimated = reported > 0 ? 0
+                    : Math.ceil(String(m.content || '').length / 4)
+                      + (Array.isArray(m.tool_calls) ? m.tool_calls.length * 60 : 0);
+                  subTokens += reported + estimated;
                   if (subTokens > budget && !exhausted) {
                     exhausted = true;
                     subCtl.abort();
                   }
                 }
               },
-              onDone: () => {},
+              onBudget: (s) => {
+                if (s && s.running === false) {
+                  subFinal.budgetKind = s.budgetKind || 'normal';
+                  subFinal.round = s.round || 0;
+                  subFinal.windowSpent = s.windowSpent || 0;
+                }
+              },
+              onDone: (ft, usage, aborted) => { subFinal.aborted = !!aborted; },
             });
+            const stoppedEarly = exhausted || subFinal.budgetKind !== 'normal' || subFinal.aborted;
+            // 失败模式归一：自家 token 闸 > 引擎熔断种类 > 被中止
+            const stopKind = exhausted ? 'tokens'
+              : (subFinal.budgetKind !== 'normal' ? subFinal.budgetKind : (subFinal.aborted ? 'aborted' : 'normal'));
             toolResult = {
               ok: true,
               objective: args.objective,
               task_type: args.task_type || 'explore',
               tokens_used: subTokens,
-              budget_exhausted: exhausted,
+              // 语义拆分：只有 token 预算真正耗尽才是 budget_exhausted；
+              // 轮次耗尽/重复失败熔断/被中止是不同的失败模式，混在同一个字段里
+              // 会让父代理（和用户）误判成「token 花完了」
+              budget_exhausted: stopKind === 'tokens',
+              rounds_exhausted: stopKind === 'rounds',
+              repeat_stopped: stopKind === 'repeat',
+              aborted: stopKind === 'aborted',
+              budget_kind: stopKind,
+              rounds_used: subFinal.round,
               result: subResult || '（子代理未产出结论）',
+              ...(stoppedEarly ? {
+                hint: stoppedEarlyHint(stopKind, stopKind === 'tokens', args.objective),
+              } : {}),
             };
             break;
           }

@@ -1119,23 +1119,106 @@ async function executeWriteTool(toolName, { path: p, content, search, replace, p
   }
   // apply_patch：stdin 送入 patch，在项目 cwd 执行
   if (!patch || typeof patch !== 'string') throw new Error('patch 内容为空');
-  return new Promise((resolve) => {
-    const child = spawn('patch', ['-p1', '--no-backup-if-mismatch'], { cwd: cwd || process.cwd() });
+  // 2026-10-15 加固（三类失败模式全部实测复现后修复）：
+  //   · --batch                 永不交互提问。此前 "Reversed (or previously applied)
+  //                             patch detected! Assume -R? [n]" 会等 stdin 回答，
+  //                             而 stdin 是补丁本身（写完即 end）→ EOF 异常或挂死
+  //   · --forward               已应用过的补丁跳过而非报错（重复调用幂等）
+  //   · --no-backup-if-mismatch 失败时不落 .orig / .ouD0ErF 备份
+  //   · -r /dev/null            失败不再写 app.js.rej —— 此前会在用户项目里留下
+  //                             拒绝文件，污染工作区、混进 git status 干扰后续提交
+  const runPatchProcess = (extraArgs) => new Promise((resolve) => {
+    const child = spawn('patch', ['-p1', '--batch', '--forward', '--no-backup-if-mismatch', '-r', '/dev/null', ...extraArgs], { cwd: cwd || process.cwd() });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     const timer = setTimeout(() => {
       child.kill();
-      resolve({ stdout: stdout.slice(0, 10000), stderr: 'patch 执行超时', error: 'timeout' });
+      resolve({ stdout: stdout.slice(0, 10000), stderr: 'patch 执行超时', error: 'timeout', exitCode: -1 });
     }, 30000);
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 5000), exitCode: code ?? 0, error: code ? `patch exit ${code}` : null });
+      // 已应用过的补丁：--forward 会跳过（hunk ignored），语义上应视为幂等成功。
+      // 若当失败返回，模型会反复重试同一个补丁直到轮次耗尽（repeat 熔断）。
+      // 注意：GNU patch 的「Reversed / hunk ignored」提示走 **stdout** 而非 stderr（实测），
+      // 所以两个流都要查。
+      const out = `${stdout}\n${stderr}`;
+      if (/previously applied|hunk ignored/i.test(out)) {
+        resolve({ stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 5000), exitCode: 0, alreadyApplied: true, error: null });
+        return;
+      }
+      resolve({
+        stdout: stdout.slice(0, 10000),
+        stderr: stderr.slice(0, 5000),
+        exitCode: code ?? 0,
+        error: code ? `patch exit ${code}` : null,
+      });
     });
     child.stdin.write(patch);
     child.stdin.end();
   });
+
+  const result = await runPatchProcess([]);
+  if (result.exitCode && !result.alreadyApplied) {
+    // 二次机会：-l（忽略空白差异）。补丁失败的头号真实原因是空白对不上
+    //（缩进空格数/制表符/行尾空白），严格模式拒绝而宽松模式能命中。
+    const retry = await runPatchProcess(['-l']);
+    if (!retry.exitCode || retry.alreadyApplied) {
+      return { ...retry, lenientWhitespace: true, note: '严格模式应用失败后已按宽松空白匹配重试成功。' };
+    }
+    // 两次都失败：必须可行动（与 editFile 未命中诊断同一原则）——
+    // 回传目标绝对路径 + 当前内容（截断）+ 最近锚点行，模型据此改用
+    // edit_file 精确替换或重新生成补丁，而不是原样重试同一 patch。
+    const target = patchTargetPath(patch);
+    const abs = target ? resolveToolPath(target, cwd) : null;
+    let currentContent = null;
+    let nearest = null;
+    try {
+      if (abs && fs.existsSync(abs)) {
+        currentContent = fs.readFileSync(abs, 'utf8');
+        const anchor = patchAnchorLine(patch);
+        if (anchor) nearest = nearestContext(currentContent, anchor);
+      }
+    } catch (e) { /* 读不到就不附加，不掩盖原始错误 */ }
+    return {
+      ...retry,
+      error: `patch exit ${retry.exitCode}（补丁上下文与文件当前内容不一致，未做任何修改）`,
+      target: abs || target || undefined,
+      hint: '不要原样重试同一补丁。请先 read_file 确认现状（下方 currentContent），'
+        + '改用 edit_file 精确替换，或基于当前内容重新生成补丁。',
+      currentContent: currentContent ? currentContent.slice(0, 4000) : undefined,
+      nearest: nearest || undefined,
+    };
+  }
+  return result;
+}
+
+// 从补丁解析目标路径（+++ b/ 行）：-p1 语义去一层前缀、去时间戳
+function patchTargetPath(patch) {
+  const line = String(patch || '').split('\n').find((l) => l.startsWith('+++ '));
+  if (!line) return null;
+  let p = line.slice(4).trim();
+  const tab = p.indexOf('\t');
+  if (tab >= 0) p = p.slice(0, tab);
+  p = p.replace(/^[ab]\//, '');
+  return p || null;
+}
+
+// 首个 hunk 的锚点行：取第一条上下文/删除行的内容（文件中应存在），供 nearestContext 定位
+function patchAnchorLine(patch) {
+  const lines = String(patch || '').split('\n');
+  const hunkIdx = lines.findIndex((l) => l.startsWith('@@'));
+  if (hunkIdx < 0) return null;
+  for (let i = hunkIdx + 1; i < lines.length; i += 1) {
+    const l = lines[i];
+    if (l.startsWith('@@')) break;
+    if (l.startsWith(' ') || l.startsWith('-')) {
+      const t = l.slice(1).trim();
+      if (t) return t;
+    }
+  }
+  return null;
 }
 
 // ── editFile 未命中诊断 ──
