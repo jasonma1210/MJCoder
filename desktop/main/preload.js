@@ -197,6 +197,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   memoryBgTasks: (opts) => ipcRenderer.invoke('memory:bgTasks', opts),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
   serverBase: (payload) => ipcRenderer.invoke('local:server/base', payload),
+  // 网络插件发现（市场弹窗/调试用；对话内安装走 agent 工具通道）
+  marketSearchNetwork: (payload) => ipcRenderer.invoke('market:searchNetwork', payload),
   // Phase 3-1：断点持久化（「继续」时取回并清除；保存由主进程在熔断时自动完成）
   checkpointGet: (threadKey) => ipcRenderer.invoke('checkpoint:get', threadKey),
   checkpointClear: (threadKey) => ipcRenderer.invoke('checkpoint:clear', threadKey),

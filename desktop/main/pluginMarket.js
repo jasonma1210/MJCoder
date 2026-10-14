@@ -583,7 +583,22 @@ async function installFromGit(url, options = {}) {
         .filter((e) => e.isDirectory() && e.name !== '.git')
         .filter((e) => fs.existsSync(path.join(tmpDir, e.name, MANIFEST_FILE)));
       if (sub.length === 1) srcDir = path.join(tmpDir, sub[0].name);
-      else return { ok: false, stage: 'manifest', errors: [`仓库内未找到 ${MANIFEST_FILE}`] };
+      else if (options.skillFallback && fs.existsSync(path.join(tmpDir, 'SKILL.md'))) {
+        // 网络技能仓库回落：大量 GitHub 技能仓库没有 mjcode-plugin.json 清单，
+        // 只有 SKILL.md。合成最小清单后走完整安装管道（提示注入检测照常，
+        // 签名闸门由调用方按审批语义放宽——审批卡是用户的显式同意）。
+        const name = normalizeName(options.fallbackName || path.basename(check.url.replace(/\.git$/, '')));
+        if (!isValidName(name)) return { ok: false, stage: 'manifest', errors: [`无法从仓库推导合法技能名：${name}`] };
+        const synth = {
+          name,
+          version: '0.1.0',
+          type: 'skill',
+          description: `网络安装技能（来源 ${check.url}）`,
+          permissions: [{ level: 'filesystem', scope: '*' }],
+        };
+        fs.writeFileSync(path.join(tmpDir, MANIFEST_FILE), JSON.stringify(synth, null, 2));
+        srcDir = tmpDir;
+      } else return { ok: false, stage: 'manifest', errors: [`仓库内未找到 ${MANIFEST_FILE}`] };
     }
 
     const res = await installFromSourceDir(srcDir, { ...options, source: `git:${check.url}` });
@@ -655,5 +670,6 @@ module.exports = {
   installFromSourceDir,
   installFromLocalDir,
   installFromGit,
+  copyDir,
   uninstall,
 };

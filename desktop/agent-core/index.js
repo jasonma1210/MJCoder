@@ -29,6 +29,25 @@ async function ensureNodeFs() {
 
 export const BASE_TOOLS = [
   { type: 'function', function: {
+    name: 'search_plugins',
+    description: '在公网插件源中搜索可安装的插件：npm registry 的 MCP Server 与 GitHub 的技能仓库。返回名称、版本、简介、来源与安装方式。安装请用 install_plugin（会弹审批卡请用户确认）。',
+    parameters: { type: 'object', properties: {
+      query: { type: 'string', description: '搜索关键词，例如 "github mcp"、"代码审查 skill"' },
+      types: { type: 'array', items: { type: 'string', enum: ['mcp', 'skill'] }, description: '限定插件类型，缺省两者都搜' },
+    }, required: ['query'] },
+  }},
+  { type: 'function', function: {
+    name: 'install_plugin',
+    description: '安装网络插件（会弹审批卡请用户确认，拒绝即中止）。kind=mcp：从 npm 安装 MCP Server（pkg 为包名，装完自动连接，工具立即可用）；kind=skill：从 GitHub 仓库安装 SKILL.md 技能（url 为仓库地址，下一轮对话生效）。安装 MCP 前应先用 search_plugins 确认准确包名。',
+    parameters: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['mcp', 'skill'], description: '插件类型' },
+      pkg: { type: 'string', description: 'npm 包名（kind=mcp 必填）' },
+      url: { type: 'string', description: 'Git 仓库地址（kind=skill 必填）' },
+      name: { type: 'string', description: '自定义安装名（可选）' },
+      ref: { type: 'string', description: 'Git 分支或 tag（可选）' },
+    }, required: ['kind'] },
+  }},
+  { type: 'function', function: {
     name: 'shell', description: '在项目目录执行 shell 命令（git/npm/ls/cat/build/test 等）',
     parameters: { type: 'object', properties: {
       command: { type: 'string', description: '要执行的 shell 命令' },
@@ -182,7 +201,7 @@ const TOKEN_RESCUE_MAX = 3;
 const TOKEN_COMPACTION_TRIGGER = 0.7;
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
-const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add']);
+const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'install_plugin']);
 
 // 工具名 → toolHandlers / window.mjcode 上的方法名（camelCase）
 const TOOL_HANDLER_NAMES = {
@@ -201,6 +220,8 @@ const TOOL_HANDLER_NAMES = {
   git_add: 'gitAdd',
   git_branch: 'gitBranch',
   orchestrate_task: 'orchestrateTask',
+  search_plugins: 'searchPlugins',
+  install_plugin: 'installPlugin',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符

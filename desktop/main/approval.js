@@ -11,6 +11,9 @@ const TOOL_LEVEL = {
   git_commit: 'L2', git_add: 'L2', apply_patch: 'L2',
   write_file: 'L2', edit_file: 'L2',
   mcp__: 'L3',
+  // 对话内插件安装 = 给模型「装软件」的能力（网络下载 + 落盘 + 注册服务），
+  // 恒为 L3：任何审批档位都弹卡确认，且不可经「本对话同类」规则静默放行
+  install_plugin: 'L3',
 };
 
 // 只读工具：任何档位都不询问
@@ -61,6 +64,7 @@ function needsApproval({ tool, args = {}, approvalMode = 'on-request', conversat
 // 规则匹配对象：shell 取 command，文件类取 path，mcp 取 server/tool
 function approvalTarget(tool, args = {}) {
   if (tool === 'shell') return String(args.command || '');
+  if (tool === 'install_plugin') return String(args.url || args.pkg || args.name || '');
   if (tool.startsWith('mcp__')) return tool;
   return String(args.path || args.patch?.slice(0, 80) || args.message || '');
 }
@@ -95,6 +99,17 @@ function approvalSummary(tool, args = {}) {
       return { level: 'L2', title: 'Git 提交', detail: String(args.message || '').slice(0, 300) };
     case 'git_add':
       return { level: 'L2', title: 'Git 暂存', detail: String(args.files || '.') };
+    case 'install_plugin': {
+      const what = args.kind === 'mcp'
+        ? `MCP 服务（npm 包 ${args.pkg || ''}，npx 启动）`
+        : `技能（仓库 ${args.url || ''}）`;
+      return {
+        level: 'L3',
+        title: '安装网络插件',
+        detail: `将要安装：${what}\n来源：${args.url || args.pkg || ''}\n`
+          + '安装动作含网络下载与本地落盘；技能内容会进入模型上下文（已做提示注入检测）。确认允许？',
+      };
+    }
     default:
       if (tool.startsWith('mcp__')) {
         return { level: 'L3', title: `MCP 工具 ${tool}`, detail: JSON.stringify(args).slice(0, 500) };

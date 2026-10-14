@@ -1403,9 +1403,94 @@ ipcMain.handle('market:search', async (_, options = {}) => {
   }
 });
 
-// 从 git 地址安装（P1 手动装路径）；签名与提示注入检测 fail-closed
-ipcMain.handle('market:installGit', async (_, payload = {}) => {
+// ── 网络插件发现与对话内安装（LobeChat 式：输入框说一句，app 搜公网并装）──
+// 公共源：npm registry（MCP Server 生态）+ GitHub（技能仓库）；不依赖自建市场索引
+const pluginDiscovery = require('./pluginDiscovery');
+
+ipcMain.handle('market:searchNetwork', async (_, { query, types } = {}) => {
   try {
+    const net = await pluginDiscovery.searchNetworkPlugins(query || '', { types });
+    // 本地已装/缓存索引结果并入（source: 'local'），模型可一并参考
+    let local = [];
+    try {
+      const r = getMarketRegistry().search({ query: query || '' });
+      local = (r.plugins || []).map((p) => ({ ...p, source: 'local' }));
+    } catch { /* 本地索引失败不影响网络结果 */ }
+    return { ok: true, results: [...local, ...net.results], notes: net.notes };
+  } catch (err) {
+    return { ok: false, error: err.message, results: [], notes: [] };
+  }
+});
+
+// 对话内插件搜索（只读工具，不走审批）：网络源 + 本地索引合并
+async function searchPluginsTool(args = {}) {
+  const query = String(args.query || '').trim();
+  if (!query) return { ok: false, error: '缺少搜索关键词 query' };
+  const r = await pluginDiscovery.searchNetworkPlugins(query, { types: args.types, timeoutMs: 10000 });
+  let local = [];
+  try {
+    const lr = getMarketRegistry().search({ query });
+    local = (lr.plugins || []).map((p) => ({ ...p, source: 'local' }));
+  } catch { /* 本地索引失败不影响网络结果 */ }
+  return { ok: true, query, count: local.length + r.results.length, results: [...local, ...r.results].slice(0, 12), notes: r.notes };
+}
+
+// 对话内安装（工具 install_plugin 的实现）。恒走 L3 审批卡（approval.js TOOL_LEVEL），
+// 卡片展示安装对象与风险说明，用户允许才执行；npm 源包名白名单校验防注入。
+async function installNetworkPlugin(args, { approvalMode = 'on-request', conversationId = '' } = {}) {
+  const kind = String(args.kind || '');
+  // 审批闸（L3）：与 toolShell 同一套审批中心，弹卡内容见 approval.approvalSummary
+  const verdict = approval.needsApproval({ tool: 'install_plugin', args, approvalMode, conversationId, alwaysRules, conversationRules });
+  if (verdict.need) {
+    const decision = await requestApproval('install_plugin', args);
+    if (decision === 'deny') {
+      audit('install_plugin', JSON.stringify(args).slice(0, 200), '用户拒绝', 'denied');
+      return { ok: false, error: '用户拒绝安装', denied: true };
+    }
+    applyApprovalDecision(decision, 'install_plugin', args, conversationId);
+  }
+
+  if (kind === 'mcp') {
+    const pkg = String(args.pkg || '').trim();
+    if (!pluginDiscovery.isValidNpmPkg(pkg)) {
+      return { ok: false, error: `npm 包名非法：${pkg}` };
+    }
+    const name = pluginDiscovery.repoToSkillName(args.name || pkg) || `mcp-${Date.now().toString(36)}`;
+    // connectMcpServer：连接成功才持久化 mcp-servers.json（fail-closed），失败即回报
+    const r = await connectMcpServer({ name, command: 'npx', args: ['-y', pkg] });
+    audit('install_plugin', `mcp ${pkg}`, r.ok ? `连接成功 tools=${r.toolCount}` : `失败 ${r.error}`, r.ok ? 'ok' : 'error');
+    return r.ok
+      ? { ok: true, kind: 'mcp', name, package: pkg, toolCount: r.toolCount, tools: (r.tools || []).map((t) => t.name).slice(0, 30), message: `MCP 服务 ${name} 已安装并连接，新增 ${r.toolCount} 个工具` }
+      : { ok: false, error: `安装后连接失败：${r.error}（未写入配置；请检查包是否为有效的 stdio MCP Server）` };
+  }
+
+  if (kind === 'skill') {
+    const url = String(args.url || '').trim();
+    const r = await pluginMarket.installFromGit(url, {
+      pluginsRoot: PLUGINS_ROOT(),
+      registry: getPluginRegistry(),
+      skillsRoot: SKILLS_DIR(), // 技能包落 ~/.mjcode/skills/<name>，listSkills 现读即热生效
+      ref: args.ref,
+      // 网络第三方仓库普遍无签名：签名闸门放宽，但注入检测照常 + 审批卡为用户显式同意
+      policy: { allowUnsigned: true, requireSigstore: false },
+      skillFallback: true,
+      fallbackName: args.name,
+    });
+    if (!r.ok) return { ok: false, error: `安装失败（${r.stage}）：${(r.errors || [r.error]).join('；')}` };
+    const rec = r.plugin || {};
+    audit('install_plugin', `skill ${rec.name}`, `来源=${url} 版本=${rec.version}`, 'ok');
+    return {
+      ok: true, kind: 'skill', name: rec.name, version: rec.version,
+      skillHotLoaded: !!rec.skillsDir,
+      message: `技能 ${rec.name} v${rec.version} 已安装${rec.skillsDir ? '并生效，下一轮对话即可使用' : ''}`,
+    };
+  }
+
+  return { ok: false, error: `不支持的安装类型：${kind}（仅支持 mcp / skill）` };
+}
+
+// 从 git 地址安装（P1 手动装路径）；签名与提示注入检测 fail-closed
+ipcMain.handle('market:installGit', async (_, payload = {}) => {  try {
     const r = await pluginMarket.installFromGit(String(payload.url || ''), {
       pluginsRoot: PLUGINS_ROOT(),
       registry: getPluginRegistry(),
@@ -1682,12 +1767,15 @@ function saveMcpConfig(list) {
 }
 
 // env 白名单：仅透传系统基础变量 + 用户显式配置，杜绝 process.env 全量泄漏（P2-10）
+// PATH 特殊处理：打包版 GUI 进程继承的 PATH 极简（/usr/bin:/bin:...），
+// npx/uvx（homebrew）全找不到——真机复盘：MCP 服务全部 spawn ENOENT。
+// 注入与 toolShell 子 shell 一致的完整 PATH（见 SHELL_PATH 定义）。
 function sanitizeEnv(env) {
   const out = {};
   for (const k of ENV_WHITELIST) {
     if (process.env[k]) out[k] = process.env[k];
   }
-  return { ...out, ...(env || {}) };
+  return { ...out, PATH: shellEnv().PATH, ...(env || {}) };
 }
 
 // 单次 JSON-RPC 请求：id 关联 + 超时清理，杜绝 initialize 提前 resolve 吞掉 tools/list
@@ -2142,6 +2230,12 @@ agentRunner.initAgentRunner({
     ...scheduledToolHandlers(),
     chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal),
     orchestrateTask: (args) => toolOrchestrateTask(args, signal),
+    // 对话内网络插件搜索/安装（LobeChat 式）：搜索只读；安装恒走 L3 审批卡
+    searchPlugins: (args) => searchPluginsTool(args),
+    installPlugin: (args) => installNetworkPlugin(args, {
+      approvalMode: args.approvalMode || 'on-request',
+      conversationId: args.conversationId || '',
+    }),
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
