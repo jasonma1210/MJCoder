@@ -7,6 +7,7 @@ import { compactHistory } from '../../../agent-core/index.js';
 import InlineAlert from './InlineAlert';
 import { toast } from './feedback';
 import ComposerControls from './ComposerControls';
+import AgentDock from './AgentDock';
 import ContextRing, { contextUsageOf } from './ContextRing';
 import { getModelConfig, modelKeyOf, effectiveContextWindow } from '../lib/modelConfig';
 import { projectDisplayName } from '../lib/projectName';
@@ -144,7 +145,15 @@ export default function ChatArea({
   // P1-G：切会话旧消息残留串显——thread.id 变化即清空，拉取完成前不渲染上一个会话的消息；
   // 并用请求序号防竞态（A→B→A 快速切换时，先发的旧响应晚到会覆盖新会话内容）
   const msgReqRef = useRef(0);
+  // 真机事故根因：新会话首条消息时 thread?.id 从 undefined → 真实 id，本 effect 触发，
+  // 下面的 abortRef.abort() 把刚启动的运行当场掐死（「已停止」+ 0 tokens，必现）。
+  // 修复：用 prevThreadIdRef 区分「新建会话（undefined→id）」与「真实切换（id→不同 id）」，
+  // 仅后者才需要中止在途运行与清理会话级状态。
+  const prevThreadIdRef = useRef(null);
   useEffect(() => {
+    const prevId = prevThreadIdRef.current;
+    prevThreadIdRef.current = thread?.id || null;
+    const isCreatingThread = !prevId && !!thread?.id; // 新建会话 ≠ 切换会话
     if (thread?.id) {
       const reqId = ++msgReqRef.current;
       setLastFailed(null); // 切换会话：失败重试上下文不跨会话
@@ -164,6 +173,8 @@ export default function ChatArea({
     //   流式文本属于上一个会话，切走后 runAgent 仍在跑，必须一并中止并清空，
     //   否则旧会话的流式输出会打在新会话的消息区上；planMode 残留会让新会话
     //   莫名变成「只读规划」（写工具全被移除），用户完全无感知。
+    //   注意：新建会话（undefined→id）不在此列：那一步正在进行的是「本会话自己的首条消息」。
+    if (isCreatingThread) return;
     abortRef.current?.abort();
     if (window.mjcode?.abortChat) window.mjcode.abortChat();
     setStreamingText('');
@@ -448,14 +459,19 @@ export default function ChatArea({
           for (const f of agentFilesOf(tc)) agentFilesRef.current.add(f);
         },
         onDone: async (finalText, usage, aborted) => {
-          const content = aborted ? `${finalText}\n\n（已停止）` : finalText;
+          // Bugfix：即时中止收尾时 finalText 为空串（引擎真实结果尚未返回），
+          // 不再拼出 "\n\n（已停止）" 的空尾消息，直接显示「（已停止）」
+          const content = aborted
+            ? (finalText ? `${finalText}\n\n（已停止）` : '（已停止）')
+            : finalText;
           const assistantMsg = {
             role: 'assistant',
             content,
             model_name: selectedModel.model.model_id,
-            // 底部 token 明细（参考 WorkBuddy：模型名 + 消耗量）
+            // 底部 token 明细（参考 WorkBuddy：模型名 + 消耗量）+ 时间戳
             tokens_input: usage?.prompt_tokens || 0,
             tokens_output: usage?.completion_tokens || 0,
+            created_at: Date.now(),
           };
           setMessages((m) => [...m, assistantMsg]);
           await api.sendMessage(currentThread.id, {
@@ -505,7 +521,8 @@ export default function ChatArea({
       const msg = String(err.message || '').startsWith('KEY_MISSING')
         ? '模型凭证未加载，请在本机模型设置中重新填写 API Key'
         : err.message;
-      setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}` }]);
+      // 此前错误消息不带 model_name → meta 行整体隐藏，用户侧三样全缺（模型/耗时/token）无从判断
+      setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}`, model_name: selectedModel?.model?.model_id || '' }]);
       // P0-A：失败可挽回——记录本次输入，用户可一键「重试本轮」（历史已保留，无需手动重打）
       setLastFailed({ text: content });
       onThreadStatus?.('idle');
@@ -673,6 +690,8 @@ export default function ChatArea({
           onClosed={() => { setWorktree(null); setRunMode('local'); }}
           onMsg={(m) => setModeMsg(m)}
         />
+        {/* WorkBuddy 式 Agent 运行胶囊：在役数字员工一览（点击展开流程与强制关闭） */}
+        <AgentDock />
         <Composer
           input={input} setInput={setInput} onSend={send} onStop={stop} onPickFiles={pickFiles}
           loading={loading} selectedModel={selectedModel} project={project}
@@ -780,6 +799,8 @@ export default function ChatArea({
           onClosed={() => { setWorktree(null); setRunMode('local'); }}
           onMsg={(m) => setModeMsg(m)}
         />
+        {/* WorkBuddy 式 Agent 运行胶囊：在役数字员工一览（点击展开流程与强制关闭） */}
+        <AgentDock />
         <Composer
           input={input} setInput={setInput} onSend={send} onStop={stop} onPickFiles={pickFiles}
           loading={loading} selectedModel={selectedModel} project={project}
@@ -1449,12 +1470,15 @@ function renderMessages(messages) {
             </div>
           );
         })}
-        {/* 底部明细：模型 + token 消耗（参考 WorkBuddy，仅最终回复展示） */}
+        {/* 底部明细：模型 + token 消耗 + 时间（参考 WorkBuddy，仅最终回复展示） */}
         {modelName && (
           <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text2" title={`输入 ${tokensIn.toLocaleString()} / 输出 ${tokensOut.toLocaleString()} tokens`}>
             <IconCpu size={11} className="shrink-0" />
             <span>共消耗 {(tokensIn + tokensOut).toLocaleString()} tokens</span>
             <span className="truncate">· {modelName}</span>
+            {(m.created_at || m.createdAt) && (
+              <span>· {new Date(m.created_at || m.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+            )}
           </div>
         )}
       </div>

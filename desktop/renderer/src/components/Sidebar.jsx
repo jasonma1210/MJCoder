@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
 import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSearch, IconSettings, IconArchive } from './icons';
 
-// 左侧栏（对标 Codex）：New chat / Scheduled / Plugins + Projects→会话嵌套；底部 Settings
+// 左侧栏（对标 Codex）：New chat / Scheduled / Tasks / Plugins + Projects→会话嵌套；底部 Settings
 // 「打开项目」不设一级导航：Projects 区头「+」承担添加（Codex 同款），
 // 新会话自动归属当前项目/默认工作区，无需先「打开项目」再操作
 export default function Sidebar({

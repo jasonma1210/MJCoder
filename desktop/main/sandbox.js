@@ -29,6 +29,9 @@ function checkCommandGuard(policy, command, platform = process.platform, execExi
 
 // 依据沙箱策略与项目目录生成 Seatbelt profile
 // read-only: 只读 + 禁网；workspace-write: 项目目录与临时目录可写 + 禁网；full-access: 不沙箱
+// 真机复盘（打包版）：zsh 等标准 shell 大量使用 `>/dev/null` 重定向（如 `cmd 2>/dev/null`），
+// profile 未放行 /dev/null 写入 → 「operation not permitted: /dev/null」，模型被迫换写法浪费轮次。
+// /dev/null 是字面黑洞设备，放行写入无任何数据外泄风险，两个档位统一 allow。
 function buildSeatbeltProfile(policy, cwd) {
   const tmpPaths = ['/private/tmp', '/private/var/tmp', '/tmp'];
   const tmpRules = tmpPaths.map((p) => `(subpath "${p}")`).join(' ');
@@ -42,6 +45,8 @@ function buildSeatbeltProfile(policy, cwd) {
       '(allow sysctl-read)',
       '(allow mach-lookup)',
       '(deny file-write*)',
+      // /dev/null 必须在 deny file-write* 之后：Seatbelt 后匹配规则优先生效
+      '(allow file-write* (literal "/dev/null"))',
       '(deny network*)',
     ].join('\n');
   }
@@ -58,6 +63,8 @@ function buildSeatbeltProfile(policy, cwd) {
     '(allow sysctl-read)',
     '(allow mach-lookup)',
     writeRule,
+    // /dev/null 放行（deny default 已拒其余写入，此处显式允许该字面路径）
+    '(allow file-write* (literal "/dev/null"))',
     '(deny network*)',
   ].join('\n');
 }

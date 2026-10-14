@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
 const path = require('path');
+const os = require('os');
 const { exec, execFile, spawn } = require('child_process');
 const fsp = require('fs/promises');
 const fs = require('fs');
@@ -9,7 +10,14 @@ let mainWindow;
 // ═══════════════════════════════════════════
 //  MODEL SECRETS（仅主进程持有，严禁流向渲染层）
 // ═══════════════════════════════════════════
-const MJ_SERVER = process.env.MJ_SERVER_API || 'http://localhost:3001/api';
+// 服务端地址三级解析：设置页偏好（server.apiBase）→ env MJ_SERVER_API → 默认本机 3001。
+// 打包版从 Finder 启动拿不到 shell env，此前写死 localhost:3001 → server（Spring Boot）没跑时
+// 服务端数据（共享模型/登录/审计）全离线且无法配置远程地址；现可在设置-通用里改。
+const MJ_SERVER_DEFAULT = 'http://localhost:3001/api';
+function serverBase() {
+  const pref = localStore?.getPreference?.('server.apiBase');
+  return String(pref || process.env.MJ_SERVER_API || MJ_SERVER_DEFAULT).replace(/\/+$/, '');
+}
 const secrets = new Map(); // `${isGlobal ? 'g' : 'u'}:${id}` -> { api_key, base_url }
 let secretsInFlight = null; // 凭证拉取进行中的 promise（去重用）
 const activeChats = new Set(); // 进行中的 chat AbortController
@@ -38,17 +46,29 @@ function saveAlwaysRules() {
 }
 
 // 向渲染层发起审批，返回 'once' | 'conversation' | 'always' | 'deny'
+// P0-2：审批响应按 approvalId 精确分发。原实现 ipcMain.once 共享一条无 id 通道，
+// 多工具并发审批时第一个响应会被任一等待者消费，决策可能张冠李戴（把「允许」发给更危险的命令）。
+const { ApprovalChannel } = require('./approvalChannel');
+const approvalChannel = new ApprovalChannel({ timeoutMs: 120000 });
+
 function requestApproval(tool, args) {
   const summary = approval.approvalSummary(tool, args);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve('deny'), 120000); // 2 分钟无响应按拒绝处理
-    ipcMain.once('tool:approval-response', (_, decision) => {
-      clearTimeout(timer);
-      resolve(decision || 'deny');
-    });
-    mainWindow.webContents.send('tool:approval-request', { tool, ...summary });
-  });
+  const approvalId = approvalChannel.nextId();
+  const waitP = approvalChannel.wait(approvalId);
+  mainWindow.webContents.send('tool:approval-request', { approvalId, tool, ...summary });
+  return waitP;
 }
+
+// 全局唯一监听器：按 approvalId 分发（替代原先每次请求注册一次的 ipcMain.once）
+ipcMain.on('tool:approval-response', (_, payload) => {
+  const hasId = payload && typeof payload === 'object';
+  const approvalId = hasId ? payload.approvalId : null;
+  const decision = hasId ? payload.decision : payload;
+  const dispatched = approvalId != null
+    ? approvalChannel.dispatch(approvalId, decision)
+    : approvalChannel.dispatchLegacy(decision); // 旧渲染层兼容：仅唯一挂起时接受
+  if (!dispatched) console.warn('[approval] 收到无法匹配的审批响应，已忽略（防串扰）');
+});
 
 function applyApprovalDecision(decision, tool, args, conversationId) {
   if (decision === 'conversation') {
@@ -82,6 +102,8 @@ let authToken = '';
 
 // ── Seatbelt 沙箱（M3）──
 const sandbox = require('./sandbox');
+// P0-3：写路径白名单守卫（写目标必须位于 {项目 cwd, userData, 系统临时目录} 内）
+const writeGuard = require('./writeGuard');
 
 // ── 桌面端功能开关（战略收敛：默认冻结协同/云端/小程序，聚焦桌面端单点）──
 const { loadFeatureFlags } = require('./featureFlags');
@@ -98,8 +120,10 @@ const worktree = require('./worktree');
 
 // ── 本地优先数据层（离线模式）──
 const { LocalStore } = require('./localStore');
+const { CredentialCrypto } = require('./credentialCrypto');
 let localStore = null;   // whenReady 后初始化
-const localVault = new Map(); // 本地 provider id -> { api_key, base_url }（safeStorage 解密后的内存态）
+let credentialCrypto = null; // 凭证加密双轨：safeStorage 首选，不可用降级文件密钥 AES-GCM（打包版真机事故）
+const localVault = new Map(); // 本地 provider id -> { api_key, base_url }（解密后的内存态）
 
 // 统一凭证解析（本地优先）：全局共享 g: → 本机保险库 → 服务端私有 u:
 // 渲染层对服务端 provider 的 id 加 s 前缀做命名空间隔离，避免与本机 id 冲突；此处剥离后命中 u: 轨道
@@ -113,19 +137,21 @@ function resolveSecret(providerId, isGlobal = false) {
 function initLocalStore() {
   try {
     localStore = new LocalStore(app.getPath('userData'));
-    if (safeStorage.isEncryptionAvailable()) {
-      for (const p of localStore.data.providers) {
-        try {
-          const key = safeStorage.decryptString(Buffer.from(p.keyEncrypted, 'base64'));
-          localVault.set(p.id, { api_key: key, base_url: p.base_url });
-        } catch (e) {
-          console.warn('[local] 凭证解密失败:', p.id, e.message);
-        }
-      }
-    } else {
-      console.warn('[local] safeStorage 不可用，本地凭证将以未加密形式拒绝写入');
+    // 凭证加密双轨（credentialCrypto.js）：safeStorage 不可用（打包版 macOS 27 真机复现）
+    // 时降级文件密钥 AES-256-GCM——凭证仍可保存，保护级别显式降级并留痕
+    credentialCrypto = new CredentialCrypto(app.getPath('userData'), safeStorage);
+    if (credentialCrypto.scheme === 'file-key') {
+      console.warn('[local] safeStorage 不可用，凭证改用本地文件密钥加密（userData/credential.key，0600）');
     }
-    console.log(`[local] 本地数据层就绪：${localStore.listThreads().length} 线程 / ${localStore.listProviders().length} 私有服务`);
+    for (const p of localStore.data.providers) {
+      try {
+        const key = credentialCrypto.decrypt(p.keyEncrypted);
+        localVault.set(p.id, { api_key: key, base_url: p.base_url });
+      } catch (e) {
+        console.warn('[local] 凭证解密失败:', p.id, e.message);
+      }
+    }
+    console.log(`[local] 本地数据层就绪：${localStore.listThreads().length} 线程 / ${localStore.listProviders().length} 私有服务（加密轨：${credentialCrypto.scheme}）`);
   } catch (err) {
     console.error('[local] 初始化失败:', err);
   }
@@ -133,7 +159,7 @@ function initLocalStore() {
 
 ipcMain.handle('server:health', async () => {
   try {
-    const r = await fetch(`${MJ_SERVER}/health`, { signal: AbortSignal.timeout(3000) });
+    const r = await fetch(`${serverBase()}/health`, { signal: AbortSignal.timeout(3000) });
     return { online: r.ok };
   } catch (e) {
     return { online: false };
@@ -172,8 +198,8 @@ ipcMain.handle('local:threads/set-project', async (_, { threadId, projectPath })
 ipcMain.handle('local:providers/list', async () => localStore ? localStore.listProviders() : []);
 ipcMain.handle('local:providers/add', async (_, { name, base_url, api_key, model_id }) => {
   if (!localStore) throw new Error('本地数据层未初始化');
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，无法安全保存本地凭证');
-  const keyEncrypted = safeStorage.encryptString(String(api_key || '')).toString('base64');
+  if (!credentialCrypto) throw new Error('本地数据层未初始化');
+  const keyEncrypted = credentialCrypto.encrypt(String(api_key || ''));
   const p = localStore.addProvider({ name, base_url, keyEncrypted, modelId: model_id });
   localVault.set(p.id, { api_key: String(api_key || ''), base_url });
   return p;
@@ -196,13 +222,13 @@ ipcMain.handle('local:providers/delete', async (_, { id }) => {
   localVault.delete(Number(id));
   return { ok: true };
 });
-// B2：供应商编辑（name/base_url/换 Key；Key 走 safeStorage 加密后落库）
+// B2：供应商编辑（name/base_url/换 Key；Key 走凭证加密双轨落库）
 ipcMain.handle('local:providers/update', async (_, { id, name, base_url, api_key }) => {
   if (!localStore) throw new Error('本地数据层未初始化');
+  if (!credentialCrypto) throw new Error('本地数据层未初始化');
   let keyEncrypted;
   if (api_key) {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，无法安全保存本地凭证');
-    keyEncrypted = safeStorage.encryptString(String(api_key)).toString('base64');
+    keyEncrypted = credentialCrypto.encrypt(String(api_key));
     const cur = localVault.get(Number(id)) || {};
     localVault.set(Number(id), { ...cur, api_key: String(api_key), base_url: base_url || cur.base_url });
   } else if (base_url && localVault.get(Number(id))) {
@@ -237,8 +263,52 @@ ipcMain.handle('local:projects/rename', async (_, { path, name }) => localStore 
 ipcMain.handle('local:preferences/get', async (_, { key }) => localStore ? localStore.getPreference(key) : undefined);
 ipcMain.handle('local:preferences/set', async (_, { key, value }) => localStore ? localStore.setPreference(key, value) : { ok: false });
 
-ipcMain.handle('local:memories/add', async (_, { projectPath, content }) => localStore ? localStore.addMemory({ projectPath, content }) : null);
-ipcMain.handle('local:memories/list', async (_, { projectPath, limit }) => localStore ? localStore.listMemories(projectPath, limit) : []);
+// 服务端地址读写（设置-通用）：写偏好（三级解析之首）；读返回当前生效地址与来源
+ipcMain.handle('local:server/base', async (_, { base } = {}) => {
+  if (base != null) {
+    const v = String(base).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//.test(v)) throw new Error('服务端地址需以 http:// 或 https:// 开头');
+    if (!localStore) throw new Error('本地数据层未初始化');
+    localStore.setPreference('server.apiBase', v);
+  }
+  return {
+    base: serverBase(),
+    default: MJ_SERVER_DEFAULT,
+    source: localStore?.getPreference?.('server.apiBase') ? 'preference' : (process.env.MJ_SERVER_API ? 'env' : 'default'),
+  };
+});
+
+ipcMain.handle('local:memories/add', async (_, { projectPath, content }) => {
+  // P2-1：写入收口 MemoryManager（SQLite）；不可用时回落旧 localStore 链路
+  if (memoryManager) {
+    const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source: 'ipc' });
+    return m ? { id: m.id, content: m.content } : null;
+  }
+  return localStore ? localStore.addMemory({ projectPath, content }) : null;
+});
+ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query } = {}) => {
+  // P2-6：分层召回路由（importance×recency×相关性 Top-K）；不可用时回落旧链路
+  if (memoryManager) {
+    return memoryManager.recallContents({ spaceId: projectPath, query, topK: limit || 5 });
+  }
+  return localStore ? localStore.listMemories(projectPath, limit) : [];
+});
+// P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
+ipcMain.handle('memory:stats', async () => (memoryManager ? { ok: true, stats: memoryManager.stats() } : { ok: false }));
+ipcMain.handle('memory:bgTasks', async (_, opts) => (memoryScheduler ? { ok: true, tasks: memoryScheduler.listTasks(opts) } : { ok: false }));
+
+// ═══════════════════════════════════════════
+//  P3-1/P3-5：ResourceQuotaCenter——全局唯一资源额度中心（槽位预占 + 前后台隔离 + 熔断节流）
+//  fg = 用户会话 / Worker / 编排 / 定时任务（一切用户可感知请求）；bg = 记忆后台作业。
+//  接入点：chatStreamOnce（流式）/ scheduledAgentChat（非流式，Worker 与编排同源）统一占用 fg 槽位，
+//  MemoryBgScheduler 经 bgGate 让路。快照经 quota:snapshot 供渲染层（AgentDock 资源行）轮询。
+// ═══════════════════════════════════════════
+const { ResourceQuotaCenter } = require('./resourceQuotaCenter');
+const quota = new ResourceQuotaCenter({ providerLimit: 8, fgReserve: 2 });
+ipcMain.handle('quota:snapshot', () => quota.snapshot());
+// P3-4：本地后端探测（Ollama）——启动时一次 + 每 5 分钟复探；结果进快照供渲染层展示
+quota.detectLocalBackend().catch(() => {});
+setInterval(() => { quota.detectLocalBackend().catch(() => {}); }, 5 * 60 * 1000).unref?.();
 
 // ── 协同（P4/P5）：主进程侧 Yjs 本地优先快照层 ──
 // 渲染层经 HTTP 与服务端 CRDT 同步；主进程提供离线可读的本地快照与增量编解码
@@ -454,7 +524,7 @@ function auditLocal(action, target, detail, approvalResult) {
 function audit(action, target, detail, approvalResult) {
   if (!authToken) { auditLocal(action, target, detail, approvalResult); return; } // 本地优先：无令牌时落盘留痕
   if (Date.now() < auditBreakerUntil) { auditFailures++; return; } // 熔断期内不再发起连接
-  fetch(`${MJ_SERVER}/audit`, {
+  fetch(`${serverBase()}/audit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
@@ -487,8 +557,8 @@ ipcMain.handle('model:getSecrets', async (_, { token }) => {
     let count = 0;
     try {
       const [userRes, globalRes] = await Promise.all([
-        fetch(`${MJ_SERVER}/providers/secrets`, { headers, signal: AbortSignal.timeout(5000) }),
-        fetch(`${MJ_SERVER}/global/providers/secrets`, { headers, signal: AbortSignal.timeout(5000) }),
+        fetch(`${serverBase()}/providers/secrets`, { headers, signal: AbortSignal.timeout(5000) }),
+        fetch(`${serverBase()}/global/providers/secrets`, { headers, signal: AbortSignal.timeout(5000) }),
       ]);
       if (userRes.ok) {
         for (const p of await userRes.json()) {
@@ -561,6 +631,31 @@ function createWindow() {
   mainWindow.on('close', saveWindowState);
 }
 
+// 打包版诊断日志：console 全量 tee 到 userData/logs/main-YYYYMMDD.log。
+// 背景：连续三起打包版问题（SIGSEGV/凭证加密/运行中停止）都因「主进程日志不可见」只能靠猜。
+// dev 模式终端可见，不 tee（避免双写）；打包版启用。崩溃类另有 uncaughtException → crash.log。
+function setupFileLogging() {
+  if (!app.isPackaged) return;
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `main-${new Date().toISOString().slice(0, 10)}.log`);
+    const orig = { log: console.log.bind(console), warn: console.warn.bind(console), error: console.error.bind(console) };
+    const tee = (level) => (...args) => {
+      orig[level](...args);
+      try {
+        const body = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+        fs.appendFileSync(file, `[${new Date().toISOString()}] [${level}] ${body.slice(0, 4000)}\n`);
+      } catch { /* 日志落盘失败不影响主流程 */ }
+    };
+    console.log = tee('log');
+    console.warn = tee('warn');
+    console.error = tee('error');
+  } catch (e) {
+    console.warn('[logging] 文件日志初始化失败:', e.message);
+  }
+}
+
 // 单实例锁：第二个实例启动时聚焦已有窗口
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -571,10 +666,12 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
   app.whenReady().then(() => {
+    setupFileLogging();
     createWindow();
     // P1-N：更新检查延迟 10s 自动触发（initUpdater 仍保留供手动检查即时初始化）
     scheduleAutoUpdateCheck();
     initLocalStore();
+    initTaskOrchestration(); // P1：任务编排子系统（SQLite 队列 + Worker 池 + 断点恢复）
     reconnectMcpServers(); // 启动自动重连已持久化的 MCP 服务
     // 定时任务：IPC + 调度循环
     // P0-D：执行通道升级为 Agent（工具循环+审批+沙箱）；chatOnce 保留为无 Agent 通道时的回落
@@ -674,11 +771,33 @@ ipcMain.handle('updater:install', async () => {
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+// P0-1：退出前强制落盘合并窗口内未写盘的内存变更（消息/状态）
+app.on('will-quit', () => {
+  try { localStore?.flushSync(); } catch (e) { console.warn('[local] 退出刷盘失败:', e.message); }
+  try { taskStore?.db?.flush?.(); } catch (e) { console.warn('[tasks] 退出刷盘失败:', e.message); }
+  try { memoryScheduler?.stop(); } catch { /* 调度器已停 */ }
+  approvalChannel.disposeAll();
+});
+// SIGTERM/SIGINT 优雅退出：pkill/终端 Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    try { console.log(`[main] 收到 ${sig}，优雅退出（落盘后关闭）`); } catch { /* 日志尽力而为 */ }
+    try { app.quit(); } catch { process.exit(0); }
+    setTimeout(() => process.exit(0), 2000).unref(); // 兜底：2s 内必须退出
+  });
+}
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
 // ═══════════════════════════════════════════
 //  AGENT TOOL EXECUTION LAYER
 // ═══════════════════════════════════════════
+
+// 打包版 GUI 进程（Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
+// homebrew（node/npm/git 等用户工具）全部找不到——真机复盘：模型被迫每轮先
+// `export PATH=/usr/local/bin:/opt/homebrew/bin:$PATH` 自救，白烧轮次。
+// 统一为子 shell 注入完整 PATH（homebrew 优先，其次系统路径），沙箱内外一致。
+const SHELL_PATH = '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin';
+const shellEnv = () => ({ ...process.env, PATH: SHELL_PATH });
 
 // P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
 async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy }) {
@@ -706,7 +825,7 @@ async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-req
     const profile = sandbox.buildSeatbeltProfile(policy, cwd);
     return new Promise((resolve) => {
       execFile(sandbox.SANDBOX_EXEC, ['-p', profile, '/bin/zsh', '-c', command],
-        { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+        { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
           const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: error?.code || 0, error: error?.message || null, sandboxed: true };
           audit('shell', command, `sandbox=${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
           resolve(result);
@@ -724,7 +843,7 @@ async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-req
     console.warn(`[sandbox] 未沙箱执行（${sb.reason}）policy=${policy}`);
   }
   return new Promise((resolve) => {
-    exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+    exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
       const result = { stdout: stdout.slice(0, 50000), stderr: stderr.slice(0, 10000), exitCode: error?.code || 0, error: error?.message || null };
       audit('shell', command, `exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
       resolve(result);
@@ -768,11 +887,40 @@ ipcMain.handle('tool:readFile', (_, payload) => toolReadFile(payload));
 // 写操作统一走审批中心（L2）
 const WRITE_TOOLS = ['writeFile', 'editFile', 'applyPatch'];
 // P0-D：写工具实现提取为函数（IPC 与定时任务 Agent 通道共用）
+// P0-3：写路径白名单——写目标越出 {项目 cwd, userData, 系统临时目录} 时：
+//   · auto-safe / on-request：强制弹审批（不走 needsApproval，任何「始终允许」规则不可豁免）；
+//   · never 档（全不询问）或 requireApproval=false（无审批通道的调用方）：直接硬拒绝，fail-closed。
+//   白名单外的批准也不落地 conversation/always 规则，防止一次批准演变为永久绕过。
+function outsideWriteTarget(toolName, args) {
+  const roots = writeGuard.allowedWriteRoots({
+    cwd: args.cwd,
+    userDataDir: app.getPath('userData'),
+  });
+  if (toolName === 'applyPatch') {
+    return writeGuard.firstOutsideTarget(writeGuard.patchTargets(args.patch), roots, args.cwd || process.cwd());
+  }
+  if (!args.path) return null;
+  const target = resolveToolPath(args.path, args.cwd);
+  return writeGuard.firstOutsideTarget([target], roots, args.cwd || process.cwd());
+}
+
 async function runWriteTool(toolName, args) {
   const { approvalMode = 'on-request', conversationId, requireApproval = true, ...rest } = args;
   const toolKey = { writeFile: 'write_file', editFile: 'edit_file', applyPatch: 'apply_patch' }[toolName];
   let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
-  if (requireApproval) {
+  const outside = outsideWriteTarget(toolName, rest);
+  if (outside) {
+    if (!requireApproval || approvalMode === 'never') {
+      audit(toolKey, rest.path || '(patch)', `白名单外写入被拦截：${outside}`, 'blocked');
+      return { ok: false, blocked: true, outsideWhitelist: true, path: outside, error: `写入目标超出允许范围（仅限项目目录 / 应用数据 / 系统临时目录）：${outside}` };
+    }
+    const decision = await requestApproval(toolKey, rest);
+    if (decision === 'deny') {
+      audit(toolKey, rest.path || '(patch)', `白名单外写入被拒绝：${outside}`, 'denied');
+      return { ok: false, error: '用户拒绝执行', denied: true };
+    }
+    // 决策仅本次有效（once），不调用 applyApprovalDecision——白名单外路径不允许沉淀「始终允许」
+  } else if (requireApproval) {
     const verdict = approval.needsApproval({ tool: toolKey, args: rest, approvalMode, conversationId, alwaysRules, conversationRules });
     if (verdict.matched) ruleMatched = verdict.matched;
     if (verdict.need) {
@@ -1725,14 +1873,18 @@ async function reconnectMcpServers() {
 
 // ═══════════════════════════════════════════
 //  MODEL PROXY (streaming, main-process direct)
+//  P0-4：抽为可复用函数——model:chat IPC 与主进程 Agent 运行器（agentRunner）共用。
+//  externalSignal：外部中止信号（交互式运行的 AbortController）；信号中止时级联中止在途 fetch。
 // ═══════════════════════════════════════════
-ipcMain.handle('model:chat', async (event, { providerId, isGlobal = false, baseUrl, messages, model, tools, reasoningEffort }) => {
+async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages, model, tools, reasoningEffort }, sender, externalSignal) {
   const secret = resolveSecret(providerId, isGlobal);
   if (!secret || !secret.api_key) {
     throw new Error('KEY_MISSING: 模型凭证未加载，请在本机模型设置中重新填写 API Key');
   }
   const root = (baseUrl || secret.base_url || '').replace(/\/+$/, '');
   if (!root) throw new Error('BASE_URL_MISSING: 模型服务地址为空');
+  // P3-2：fg 槽位预占（超时抛错=真过载，调用方按普通失败处理；AbortError 不计错误连击）
+  const slot = await quota.acquire('fg', providerId || 'default');
   const body = { model, messages, stream: true, stream_options: { include_usage: true } };
   if (tools) body.tools = tools;
   // 思考强度：仅在用户显式选择时下发（OpenAI 兼容 reasoning_effort；空值不发送，避免严格服务端 400）
@@ -1742,6 +1894,10 @@ ipcMain.handle('model:chat', async (event, { providerId, isGlobal = false, baseU
   let usage = null;
   const controller = new AbortController();
   activeChats.add(controller);
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   try {
     const res = await fetch(`${root}/chat/completions`, {
       method: 'POST',
@@ -1778,11 +1934,11 @@ ipcMain.handle('model:chat', async (event, { providerId, isGlobal = false, baseU
           // 推理模型（mimo / DeepSeek-R 系）思考阶段输出 reasoning_content，
           // 此前被丢弃 → 思考全程只有「思考中...」，用户误以为 API 很慢
           if (delta?.reasoning_content) {
-            event.sender.send('model:reasoning', delta.reasoning_content);
+            sender.send('model:reasoning', delta.reasoning_content);
           }
           if (delta?.content) {
             fullContent += delta.content;
-            event.sender.send('model:delta', delta.content);
+            sender.send('model:delta', delta.content);
           }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
@@ -1798,23 +1954,30 @@ ipcMain.handle('model:chat', async (event, { providerId, isGlobal = false, baseU
         }
       }
     }
+    quota.reportSuccess(providerId || 'default');
     return { content: fullContent, tool_calls: toolCalls.filter(Boolean), usage, finish_reason: finishReason };
   } catch (err) {
     if (err.name === 'AbortError') {
       return { aborted: true, content: fullContent, usage };
     }
+    quota.reportError(providerId || 'default');
     throw err;
   } finally {
     activeChats.delete(controller);
+    slot.release();
   }
-});
+}
+
+ipcMain.handle('model:chat', (event, payload) => chatStreamOnce(payload || {}, event.sender));
 
 // 中止全部进行中的 chat（停止生成）
+// P0-4：同时中止主进程 Agent 运行器中挂起的交互式运行（run controller 级联中止在途 fetch）
 ipcMain.handle('model:abort', async () => {
   const n = activeChats.size;
   for (const c of activeChats) c.abort();
   activeChats.clear();
-  return { ok: true, aborted: n };
+  const abortedRuns = agentRunner.abortAllRuns();
+  return { ok: true, aborted: n, abortedRuns };
 });
 
 // 定时任务执行通道：非流式单轮直连（凭证解析与 model:chat 同源）
@@ -1868,30 +2031,40 @@ async function scheduledAgentChat(payload) {
   }
   const root = (payload.baseUrl || secret.base_url || '').replace(/\/+$/, '');
   if (!root) throw new Error('BASE_URL_MISSING: 模型服务地址为空');
+  // P3-2：fg 槽位预占——Worker / 编排 / 记忆后台 compress 均经此通道，统一占用 fg 槽位
+  const slot = await quota.acquire('fg', payload.providerId || 'default');
   const body = { model: payload.model, messages: payload.messages, stream: false };
   if (Array.isArray(payload.tools) && payload.tools.length > 0) {
     body.tools = payload.tools;
     body.tool_choice = 'auto';
   }
-  const res = await fetch(`${root}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.api_key}` },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(180000),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const j = await res.json();
-  const choice = j.choices?.[0] || {};
-  const m = choice.message || {};
-  return {
-    content: m.content || '',
-    tool_calls: (m.tool_calls || []).map((tc) => ({
-      id: tc.id, type: 'function',
-      function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '{}' },
-    })),
-    usage: j.usage ? { prompt_tokens: j.usage.prompt_tokens || 0, completion_tokens: j.usage.completion_tokens || 0 } : null,
-    finish_reason: choice.finish_reason || null,
-  };
+  try {
+    const res = await fetch(`${root}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.api_key}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180000),
+    });
+    if (!res.ok) {
+      quota.reportError(payload.providerId || 'default');
+      throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    }
+    const j = await res.json();
+    quota.reportSuccess(payload.providerId || 'default');
+    const choice = j.choices?.[0] || {};
+    const m = choice.message || {};
+    return {
+      content: m.content || '',
+      tool_calls: (m.tool_calls || []).map((tc) => ({
+        id: tc.id, type: 'function',
+        function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '{}' },
+      })),
+      usage: j.usage ? { prompt_tokens: j.usage.prompt_tokens || 0, completion_tokens: j.usage.completion_tokens || 0 } : null,
+      finish_reason: choice.finish_reason || null,
+    };
+  } finally {
+    slot.release();
+  }
 }
 
 // 定时任务专用 toolHandlers：与渲染层会话同源（复用主进程工具实现）
@@ -1915,6 +2088,52 @@ function scheduledToolHandlers() {
     mcpCallTool: callMcpTool,
   };
 }
+
+// P0-4：主进程 Agent 运行器——交互式会话工具循环迁移至主进程。
+// 渲染层只负责发起（agent:run）、订阅事件（agent:event）、中止（agent:abort）；
+// 循环本体与全部工具副作用都在主进程，刷新/关闭窗口不再杀死进行中任务。
+const agentRunner = require('./agentRunner');
+const { waitGroupSettled, humanizeGroupResult } = require('./orchestrator/invoke');
+
+// orchestrate_task 工具实现：对话内自动多 Agent 编排（模型自主决策触发）。
+// 同步等待整组收尾，返回人话聚合结果；用户「停止」时立即返回未完成说明。
+// 注意：仅在主会话 handlers 注入——Worker 内不可再编排（防递归失控）。
+async function toolOrchestrateTask(args, { signal } = {}) {
+  const goal = String(args?.goal || '').trim();
+  if (!goal) return { ok: false, error: 'goal 不能为空' };
+  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+  const cwd = String(args?.cwd || '');
+  const maxAgents = Number(args?.max_agents);
+  if (maxAgents >= 1 && maxAgents <= 8) workerPool.setMaxConcurrent(Math.floor(maxAgents));
+  const plan = await orchestrator.autoOrchestrate({ goal, cwd });
+  if (!plan.ok) return { ok: false, error: `编排启动失败：${plan.error}` };
+  const waited = await waitGroupSettled(taskStore, plan.groupId, { signal });
+  if (waited.aborted) {
+    // 用户已停止：强停该组全部在役 Agent（已完成结果保留在组内，胶囊面板可查）
+    for (const a of workerPool.listActive()) {
+      if (a.groupId === plan.groupId) workerPool.abortTask(a.groupId, a.taskId);
+    }
+    return { ok: false, aborted: true, groupId: plan.groupId,
+      error: `用户已停止：编排组 ${plan.groupId} 的在役 Agent 已中止（已完成的部分结果已保留）` };
+  }
+  if (waited.timedOut || waited.missing) {
+    return { ok: false, groupId: plan.groupId, error: `编排组 ${plan.groupId} 等待超时或状态异常，可稍后在对话中查询进度` };
+  }
+  return { ok: true, groupId: plan.groupId, taskCount: plan.tasks.length, summary: humanizeGroupResult(waited.group) };
+}
+
+agentRunner.initAgentRunner({
+  loadAgentCore,
+  // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
+  // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
+  createToolHandlers: ({ sender, signal }) => ({
+    ...scheduledToolHandlers(),
+    chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal),
+    orchestrateTask: (args) => toolOrchestrateTask(args, signal),
+  }),
+});
+ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
+ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun(runId) }));
 
 // 定时任务 Agent 入口：scheduler.runTask 到点调用
 // 审批策略 auto-safe：L2 写操作自动放行（本地审计已留痕），L1 危险命令/L3 MCP 仍弹审批卡
@@ -1949,6 +2168,205 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
   });
   return { output: finalText || '', toolCalls: toolCount, usage: totalUsage };
 }
+
+// ═══════════════════════════════════════════
+//  P1：任务编排子系统（Orchestrator + WorkerPool + 持久化队列 + Aggregator）
+//  目标 → LLM 拆解 DAG → 并行分层执行（wait_all）→ 聚合收尾；SQLite 断点续跑。
+//  与定时任务通道同源：loadAgentCore / scheduledAgentChat / scheduledToolHandlers 复用。
+// ═══════════════════════════════════════════
+const { openDbAsync } = require('./db');
+const { TaskStore } = require('./taskStore');
+const { MemoryManager } = require('./memory');
+const { MemoryBgScheduler } = require('./memory/bgScheduler');
+const workerPool = require('./workerPool');
+const orchestrator = require('./orchestrator');
+
+let taskStore = null;
+let taskDb = null;
+let memoryManager = null;   // P2-1：记忆唯一写入入口（SQLite，五域四层）
+let memoryScheduler = null; // P2-5：记忆后台任务调度器
+
+function emitTaskEvent(evt) {
+  // 事件桥接：编排器监听组终态/暂停事件，驱动 auto 组自动重规划
+  try { orchestrator.onTaskEvent(evt); } catch (e) { console.error('[orchestrator] 事件处理异常:', e.message); }
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send('tasks:event', evt); } catch { /* 窗口已销毁 */ }
+  }
+}
+
+// 任务执行模型：与定时任务同源（跟随用户当前选择；未选择时给出可行动错误）
+function resolveTaskModel() {
+  const m = scheduler.getModel();
+  if (!m || !m.model) {
+    throw new Error('未配置执行模型：请在任意会话中选择模型（任务编排复用会话模型与凭证）');
+  }
+  return { providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model };
+}
+
+function initTaskOrchestration() {
+  // 异步初始化：驱动选择可能包含子进程金丝雀探测（最长 ~10s），不阻断启动
+  openDbAsync(app.getPath('userData'), { isPackaged: app.isPackaged })
+    .then(setupTaskOrchestration)
+    .catch((err) => {
+      // 编排子系统初始化失败不阻断应用启动（任务功能不可用，其余不受影响）
+      console.error('[tasks] 初始化失败（任务编排不可用）:', err.message);
+      taskStore = null;
+    });
+}
+
+function setupTaskOrchestration(db) {
+  try {
+    taskDb = db;
+    taskStore = new TaskStore(db);
+
+    // P2：记忆体系初始化（与任务编排共用 SQLite 底座）
+    memoryManager = new MemoryManager({ db });
+    // 旧 JSON 记忆一次性导入（幂等：localStore 清空后不再重复；按标记只导一次）
+    try {
+      if (db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source = 'legacy-import'").get().n === 0) {
+        const legacy = localStore?.data?.memories || [];
+        const n = memoryManager.importLegacy(legacy);
+        if (n > 0) console.log(`[memory] 旧记忆导入完成：${n} 条`);
+      }
+    } catch (e) { console.warn('[memory] 旧记忆导入跳过:', e.message); }
+    memoryScheduler = new MemoryBgScheduler({
+      db,
+      memory: memoryManager,
+      chatOnce: scheduledAgentChat,
+      resolveModel: resolveTaskModel,
+      bgGate: () => quota.bgAllowed(), // P3-3：前台过载/熔断时后台作业全部让路
+      emit: emitTaskEvent,
+    });
+    memoryScheduler.start({ intervalMs: 60 * 1000 });
+
+    workerPool.initWorkerPool({
+      loadAgentCore,
+      store: taskStore,
+      maxConcurrent: Number(localStore?.getPreference('tasks.max_concurrent')) || 4,
+      emit: emitTaskEvent,
+      resolveModel: resolveTaskModel,
+      createToolHandlers: ({ signal }) => ({
+        ...scheduledToolHandlers(),
+        // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联
+        chat: (payload) => scheduledAgentChat(payload),
+      }),
+      buildTaskPrompt: (group, task) => {
+        // 注入总体目标 + 已完成前置任务的结论摘要（跨 Worker 数据传递的唯一通道）
+        const gNow = taskStore.getGroup(group.group_id);
+        const doneSiblings = (gNow?.tasks || [])
+          .filter((t) => t.status === 'done' && t.taskId !== task.taskId)
+          .map((t) => `- ${t.title}：${String(t.result?.summary || '').slice(0, 300)}`);
+        // P2-6：分层召回——按「目标+任务标题」查询该空间相关记忆，Top-3 注入
+        let memoryBlock = '';
+        try {
+          if (memoryManager && group.cwd) {
+            const hits = memoryManager.recallContents({
+              spaceId: group.cwd, query: `${group.goal} ${task.title}`, topK: 3,
+              domains: ['global_knowledge', 'entity', 'reflection'],
+            });
+            if (hits.length) {
+              memoryBlock = `【相关记忆（历史沉淀，供参考）】\n${hits.map((m) => `- ${m.content.slice(0, 200)}`).join('\n')}`;
+            }
+          }
+        } catch { /* 记忆召回失败不阻塞任务 */ }
+        return [
+          `【总体目标】\n${group.goal}`,
+          doneSiblings.length ? `【已完成前置任务的结论摘要】\n${doneSiblings.join('\n')}` : '',
+          memoryBlock,
+          `【你的子任务】${task.title}\n${task.prompt}\n\n只完成该子任务，产出可执行的结论；工作目录即项目目录。`,
+        ].filter(Boolean).join('\n\n');
+      },
+    });
+
+    orchestrator.initOrchestrator({
+      loadAgentCore,
+      store: taskStore,
+      chatOnce: scheduledAgentChat,
+      resolveModel: resolveTaskModel,
+      emit: emitTaskEvent,
+      runGroup: (gid) => workerPool.runGroup(gid),
+    });
+
+    // 崩溃恢复：中断的 running 任务回队；上轮运行中的组自动续跑（断点续跑）
+    const rec = taskStore.recoverInterrupted();
+    if (rec.recoveredTasks > 0 || rec.runningGroups.length > 0) {
+      console.log(`[tasks] 崩溃恢复：${rec.recoveredTasks} 个任务回队，${rec.runningGroups.length} 个组续跑`);
+      for (const gid of rec.runningGroups) {
+        workerPool.runGroup(gid).catch((e) => console.error(`[tasks] 组 ${gid} 续跑失败:`, e.message));
+      }
+    }
+    console.log('[tasks] 任务编排子系统就绪（SQLite 持久化队列 + Worker 池）');
+  } catch (err) {
+    // 编排子系统初始化失败不阻断应用启动（任务功能不可用，其余不受影响）
+    console.error('[tasks] 初始化失败（任务编排不可用）:', err.message);
+    taskStore = null;
+  }
+}
+
+// ── 任务编排 IPC ──
+ipcMain.handle('tasks:autoRun', async (_, { goal, cwd } = {}) => {
+  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+  // 一键自动：拆解（失败自动修复重试）→ 直接执行；组失败后由 orchestrator 自动重规划
+  return orchestrator.autoOrchestrate({ goal, cwd });
+});
+ipcMain.handle('tasks:plan', async (_, { goal, cwd } = {}) => {
+  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+  return orchestrator.planGoal({ goal, cwd });
+});
+ipcMain.handle('tasks:execute', async (_, { groupId } = {}) => {
+  if (!taskStore) return { ok: false, error: '任务编排子系统不可用' };
+  try {
+    const g = await workerPool.runGroup(groupId);
+    return { ok: true, group: g };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('tasks:list', async (_, opts) => (taskStore ? { ok: true, groups: taskStore.listGroups(opts) } : { ok: false, error: '不可用' }));
+ipcMain.handle('tasks:get', async (_, { groupId } = {}) => (taskStore ? { ok: true, group: taskStore.getGroup(groupId) } : { ok: false, error: '不可用' }));
+ipcMain.handle('tasks:cancel', async (_, { groupId } = {}) => {
+  if (!taskStore) return { ok: false, error: '不可用' };
+  try {
+    // v1：仅允许取消未在执行的组（ready/paused）；running 组等收尾或用任务级重试干预
+    const g = taskStore.getGroup(groupId);
+    if (!g) return { ok: false, error: '任务组不存在' };
+    if (g.status === 'running') return { ok: false, error: '组执行中，暂不支持取消；请等待收尾后处理' };
+    return { ok: true, group: taskStore.setGroupStatus(groupId, 'cancelled') };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+// 强制关闭正在执行的子任务（Agent 面板入口）：中止运行且不重试
+ipcMain.handle('tasks:abortTask', async (_, { groupId, taskId } = {}) => {
+  if (!taskStore) return { ok: false, error: '不可用' };
+  const done = workerPool.abortTask(groupId, taskId);
+  return done ? { ok: true } : { ok: false, error: '该任务不在执行中（可能已完成或尚未开始）' };
+});
+// 组级强停（对话中止联动 / 胶囊面板「全部停止」）
+ipcMain.handle('tasks:abortGroup', async (_, { groupId } = {}) => {
+  if (!taskStore) return { ok: false, error: '不可用' };
+  const n = workerPool.abortGroup(groupId);
+  return { ok: true, aborted: n };
+});
+ipcMain.handle('tasks:retryTask', async (_, { groupId, taskId } = {}) => {  if (!taskStore) return { ok: false, error: '不可用' };
+  try {
+    const t = taskStore.getTask(groupId, taskId);
+    if (!t) return { ok: false, error: '子任务不存在' };
+    if (t.status !== 'failed') return { ok: false, error: `仅失败任务可重试（当前：${t.status}）` };
+    taskStore.setTaskStatus(groupId, taskId, 'queued');
+    const g = taskStore.getGroup(groupId);
+    if (g.status === 'paused') taskStore.setGroupStatus(groupId, 'running'); // paused → running（重试续跑）
+    workerPool.schedule();
+    return { ok: true, group: taskStore.getGroup(groupId) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('tasks:config', async (_, { maxConcurrent } = {}) => {
+  const n = workerPool.setMaxConcurrent(maxConcurrent);
+  localStore?.setPreference('tasks.max_concurrent', n);
+  return { ok: true, maxConcurrent: n };
+});
 
 // ═══════════════════════════════════════════
 //  COMPUTER USE (M4-C)：macOS AX 结构化界面自动化

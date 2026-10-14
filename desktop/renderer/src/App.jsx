@@ -572,6 +572,7 @@ export default function App() {
         </header>
         {showDashboard && <Dashboard />}
         {showScheduled && <ScheduledTasks />}
+        {/* 任务编排已并入对话流（orchestrate_task 工具 + AgentDock 胶囊），不再有独立面板入口 */}
         {/* E4：ChatArea 常驻挂载（数据/定时任务视图下用 hidden 隐藏而非卸载）。
             此前条件渲染会卸载 ChatArea，导致生态中心「在当前会话启用」的
             mjcode:enable-expert/skill 事件静默丢失；同时避免重挂载带来的

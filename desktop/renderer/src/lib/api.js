@@ -1,7 +1,21 @@
 // 数据访问层：服务端 API 与本地存储（离线模式）双轨路由
-// 服务端地址可覆盖（localStorage mj_api_base / 编译期注入），默认本机 3001
-const API = (typeof localStorage !== 'undefined' && localStorage.getItem('mj_api_base'))
+// 服务端地址优先级：localStorage mj_api_base（历史覆盖）→ 主进程偏好 server.apiBase（设置-通用）
+// → env MJ_SERVER_API（主进程侧）→ 默认本机 3001
+let API = (typeof localStorage !== 'undefined' && localStorage.getItem('mj_api_base'))
   || 'http://localhost:3001/api';
+
+export function getApiBase() { return API; }
+export function setApiBase(b) {
+  const v = String(b || '').replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(v) || v === API) return;
+  API = v;
+  try { localStorage.setItem('mj_api_base', API); } catch { /* 隐私模式等场景尽力而为 */ }
+}
+
+// 启动同步：主进程偏好是打包版唯一可用的服务端地址入口（env 经 Finder 启动不可达）
+if (typeof window !== 'undefined' && window.mjcode?.serverBase) {
+  window.mjcode.serverBase().then((r) => { if (r?.base) setApiBase(r.base); }).catch(() => {});
+}
 
 let localMode = false;
 export function setLocalMode(v) { localMode = !!v; }

@@ -30,7 +30,37 @@ class LocalStore {
     this.dataDir = dataDir;
     this.recoveredFromBackup = false; // 诊断：本次加载是否走了 .bak 恢复
     this.pendingBakRepair = false;     // 主文件已知损坏：下次 flush 跳过 .bak 覆盖（防好备份被坏文件污染）
+    // P0-1：消息热路径合并刷盘状态。此前每条消息 addMessage 都触发整库 writeFileSync，
+    // Agent 工具循环高峰每秒多条消息，同步写会卡死主进程事件循环（连带冻结 IPC 流式转发与审批响应）。
+    this._flushTimer = null; // 挂起的合并刷盘定时器
+    this._dirty = false;     // 有未落盘的内存变更
     this.data = this.load();
+  }
+
+  // P0-1：合并刷盘——延迟 delay 毫秒合并窗口内的多次变更为一次落盘。
+  // 仅用于高频低危路径（消息追加 / 线程状态）；关键数据（凭证/供应商/偏好）仍走同步 flush()。
+  // 崩溃丢失窗口 = 合并窗口（默认 150ms），换回主进程不再被消息热路径阻塞，代价可接受。
+  scheduleFlush(delay = 150) {
+    this._dirty = true;
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      if (this._dirty) {
+        this._dirty = false;
+        this.flush();
+      }
+    }, delay);
+    // unref：不阻止进程退出（退出路径由 flushSync 兜底）
+    if (typeof this._flushTimer.unref === 'function') this._flushTimer.unref();
+  }
+
+  // P0-1：强制落盘挂起的合并变更（退出前 / 测试断言前调用）
+  flushSync() {
+    if (!this._dirty && !this._flushTimer) return false;
+    if (this._flushTimer) { clearTimeout(this._flushTimer); this._flushTimer = null; }
+    this._dirty = false;
+    this.flush();
+    return true;
   }
 
   load() {
@@ -148,12 +178,13 @@ class LocalStore {
   }
 
   // 线程状态：运行中 / 待审批 / 已完成（侧栏三色指示的数据来源）
+  // P0-1：状态切换与消息同属高频路径，走合并刷盘
   setThreadStatus(threadId, status) {
     const t = this.data.threads.find((x) => x.id === Number(threadId));
     if (!t) return null;
     t.status = status;
     t.updatedAt = Date.now();
-    this.flush();
+    this.scheduleFlush();
     return t;
   }
 
@@ -171,7 +202,8 @@ class LocalStore {
     if (role === 'user' && (t.title === '新对话' || t.title === '新会话' || !t.title)) {
       t.title = String(content || '').slice(0, 50) || t.title;
     }
-    this.flush();
+    // P0-1：消息追加是最高频写路径，改为合并刷盘（内存态即时可见，磁盘延迟 ≤150ms）
+    this.scheduleFlush();
     return m;
   }
 
@@ -413,7 +445,7 @@ class LocalStore {
     for (const m of this.data.memories) {
       if (ids.includes(m.id)) m.usageCount += 1;
     }
-    this.flush();
+    this.scheduleFlush(); // P0-1：使用计数属低危高频候选，走合并刷盘
   }
 }
 

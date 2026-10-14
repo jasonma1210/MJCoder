@@ -9,9 +9,9 @@ const { execFile } = require('child_process');
 const DEFAULT_LIMIT = 8;
 const BRANCH_PREFIX = 'mjcode/';
 
-function git(cwd, args, timeout = 20000) {
+function git(cwd, args, timeout = 20000, input = null) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile('git', args, { cwd, timeout, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
         stdout: String(stdout || ''),
@@ -19,6 +19,11 @@ function git(cwd, args, timeout = 20000) {
         error: error ? error.message : null,
       });
     });
+    // stdin 支持（P1 并行隔离：git apply - 从标准输入读补丁）
+    if (input != null && child.stdin) {
+      child.stdin.write(input);
+      child.stdin.end();
+    }
   });
 }
 

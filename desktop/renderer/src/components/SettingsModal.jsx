@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, loadFeatures } from '../lib/api';
+import { api, loadFeatures, setApiBase } from '../lib/api';
 import MarketModal from './MarketModal';
 import TeamSpace from './TeamSpace';
 import EcosystemModal from './EcosystemModal';
@@ -92,6 +92,16 @@ export default function SettingsModal({
   const sandbox = approvalSettings?.sandbox_policy || 'workspace-write';
   // P0-F：沙箱能力状态（无 OS 级沙箱时明示兜底边界）
   const [sandboxStatus, setSandboxStatus] = useState(null);
+  // 服务端地址（设置-通用）：打包版唯一可行的服务端数据入口（dev 时本地 3001 已在跑）
+  const [serverBaseInput, setServerBaseInput] = useState('');
+  const [serverBaseCur, setServerBaseCur] = useState('');
+  const [serverBaseMsg, setServerBaseMsg] = useState('');
+  useEffect(() => {
+    window.mjcode?.serverBase?.().then((r) => {
+      setServerBaseCur(r?.base || '');
+      setServerBaseInput(r?.base || '');
+    }).catch(() => {});
+  }, []);
   // A10：读取时迁移遗留值（auto → auto-safe、always-ask → always）
   const approvalMode = migrateApprovalMode(approvalSettings?.approval_mode);
 
@@ -206,13 +216,19 @@ export default function SettingsModal({
   }
 
   async function addProvider() {
-    if (!newP.name || !newP.base_url) return;
+    if (!newP.name || !newP.base_url) { setAddPError('名称与接口地址必填'); return; }
     const url = newP.base_url.trim();
     if (!isValidHttpUrl(url)) { setAddPError('接口地址需为完整 URL（以 http:// 或 https:// 开头）'); return; }
+    if (!newP.api_key || !String(newP.api_key).trim()) { setAddPError('API Key 必填'); return; }
     setAddPError('');
-    await api.addProvider({ ...newP, base_url: url });
-    setNewP({ name: '', base_url: '', api_key: '' });
-    onProvidersChange();
+    try {
+      await api.addProvider({ ...newP, base_url: url });
+      setNewP({ name: '', base_url: '', api_key: '' });
+      onProvidersChange();
+    } catch (err) {
+      // 此前裸 await：主进程报错（如打包版 safeStorage 不可用）时 Promise 静默失败，UI 毫无反馈
+      setAddPError(`保存失败：${err?.message || '未知错误'}`);
+    }
   }
 
   return (
@@ -313,6 +329,31 @@ export default function SettingsModal({
                 </div>
                 <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)} />
               </div>
+            </Section>
+            <Section title="服务端地址">
+              <p className="text-xs text-text2 mb-2">本地优先：会话、本机模型、任务编排不依赖服务端；服务端仅提供登录、共享模型与团队数据。打包版默认指向本机 3001，若服务端部署在远端请在此填写（以 http:// 或 https:// 开头）。</p>
+              <div className="flex items-center gap-2">
+                <input value={serverBaseInput} onChange={(e) => setServerBaseInput(e.target.value)}
+                  placeholder="http://localhost:3001/api"
+                  className="flex-1 bg-surface border border-border rounded-lg px-3 py-1.5 text-sm font-mono outline-none focus:border-accent" />
+                <button
+                  onClick={async () => {
+                    setServerBaseMsg('');
+                    try {
+                      const r = await window.mjcode.serverBase({ base: serverBaseInput });
+                      setServerBaseCur(r.base);
+                      setApiBase(r.base);
+                      loadFeatures();
+                      setServerBaseMsg('已保存并生效（当前地址：' + r.base + '，来源：' + r.source + '）');
+                    } catch (err) {
+                      setServerBaseMsg(err?.message || '保存失败');
+                    }
+                  }}
+                  className="bg-accent text-white px-3 py-1.5 rounded-lg text-xs shrink-0"
+                >保存并测试</button>
+              </div>
+              {serverBaseMsg && <p className="text-xs text-text2 mt-1">{serverBaseMsg}</p>}
+              {serverBaseCur && <p className="text-xs text-text2 mt-1">当前生效：{serverBaseCur}</p>}
             </Section>
           </>
         )}
@@ -675,8 +716,12 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
 
   async function testConn(p) {
     setTestStatus((s) => ({ ...s, [p.id]: { testing: true } }));
-    const r = await api.testConnection(p.id, p.base_url);
-    setTestStatus((s) => ({ ...s, [p.id]: { ok: r?.ok, latencyMs: r?.latencyMs, error: r?.error } }));
+    try {
+      const r = await api.testConnection(p.id, p.base_url);
+      setTestStatus((s) => ({ ...s, [p.id]: { ok: r?.ok, latencyMs: r?.latencyMs, error: r?.error } }));
+    } catch (err) {
+      setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: err?.message || '测试请求失败' } }));
+    }
   }
 
   return (
@@ -721,8 +766,12 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                           confirmLabel: '删除',
                         });
                         if (!ok) return;
-                        await api.deleteProvider(p.id);
-                        onProvidersChange();
+                        try {
+                          await api.deleteProvider(p.id);
+                          onProvidersChange();
+                        } catch (err) {
+                          setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: err?.message || '删除失败' } }));
+                        }
                       }} className="text-danger text-xs">删除</button>
                     </span>
                   </>

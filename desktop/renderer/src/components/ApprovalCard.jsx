@@ -43,7 +43,9 @@ export default function ApprovalCard({ onPendingChange }) {
   }, []);
 
   function resolve(decision) {
-    window.mjcode.resolveApproval(decision);
+    // P0-2：决策负载必须回带 approvalId——主进程按 id 精确分发，
+    // 并发审批时决策才能落到正确的请求上（否则把「允许」发给另一条命令）
+    window.mjcode.resolveApproval({ approvalId: pending?.approvalId, decision });
     setPending(null);
     pendingCbRef.current?.(false);
   }

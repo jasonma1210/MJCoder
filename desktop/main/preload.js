@@ -173,7 +173,37 @@ contextBridge.exposeInMainWorld('mjcode', {
     ipcRenderer.on('tool:approval-request', handler);
     return () => ipcRenderer.removeListener('tool:approval-request', handler);
   },
-  resolveApproval: (decision) => ipcRenderer.send('tool:approval-response', decision),
+  // P0-2：决策负载携带 approvalId 回传（payload: { approvalId, decision }），
+  // 主进程按 id 精确分发，并发审批不再串扰
+  resolveApproval: (payload) => ipcRenderer.send('tool:approval-response', payload),
+  // P0-4：主进程 Agent 运行通道——循环在主进程执行，渲染层发起/订阅/中止
+  agentRun: (payload) => ipcRenderer.invoke('agent:run', payload),
+  agentAbort: (runId) => ipcRenderer.invoke('agent:abort', { runId }),
+  onAgentEvent: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('agent:event', handler);
+    return () => ipcRenderer.removeListener('agent:event', handler);
+  },
+  // P1：任务编排通道（拆解/执行/查询/取消/重试/并发配置 + 实时事件）
+  tasksAutoRun: (payload) => ipcRenderer.invoke('tasks:autoRun', payload),
+  tasksPlan: (payload) => ipcRenderer.invoke('tasks:plan', payload),
+  tasksExecute: (groupId) => ipcRenderer.invoke('tasks:execute', { groupId }),
+  tasksList: (opts) => ipcRenderer.invoke('tasks:list', opts),
+  tasksGet: (groupId) => ipcRenderer.invoke('tasks:get', { groupId }),
+  tasksCancel: (groupId) => ipcRenderer.invoke('tasks:cancel', { groupId }),
+  tasksAbortTask: (groupId, taskId) => ipcRenderer.invoke('tasks:abortTask', { groupId, taskId }),
+  tasksAbortGroup: (groupId) => ipcRenderer.invoke('tasks:abortGroup', { groupId }),
+  memoryStats: () => ipcRenderer.invoke('memory:stats'),
+  memoryBgTasks: (opts) => ipcRenderer.invoke('memory:bgTasks', opts),
+  quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
+  serverBase: (payload) => ipcRenderer.invoke('local:server/base', payload),
+  tasksRetryTask: (groupId, taskId) => ipcRenderer.invoke('tasks:retryTask', { groupId, taskId }),
+  tasksConfig: (payload) => ipcRenderer.invoke('tasks:config', payload),
+  onTasksEvent: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('tasks:event', handler);
+    return () => ipcRenderer.removeListener('tasks:event', handler);
+  },
   // Computer Use（M4-C）
   cuaStatus: () => ipcRenderer.invoke('cua:status'),
   cuaRun: (payload) => ipcRenderer.invoke('cua:run', payload),

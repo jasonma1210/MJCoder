@@ -115,6 +115,15 @@ export const BASE_TOOLS = [
       task_type: { type: 'string', description: '任务类型: explore/implement/review/test' },
     }, required: ['objective'] },
   }},
+  // 多 Agent 编排（对话内自动触发）：整组并行执行，阻塞至收尾，返回聚合结果
+  { type: 'function', function: {
+    name: 'orchestrate_task',
+    description: '把一个可拆解为多个子任务的目标交给多 Agent 编排系统：自动拆解为 DAG、多个独立 Agent 并行执行（各自拥有完整工具集）、失败自动重试与重规划。适用于：用户要求多个角色/多件事并行处理、目标可自然拆分为互不依赖的子任务（如多视角审查、多模块改造）。会阻塞直到整组完成，返回聚合结果与人话总结。',
+    parameters: { type: 'object', properties: {
+      goal: { type: 'string', description: '总体目标（自包含：写清楚对象、范围、验收标准，禁止引用对话上下文）' },
+      max_agents: { type: 'number', description: '并行 Agent 数上限 1-8（默认 4，主流大模型服务均支持）。并发出问题时可调小（如 1 个串行）重试' },
+    }, required: ['goal'] },
+  }},
 ];
 
 const SKILL_PROMPTS = {
@@ -132,6 +141,9 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
 - 浏览和搜索代码（list_dir/grep/glob）
 - 操作 Git（git_status/git_diff/git_log/git_commit，默认在当前项目目录）
 - 启动子代理处理子任务（spawn_subagent）
+- 多 Agent 并行编排（orchestrate_task）：当用户要求多角色/多任务并行，或目标可拆为互不依赖的
+  子任务时，主动调用它把目标转交编排系统并行执行；返回的聚合结果由你向用户转述，
+  若结果提示并发出问题，调小 max_agents 重试并用平实的语言告知用户
 
 工作原则：
 1. 先探索代码库结构，理解项目后再动手
@@ -153,12 +165,18 @@ const CWD_TOOLS = new Set([
   'shell', 'read_file', 'list_dir', 'grep', 'glob',
   'write_file', 'edit_file', 'apply_patch',
   'git_status', 'git_diff', 'git_log', 'git_commit', 'git_branch', 'git_add',
+  'orchestrate_task',
 ]);
 
 // 子代理可用工具：只读探索集（不做任何修改）
 const SUBAGENT_TOOL_NAMES = ['read_file', 'list_dir', 'grep', 'glob', 'git_status', 'git_diff', 'git_log'];
 const SUBAGENT_TOOLS = BASE_TOOLS.filter((t) => SUBAGENT_TOOL_NAMES.includes(t.function.name));
 const SUBAGENT_DEFAULT_BUDGET = 50000;
+
+// token 预算闸的自动压缩救援次数上限（每次救援清零窗口重新计数）
+// 真机复盘：单次救援对文件密集型审查任务不够（逐文件读源码单窗口仍打满），
+// 放宽到 3 次（累计消耗上限 ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
+const TOKEN_RESCUE_MAX = 3;
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
 const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add']);
@@ -179,6 +197,7 @@ const TOOL_HANDLER_NAMES = {
   git_commit: 'gitCommit',
   git_add: 'gitAdd',
   git_branch: 'gitBranch',
+  orchestrate_task: 'orchestrateTask',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -613,7 +632,9 @@ export async function runAgent({
   let lengthContinues = 0;
   let budgetExhausted = false;
   let budgetKind = 'rounds'; // 'rounds' | 'tokens' | 'repeat' —— 收尾文案区分触发闸门
-  let tokenCompacted = false; // token 超限后是否已尝试过自动压缩
+  let tokenRescues = 0; // token 超限后已执行的自动压缩救援次数（上限 TOKEN_RESCUE_MAX）
+  let tokenWindowSpent = 0; // token 预算口径：当前窗口累计消耗（压缩救援后清零）
+  let contextRescued = false; // 上下文超限（provider 400）压缩救援已尝试过
   let renewNotice = '';
 
   // ── 重复失败熔断：空转循环防线 ──
@@ -650,17 +671,33 @@ export async function runAgent({
       : compacted;
     renewNotice = '';
     // P0-A：瞬时错误（429/5xx/网络）指数退避重试；aborted 与客户端错误直穿
-    const result = await chatWithRetry(chatFn, {
-      providerId: model.provider.id,
-      isGlobal: !!model.provider.isGlobal,
-      baseUrl: model.provider.base_url,
-      messages: outbound,
-      model: model.model.model_id,
-      tools: allTools,
-      reasoningEffort: model.model.reasoning_effort || '',
-    }, signal, { baseMs: chatRetryBaseMs });
+    let result;
+    try {
+      result = await chatWithRetry(chatFn, {
+        providerId: model.provider.id,
+        isGlobal: !!model.provider.isGlobal,
+        baseUrl: model.provider.base_url,
+        messages: outbound,
+        model: model.model.model_id,
+        tools: allTools,
+        reasoningEffort: model.model.reasoning_effort || '',
+      }, signal, { baseMs: chatRetryBaseMs });
+    } catch (err) {
+      // 上下文超限救援：小上下文模型在长任务中容易打满 provider 侧限制返回 400，
+      // 此前直穿 → 前面几十轮成果作废（真机表现「跑到一半突然停」）。识别后强制压缩一次续跑；
+      // 已救援过仍超限才抛出（渲染层显示带模型名的错误消息，不再静默）。
+      const msg = String(err?.message || err);
+      if (!contextRescued && !signal?.aborted && /(\bAPI 400\b|context|length|too long|maximum|超出)/i.test(msg)) {
+        contextRescued = true;
+        console.warn(`[agent] 疑似上下文超限（${msg.slice(0, 200)}），强制压缩历史后重试`);
+        convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
+        continue;
+      }
+      console.error(`[agent] 模型调用失败终止运行：${msg.slice(0, 300)}（第 ${roundsUsed} 轮后）`);
+      throw err;
+    }
 
-    if (result.aborted) { aborted = true; finalText = result.content || finalText; break; }
+    if (result.aborted) { aborted = true; finalText = result.content || finalText; console.warn(`[agent] 运行中止：收到中止信号（第 ${roundsUsed} 轮后，窗口消耗 ${tokenWindowSpent} tokens）`); break; }
     const roundUsage = result.usage
       ? { prompt_tokens: result.usage.prompt_tokens || 0, completion_tokens: result.usage.completion_tokens || 0 }
       : null;
@@ -668,14 +705,24 @@ export async function runAgent({
       usage.prompt_tokens += roundUsage.prompt_tokens;
       usage.completion_tokens += roundUsage.completion_tokens;
       lastPromptTokens = roundUsage.prompt_tokens;
+      tokenWindowSpent += roundUsage.prompt_tokens + roundUsage.completion_tokens;
     }
 
-    // P1-I：token 预算闸——超限先自动压缩续跑一次，仍超限才收尾
-    if (tokenBudget > 0 && (usage.prompt_tokens + usage.completion_tokens) > tokenBudget) {
-      if (!tokenCompacted) {
-        tokenCompacted = true;
-        console.warn(`[agent] 单任务 token 预算（${tokenBudget}）已用尽（${usage.prompt_tokens + usage.completion_tokens}），自动压缩后续跑`);
+    // P1-I：token 预算闸——超限先自动压缩续跑（最多 TOKEN_RESCUE_MAX 次），仍超限才收尾。
+    // 预算口径 = 当前窗口累计消耗（压缩救援后清零开新窗口），而非全程累计：
+    // 事故复盘：原实现拿全程累计 usage 判闸——usage 单调递增且压缩后不清零，
+    // 导致压缩救援后下一轮必然再次超限立即收尾，救援形同虚设（真机复现）。
+    // 注意：压缩解决的是「上下文过长」，预算闸防的是「单任务失控烧 token」，
+    // 两者独立；每轮都会重复读取上下文，长任务累计消耗会滚动增大属正常现象。
+    // 真机迭代：单次救援不够——文件密集型审查任务（逐文件读源码）单窗口仍会打满，
+    // 用户看到 470k/454k 熔断文案即第 2 次触闸。放宽为最多 3 次救援（累计上限
+    // ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
+    if (tokenBudget > 0 && tokenWindowSpent > tokenBudget) {
+      if (tokenRescues < TOKEN_RESCUE_MAX) {
+        tokenRescues += 1;
+        console.warn(`[agent] 单任务 token 预算（${tokenBudget}）窗口耗尽（${tokenWindowSpent}），自动压缩后开启新预算窗口续跑（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次救援）`);
         convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
+        tokenWindowSpent = 0; // 新窗口：清零重算（usage 全程累计仍如实上报，不动）
         continue;
       }
       budgetExhausted = true; budgetKind = 'tokens';
@@ -693,6 +740,7 @@ export async function runAgent({
       }
       // 纯文本收尾视为本轮对话完成。「只说不做」由系统提示第 8 条（持续执行纪律）约束，
       // 不做无条件续跑：否则闲聊/正常总结每条都会多一轮请求，延迟与 token 翻倍。
+      console.warn(`[agent] 运行结束（正常收尾）：轮数=${roundsUsed}，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens（窗口 ${tokenWindowSpent}）`);
       onDone?.(finalText, usage, aborted);
       return finalText;
     }
@@ -785,7 +833,8 @@ export async function runAgent({
               const camelName = TOOL_HANDLER_NAMES[tc.function.name];
               const channel = camelName ? resolveChannel(toolHandlers, camelName) : null;
               if (!channel) throw new Error(`未知工具: ${tc.function.name}`);
-              toolResult = await channel(toolArgs);
+              // 第二参传运行上下文（signal 可用于长阻塞工具响应中止，如 orchestrate_task）
+              toolResult = await channel(toolArgs, { signal });
             }
           }
         }
@@ -823,12 +872,16 @@ export async function runAgent({
   }
   // 预算耗尽 / 熔断：如实告知未完成，引导用户「继续」接力（而非假装任务已结束）
   if (budgetExhausted) {
+    console.warn(`[agent] 运行结束（${budgetKind} 熔断）：轮数=${roundsUsed}，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens`);
     if (budgetKind === 'repeat') {
       finalText = `${finalText || ''}\n\n（已主动停止：工具 \`${repeatFailTool}\` 用相同参数连续失败 ${repeatFailCount} 次，`
         + '判定为无效重试而非任务不可完成，继续跑只会空转。请根据上述失败原因调整，或换个说法让我重新尝试。）'.trim();
     } else {
       const kindText = budgetKind === 'tokens' ? 'token 预算' : '执行轮次预算';
-      finalText = `${finalText || '任务尚未完成。'}\n\n（单任务${kindText}已用尽，任务未完全完成。发送「继续」让我接着执行。）`.trim();
+      const exhaustDetail = budgetKind === 'tokens'
+        ? `（含每轮重复读取上下文的消耗，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens，期间已自动压缩续跑 ${tokenRescues} 次；这是防失控上限，不是上下文放不下——上下文会自动压缩）`
+        : '';
+      finalText = `${finalText || '任务尚未完成。'}\n\n（单任务${kindText}已用尽${exhaustDetail}，任务未完全完成。发送「继续」让我接着执行。）`.trim();
     }
   }
   onDone?.(finalText, usage, aborted);
