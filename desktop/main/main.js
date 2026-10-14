@@ -796,8 +796,13 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 // homebrew（node/npm/git 等用户工具）全部找不到——真机复盘：模型被迫每轮先
 // `export PATH=/usr/local/bin:/opt/homebrew/bin:$PATH` 自救，白烧轮次。
 // 统一为子 shell 注入完整 PATH（homebrew 优先，其次系统路径），沙箱内外一致。
+// 复盘文档 P0-1 采纳：增补 bun/volta 等用户级工具目录（存在 HOME 时前置）。
 const SHELL_PATH = '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin';
-const shellEnv = () => ({ ...process.env, PATH: SHELL_PATH });
+const shellEnv = () => {
+  const home = process.env.HOME || '';
+  const userPaths = home ? [`${home}/.bun/bin`, `${home}/.volta/bin`] : [];
+  return { ...process.env, PATH: [...userPaths, SHELL_PATH].join(':') };
+};
 
 // P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
 async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy }) {

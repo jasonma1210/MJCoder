@@ -177,6 +177,9 @@ const SUBAGENT_DEFAULT_BUDGET = 50000;
 // 真机复盘：单次救援对文件密集型审查任务不够（逐文件读源码单窗口仍打满），
 // 放宽到 3 次（累计消耗上限 ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
 const TOKEN_RESCUE_MAX = 3;
+// 预判式触发比例（复盘文档 P1-2 采纳）：窗口消耗达预算 70% 即压缩，
+// 而非等超限后溢出一轮才救——省下溢出轮的无效消耗；触闸后仍受 TOKEN_RESCUE_MAX 约束。
+const TOKEN_COMPACTION_TRIGGER = 0.7;
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
 const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add']);
@@ -251,7 +254,16 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
       providerId: model.provider.id,
       isGlobal: !!model.provider.isGlobal,
       baseUrl: model.provider.base_url,
-      messages: [{ role: 'user', content: `将以下对话历史压缩为一份摘要，保留：关键决策、涉及的文件路径、待办事项与用户偏好。300 字以内，直接输出摘要。\n\n${transcript}` }],
+      // 结构化摘要模板（复盘文档 P1-2 采纳）：固定四段式，细节（文件路径/函数名/结论）
+      // 必须保留——LLM 需要更多细节时按路径按需重读，平衡 token 消耗与信息完整性
+      messages: [{ role: 'user', content: `将以下对话历史压缩为一份结构化摘要，严格按此格式输出（300 字以内）：
+【已完成】列出已完成的工作与验证结果（一句话一项）
+【关键发现】重要结论、发现的文件路径/函数名/关键变量，后续轮次必须能凭此定位
+【待办】当前进行到哪一步、接下来要做什么（含断点位置）
+【约束】用户原始需求中不可丢失的约束
+
+对话历史：
+${transcript}` }],
       model: model.model.model_id,
       reasoningEffort: model.model.reasoning_effort || '',
     });
@@ -708,7 +720,8 @@ export async function runAgent({
       tokenWindowSpent += roundUsage.prompt_tokens + roundUsage.completion_tokens;
     }
 
-    // P1-I：token 预算闸——超限先自动压缩续跑（最多 TOKEN_RESCUE_MAX 次），仍超限才收尾。
+    // P1-I：token 预算闸——窗口消耗达预算 70%（TOKEN_COMPACTION_TRIGGER）即预判式压缩续跑
+    // （最多 TOKEN_RESCUE_MAX 次），救援用尽仍触闸才收尾。
     // 预算口径 = 当前窗口累计消耗（压缩救援后清零开新窗口），而非全程累计：
     // 事故复盘：原实现拿全程累计 usage 判闸——usage 单调递增且压缩后不清零，
     // 导致压缩救援后下一轮必然再次超限立即收尾，救援形同虚设（真机复现）。
@@ -716,11 +729,11 @@ export async function runAgent({
     // 两者独立；每轮都会重复读取上下文，长任务累计消耗会滚动增大属正常现象。
     // 真机迭代：单次救援不够——文件密集型审查任务（逐文件读源码）单窗口仍会打满，
     // 用户看到 470k/454k 熔断文案即第 2 次触闸。放宽为最多 3 次救援（累计上限
-    // ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
-    if (tokenBudget > 0 && tokenWindowSpent > tokenBudget) {
+    // ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线；不设无限救援（成本失控风险）。
+    if (tokenBudget > 0 && tokenWindowSpent > tokenBudget * TOKEN_COMPACTION_TRIGGER) {
       if (tokenRescues < TOKEN_RESCUE_MAX) {
         tokenRescues += 1;
-        console.warn(`[agent] 单任务 token 预算（${tokenBudget}）窗口耗尽（${tokenWindowSpent}），自动压缩后开启新预算窗口续跑（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次救援）`);
+        console.warn(`[agent] 单任务 token 窗口达预判阈值（${tokenWindowSpent} / 预算 ${tokenBudget} 的 ${TOKEN_COMPACTION_TRIGGER * 100}%），自动压缩后开启新预算窗口续跑（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次救援）`);
         convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
         tokenWindowSpent = 0; // 新窗口：清零重算（usage 全程累计仍如实上报，不动）
         continue;

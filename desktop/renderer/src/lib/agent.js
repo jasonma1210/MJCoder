@@ -13,8 +13,27 @@ export { BASE_TOOLS, BUILTIN_SKILL_IDS, decomposeTask, looksLargeTask, parsePlan
 // （最多 3 次救援，见 agent-core runAgent 的 P1-I 预算闸），仍超限才优雅收尾，不会硬切断对话。
 // 真机复盘：200k 对文件密集型审查任务太紧（每轮重复读取上下文，窗口很快打满，
 // 用户两次看到 470k 熔断文案）→ 放宽到 600k；配合 3 次救援，单任务累计上限 ≈ 2.4M。
-// 调用方显式传入 tokenBudget（含 0=关闭）可覆盖此默认值。
+// 分层预算（复盘文档 P1-1 采纳）：looksLargeTask 命中的大任务（审查/批量/重构类，零成本
+// 本地启发式）自动升档到 LARGE_TASK_TOKEN_BUDGET——大任务拆子块的滚动压缩属 Phase 3，
+// 当前以「更大单窗口 + 多次救援」过渡；调用方显式传入 tokenBudget（含 0=关闭）始终优先。
 export const FRONTEND_TOKEN_BUDGET = 600000;
+export const LARGE_TASK_TOKEN_BUDGET = 1000000;
+
+// 从 options.messages 取最后一条 user 消息文本（分层预算的档位判定输入）
+function lastUserText(options) {
+  const msgs = options?.messages || [];
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i];
+    if (m?.role === 'user') return typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+  }
+  return '';
+}
+
+// 预算档位解析：显式传入 > 大任务档 > 常规档（显式 0=关闭也优先尊重）
+function resolveTokenBudget(options) {
+  if (options?.tokenBudget !== undefined) return options.tokenBudget;
+  return looksLargeTask(lastUserText(options)) ? LARGE_TASK_TOKEN_BUDGET : FRONTEND_TOKEN_BUDGET;
+}
 
 let runSeq = 0;
 
@@ -76,7 +95,7 @@ function runAgentViaMain(options) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
     }
-    mj.agentRun({ ...rest, tokenBudget: rest.tokenBudget ?? FRONTEND_TOKEN_BUDGET, runId })
+    mj.agentRun({ ...rest, tokenBudget: resolveTokenBudget(options), runId })
       .then((res) => {
         if (!res?.ok) finish(reject, new Error(res?.error || 'Agent 运行启动失败'));
       })
@@ -113,8 +132,8 @@ function runAgentInProcess(options) {
     },
     mcpCallTool: requireChannel('mcpCallTool'),
   };
-  // P0-5：默认注入前台 token 预算；options.tokenBudget 显式传值（含 0）时以调用方为准
-  return coreRunAgent({ tokenBudget: FRONTEND_TOKEN_BUDGET, ...options, toolHandlers });
+  // P0-5：默认注入前台 token 预算（分层：大任务自动升档）；options.tokenBudget 显式传值（含 0）时以调用方为准
+  return coreRunAgent({ ...options, tokenBudget: resolveTokenBudget(options), toolHandlers });
 }
 
 export function runAgent(options = {}) {
