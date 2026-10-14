@@ -57,6 +57,11 @@ export default function ChatArea({
   const [decomposing, setDecomposing] = useState(false);
   const [compacting, setCompacting] = useState(false); // 上下文压缩中
   const [planMode, setPlanMode] = useState(false); // 规划模式：只出计划，不改动文件
+  // 运行级结束信息（WorkBuddy 式收尾条）：耗时 + 共消耗 + 模型 + 结束时间 + 状态。
+  // 此前结束信息只藏在最终消息的 meta 小字里（且中间消息/异常路径都没有），
+  // 用户侧表现就是「结果出来了，但没有任何结束的信息」。
+  const [runSummary, setRunSummary] = useState(null); // { status, durationMs, tokensIn, tokensOut, model, endedAt }
+  const runStartRef = useRef(0);
   // 上下文窗口：模型自带字段优先，其次用户在模型配置 popover 里设置的值，最后 128K 兜底
   const contextUsage = contextUsageOf(
     messages,
@@ -402,6 +407,8 @@ export default function ChatArea({
     setLastFailed(null);
     setLoading(true);
     setToolCalls([]);
+    setRunSummary(null); // 新一轮开始：上一轮的结束信息条收起
+    runStartRef.current = Date.now();
     onThreadStatus?.('running');
     await api.sendMessage(currentThread.id, userMsg);
 
@@ -493,6 +500,15 @@ export default function ChatArea({
             created_at: Date.now(),
           };
           setMessages((m) => [...m, assistantMsg]);
+          // 运行级结束信息（WorkBuddy 式收尾条）：正常收尾 / 预算暂停（断点已保存）/ 已停止
+          setRunSummary({
+            status: aborted ? 'aborted' : (String(finalText).includes('断点已保存') ? 'suspended' : 'done'),
+            durationMs: runStartRef.current ? Date.now() - runStartRef.current : 0,
+            tokensIn: usage?.prompt_tokens || 0,
+            tokensOut: usage?.completion_tokens || 0,
+            model: selectedModel?.model?.model_id || '',
+            endedAt: Date.now(),
+          });
           await api.sendMessage(currentThread.id, {
             ...assistantMsg,
             tokens_input: usage?.prompt_tokens || 0,
@@ -541,7 +557,14 @@ export default function ChatArea({
         ? '模型凭证未加载，请在本机模型设置中重新填写 API Key'
         : err.message;
       // 此前错误消息不带 model_name → meta 行整体隐藏，用户侧三样全缺（模型/耗时/token）无从判断
-      setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}`, model_name: selectedModel?.model?.model_id || '' }]);
+      setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}`, model_name: selectedModel?.model?.model_id || '', created_at: Date.now() }]);
+      setRunSummary({
+        status: 'error',
+        durationMs: runStartRef.current ? Date.now() - runStartRef.current : 0,
+        tokensIn: 0, tokensOut: 0,
+        model: selectedModel?.model?.model_id || '',
+        endedAt: Date.now(),
+      });
       // P0-A：失败可挽回——记录本次输入，用户可一键「重试本轮」（历史已保留，无需手动重打）
       setLastFailed({ text: content });
       onThreadStatus?.('idle');
@@ -756,6 +779,8 @@ export default function ChatArea({
           </div>
         )}
         {renderMessages(visibleMessages)}
+        {/* 运行级结束信息条：最近一轮运行的耗时/消耗/模型/状态，WorkBuddy 式固定收尾 */}
+        <RunFooter summary={runSummary} />
         {toolCalls.map((tc, i) => (
           <div key={`tool-${i}`} className="mb-2 ml-2">
             <div className="bg-surface border border-border rounded-lg px-3 py-2 text-xs font-mono flex items-center gap-2">
@@ -1430,10 +1455,45 @@ function OutputBlock({ text, className, max = 500 }) {
   );
 }
 
+// 运行级结束信息条（WorkBuddy 式）：每轮运行收尾在消息区底部固定展示——
+// 状态（正常结束/任务暂停/已停止/失败）+ 耗时 + 共消耗 + 模型 + 结束时间。
+// 与单条消息的 meta 小字互补：meta 随消息滚动，此条永远挂在最后一屏可见。
+export function RunFooter({ summary }) {
+  if (!summary) return null;
+  const STATUS = {
+    done: { label: '运行结束', cls: 'text-success', dot: 'bg-success' },
+    aborted: { label: '已停止', cls: 'text-warn', dot: 'bg-warn' },
+    suspended: { label: '任务暂停（断点已保存，回复「继续」恢复）', cls: 'text-warn', dot: 'bg-warn' },
+    error: { label: '运行失败', cls: 'text-danger', dot: 'bg-danger' },
+  };
+  const st = STATUS[summary.status] || STATUS.done;
+  const sec = Math.max(0, Math.round((summary.durationMs || 0) / 1000));
+  const dur = sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60}s`;
+  const total = (summary.tokensIn || 0) + (summary.tokensOut || 0);
+  return (
+    <div className="mb-4 max-w-3xl">
+      <div className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-text2 bg-surface border border-border rounded-lg px-3 py-1.5">
+        <span className={`inline-flex items-center gap-1 ${st.cls}`}>
+          <span className={`w-1.5 h-1.5 rounded-full inline-block ${st.dot}`} />
+          {st.label}
+        </span>
+        {summary.durationMs > 0 && <span>耗时 {dur}</span>}
+        {total > 0 && (
+          <span title={`输入 ${(summary.tokensIn || 0).toLocaleString()} / 输出 ${(summary.tokensOut || 0).toLocaleString()} tokens`}>
+            共消耗 {total.toLocaleString()} tokens
+          </span>
+        )}
+        {summary.model && <span className="truncate">· {summary.model}</span>}
+        {summary.endedAt && <span>· {new Date(summary.endedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>}
+      </div>
+    </div>
+  );
+}
+
 // 历史消息重放：user 气泡 / assistant markdown / assistant+tool_calls 配对渲染 tool 卡片
 // 兼容双轨字段：服务端 snake_case（tool_calls/model_name/tokens_input），
 // 本机 localStore camelCase（toolCalls/modelName/tokensInput）——此前本地历史工具卡片不渲染
-function renderMessages(messages) {
+export function renderMessages(messages) {
   // tool_call_id -> tool 消息内容 索引
   const toolResults = new Map();
   for (const m of messages) {
@@ -1489,12 +1549,14 @@ function renderMessages(messages) {
             </div>
           );
         })}
-        {/* 底部明细：模型 + token 消耗 + 时间（参考 WorkBuddy，仅最终回复展示） */}
-        {modelName && (
+        {/* 底部明细：模型 + token 消耗 + 时间（参考 WorkBuddy）。
+            条件放宽：任一信息存在即展示——此前 modelName 为空时整行隐藏，
+            中间消息（有 token 无模型名）与历史消息一律不可见，用户侧「结束信息全缺」 */}
+        {(modelName || tokensIn + tokensOut > 0 || m.created_at || m.createdAt) && (
           <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text2" title={`输入 ${tokensIn.toLocaleString()} / 输出 ${tokensOut.toLocaleString()} tokens`}>
             <IconCpu size={11} className="shrink-0" />
             <span>共消耗 {(tokensIn + tokensOut).toLocaleString()} tokens</span>
-            <span className="truncate">· {modelName}</span>
+            {modelName && <span className="truncate">· {modelName}</span>}
             {(m.created_at || m.createdAt) && (
               <span>· {new Date(m.created_at || m.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
             )}
