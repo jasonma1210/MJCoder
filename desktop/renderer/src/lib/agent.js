@@ -47,8 +47,9 @@ function runAgentViaMain(options) {
       reject(new Error('主进程 Agent 通道不可用'));
       return;
     }
+    // 调用方可指定 runId（ChatArea 运行注册表用它索引流式归属与按 run 精确中止）；未指定时自行生成
     runSeq += 1;
-    const runId = `run-${Date.now().toString(36)}-${runSeq}`;
+    const runId = options.runId || `run-${Date.now().toString(36)}-${runSeq}`;
     let settled = false;
     let off = null;
     const finish = (fn, arg) => {

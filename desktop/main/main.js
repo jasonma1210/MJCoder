@@ -811,6 +811,23 @@ const shellEnv = () => {
   return { ...process.env, PATH: [...userPaths, SHELL_PATH].join(':') };
 };
 
+// 命令失败审查修复（真机复盘 2026-10-14）：
+// 1）execFile 的 err.message 是 "Command failed: <file> <args 全文>"——沙箱路径下 args 含整个
+//    Seatbelt profile（数千字符），每次非零退出都把 profile 全文灌进模型上下文，
+//    并让「Command failed」成为模型看到的主信号（stdout 里明明已有答案）。
+// 2）链式命令（a; b; c）退出码只取最后一段：探测类命令（ls 不存在的目录、env|grep 无命中）
+//    非零退出是正常控制流，不是失败。
+// 统一收敛为简洁的退出码说明；stdout/stderr 原样返回（答案在输出里，不靠 error 字段）。
+// 仅真正的 spawn 异常（ENOENT 等，code 非数字且非 killed）保留原始 message。
+function shellErrorNote(error) {
+  if (!error) return null;
+  if (typeof error.code === 'number') {
+    return `命令以退出码 ${error.code} 结束${error.killed ? '（超时被终止）' : ''}（非零退出≠失败，链式命令仅取最后一段的退出码；请以 stdout/stderr 内容为准）`;
+  }
+  if (error.killed) return '命令超时被终止';
+  return String(error.message || '命令执行异常').slice(0, 300);
+}
+
 // P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
 async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy }) {
   let neededApproval = false;
@@ -838,7 +855,7 @@ async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-req
     return new Promise((resolve) => {
       execFile(sandbox.SANDBOX_EXEC, ['-p', profile, '/bin/zsh', '-c', command],
         { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-          const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: error?.code || 0, error: error?.message || null, sandboxed: true };
+          const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true };
           audit('shell', command, `sandbox=${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
           resolve(result);
         });
@@ -856,7 +873,7 @@ async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-req
   }
   return new Promise((resolve) => {
     exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-      const result = { stdout: stdout.slice(0, 50000), stderr: stderr.slice(0, 10000), exitCode: error?.code || 0, error: error?.message || null };
+      const result = { stdout: stdout.slice(0, 50000), stderr: stderr.slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error) };
       audit('shell', command, `exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
       resolve(result);
     });
@@ -1422,17 +1439,31 @@ ipcMain.handle('market:searchNetwork', async (_, { query, types } = {}) => {
   }
 });
 
-// 对话内插件搜索（只读工具，不走审批）：网络源 + 本地索引合并
+// 对话内插件搜索（只读工具，不走审批）：已装插件 + 本地市场索引 + 网络源合并
+// 「先本地后网络」的本地侧数据源：installed=已装插件（直接可用，无需安装）；local=市场索引
 async function searchPluginsTool(args = {}) {
   const query = String(args.query || '').trim();
   if (!query) return { ok: false, error: '缺少搜索关键词 query' };
   const r = await pluginDiscovery.searchNetworkPlugins(query, { types: args.types, timeoutMs: 10000 });
+  const q = query.toLowerCase();
+  const match = (s) => String(s || '').toLowerCase().includes(q);
+  let installed = [];
+  try {
+    installed = (getPluginRegistry().list() || [])
+      .filter((p) => match(p.name) || match(p.description) || match(p.type))
+      .map((p) => ({ ...p, source: 'installed' }));
+  } catch { /* 已装列表失败不影响后续结果 */ }
   let local = [];
   try {
     const lr = getMarketRegistry().search({ query });
     local = (lr.plugins || []).map((p) => ({ ...p, source: 'local' }));
   } catch { /* 本地索引失败不影响网络结果 */ }
-  return { ok: true, query, count: local.length + r.results.length, results: [...local, ...r.results].slice(0, 12), notes: r.notes };
+  return {
+    ok: true, query,
+    count: installed.length + local.length + r.results.length,
+    results: [...installed, ...local, ...r.results].slice(0, 12),
+    notes: r.notes,
+  };
 }
 
 // 对话内安装（工具 install_plugin 的实现）。恒走 L3 审批卡（approval.js TOOL_LEVEL），
@@ -1975,8 +2006,10 @@ async function reconnectMcpServers() {
 //  MODEL PROXY (streaming, main-process direct)
 //  P0-4：抽为可复用函数——model:chat IPC 与主进程 Agent 运行器（agentRunner）共用。
 //  externalSignal：外部中止信号（交互式运行的 AbortController）；信号中止时级联中止在途 fetch。
+//  streamTag：运行标识（runId）。带标签时 delta/reasoning 事件发 {tag,text} 对象，
+//  渲染层据此把流式输出归到正确的会话（多会话并行/后台运行不串显）；无标签保持旧纯文本协议。
 // ═══════════════════════════════════════════
-async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages, model, tools, reasoningEffort }, sender, externalSignal) {
+async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages, model, tools, reasoningEffort }, sender, externalSignal, streamTag) {
   const secret = resolveSecret(providerId, isGlobal);
   if (!secret || !secret.api_key) {
     throw new Error('KEY_MISSING: 模型凭证未加载，请在本机模型设置中重新填写 API Key');
@@ -2034,11 +2067,11 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
           // 推理模型（mimo / DeepSeek-R 系）思考阶段输出 reasoning_content，
           // 此前被丢弃 → 思考全程只有「思考中...」，用户误以为 API 很慢
           if (delta?.reasoning_content) {
-            sender.send('model:reasoning', delta.reasoning_content);
+            sender.send('model:reasoning', streamTag ? { tag: streamTag, text: delta.reasoning_content } : delta.reasoning_content);
           }
           if (delta?.content) {
             fullContent += delta.content;
-            sender.send('model:delta', delta.content);
+            sender.send('model:delta', streamTag ? { tag: streamTag, text: delta.content } : delta.content);
           }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
@@ -2226,9 +2259,10 @@ agentRunner.initAgentRunner({
   loadAgentCore,
   // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
-  createToolHandlers: ({ sender, signal }) => ({
+  createToolHandlers: ({ sender, signal, runId }) => ({
     ...scheduledToolHandlers(),
-    chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal),
+    // runId 作为 streamTag：Agent 运行的流式输出带标签，渲染层按活跃会话过滤（切会话/后台运行不串显）
+    chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal, runId),
     orchestrateTask: (args) => toolOrchestrateTask(args, signal),
     // 对话内网络插件搜索/安装（LobeChat 式）：搜索只读；安装恒走 L3 审批卡
     searchPlugins: (args) => searchPluginsTool(args),

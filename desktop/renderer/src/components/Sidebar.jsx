@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
 import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSearch, IconSettings, IconArchive } from './icons';
+import logo from '../assets/logo.png';
 
 // 左侧栏（对标 Codex）：New chat / Scheduled / Tasks / Plugins + Projects→会话嵌套；底部 Settings
 // 「打开项目」不设一级导航：Projects 区头「+」承担添加（Codex 同款），
@@ -28,8 +29,11 @@ export default function Sidebar({
           </button>
         </div>
         <div className="px-4 pb-3 pt-1">
-          <div className="font-semibold text-[15px]">MJ Code</div>
-          <div className="text-xs text-text2 mt-0.5">{version ? `v${version}` : ''} · 本地优先 AI 工作台</div>
+          <div className="flex items-center gap-2">
+            <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
+            <div className="font-semibold text-[15px] leading-none">MJ Code</div>
+          </div>
+          <div className="text-xs text-text2 mt-1">{version ? `v${version}` : ''} · 本地优先 AI 工作台</div>
         </div>
       </div>
 

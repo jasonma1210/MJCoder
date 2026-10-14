@@ -593,6 +593,7 @@ export default function App() {
             }}
             onNewMessage={scheduleLoadData}
             onThreadCreated={(t) => setActiveThread(t)}
+            onAutoProject={selectProject}
             mcpTools={mcpTools}
             enabledSkills={enabledSkills}
             onOpenProjectPicker={() => setShowProjectPicker(true)}

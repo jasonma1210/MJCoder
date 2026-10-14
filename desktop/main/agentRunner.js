@@ -49,7 +49,7 @@ function startAgentRun(payload, sender) {
     console.warn(`[agentRun] 启动 runId=${runId} model=${payload?.model?.model?.model_id || '?'} cwd=${payload?.cwd || '-'} msgs=${payload?.messages?.length || 0} budget=${payload?.tokenBudget || 0}`);
     try {
       const core = await deps.loadAgentCore();
-      const handlers = deps.createToolHandlers({ sender, signal: controller.signal });
+      const handlers = deps.createToolHandlers({ sender, signal: controller.signal, runId });
       const finalText = await core.runAgent({
         messages: payload.messages,
         model: payload.model,

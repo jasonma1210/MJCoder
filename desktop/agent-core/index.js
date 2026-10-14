@@ -30,7 +30,8 @@ async function ensureNodeFs() {
 export const BASE_TOOLS = [
   { type: 'function', function: {
     name: 'search_plugins',
-    description: '在公网插件源中搜索可安装的插件：npm registry 的 MCP Server 与 GitHub 的技能仓库。返回名称、版本、简介、来源与安装方式。安装请用 install_plugin（会弹审批卡请用户确认）。',
+    description: '搜索可安装的插件：结果 = 本地已装插件（source=installed）+ 本地市场索引（source=local）+ 公网源（npm registry 的 MCP Server、GitHub 的技能仓库）合并去重。'
+      + '用户提出「添加/安装某个服务、工具、技能」类需求时先调本工具；本地已有的直接使用，不要重复安装。返回名称、版本、简介、来源（source）与安装方式。安装用 install_plugin（会弹审批卡请用户确认）。',
     parameters: { type: 'object', properties: {
       query: { type: 'string', description: '搜索关键词，例如 "github mcp"、"代码审查 skill"' },
       types: { type: 'array', items: { type: 'string', enum: ['mcp', 'skill'] }, description: '限定插件类型，缺省两者都搜' },
@@ -38,7 +39,10 @@ export const BASE_TOOLS = [
   }},
   { type: 'function', function: {
     name: 'install_plugin',
-    description: '安装网络插件（会弹审批卡请用户确认，拒绝即中止）。kind=mcp：从 npm 安装 MCP Server（pkg 为包名，装完自动连接，工具立即可用）；kind=skill：从 GitHub 仓库安装 SKILL.md 技能（url 为仓库地址，下一轮对话生效）。安装 MCP 前应先用 search_plugins 确认准确包名。',
+    description: '安装插件到本机（会弹审批卡请用户确认，拒绝即中止）。'
+      + '先 search_plugins：结果里 source=installed/local 表示本地已存在，直接使用无需安装；'
+      + '仅网络结果（source=npm/github）才需要安装。kind=mcp：从 npm 安装 MCP Server（pkg 为包名，装完自动连接，工具立即可用）；'
+      + 'kind=skill：从 GitHub 仓库安装 SKILL.md 技能（url 为仓库地址，下一轮对话生效）。安装 MCP 前必须先用 search_plugins 确认准确包名。',
     parameters: { type: 'object', properties: {
       kind: { type: 'string', enum: ['mcp', 'skill'], description: '插件类型' },
       pkg: { type: 'string', description: 'npm 包名（kind=mcp 必填）' },
@@ -48,7 +52,10 @@ export const BASE_TOOLS = [
     }, required: ['kind'] },
   }},
   { type: 'function', function: {
-    name: 'shell', description: '在项目目录执行 shell 命令（git/npm/ls/cat/build/test 等）',
+    name: 'shell', description: '在项目目录执行 shell 命令（git/npm/ls/cat/build/test 等）。'
+      + '注意：退出码非 0 不等于失败——链式命令（a; b; c）只取最后一段的退出码，'
+      + '探测类命令（ls 不存在的路径、grep/env 无命中等）非零退出是正常现象；'
+      + 'stdout/stderr 里的输出往往已包含所需信息，先读输出再决定下一步，不要因非零退出就放弃或重试。',
     parameters: { type: 'object', properties: {
       command: { type: 'string', description: '要执行的 shell 命令' },
       cwd: { type: 'string', description: '工作目录（可选）' },
@@ -163,6 +170,11 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
 - 多 Agent 并行编排（orchestrate_task）：当用户要求多角色/多任务并行，或目标可拆为互不依赖的
   子任务时，主动调用它把目标转交编排系统并行执行；返回的聚合结果由你向用户转述，
   若结果提示并发出问题，调小 max_agents 重试并用平实的语言告知用户
+- 对话内添加插件/能力（search_plugins / install_plugin）：用户想接入某个服务、工具或技能时
+  （如「帮我装一个 XX 的 MCP/技能」），用 search_plugins 一次搜索（结果已合并本地已装插件、
+  本地市场索引与公网源 npm MCP Server / GitHub 技能仓库，结果带 source 标注）；
+  本地已有（source=local/installed）直接告知并使用，不重复安装；本地没有再从网络结果中
+  选定目标调 install_plugin 安装（会弹审批卡，用户确认后自动装到本机并生效），装完告知用户如何使用
 
 工作原则：
 1. 先探索代码库结构，理解项目后再动手

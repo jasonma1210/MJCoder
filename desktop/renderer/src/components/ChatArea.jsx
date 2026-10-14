@@ -26,10 +26,34 @@ const QUICK_ACTIONS = [
 // C1：消息窗口大小 —— 历史全量在 state，渲染只取最近 N 条，避免长会话 DOM 爆炸
 const MSG_WINDOW = 50;
 
+// ═══ 会话运行注册表（切页 / 切会话运行保活，Phase 3-5）═══
+// 根因：此前切会话（thread?.id 变化）即 abortRef.abort() + 全局 model:abort（杀掉主进程全部运行），
+// 用户切到其他页面/会话的瞬间，进行中的任务被当场强制关闭（「已停止」+ 0 tokens）。
+// 架构事实：运行真正活在主进程（agentRunner 按 runId 索引），渲染层只是观察者——
+// 切走 = 摘下观察镜（流式/工具/收尾快照进注册表），切回 = 重新装上（从注册表恢复），运行本身零影响。
+// 结构：runRegistry（threadId → 快照）+ runIndex（runId → 同一快照，供带标签 delta 事件反查归属）。
+const runRegistry = new Map();
+const runIndex = new Map();
+function makeRunState(runId, threadId) {
+  const rs = {
+    runId, threadId, controller: null,
+    inFlight: false, done: false, settledAt: 0,
+    streaming: '', reasoning: '', toolCalls: [],
+    finalMsg: null, applied: true, // applied=false 表示完成消息还没进过可见消息列表（切回时补挂）
+    runSummary: null, startedAt: 0,
+  };
+  runRegistry.set(threadId, rs);
+  runIndex.set(runId, rs);
+  return rs;
+}
+
 export default function ChatArea({
   thread, selectedModel, project, onNewMessage, mcpTools = [], enabledSkills = [], onOpenProjectPicker, initialPrompt, onPromptConsumed, approvalSettings, agentsMd = null,
   providers = [], onSelectModel, onApprovalChange, onThreadStatus, onAgentFilesChange,
   onThreadCreated,
+  // 自动建目录回调（App.selectProject）：新建任务未主动选目录时，ChatArea 自动创建
+  // 时间戳目录后经此通知 App 切换过去（侧栏项目列表/文件树立即跟随）
+  onAutoProject,
   // 「本次使用中主动选择」的项目（App 层 selectProject 时置位）：
   // 欢迎页据此决定能否围绕该项目生成个性化建议与副标题——
   // 重启后残留的上次项目不算数，否则新建任务页整个都在说上一个任务
@@ -44,6 +68,9 @@ export default function ChatArea({
   const [toolCalls, setToolCalls] = useState([]);
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
+  // 运行保活：当前查看的会话 id 与其运行中的 runId（事件归属过滤的事实源，effect 闭包读 ref 防陈旧）
+  const activeThreadIdRef = useRef(null);
+  const activeRunIdRef = useRef(null);
   const [modelWarning, setModelWarning] = useState(false);
   const [fileSkills, setFileSkills] = useState([]);
   const [memories, setMemories] = useState([]);
@@ -158,32 +185,42 @@ export default function ChatArea({
   useEffect(() => {
     const prevId = prevThreadIdRef.current;
     prevThreadIdRef.current = thread?.id || null;
+    activeThreadIdRef.current = thread?.id != null ? String(thread.id) : null;
     const isCreatingThread = !prevId && !!thread?.id; // 新建会话 ≠ 切换会话
     if (thread?.id) {
       const reqId = ++msgReqRef.current;
+      const fetchStartedAt = Date.now();
       setLastFailed(null); // 切换会话：失败重试上下文不跨会话
       setMessages([]);     // 先清空：异步拉取期间禁止显示旧会话消息（串显根因）
-      setToolCalls([]);
       setWindowStart(0);
       api.messages(thread.id).then((list) => {
         if (reqId !== msgReqRef.current) return; // 已被更新的切换取代，丢弃迟到响应
         // C1：全量拉取仅落 state，首屏只渲染最近 MSG_WINDOW 条（顶部「加载更早消息」展开）
         setMessages(list);
         setWindowStart(Math.max(0, (list || []).length - MSG_WINDOW));
+        // 运行保活：目标会话的后台运行恰好在拉取启动后完成（完成消息尚未进过可见列表）→ 补挂收尾消息
+        const rsDone = runRegistry.get(String(thread.id));
+        if (rsDone?.done && rsDone.finalMsg && !rsDone.applied && rsDone.settledAt > fetchStartedAt) {
+          rsDone.applied = true;
+          setMessages((m) => [...m, rsDone.finalMsg]);
+        }
       }).catch((err) => {
         if (reqId === msgReqRef.current) console.warn('[chat] 消息加载失败:', err);
       });
-    } else { setMessages([]); setToolCalls([]); setWindowStart(0); }
-    // 会话级状态不得跨会话残留（ChatArea 常驻挂载不卸载，残留会串显/误生效）：
-    //   流式文本属于上一个会话，切走后 runAgent 仍在跑，必须一并中止并清空，
-    //   否则旧会话的流式输出会打在新会话的消息区上；planMode 残留会让新会话
-    //   莫名变成「只读规划」（写工具全被移除），用户完全无感知。
+    } else { setMessages([]); setWindowStart(0); }
+    // 运行保活（Phase 3-5）：切换会话不再中止在途运行——
+    //   流式文本/工具调用属于上一个会话的运行，快照已实时写进注册表（按 threadId 归档），
+    //   这里按目标会话的注册表快照恢复 UI；目标会话有运行在途则继续观察其流式输出。
+    //   planMode 残留仍需清理（会话级状态，残留会让新会话莫名变成「只读规划」）。
     //   注意：新建会话（undefined→id）不在此列：那一步正在进行的是「本会话自己的首条消息」。
     if (isCreatingThread) return;
-    abortRef.current?.abort();
-    if (window.mjcode?.abortChat) window.mjcode.abortChat();
-    setStreamingText('');
-    setReasoningText('');
+    const rs = thread?.id != null ? runRegistry.get(String(thread.id)) : null;
+    activeRunIdRef.current = rs?.inFlight ? rs.runId : null;
+    setLoading(!!rs?.inFlight);
+    setStreamingText(rs?.inFlight ? (rs.streaming || '') : '');
+    setReasoningText(rs?.inFlight ? (rs.reasoning || '') : '');
+    setToolCalls(rs?.inFlight ? [...rs.toolCalls] : []);
+    setRunSummary(rs?.done ? rs.runSummary : null);
     setPlan(null);
     setPlanReport(null);
     setPlanMode(false);
@@ -256,22 +293,53 @@ export default function ChatArea({
 
   useEffect(() => {
     if (!window.mjcode?.onDelta) return;
-    // 返回 cleanup，避免 StrictMode 重复注册导致流式文本翻倍
-    const off = window.mjcode.onDelta((delta) => setStreamingText((prev) => prev + delta));
+    // 返回 cleanup，避免 StrictMode 重复注册导致流式文本翻倍。
+    // 带标签事件（{tag,text}，主进程 Agent 运行）：先归档注册表，仅当标签会话=当前查看会话才驱动 UI；
+    // 无标签旧协议纯文本（直连 model:chat）维持原行为。
+    const off = window.mjcode.onDelta((payload) => {
+      const isObj = payload && typeof payload === 'object';
+      const text = isObj ? String(payload.text || '') : String(payload || '');
+      const tag = isObj ? payload.tag : null;
+      if (tag) {
+        const rs = runIndex.get(tag);
+        if (!rs) return;
+        rs.streaming += text;
+        if (rs.threadId === activeThreadIdRef.current) setStreamingText(rs.streaming);
+      } else {
+        setStreamingText((prev) => prev + text);
+      }
+    });
     return () => { if (typeof off === 'function') off(); };
   }, []);
 
   // 推理模型思考流：mimo / DeepSeek-R 系在 content 之前输出 reasoning_content，
-  // 实时展示（灰色折叠区），消除「思考中...长时间无输出」的慢错觉
+  // 实时展示（灰色折叠区），消除「思考中...长时间无输出」的慢错觉；标签归属协议同 delta
   useEffect(() => {
     if (!window.mjcode?.onReasoning) return;
-    const off = window.mjcode.onReasoning((chunk) => setReasoningText((prev) => (prev || '') + chunk));
+    const off = window.mjcode.onReasoning((payload) => {
+      const isObj = payload && typeof payload === 'object';
+      const text = isObj ? String(payload.text || '') : String(payload || '');
+      const tag = isObj ? payload.tag : null;
+      if (tag) {
+        const rs = runIndex.get(tag);
+        if (!rs) return;
+        rs.reasoning += text;
+        if (rs.threadId === activeThreadIdRef.current) setReasoningText(rs.reasoning);
+      } else {
+        setReasoningText((prev) => (prev || '') + text);
+      }
+    });
     return () => { if (typeof off === 'function') off(); };
   }, []);
 
+  // 停止 = 只中止「当前查看会话」的运行（注册表按 threadId 精确取 controller，
+  // signal 触发后 agent.js 调 mj.agentAbort(runId) 按 run 中止）。
+  // 此前全局 model:abort 会把后台运行一并杀光——正是「切页回来会话被关掉」的帮凶。
   function stop() {
-    abortRef.current?.abort();
-    if (window.mjcode?.abortChat) window.mjcode.abortChat();
+    const tid = activeThreadIdRef.current;
+    const rs = tid != null ? runRegistry.get(tid) : null;
+    if (rs?.inFlight && rs.controller) { rs.controller.abort(); return; }
+    abortRef.current?.abort(); // 兜底：进程内回退模式无注册表
   }
 
   // Esc 快捷停止生成
@@ -382,9 +450,29 @@ export default function ChatArea({
     }
 
     // 自动创建会话（项目路径用于「项目 → 会话」归属）
-    // Bug1：未选项目时允许直接发送（不自动创建日期文件夹）；项目由用户在项目弹窗中主动创建/选择
+    // 目录归属修复（2026-10-14 复盘，务必修复项）：新建任务时若用户**没有主动**「打开或创建目录」
+    // （projectPicked=false，activeProject 是上一次操作的残留），不再静默复用上一个任务目录——
+    // 自动在 系统文档目录/.MJCoder/ 下创建时间戳目录（主进程 createProject：日期+随机数命名，
+    // 跨平台取 app.getPath('documents')），本任务就在自己的目录里干活。
     let currentThread = forcedThread || thread;
     let effectiveProject = project;
+    if (!currentThread && !projectPicked) {
+      try {
+        const r = await window.mjcode?.createProject?.({ name: '' });
+        if (r?.ok && r.path) {
+          effectiveProject = {
+            id: r.path,
+            name: r.name || String(r.path).split('/').filter(Boolean).pop() || r.path,
+            path: r.path,
+            branch: '',
+          };
+          // App 侧切换到新目录（setActiveProject + projectPicked=true + 最近项目列表），侧栏立即可见
+          onAutoProject?.(effectiveProject);
+        }
+      } catch (err) {
+        console.warn('[chat] 自动创建任务目录失败（沿用当前项目）:', err);
+      }
+    }
     if (!currentThread) {
       currentThread = await api.createThread({
         provider_id: selectedModel.provider?.id,
@@ -437,6 +525,15 @@ export default function ChatArea({
       }
     }
     abortRef.current = new AbortController();
+    // 运行保活：本轮运行登记进注册表（runId 由渲染层指定，主进程事件/流式标签全用它）
+    const threadKey = String(currentThread.id || 'local');
+    const runSeqLocal = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const rs = makeRunState(runSeqLocal, threadKey);
+    rs.controller = abortRef.current;
+    rs.inFlight = true;
+    rs.startedAt = Date.now();
+    runStartRef.current = rs.startedAt;
+    activeRunIdRef.current = runSeqLocal;
 
     try {
       // Fix3：按模型 key 读取用户在 popover 里配置的思考强度，注入本轮请求
@@ -461,7 +558,8 @@ export default function ChatArea({
         sandboxPolicy: planMode || noProject ? 'read-only' : (thread?.sandbox_policy || approvalSettings?.sandbox_policy || 'workspace-write'),
         approvalMode: thread?.approval_mode || approvalSettings?.approval_mode || 'on-request',
         planMode,
-        conversationId: thread?.id ? String(thread.id) : 'local',
+        runId: runSeqLocal,
+        conversationId: threadKey,
         // Phase 3-1：断点摘要注入（仅「继续」且有已保存断点时非空）
         resumeContext,
         onMessage: async (msg) => {
@@ -479,12 +577,21 @@ export default function ChatArea({
             console.warn('[chat] 中间消息持久化失败:', err);
           }
         },
-        onStream: () => { setStreamingText(''); setReasoningText(''); },
+        onStream: () => {
+          // 轮次边界：清空上一轮流式文本（注册表快照与可见 UI 同步清）
+          rs.streaming = ''; rs.reasoning = '';
+          if (activeThreadIdRef.current === threadKey) { setStreamingText(''); setReasoningText(''); }
+        },
         onToolCall: (tc) => {
-          setToolCalls((prev) => [...prev, tc]);
+          rs.toolCalls = [...rs.toolCalls, tc];
+          if (activeThreadIdRef.current === threadKey) setToolCalls((prev) => [...prev, tc]);
           for (const f of agentFilesOf(tc)) agentFilesRef.current.add(f);
         },
         onDone: async (finalText, usage, aborted) => {
+          // 运行保活：完成时用户可能已切到其他会话（wasActive=false）。
+          // 持久化/状态收敛/记忆留存线程无关照做；仅「仍在本会话」才直接动可见 UI，
+          // 否则完成消息会打进别的会话的消息区（串显根因之二）。
+          const wasActive = activeThreadIdRef.current === threadKey;
           // Bugfix：即时中止收尾时 finalText 为空串（引擎真实结果尚未返回），
           // 不再拼出 "\n\n（已停止）" 的空尾消息，直接显示「（已停止）」
           const content = aborted
@@ -499,21 +606,29 @@ export default function ChatArea({
             tokens_output: usage?.completion_tokens || 0,
             created_at: Date.now(),
           };
-          setMessages((m) => [...m, assistantMsg]);
-          // 运行级结束信息（WorkBuddy 式收尾条）：正常收尾 / 预算暂停（断点已保存）/ 已停止
-          setRunSummary({
+          // 注册表快照收敛（切回本会话时的恢复数据源）
+          rs.inFlight = false;
+          rs.done = true;
+          rs.settledAt = Date.now();
+          rs.streaming = ''; rs.reasoning = '';
+          rs.runSummary = {
             status: aborted ? 'aborted' : (String(finalText).includes('断点已保存') ? 'suspended' : 'done'),
-            durationMs: runStartRef.current ? Date.now() - runStartRef.current : 0,
+            durationMs: rs.startedAt ? Date.now() - rs.startedAt : 0,
             tokensIn: usage?.prompt_tokens || 0,
             tokensOut: usage?.completion_tokens || 0,
             model: selectedModel?.model?.model_id || '',
             endedAt: Date.now(),
-          });
+          };
+          if (activeRunIdRef.current === rs.runId) activeRunIdRef.current = null;
+          // 先落库再补挂 UI：切换拉取历史时能拿到完成消息（顺带消除追加/拉取竞态）
           await api.sendMessage(currentThread.id, {
             ...assistantMsg,
             tokens_input: usage?.prompt_tokens || 0,
             tokens_output: usage?.completion_tokens || 0,
           });
+          rs.finalMsg = assistantMsg;
+          rs.applied = wasActive; // 活跃路径马上追加进可见列表；后台路径留给切回时的拉取/补挂
+          if (wasActive) setMessages((m) => [...m, assistantMsg]);
           // 两阶段记忆 POC（stage1）：会话完成即留存原始记忆
           if (project?.path && window.mjcode?.localAddMemory && !aborted) {
             try {
@@ -524,10 +639,14 @@ export default function ChatArea({
             } catch (err) { console.warn('[chat] 记忆留存失败:', err); }
           }
           onNewMessage();
-          onAgentFilesChange?.([...agentFilesRef.current]);
-          agentFilesRef.current = new Set();
+          if (wasActive) {
+            setRunSummary(rs.runSummary);
+            onAgentFilesChange?.([...agentFilesRef.current]);
+            agentFilesRef.current = new Set();
+          }
           if (!aborted) {
             onThreadStatus?.('done');
+            if (!wasActive) return; // 后台完成：分步报告/排队接力留给用户切回本会话后继续
             // 分步完成报告：本步结果 + 是否继续下一步（下一步由用户在输入框决定发送）
             if (opts.planStep) {
               const ps = opts.planStep;
@@ -556,28 +675,41 @@ export default function ChatArea({
       const msg = String(err.message || '').startsWith('KEY_MISSING')
         ? '模型凭证未加载，请在本机模型设置中重新填写 API Key'
         : err.message;
-      // 此前错误消息不带 model_name → meta 行整体隐藏，用户侧三样全缺（模型/耗时/token）无从判断
-      setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}`, model_name: selectedModel?.model?.model_id || '', created_at: Date.now() }]);
-      setRunSummary({
+      // 运行保活：出错时用户可能已切走——错误只打进「仍是本会话」的可见消息区
+      const errActive = activeThreadIdRef.current === threadKey;
+      rs.inFlight = false;
+      rs.done = true;
+      rs.settledAt = Date.now();
+      rs.runSummary = {
         status: 'error',
-        durationMs: runStartRef.current ? Date.now() - runStartRef.current : 0,
+        durationMs: rs.startedAt ? Date.now() - rs.startedAt : 0,
         tokensIn: 0, tokensOut: 0,
         model: selectedModel?.model?.model_id || '',
         endedAt: Date.now(),
-      });
-      // P0-A：失败可挽回——记录本次输入，用户可一键「重试本轮」（历史已保留，无需手动重打）
-      setLastFailed({ text: content });
+      };
+      if (activeRunIdRef.current === rs.runId) activeRunIdRef.current = null;
+      if (errActive) {
+        // 此前错误消息不带 model_name → meta 行整体隐藏，用户侧三样全缺（模型/耗时/token）无从判断
+        setMessages((m) => [...m, { role: 'assistant', content: `**错误**: ${msg}`, model_name: selectedModel?.model?.model_id || '', created_at: Date.now() }]);
+        setRunSummary(rs.runSummary);
+        // P0-A：失败可挽回——记录本次输入，用户可一键「重试本轮」（历史已保留，无需手动重打）
+        setLastFailed({ text: content });
+      }
       onThreadStatus?.('idle');
     }
-    abortRef.current = null;
-    setStreamingText('');
-    setReasoningText('');
-    setLoading(false);
+    const stillActive = activeThreadIdRef.current === threadKey;
+    if (stillActive) {
+      abortRef.current = null;
+      setStreamingText('');
+      setReasoningText('');
+      setLoading(false);
+    }
     // steer 补发：本轮已完全退出（无并发 run），用 messagesRef 拿到的最新历史重开一轮。
     // 不能在 steer() 里直接 send——那时 loading 仍为 true，请求会被运行中检查静默吞掉。
+    // 仅在用户仍停留在本会话时补发；已切走则丢弃（steer 语义就是「看着它跑」时的即时纠偏）。
     const pendingSteer = steerPendingRef.current;
     steerPendingRef.current = null;
-    if (pendingSteer) setTimeout(() => send(pendingSteer, undefined, { force: true }), 0);
+    if (pendingSteer && stillActive) setTimeout(() => send(pendingSteer, undefined, { force: true }), 0);
   }
 
   // steer（对标 Codex 运行中按 Enter）：立刻中止当前轮并用新指令重开
@@ -587,8 +719,7 @@ export default function ChatArea({
   function steer(text) {
     const t = String(text || '').trim();
     if (!t) return;
-    abortRef.current?.abort();
-    if (window.mjcode?.abortChat) window.mjcode.abortChat();
+    stop(); // 仅中止当前查看会话的运行（不再全局 abortChat，避免误杀后台运行）
     setQueued([]);
     steerPendingRef.current = t;
   }
@@ -602,7 +733,7 @@ export default function ChatArea({
 
   // /clear：清空当前对话上下文
   function clearContext() {
-    abortRef.current?.abort();
+    stop(); // 仅中止当前会话的运行，不影响其他会话的后台任务
     setMessages([]);
     setWindowStart(0);
     setToolCalls([]);
