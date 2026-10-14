@@ -228,7 +228,21 @@ export default function ChatArea({
     //   这里按目标会话的注册表快照恢复 UI；目标会话有运行在途则继续观察其流式输出。
     //   planMode 残留仍需清理（会话级状态，残留会让新会话莫名变成「只读规划」）。
     //   注意：新建会话（undefined→id）不在此列：那一步正在进行的是「本会话自己的首条消息」。
-    if (isCreatingThread) return;
+    //
+    // 2026-10-15 修复（真机：30 轮 / 1027s 跑完，底部看不到耗时与消耗）：
+    // 此处原先 `if (isCreatingThread) return;` 把**全部**恢复逻辑一并早退，包括运行快照。
+    // isCreatingThread 的真实含义是「thread.id 从空变成非空」，它不仅匹配「真的新建会话」，
+    // 也匹配「曾被置空过、又切回同一个会话」——而 activeThread 变 null 是常规操作：
+    //   ① App 快捷键 ⌘N「新建会话」→ setActiveThread(null)（App.jsx:679/485）
+    //   ② ChatArea.send 未选目录时 onAutoProject → App.selectProject → setActiveThread(null)
+    //      （App.jsx:407）——新建任务场景几乎必触发
+    // 于是「切走 → 运行在后台跑完 → 切回」这条最常见的路径上：
+    //   · 完成消息经上方补挂逻辑（rsDone.finalMsg）正常显示 → 用户能看到消息的 meta 小字
+    //   · 而 setRunSummary 被早退吞掉 → 结束信息条永远不出现
+    // 症状就是「只有单条消息的 token 小字，没有底部那条『运行结束 耗时…』」。
+    // 修法：运行快照恢复是只读操作（不涉及中止），对新建会话同样安全，一律执行；
+    // 只有「会话级状态清理」保留 !isCreatingThread 守卫——它才是有害的那部分
+    //（新建会话首条消息时清掉刚弹出的拆分卡片 / 规划模式）。
     const rs = thread?.id != null ? runRegistry.get(String(thread.id)) : null;
     activeRunIdRef.current = rs?.inFlight ? rs.runId : null;
     setLoading(!!rs?.inFlight);
@@ -236,9 +250,11 @@ export default function ChatArea({
     setReasoningText(rs?.inFlight ? (rs.reasoning || '') : '');
     setToolCalls(rs?.inFlight ? [...rs.toolCalls] : []);
     setRunSummary(rs?.done ? rs.runSummary : null);
-    setPlan(null);
-    setPlanReport(null);
-    setPlanMode(false);
+    if (!isCreatingThread) {
+      setPlan(null);
+      setPlanReport(null);
+      setPlanMode(false);
+    }
   }, [thread?.id]);
 
   // A4：sessionExtras 按线程持久化（localStorage，线程切换时恢复）
