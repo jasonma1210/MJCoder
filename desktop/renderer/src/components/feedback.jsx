@@ -61,9 +61,14 @@ export default function FeedbackHost() {
   }
 
   // Esc 关闭 = 取消（危险操作默认安全侧）
+  // P1-6：finish 走 latest-ref 模式。finish 是组件内普通函数（每次渲染新建），
+  // 直接列入依赖会让 keydown 监听每轮渲染卸载重挂；但遗漏又会用到过期闭包。
+  // ref 方案两者兼顾：监听只在 dialog 开关时重挂，调用时永远是最新 finish。
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
   useEffect(() => {
     if (!dialog) return;
-    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+    const onKey = (e) => { if (e.key === 'Escape') finishRef.current(false); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [dialog]);

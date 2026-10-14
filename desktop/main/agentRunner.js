@@ -71,6 +71,8 @@ function startAgentRun(payload, sender) {
         onMessage: (m) => emit('message', m),
         onStream: (s) => emit('stream', s),
         onToolCall: (tc) => emit('tool_call', tc),
+        // P0-B：任务清单 → 渲染层实时展示（让长任务进度对用户可见）
+        onTodos: (info) => emit('todos', info),
         // Phase 3-1：token 预算熔断 → 保存断点（threadKey = conversationId）+ 通知渲染层
         onSuspend: (info) => {
           let saved = false;

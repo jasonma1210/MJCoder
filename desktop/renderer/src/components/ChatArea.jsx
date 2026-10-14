@@ -8,6 +8,7 @@ import InlineAlert from './InlineAlert';
 import { toast } from './feedback';
 import ComposerControls from './ComposerControls';
 import AgentDock from './AgentDock';
+import TodoPanel from './TodoPanel';
 import ContextRing, { contextUsageOf } from './ContextRing';
 import { getModelConfig, modelKeyOf, effectiveContextWindow } from '../lib/modelConfig';
 import { projectDisplayName } from '../lib/projectName';
@@ -118,10 +119,17 @@ export default function ChatArea({
   const cwd = (runMode === 'worktree' && worktree?.path) ? worktree.path : (project?.path || '');
 
   // 首启向导带入的首任务提示词
+  // P1-6：onPromptConsumed 走 latest-ref 模式，不列入依赖数组。
+  // 原因：父组件传的是内联箭头（App.jsx:601 `onPromptConsumed={() => setInitialPrompt('')}`），
+  // 每次渲染都是新引用。若直接列入依赖，effect 会每轮渲染重跑 → 反复调用
+  // onPromptConsumed → 反复 setInitialPrompt('') → 额外渲染循环。
+  // 用 ref 持有最新回调，既保证不用过期的闭包，又不让 effect 被回调身份变化触发。
+  const onPromptConsumedRef = useRef(onPromptConsumed);
+  onPromptConsumedRef.current = onPromptConsumed;
   useEffect(() => {
     if (initialPrompt) {
       setInput(initialPrompt);
-      onPromptConsumed?.();
+      onPromptConsumedRef.current?.();
     }
   }, [initialPrompt]);
 
@@ -172,7 +180,14 @@ export default function ChatArea({
       }
       setAmbient(tips.slice(0, 3));
     })();
-  }, [projectPicked, project?.path, project?.branch]);
+    // P1-6：依赖补齐为「本 effect 实际读取的 project 字段」。
+    // P1-6：依赖改为整个 project 对象。
+    // 背景：此前只列 path/branch，但函数体还读了 project.languages、project.name
+    // （经 projectDisplayName）与 project.path——字段变化时不重跑，欢迎页建议会过期。
+    // 试过只补 project?.languages / project?.name，但 linter 仍要求基对象 project。
+    // 列整个对象是安全的：父组件传的 activeProject 来自 useState（App.jsx:57），
+    // 引用在 setActiveProject 调用前保持稳定，不会导致 effect 每轮重跑。
+  }, [projectPicked, project]);
 
   // P1-G：切会话旧消息残留串显——thread.id 变化即清空，拉取完成前不渲染上一个会话的消息；
   // 并用请求序号防竞态（A→B→A 快速切换时，先发的旧响应晚到会覆盖新会话内容）
@@ -274,7 +289,11 @@ export default function ChatArea({
     setCompacting(false);
     agentFilesRef.current = new Set();
     onAgentFilesChange?.([]);
-  }, [project?.path]);
+    // P1-6：onAgentFilesChange 列入依赖。父组件传的是 useState setter（App.jsx:590
+    // `onAgentFilesChange={setAgentFiles}`），React 保证其引用稳定，列入不会导致
+    // 重复执行；但若将来父组件改成内联箭头，这里必须同步改为 latest-ref 模式，
+    // 否则切项目时会反复调用、把 Agent 文件列表清空成循环。
+  }, [project?.path, onAgentFilesChange]);
 
   // C3：智能滚底 —— 仅当用户已在底部附近（<80px）才跟随；上翻历史时不再被强制拽回，
   // 由悬浮的「回到底部」按钮接管（stickToBottomRef 在 onScroll 中维护）
@@ -400,8 +419,11 @@ export default function ChatArea({
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); };
-    // 只依赖 start/stop（useCallback 稳定，仅状态机切换时重建）：
-    // 依赖 [voice] 的话 elapsed 每 250ms 变一次，监听会跟着每 250ms 卸载重挂
+    // 只依赖 start/stop（useCallback 稳定，仅状态机切换时重建）。
+    // 刻意不列 [voice]：voice 对象含 elapsed（每 250ms 变一次），列入会让
+    // keydown/keyup 监听每 250ms 卸载重挂一次。本 effect 只用到
+    // voice.start / voice.stop 两个 useCallback 稳定引用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice.start, voice.stop]);
 
   async function pickFiles() {
@@ -863,6 +885,8 @@ export default function ChatArea({
           onClosed={() => { setWorktree(null); setRunMode('local'); }}
           onMsg={(m) => setModeMsg(m)}
         />
+        {/* P0-B：任务清单——让长任务的进度对用户可见（模型经 todo_write 实时维护） */}
+        <TodoPanel />
         {/* WorkBuddy 式 Agent 运行胶囊：在役数字员工一览（点击展开流程与强制关闭） */}
         <AgentDock />
         <Composer
@@ -974,6 +998,8 @@ export default function ChatArea({
           onClosed={() => { setWorktree(null); setRunMode('local'); }}
           onMsg={(m) => setModeMsg(m)}
         />
+        {/* P0-B：任务清单——让长任务的进度对用户可见（模型经 todo_write 实时维护） */}
+        <TodoPanel />
         {/* WorkBuddy 式 Agent 运行胶囊：在役数字员工一览（点击展开流程与强制关闭） */}
         <AgentDock />
         <Composer

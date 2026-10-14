@@ -1,0 +1,21 @@
+{
+  "_comment": "对照配置：只填端点/模型/单价 + API Key 所在的【环境变量名】。真实 Key 绝不写入本文件。profiles.json 可含本地端点（Ollama 无需 Key）。",
+  "profiles": [
+    {
+      "name": "mimo-v2.6-flash",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.6-flash",
+      "api_key_env": "MIMO_API_KEY",
+      "price_in": 0,
+      "price_out": 0
+    },
+    {
+      "name": "ollama-qwen3.5-14b",
+      "base_url": "http://localhost:11434/v1",
+      "model": "qwen3.5:14b",
+      "api_key_env": "",
+      "price_in": 0,
+      "price_out": 0
+    }
+  ]
+}

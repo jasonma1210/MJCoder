@@ -362,6 +362,9 @@ function sanitizeUntrusted(text, limit = 4000) {
   let s = String(text ?? '');
   // 中和内容里出现的分隔符，防止提前闭合包裹块
   s = s.split(UNTRUSTED_BEGIN).join('[已过滤]').split(UNTRUSTED_END).join('[已过滤]');
+  // 屏幕OCR 属第三方不可信内容，必须剥离 NUL/BS/VT/FF/SO/US 等控制字符，
+  // 否则可被用于构造欺骗性显示或注入分隔符：
+  // eslint-disable-next-line no-control-regex
   s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ').trim();
   return s.length > limit ? `${s.slice(0, limit)}…（内容已截断）` : s;
 }

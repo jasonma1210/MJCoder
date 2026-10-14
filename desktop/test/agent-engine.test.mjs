@@ -1,0 +1,310 @@
+// Agent 引擎测试：中间消息持久化 / cwd 注入 / usage 归属 / abort / 上下文压缩
+import { runAgent } from '../renderer/src/lib/agent.js';
+
+let pass = 0;
+let fail = 0;
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`✅ ${name}${detail ? ` — ${detail}` : ''}`); }
+  else { fail++; console.log(`❌ ${name}${detail ? ` — ${detail}` : ''}`); }
+}
+
+const shellCalls = [];
+const gitStatusCalls = [];
+let chatScript = [];
+let chatCalls = [];
+
+globalThis.window = {
+  mjcode: {
+    chat: async (payload) => {
+      chatCalls.push(payload);
+      const next = chatScript.shift();
+      return next || { content: '（默认回复）', usage: { prompt_tokens: 5, completion_tokens: 3 } };
+    },
+    shell: async (args) => { shellCalls.push(args); return { stdout: 'shell-ok', stderr: '', exitCode: 0 }; },
+    gitStatus: async (args) => { gitStatusCalls.push(args); return { stdout: ' M a.js' }; },
+    readFile: async () => ({ content: 'file' }),
+    writeFile: async () => ({ ok: true }),
+    editFile: async () => ({ ok: true }),
+    applyPatch: async () => ({ stdout: 'patched' }),
+    listDir: async () => [],
+    grep: async () => ({ matches: '' }),
+    glob: async () => ({ files: [] }),
+    gitDiff: async () => ({ stdout: 'diff' }),
+    gitLog: async () => ({ stdout: 'abc123 init' }),
+    gitCommit: async () => ({ stdout: 'committed' }),
+    mcpCallTool: async () => ({ content: [] }),
+  },
+};
+
+const model = {
+  provider: { id: 1, isGlobal: false, base_url: 'https://api.deepseek.com/v1' },
+  model: { id: 1, model_id: 'deepseek-chat', context_window: 128000 },
+};
+
+function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitStatusCalls.length = 0; }
+
+(async () => {
+  // ── 测试 1：多轮工具循环的持久化顺序 + cwd + usage ──
+  reset();
+  chatScript = [
+    { content: '先看下状态', tool_calls: [{ id: 'call_1', function: { name: 'git_status', arguments: '{}' } }], usage: { prompt_tokens: 100, completion_tokens: 20 } },
+    { content: '再跑个命令', tool_calls: [{ id: 'call_2', function: { name: 'shell', arguments: '{"command":"ls"}' } }], usage: { prompt_tokens: 150, completion_tokens: 25 } },
+    { content: '全部完成', usage: { prompt_tokens: 200, completion_tokens: 30 } },
+  ];
+  const emitted = [];
+  let doneArgs = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '看看仓库' }],
+    model,
+    cwd: '/tmp/project',
+    onMessage: (m) => emitted.push(m),
+    onDone: (text, usage, aborted) => { doneArgs = { text, usage, aborted }; },
+  });
+  const roles = emitted.map((m) => m.role);
+  check('持久化顺序 = assistant(tool_calls) → tool → assistant(tool_calls) → tool',
+    JSON.stringify(roles) === JSON.stringify(['assistant', 'tool', 'assistant', 'tool']), roles.join(','));
+  check('中间 assistant 消息携带 tool_calls', emitted[0].tool_calls?.[0]?.id === 'call_1' && emitted[2].tool_calls?.[0]?.id === 'call_2');
+  check('tool 消息携带 tool_call_id 与结果', emitted[1].tool_call_id === 'call_1' && emitted[1].content.includes('shell-ok') === false && emitted[3].tool_call_id === 'call_2');
+  check('git_status 自动注入 cwd', gitStatusCalls.length === 1 && gitStatusCalls[0].cwd === '/tmp/project');
+  check('shell 工具注入 cwd', shellCalls.length === 1 && shellCalls[0].cwd === '/tmp/project' && shellCalls[0].command === 'ls');
+  check('逐轮 usage 归属中间消息', emitted[0].tokens_input === 100 && emitted[2].tokens_input === 150);
+  check('总 usage 累计', doneArgs.usage.prompt_tokens === 450 && doneArgs.usage.completion_tokens === 75,
+    `in=${doneArgs.usage.prompt_tokens} out=${doneArgs.usage.completion_tokens}`);
+  check('最终文本', doneArgs.text === '全部完成' && doneArgs.aborted === false);
+
+  // ── 测试 2：工具执行中 abort ──
+  reset();
+  chatScript = [
+    { content: '', tool_calls: [{ id: 'c1', function: { name: 'shell', arguments: '{"command":"sleep 100"}' } }], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+  ];
+  const controller = new AbortController();
+  globalThis.window.mjcode.shell = async (args) => {
+    controller.abort(); // 模拟执行中被用户停止
+    return { stdout: 'partial' };
+  };
+  let abortDone = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '长任务' }],
+    model,
+    signal: controller.signal,
+    cwd: '/tmp/project',
+    onMessage: () => {},
+    onDone: (text, usage, aborted) => { abortDone = { text, usage, aborted }; },
+  });
+  check('执行中 abort → aborted=true 且收敛', abortDone?.aborted === true);
+  // 恢复 shell mock
+  globalThis.window.mjcode.shell = async (args) => { shellCalls.push(args); return { stdout: 'shell-ok' }; };
+
+  // ── 测试 3：上下文压缩 ──
+  reset();
+  const bigHistory = [];
+  for (let i = 0; i < 20; i++) {
+    bigHistory.push({ role: 'user', content: `第${i}轮问题：${'x'.repeat(3000)}` });
+    bigHistory.push({ role: 'assistant', content: `第${i}轮回答：${'y'.repeat(3000)}` });
+  }
+  chatScript = [
+    { content: '这是压缩摘要：关键决策与文件路径', usage: { prompt_tokens: 50, completion_tokens: 40 } }, // 摘要请求
+    { content: '基于摘要的回复', usage: { prompt_tokens: 60, completion_tokens: 20 } }, // 主请求
+  ];
+  let compactedDone = null;
+  await runAgent({
+    messages: bigHistory,
+    model: { ...model, model: { ...model.model, context_window: 1000 } }, // 小窗口强制触发压缩
+    cwd: '/tmp/project',
+    onMessage: () => {},
+    onDone: (t, u, a) => { compactedDone = { t, u, a }; },
+  });
+  check('压缩：首次 chat 为摘要请求（无 tools）', chatCalls[0]?.tools === undefined && chatCalls[0]?.messages?.length === 1);
+  check('压缩：主请求消息数大幅缩减', chatCalls[1]?.messages?.length < bigHistory.length + 1,
+    `${chatCalls[1]?.messages?.length} < ${bigHistory.length + 1}`);
+  check('压缩：保留 system + 摘要 + 尾部', chatCalls[1]?.messages?.[0]?.role === 'system' && String(chatCalls[1]?.messages?.[1]?.content || '').includes('压缩摘要'));
+  check('压缩后正常完成', compactedDone?.t === '基于摘要的回复');
+
+  // ── 测试 4：AGENTS.md 注入 system prompt ──
+  reset();
+  chatScript = [{ content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } }];
+  await runAgent({
+    messages: [{ role: 'user', content: 'hi' }],
+    model,
+    agentsMd: { path: '/tmp/project/AGENTS.md', content: '项目规范：使用 pnpm，禁止 any' },
+    onMessage: () => {},
+    onDone: () => {},
+  });
+  check('AGENTS.md 注入首轮 system prompt', String(chatCalls[0]?.messages?.[0]?.content || '').includes('项目规范：使用 pnpm'));
+
+  // ── 测试 5：spawn_subagent 真实现（嵌套只读循环 + 预算）──
+  reset();
+  chatScript = [
+    // 父代理第 1 轮：派生子代理
+    { content: '派生子代理探索', tool_calls: [{ id: 'p1', function: { name: 'spawn_subagent', arguments: JSON.stringify({ objective: '找出入口文件', task_type: 'explore' }) } }], usage: { prompt_tokens: 100, completion_tokens: 20 } },
+    // 子代理第 1 轮：只读探索
+    { content: '看下目录', tool_calls: [{ id: 's1', function: { name: 'list_dir', arguments: '{"path":"/tmp/project"}' } }], usage: { prompt_tokens: 50, completion_tokens: 10 } },
+    // 子代理第 2 轮：结论
+    { content: '结论：入口文件是 src/index.js', usage: { prompt_tokens: 80, completion_tokens: 30 } },
+    // 父代理第 2 轮：汇总
+    { content: '子代理确认入口为 src/index.js', usage: { prompt_tokens: 200, completion_tokens: 40 } },
+  ];
+  const subEmitted = [];
+  let subToolResult = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '入口文件是哪個？' }],
+    model,
+    cwd: '/tmp/project',
+    onMessage: (m) => subEmitted.push(m),
+    onToolCall: (tc) => { if (tc.name === 'spawn_subagent') subToolResult = tc.result; },
+    onDone: () => {},
+  });
+  check('子代理返回结构化结果', subToolResult?.ok === true && String(subToolResult?.result || '').includes('src/index.js'));
+  check('子代理记录 token 用量', typeof subToolResult?.tokens_used === 'number' && subToolResult.tokens_used > 0, `used=${subToolResult?.tokens_used}`);
+  check('子代理未耗尽预算', subToolResult?.budget_exhausted === false);
+
+  // ── 测试 6：子代理预算耗尽自动停止 ──
+  reset();
+  chatScript = [
+    { content: '派生子代理', tool_calls: [{ id: 'p1', function: { name: 'spawn_subagent', arguments: JSON.stringify({ objective: '大扫描', token_budget: 10 }) } }], usage: { prompt_tokens: 100, completion_tokens: 20 } },
+    { content: '扫描中', tool_calls: [{ id: 's1', function: { name: 'list_dir', arguments: '{}' } }], usage: { prompt_tokens: 500, completion_tokens: 100 } },
+    { content: '（默认回复）', usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    { content: '父代理汇总', usage: { prompt_tokens: 10, completion_tokens: 5 } },
+  ];
+  let budgetResult = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '扫描' }],
+    model,
+    cwd: '/tmp/project',
+    onMessage: () => {},
+    onToolCall: (tc) => { if (tc.name === 'spawn_subagent') budgetResult = tc.result; },
+    onDone: () => {},
+  });
+  check('预算耗尽标记 budget_exhausted', budgetResult?.budget_exhausted === true);
+  check('预算耗尽仍返回部分结论', typeof budgetResult?.result === 'string');
+
+  // ── 测试 N：token 预算闸——压缩救援后必须开启全新预算窗口；最多救援 TOKEN_RESCUE_MAX(3) 次后才熔断 ──
+  // （回归 1：原实现累计口径不清零，救援形同虚设；回归 2：单次救援对文件密集型长任务不够，真机两次 470k 熔断）
+  reset();
+  // 每轮消耗 70（60 in + 10 out），预算 100，救援上限 3：
+  //   轮1 窗口70；轮2 140→救援1清零；轮3 70；轮4 140→救援2；轮5 70；轮6 140→救援3；
+  //   轮7 70；轮8 140→救援已用满 3 次 → 熔断收尾。
+  // 注意：救援 2/3 的强制压缩会真实调用摘要 chat（convo body > keepTail=6 时），
+  // 摘要请求同样消耗脚本条目但不计入轮次 usage——因此脚本用完全相同的条目，
+  // 轮次断言按「是否带 tools」过滤（摘要请求无 tools），与摘要触发次数解耦。
+  chatScript = Array.from({ length: 20 }, (_, i) => ({
+    content: `干活（第 ${i + 1} 条脚本）`,
+    tool_calls: [{ id: `b${i + 1}`, function: { name: 'git_status', arguments: '{}' } }],
+    usage: { prompt_tokens: 60, completion_tokens: 10 },
+  }));
+  let budgetDone = null;
+  let suspendedInfo = null;
+  const budgetReports = [];
+  await runAgent({
+    messages: [{ role: 'user', content: '长任务' }],
+    model,
+    cwd: '/tmp/project',
+    tokenBudget: 100,
+    onMessage: () => {},
+    // Phase 3-1/3-4：挂起与逐轮用量钩子
+    onSuspend: (info) => { suspendedInfo = { ...info }; return true; },
+    onBudget: (s) => budgetReports.push(s),
+    onDone: (text, usage, aborted) => { budgetDone = { text, usage }; },
+  });
+  const roundCalls = chatCalls.filter((c) => Array.isArray(c.tools) && c.tools.length > 0);
+  check('多次压缩救援全部生效（跑满 8 轮而非第 2 次触闸即收尾）', roundCalls.length === 8, `模型轮次 ${roundCalls.length} 次（含摘要调用共 ${chatCalls.length} 次）`);
+  check('预算收尾文案含「token 预算已用尽」与救援次数说明', budgetDone?.text?.includes('token 预算已用尽') === true
+    && budgetDone?.text?.includes('防失控上限') === true
+    && budgetDone?.text?.includes('自动压缩续跑 3 次') === true);
+  check('usage 全程累计如实上报（8×70=560，摘要调用不计入）', budgetDone?.usage?.prompt_tokens === 480 && budgetDone?.usage?.completion_tokens === 80,
+    `in=${budgetDone?.usage?.prompt_tokens} out=${budgetDone?.usage?.completion_tokens}`);
+
+  // ── Phase 3-1：熔断挂起钩子——onSuspend 触发 + 收尾文案标注断点已保存 ──
+  check('熔断时触发 onSuspend（kind=tokens，带用量与轮数）', suspendedInfo?.kind === 'tokens'
+    && suspendedInfo?.roundsUsed === 8 && suspendedInfo?.usage?.prompt_tokens === 480,
+    `kind=${suspendedInfo?.kind} rounds=${suspendedInfo?.roundsUsed}`);
+  check('收尾文案标注「断点已保存」', budgetDone?.text?.includes('断点已保存') === true);
+
+  // ── Phase 3-4：逐轮用量上报——每轮一条 + 收尾 running=false 定格 ──
+  check('onBudget 逐轮上报（≥8 条运行中 + 1 条收尾）',
+    budgetReports.filter((r) => r.running === true).length >= 8
+    && budgetReports[budgetReports.length - 1]?.running === false
+    && budgetReports[budgetReports.length - 1]?.promptTokens === 480,
+    `共 ${budgetReports.length} 条`);
+
+  // ── 测试 O：断点恢复注入——resumeContext 进 system 消息（不进持久化历史）──
+  reset();
+  chatScript = [{ content: '恢复完成', usage: { prompt_tokens: 5, completion_tokens: 3 } }];
+  let resumeFirstSystem = '';
+  await runAgent({
+    messages: [{ role: 'user', content: '继续' }],
+    model,
+    cwd: '/tmp/project',
+    resumeContext: '断点标记XYZ：已完成A，待办B',
+    onMessage: () => {},
+    onDone: () => {},
+  });
+  resumeFirstSystem = String(chatCalls[0]?.messages?.[0]?.content || '');
+  check('resumeContext 注入 system（含断点恢复标识与摘要原文）',
+    resumeFirstSystem.includes('断点恢复') && resumeFirstSystem.includes('断点标记XYZ'));
+
+  // ── 测试 P：read_file run 内缓存——mtime/size 未变的重复全量读取命中缓存 ──
+  reset();
+  const fsMod = await import('node:fs');
+  const osMod = await import('node:os');
+  const pathMod = await import('node:path');
+  const cacheFile = pathMod.join(fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'mjcode-fc-')), 'big.js');
+  const bigContent = `// 大文件内容\n${'const x = 1;\n'.repeat(600)}`; // ≈ 7800 字符 > FILE_CACHE_MIN_CHARS(4000)
+  fsMod.writeFileSync(cacheFile, bigContent);
+  let readFileCalls = 0;
+  const prevReadFile = globalThis.window.mjcode.readFile;
+  globalThis.window.mjcode.readFile = async (args) => {
+    readFileCalls += 1;
+    return { ok: true, path: args.path, content: bigContent, totalLines: bigContent.split('\n').length };
+  };
+  try {
+    chatScript = [
+      { content: '读一次', tool_calls: [{ id: 'r1', function: { name: 'read_file', arguments: JSON.stringify({ path: cacheFile }) } }], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+      { content: '再读一次', tool_calls: [{ id: 'r2', function: { name: 'read_file', arguments: JSON.stringify({ path: cacheFile }) } }], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+      { content: '读完', usage: { prompt_tokens: 5, completion_tokens: 3 } },
+    ];
+    const toolMsgs = [];
+    await runAgent({
+      messages: [{ role: 'user', content: '读两次同一个大文件' }],
+      model,
+      cwd: '/tmp/project',
+      onMessage: (m) => { if (m.role === 'tool') toolMsgs.push(m); },
+      onDone: () => {},
+    });
+    check('第二次未变更读取命中缓存（通道只被调用 1 次）', readFileCalls === 1, `readFile 调用 ${readFileCalls} 次`);
+    check('缓存命中返回提示而非重复全文', String(toolMsgs[1]?.content || '').includes('缓存命中')
+      && !String(toolMsgs[1]?.content || '').includes('const x = 1;'));
+    check('首次读取仍返回完整内容', String(toolMsgs[0]?.content || '').includes('const x = 1;'));
+  } finally {
+    globalThis.window.mjcode.readFile = prevReadFile;
+  }
+
+  // ── 测试 Q：长输出摘要化（Phase 3-3）——PASS 折叠 + 头尾保留 + 原文落盘 ──
+  const { collapsePassLines, summarizeToolOutput } = await import('../agent-core/index.js');
+  const passRun = Array.from({ length: 30 }, (_, i) => `✓ test ${i + 1} passed`).join('\n');
+  const collapsed = collapsePassLines(`header\n${passRun}\nfooter`);
+  check('连续 PASS 行折叠（30 行 → 3 行，含汇总提示，上下文行保留原位）',
+    collapsed.split('\n').length === 5
+    && collapsed.includes('28 行通过用例日志已折叠') === true
+    && collapsed.startsWith('header') === true
+    && collapsed.endsWith('footer') === true,
+    `折叠后 ${collapsed.split('\n').length} 行`);
+  check('PASS 行数未超阈值不折叠', collapsePassLines(Array.from({ length: 10 }, (_, i) => `✓ t${i}`).join('\n')).split('\n').length === 10);
+
+  const hugeOutput = 'x'.repeat(20000);
+  const summarized = await summarizeToolOutput(hugeOutput, 'shell');
+  check('超长输出触发摘要化（头尾保留 + 标记 + 落盘路径）',
+    summarized.includes('长输出摘要化') === true && summarized.includes('mjcode-tool-outputs') === true
+    && summarized.length < 8000, `摘要后 ${summarized.length} 字符`);
+  const savedPath = (summarized.match(/(\/[^\s]+mjcode-tool-outputs\/[^\s（]+)/) || [])[1];
+  check('落盘原文可读回（内容与原文一致）', !!savedPath && fsMod.readFileSync(savedPath, 'utf8') === hugeOutput,
+    savedPath || '未取到路径');
+  const smallSum = await summarizeToolOutput('short', 'shell');
+  check('短输出原样返回', smallSum === 'short');
+  const objSum = await summarizeToolOutput({ ok: true, stdout: 'y'.repeat(12000), stderr: '' }, 'shell');
+  check('对象结果仅摘要化超长字段（结构完整可解析）',
+    JSON.parse(JSON.stringify(objSum)).ok === true && objSum.stdout.includes('长输出摘要化') && objSum.stderr === '');
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
+  process.exit(fail === 0 ? 0 : 1);
+})().catch((e) => { console.error('FAIL:', e); process.exit(1); });

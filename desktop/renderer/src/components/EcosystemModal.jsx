@@ -106,7 +106,12 @@ export default function EcosystemModal({ onClose, embedded = false }) {
     refreshInstalledSkills();
   }
 
-  useEffect(() => { loadAll(); }, []);
+  // 刻意「挂载时加载一次」：loadAll 内部读 keyword/type 等筛选 state，列入依赖会让
+  // 每次输入都重新拉全量生态资产（100 技能 + 100 连接器），筛选应由本地 filtered
+  // 计算完成。安装/下载后的刷新由各 handler 显式调用 loadAll()/refreshInstalledSkills()。
+  useEffect(() => { loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── 下载动作（目录页唯一入口；下载后在会话「+」菜单中选择） ──
 

@@ -1,0 +1,123 @@
+[
+  {
+    "id": "hard-router-multifile",
+    "category": "bugfix",
+    "difficulty": "hard",
+    "prompt": "这是一个跨越 src/router.js、src/handlers.js、src/index.js 三个文件的小型路由实现。当前路由匹配存在缺陷：只按路径前缀匹配，既不区分 HTTP 方法，也不解析 /users/:id 形式的路径参数，导致 POST /users 命中了 GET /users、/users/42 拿不到 id、本应 404 的请求返回了 200。请修复路由匹配（方法区分 + 路径参数解析 + 精确匹配），使 verify.js 全部通过（不要修改 verify.js）。修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "src/router.js",
+        "content": "class Router {\n  constructor() {\n    this.routes = [];\n  }\n  add(method, path, handler) {\n    this.routes.push({ method: String(method).toUpperCase(), path, handler });\n  }\n  // BUG: 仅按路径前缀匹配，不区分方法，也不解析 :id 参数\n  match(method, path) {\n    for (const r of this.routes) {\n      if (path.startsWith(r.path)) return { handler: r.handler, params: {} };\n    }\n    return null;\n  }\n}\n\nmodule.exports = { Router };\n"
+      },
+      {
+        "path": "src/handlers.js",
+        "content": "const handlers = {\n  listUsers: () => ({ status: 200, body: { users: ['alice', 'bob'] } }),\n  getUser: (params) => ({ status: 200, body: { id: params.id } }),\n  createUser: (req) => ({ status: 201, body: { created: (req && req.body && req.body.name) || 'unknown' } }),\n};\n\nmodule.exports = handlers;\n"
+      },
+      {
+        "path": "src/index.js",
+        "content": "const { Router } = require('./router');\nconst h = require('./handlers');\n\nfunction createApp() {\n  const router = new Router();\n  router.add('GET', '/users', h.listUsers);\n  router.add('GET', '/users/:id', h.getUser);\n  router.add('POST', '/users', h.createUser);\n\n  return {\n    handle(req) {\n      const hit = router.match(req.method, req.path);\n      if (!hit) return { status: 404, body: { error: 'not found' } };\n      return hit.handler(hit.params, req);\n    },\n  };\n}\n\nmodule.exports = { createApp };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { createApp } = require('./src/index.js');\nconst app = createApp();\n\nlet r = app.handle({ method: 'GET', path: '/users' });\nassert.strictEqual(r.status, 200);\nassert.deepStrictEqual(r.body.users, ['alice', 'bob']);\n\nr = app.handle({ method: 'GET', path: '/users/42' });\nassert.strictEqual(r.status, 200);\nassert.deepStrictEqual(r.body, { id: '42' }, '路径参数 :id 必须解析');\n\nr = app.handle({ method: 'POST', path: '/users', body: { name: 'carol' } });\nassert.strictEqual(r.status, 201, 'POST /users 不能命中 GET /users');\nassert.deepStrictEqual(r.body, { created: 'carol' });\n\nr = app.handle({ method: 'DELETE', path: '/users' });\nassert.strictEqual(r.status, 404, '未注册方法应 404');\n\nr = app.handle({ method: 'GET', path: '/orders' });\nassert.strictEqual(r.status, 404, '未注册路径应 404');\n\nr = app.handle({ method: 'GET', path: '/users/42/posts' });\nassert.strictEqual(r.status, 404, '必须精确匹配，不能前缀命中 /users/:id');\n\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "hard-pool-concurrency",
+    "category": "feature",
+    "difficulty": "hard",
+    "prompt": "请在 lib/pool.js 实现并发受限的任务池 runPool(tasks, limit, retries)：同一时刻最多 limit 个任务在执行（默认 2）；返回结果数组与入参任务顺序一一对应，元素为 { ok: true, value } 或 { ok: false, error }；失败任务自动重试 retries 次（retries 表示初次尝试之外的重试次数，即最多尝试 retries+1 次），重试耗尽后标记失败且不中断其他任务。当前实现没有并发上限、吞掉了错误且重试次数不生效。请修复实现使 verify.js 通过（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/pool.js",
+        "content": "// 并发受限任务池：runPool(tasks, limit, retries)\n// BUG: 无并发上限（全部并行）、顺序不保证、错误被吞掉、重试次数未生效\nasync function runPool(tasks, limit = 2, retries = 1) {\n  const results = [];\n  await Promise.all(tasks.map(async (task) => {\n    let lastErr = null;\n    for (let i = 0; i < retries; i++) {\n      try { results.push(await task()); lastErr = null; break; }\n      catch (e) { lastErr = e; }\n    }\n    if (lastErr) results.push({ error: lastErr.message });\n  }));\n  return results;\n}\n\nmodule.exports = { runPool };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { runPool } = require('./lib/pool.js');\n\n(async () => {\n  let cur = 0;\n  let max = 0;\n  const mk = (ms) => async () => {\n    cur += 1; max = Math.max(max, cur);\n    try { await new Promise((r) => setTimeout(r, ms)); return ms; }\n    finally { cur -= 1; }\n  };\n  const res = await runPool([mk(30), mk(20), mk(10), mk(5), mk(1)], 2, 1);\n  assert.strictEqual(res.length, 5, '返回结果数量应与任务一致');\n  assert.ok(max <= 2, `并发上限应为 2，实际峰值 ${max}`);\n  assert.ok(res.every((r) => r && r.ok === true), '所有任务应成功');\n  assert.deepStrictEqual(res.map((r) => r.value), [30, 20, 10, 5, 1], '结果顺序必须与任务顺序一致');\n\n  let attempts = 0;\n  const flaky = async () => { attempts += 1; if (attempts < 2) throw new Error('boom'); return 'ok'; };\n  const r2 = await runPool([flaky], 1, 1);\n  assert.strictEqual(r2[0].ok, true, '重试后应成功');\n  assert.strictEqual(r2[0].value, 'ok');\n  assert.strictEqual(attempts, 2, 'retries=1 应共尝试 2 次');\n\n  let tries = 0;\n  const dead = async () => { tries += 1; throw new Error('dead'); };\n  const r3 = await runPool([dead], 1, 2);\n  assert.strictEqual(r3[0].ok, false, '重试耗尽应标记失败');\n  assert.strictEqual(tries, 3, 'retries=2 应共尝试 3 次');\n  assert.match(String(r3[0].error), /dead/, '失败结果应保留错误信息');\n\n  const mixed = await runPool([async () => 1, dead, async () => 3], 2, 0);\n  assert.deepStrictEqual(mixed.map((r) => r.ok), [true, false, true], '单个任务失败不应中断其他任务');\n\n  console.log('verify: all pass');\n  process.exit(0);\n})().catch((e) => { console.error(e.message); process.exit(1); });\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "hard-suite-green-validator",
+    "category": "bugfix",
+    "difficulty": "hard",
+    "prompt": "项目自带一个迷你测试套件（test/run.js 读取 test/cases.js 的 6 个用例），当前有 2 个用例失败，根因在 lib/validator.js 的校验逻辑：邮箱校验过松（仅判断是否含 @）、年龄校验把 0 当成未提供。请只修改 lib/ 下的源码让测试套件全绿（不要修改 test/ 下任何文件，不要用跳过用例的方式通过）。完成后运行 node test/run.js 验证。",
+    "files": [
+      {
+        "path": "lib/validator.js",
+        "content": "// 用户校验：返回错误信息数组，空数组表示合法\nfunction validateUser(u) {\n  const errors = [];\n  if (!u || typeof u !== 'object') return ['invalid user'];\n\n  const name = String(u.name || '').trim();\n  if (name.length < 2) errors.push('name too short');\n\n  // BUG: 邮箱校验过松，'not-an-email' 这类非法值被放过\n  if (!String(u.email || '').includes('@')) return errors;\n  if (!/^[^@\\s]+@[^@\\s]+\\.[a-z]+$/.test(String(u.email))) errors.push('invalid email');\n\n  // BUG: 用真值判断，age 为 0（合法值）被当成未提供\n  if (!u.age) errors.push('age required');\n  else if (u.age < 0 || u.age > 150) errors.push('age out of range');\n\n  return errors;\n}\n\nmodule.exports = { validateUser };\n"
+      },
+      {
+        "path": "lib/profile.js",
+        "content": "const { validateUser } = require('./validator');\n\n// 对外组合接口：校验 + 归一化（行为由 validator 决定）\nfunction normalizeUser(u) {\n  const errors = validateUser(u);\n  if (errors.length) return { ok: false, errors };\n  return {\n    ok: true,\n    user: { name: String(u.name).trim(), email: String(u.email).toLowerCase(), age: Number(u.age) },\n  };\n}\n\nmodule.exports = { normalizeUser };\n"
+      },
+      {
+        "path": "test/cases.js",
+        "content": "const { validateUser } = require('../lib/validator.js');\n\nmodule.exports = [\n  { name: '合法用户通过', run: () => validateUser({ name: '张三', email: 'a@b.com', age: 30 }), expect: [] },\n  { name: '姓名过短', run: () => validateUser({ name: 'a', email: 'a@b.com', age: 30 }), expect: ['name too short'] },\n  { name: '非法邮箱应报错', run: () => validateUser({ name: '张三', email: 'not-an-email', age: 30 }), expect: ['invalid email'] },\n  { name: 'age 为 0 是合法值', run: () => validateUser({ name: '张三', email: 'a@b.com', age: 0 }), expect: [] },\n  { name: 'age 越界', run: () => validateUser({ name: '张三', email: 'a@b.com', age: 200 }), expect: ['age out of range'] },\n  { name: '非对象拒绝', run: () => validateUser(null), expect: ['invalid user'] },\n];\n"
+      },
+      {
+        "path": "test/run.js",
+        "content": "// 迷你测试套件：只读地执行 cases.js 中的用例，不做任何跳过处理\nconst assert = require('assert');\nconst cases = require('./cases.js');\n\nlet failed = 0;\nfor (const c of cases) {\n  try {\n    assert.deepStrictEqual(c.run(), c.expect);\n  } catch (e) {\n    failed += 1;\n    console.error(`FAIL ${c.name}: ${e.message}`);\n  }\n}\n\nif (failed) { console.error(`${failed}/${cases.length} 个用例失败`); process.exit(1); }\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node test/run.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "hard-refactor-shared-rules",
+    "category": "refactor",
+    "difficulty": "hard",
+    "prompt": "lib/orders.js 与 lib/users.js 各自复制了一份完全相同的校验规则（id 长度 >= 3、amount 必须为正数、currency 只支持 CNY/USD）。请把重复规则提取到新建的 lib/validate.js（导出 validateCommon），两个模块改为调用它，对外行为完全不变。满足 verify.js（不要修改 verify.js）：既要行为断言全过，也要确认重复实现已消除且两个模块确实引用了共享模块。完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/orders.js",
+        "content": "// 订单校验（与 users.js 中的规则重复，需提取共享）\nfunction validateOrder(o) {\n  const errs = [];\n  if (!o || typeof o !== 'object') return ['invalid order'];\n  if (!o.id || String(o.id).length < 3) errs.push('id too short');\n  if (!(Number(o.amount) > 0)) errs.push('amount must be positive');\n  if (o.currency && !['CNY', 'USD'].includes(o.currency)) errs.push('unsupported currency');\n  return errs;\n}\n\nfunction totalOf(orders) {\n  return orders\n    .filter((o) => validateOrder(o).length === 0)\n    .reduce((a, o) => a + Number(o.amount), 0);\n}\n\nmodule.exports = { validateOrder, totalOf };\n"
+      },
+      {
+        "path": "lib/users.js",
+        "content": "// 用户账户校验（与 orders.js 中的规则重复，需提取共享）\nfunction validateAccount(a) {\n  const errs = [];\n  if (!a || typeof a !== 'object') return ['invalid account'];\n  if (!a.id || String(a.id).length < 3) errs.push('id too short');\n  if (!(Number(a.amount) > 0)) errs.push('amount must be positive');\n  if (a.currency && !['CNY', 'USD'].includes(a.currency)) errs.push('unsupported currency');\n  return errs;\n}\n\nfunction activeBalance(accounts) {\n  return accounts\n    .filter((a) => validateAccount(a).length === 0)\n    .reduce((s, a) => s + Number(a.amount), 0);\n}\n\nmodule.exports = { validateAccount, activeBalance };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst fs = require('fs');\nconst { validateOrder, totalOf } = require('./lib/orders.js');\nconst { validateAccount, activeBalance } = require('./lib/users.js');\nconst shared = require('./lib/validate.js');\n\n// 行为不变（重构前基准）\nassert.deepStrictEqual(validateOrder({ id: 'a1', amount: 5 }), ['id too short']);\nassert.deepStrictEqual(validateOrder({ id: 'abc', amount: -1 }), ['amount must be positive']);\nassert.deepStrictEqual(validateOrder({ id: 'abc', amount: 5, currency: 'JPY' }), ['unsupported currency']);\nassert.deepStrictEqual(validateOrder({ id: 'abc', amount: 5, currency: 'CNY' }), []);\nassert.deepStrictEqual(validateOrder(null), ['invalid order']);\nassert.strictEqual(totalOf([{ id: 'abc', amount: 10 }, { id: 'x', amount: 5 }, { id: 'abcd', amount: 2.5 }]), 12.5);\n\nassert.deepStrictEqual(validateAccount({ id: 'a1', amount: 5 }), ['id too short']);\nassert.deepStrictEqual(validateAccount({ id: 'abc', amount: 0 }), ['amount must be positive']);\nassert.deepStrictEqual(validateAccount({ id: 'abc', amount: 5, currency: 'USD' }), []);\nassert.strictEqual(activeBalance([{ id: 'abc', amount: 7 }, { id: 'zz', amount: 3 }]), 7);\n\n// 重构目标：共享模块存在且被两处引用\nassert.strictEqual(typeof shared.validateCommon, 'function', 'lib/validate.js 必须导出 validateCommon');\nassert.deepStrictEqual(shared.validateCommon({ id: 'abc', amount: 5 }), []);\nassert.deepStrictEqual(shared.validateCommon({ id: 'a', amount: -2 }), ['id too short', 'amount must be positive']);\n\nconst ordersSrc = fs.readFileSync('./lib/orders.js', 'utf8');\nconst usersSrc = fs.readFileSync('./lib/users.js', 'utf8');\nassert.ok(/validate\\.js/.test(ordersSrc), 'orders.js 应引用共享模块');\nassert.ok(/validate\\.js/.test(usersSrc), 'users.js 应引用共享模块');\n\nconst dupId = (ordersSrc.match(/length < 3/g) || []).length + (usersSrc.match(/length < 3/g) || []).length;\nassert.strictEqual(dupId, 0, 'id 长度规则不得再内联出现（应收敛到共享模块）');\nconst dupCurrency = (ordersSrc.match(/'CNY'/g) || []).length + (usersSrc.match(/'CNY'/g) || []).length;\nassert.ok(dupCurrency <= 1, `货币白名单应只保留一处，发现 ${dupCurrency} 处`);\n\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "hard-locate-billing-bug",
+    "category": "bugfix",
+    "difficulty": "hard",
+    "prompt": "这是一个分 5 个模块的报价计费管线（src/currency.js 汇率换算、src/discount.js 折扣、src/tax.js 税费、src/invoice.js 明细组装、src/pipeline.js 端到端报价）。端到端金额算错了，错误埋在某个具体模块中（折扣与税费的叠加顺序或换算方向有误），需要你用 grep/阅读定位后修复，使 verify.js 的三组场景金额全部正确（不要修改 verify.js）。修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "src/currency.js",
+        "content": "const RATES = { CNY: 1, USD: 7.2, EUR: 7.8 }; // 折算到 CNY 的系数\n\nfunction toCny(amount, from) {\n  const rate = RATES[from];\n  if (!rate) throw new Error('unsupported currency: ' + from);\n  return Number(amount) * rate;\n}\n\nfunction fromCny(amount, to) {\n  const rate = RATES[to];\n  if (!rate) throw new Error('unsupported currency: ' + to);\n  return Number(amount) / rate;\n}\n\nmodule.exports = { toCny, fromCny, RATES };\n"
+      },
+      {
+        "path": "src/discount.js",
+        "content": "// 折扣：满 100 CNY 减 10，VIP 额外 5%（折扣基于折前金额）\nfunction applyDiscount(amountCny, isVip) {\n  let out = Number(amountCny);\n  if (out >= 100) out -= 10;\n  if (isVip) out *= 0.95;\n  return out;\n}\n\nmodule.exports = { applyDiscount };\n"
+      },
+      {
+        "path": "src/tax.js",
+        "content": "// 税率 6%，仅对折后金额计税\nfunction applyTax(amountCny, rate = 0.06) {\n  return Number(amountCny) * (1 + rate);\n}\n\nmodule.exports = { applyTax };\n"
+      },
+      {
+        "path": "src/invoice.js",
+        "content": "// 组装发票明细：四舍五入到分\nfunction buildLine(item, amountCny) {\n  return {\n    sku: item.sku,\n    qty: item.qty,\n    amount: Math.round(amountCny * 100) / 100,\n  };\n}\n\nmodule.exports = { buildLine };\n"
+      },
+      {
+        "path": "src/pipeline.js",
+        "content": "const { toCny } = require('./currency');\nconst { applyDiscount } = require('./discount');\nconst { applyTax } = require('./tax');\nconst { buildLine } = require('./invoice');\n\n// 端到端报价：换算 → 折扣 → 计税 → 明细\nfunction quote(order) {\n  const items = Array.isArray(order.items) ? order.items : [];\n  let subtotal = 0;\n  for (const it of items) {\n    subtotal += toCny(Number(it.price) * Number(it.qty), it.currency || 'CNY');\n  }\n  const discounted = applyDiscount(subtotal, !!order.isVip);\n  // BUG: 折扣被重复应用了一次（应在折后金额上计税，而不是再折一次）\n  const taxed = applyDiscount(discounted, !!order.isVip);\n  const total = applyTax(taxed);\n  return {\n    subtotal: Math.round(subtotal * 100) / 100,\n    total: Math.round(total * 100) / 100,\n    lines: items.map((it) => buildLine(it, toCny(Number(it.price) * Number(it.qty), it.currency || 'CNY'))),\n  };\n}\n\nmodule.exports = { quote };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { quote } = require('./src/pipeline.js');\n\n// 场景 1：普通用户，200 CNY 单品 → 满减 10 → 190 → 税 6% → 201.4\nlet q = quote({ items: [{ sku: 'A', qty: 2, price: 100, currency: 'CNY' }] });\nassert.strictEqual(q.subtotal, 200);\nassert.strictEqual(q.total, 201.4, `场景1 期望 201.4，实际 ${q.total}`);\n\n// 场景 2：VIP 用户，200 CNY → 满减 10 → 190 → VIP 95% → 180.5 → 税 6% → 191.33\nq = quote({ isVip: true, items: [{ sku: 'A', qty: 2, price: 100, currency: 'CNY' }] });\nassert.strictEqual(q.total, 191.33, `场景2 期望 191.33，实际 ${q.total}`);\n\n// 场景 3：外币换算，10 USD × 3 件 = 30 USD = 216 CNY → 满减 10 → 206 → 税 6% → 218.36\nq = quote({ items: [{ sku: 'B', qty: 3, price: 10, currency: 'USD' }] });\nassert.strictEqual(q.subtotal, 216);\nassert.strictEqual(q.total, 218.36, `场景3 期望 218.36，实际 ${q.total}`);\nassert.deepStrictEqual(q.lines, [{ sku: 'B', qty: 3, amount: 216 }], '明细金额应为折算后的 CNY');\n\n// 场景 4：不满 100 无满减\nq = quote({ items: [{ sku: 'C', qty: 1, price: 50, currency: 'CNY' }] });\nassert.strictEqual(q.total, 53, `场景4 期望 53，实际 ${q.total}`);\n\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  }
+]

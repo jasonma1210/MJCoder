@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 Jason Ma
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+关于内置生态资产（ecosystem/）的第三方许可
+============================================
+
+本仓库的 `ecosystem/` 目录包含 250 项生态资产：
+  · 100 个技能（SKILL.md）
+  · 100 个 MCP 连接器定义
+  · 50 个数字员工定义
+
+这些资产的**编写方式**（结构化定义、frontmatter 格式等）由本项目原创并适用上述 MIT 许可。
+但其中引用的第三方工具、协议与规范（如 MCP Server 各自的名称与描述）可能属于其各自权利人。
+若某个具体资产需要标注第三方许可，请在该资产的 frontmatter 或同名LICENSE 文件中补充声明。

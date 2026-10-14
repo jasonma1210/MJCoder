@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { IconAlert, IconFile, IconPlug, IconTerminal } from './icons';
 
 const LEVEL_META = {
@@ -42,13 +42,16 @@ export default function ApprovalCard({ onPendingChange }) {
     return () => window.removeEventListener('mjcode:focus-approval', onFocus);
   }, []);
 
-  function resolve(decision) {
+  // P1-6：resolve 包 useCallback。它原先是无记忆的普通函数，每次渲染新建引用；
+  // 一旦被 useEffect 列入依赖（键盘处理器需要它），就会让监听每轮渲染卸载重挂。
+  // 依赖只有 pending（其余是稳定 setter 与 ref），与键盘 effect 的触发条件一致。
+  const resolve = useCallback((decision) => {
     // P0-2：决策负载必须回带 approvalId——主进程按 id 精确分发，
     // 并发审批时决策才能落到正确的请求上（否则把「允许」发给另一条命令）
     window.mjcode.resolveApproval({ approvalId: pending?.approvalId, decision });
     setPending(null);
     pendingCbRef.current?.(false);
-  }
+  }, [pending]);
 
   // 键盘 1-4 快捷决策（仅审批卡非折叠时生效）
   useEffect(() => {
@@ -68,7 +71,10 @@ export default function ApprovalCard({ onPendingChange }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pending, collapsed]);
+    // P1-6：resolve 必须列入依赖。此前遗漏 → 父组件传入新的 resolve（如审批卡因
+    // 新一轮审批重建）时，键盘处理器仍闭包着旧的 resolve，用户按 Enter/Esc 的决策
+    // 会送到已失效的 Promise 上，表现为「按了键但审批毫无反应」。
+  }, [pending, collapsed, resolve]);
 
   if (!pending) return null;
   const meta = LEVEL_META[pending.level] || LEVEL_META.L2;

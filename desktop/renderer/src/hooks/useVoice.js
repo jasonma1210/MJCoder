@@ -105,6 +105,11 @@ export function useVoice({ onText } = {}) {
       setElapsed(sec);
       if (sec >= MAX_SECONDS) stop(); // 上限 120s 自动停止
     }, 250);
+    // 依赖只列 state，刻意不列 stop：stop 声明在本 useCallback 之后，列入会触发 TDZ
+    // （"Cannot access 'stop' before initialization" —— 实测踩过，首帧即崩）。
+    // 且 stop 的身份由 [state, cleanup] 决定、cleanup 是空依赖稳定引用，
+    // 故 stop 只在 state 变化时改变，与已列的 state 等价，不会用到过期闭包。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
   const stop = useCallback(async () => {

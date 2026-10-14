@@ -47,12 +47,19 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
     else setError(res.error || '已安装插件加载失败');
   }
 
-  useEffect(() => { loadBrowse(); loadInstalled(); }, []);
+  // 刻意「挂载时加载一次」：loadBrowse 读 keyword/type/sort 等筛选 state，列入依赖会让
+  // 每次输入/切筛选都重新请求；搜索本身由下方带 200ms 防抖的 effect 负责（其依赖含
+  // keyword/type/sort）。安装/卸载后的刷新由各 handler 显式调用 loadInstalled()。
+  useEffect(() => { loadBrowse(); loadInstalled();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     if (tab !== 'browse') return;
     const t = setTimeout(() => { market.search({ q: keyword, type, sort }).then((s) => s.ok && setPlugins(s.plugins || [])); }, 200);
     return () => clearTimeout(t);
-  }, [keyword, type, sort]);
+    // P1-6：tab 必须列入依赖。此前遗漏 → 从其他 tab 切回「浏览」时 effect 不重跑，
+    // 搜索结果停留在上次状态（甚至为空），用户看到的是过期的插件列表。
+  }, [tab, keyword, type, sort]);
 
   const filteredHint = useMemo(() => {
     const total = plugins.length;

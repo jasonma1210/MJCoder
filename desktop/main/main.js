@@ -24,6 +24,8 @@ const activeChats = new Set(); // 进行中的 chat AbortController
 
 // ── 审批中心（分级确认 + 规则记忆）──
 const approval = require('./approval');
+// P0-A：Web 检索/抓取工具（含 SSRF 防护、HTML 转文本、超时与体积上限）
+const webTools = require('./webTools');
 // 本地定时任务调度器（Bug2：到点自动执行提示词，离线可用）
 const scheduler = require('./scheduler');
 const APPROVAL_RULES_FILE = () => path.join(app.getPath('userData'), 'approval-rules.json');
@@ -701,6 +703,21 @@ process.on('uncaughtException', (err) => {
     fs.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), line);
   } catch (e) { /* 崩溃兜底路径，避免二次抛出 */ }
 });
+
+// P0-C 修复：补unhandledRejection 兜底。
+// 事故背景：此前只挂了 uncaughtException，而 Promise 拒绝**不会**触发它——
+// Node/Electron 默认在unhandledRejection 后终止进程。于是任何一处漏接的
+// `.catch()`（典型是异步 IIFE、定时器回调、事件监听里的 async 函数）都会让
+// 整个桌面应用直接退出，用户正在跑的全部 Agent 任务与对话一起丢失，且无任何提示。
+// Node 15+ 可用 process.on('unhandledRejection') 覆盖该行为。
+process.on('unhandledRejection', (reason) => {
+  const msg = String(reason?.message || reason || '');
+  try {
+    const line = `[${new Date().toISOString()}] unhandledRejection: ${reason?.stack || msg}\n`;
+    fs.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), line);
+  } catch (e) { /* 兜底路径，避免二次抛出 */ }
+  console.error('[main]未捕获的 Promise 拒绝（已兜底，未退出进程）:', msg);
+});
 }
 
 // ── 自动更新（electron-updater，仅打包态生效；延迟 require 避免非 electron 环境崩溃）──
@@ -779,11 +796,13 @@ ipcMain.handle('updater:install', async () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 // P0-1：退出前强制落盘合并窗口内未写盘的内存变更（消息/状态）
+// P1-1：同时清理 MCP 子进程，避免孤儿进程占用端口导致下次启动握手失败
 app.on('will-quit', () => {
   try { localStore?.flushSync(); } catch (e) { console.warn('[local] 退出刷盘失败:', e.message); }
   try { taskStore?.db?.flush?.(); } catch (e) { console.warn('[tasks] 退出刷盘失败:', e.message); }
   try { memoryScheduler?.stop(); } catch { /* 调度器已停 */ }
   approvalChannel.disposeAll();
+  try { killAllMcpServers(); } catch (e) { console.warn('[MCP] 退出清理异常:', e.message); }
 });
 // SIGTERM/SIGINT 优雅退出：pkill/终端 Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
 for (const sig of ['SIGTERM', 'SIGINT']) {
@@ -1521,14 +1540,29 @@ async function installNetworkPlugin(args, { approvalMode = 'on-request', convers
 }
 
 // 从 git 地址安装（P1 手动装路径）；签名与提示注入检测 fail-closed
-ipcMain.handle('market:installGit', async (_, payload = {}) => {  try {
-    const r = await pluginMarket.installFromGit(String(payload.url || ''), {
+ipcMain.handle('market:installGit', async (_, payload = {}) => {
+  try {
+    // P0-S2 修复：安全开关不得由渲染层决定。
+    // 事故背景：此处原样把 payload.allowUnsigned / payload.allowUnsafeInjection
+    // 透传给 pluginMarket.installFromGit，而 preload 的 marketInstallGit 也原样
+    // invoke 透传 payload（无字段白名单）——这意味着渲染层只要出现一次 XSS，
+    // 就能传 { allowUnsigned: true, allowUnsafeInjection: true } 直接关闭
+    // fail-closed 签名校验与提示注入扫描两道闸门，安装任意恶意 skill。
+    // 正解：签名策略只能来自主进程侧的环境变量（resolveSignaturePolicy），
+    //客户端无权放宽。此处显式剥离这两个字段并留痕，避免以后再被加回来。
+    const { allowUnsigned: _ignoredUnsigned, allowUnsafeInjection: _ignoredInjection, ...safePayload } = payload || {};
+    if (_ignoredUnsigned || _ignoredInjection) {
+      console.warn('[market:installGit] 已忽略来自渲染层的安全降级参数（allowUnsigned/allowUnsafeInjection）：签名与注入检测策略只能由主进程环境变量决定');
+    }
+    const r = await pluginMarket.installFromGit(String(safePayload.url || ''), {
       pluginsRoot: PLUGINS_ROOT(),
       registry: getPluginRegistry(),
-      ref: payload.ref,
+      ref: safePayload.ref,
       policy: pluginMarket.resolveSignaturePolicy(),
-      allowUnsigned: !!payload.allowUnsigned,
-      allowUnsafeInjection: !!payload.allowUnsafeInjection,
+      // 固定为 false：不允许任何来源（含客户端）绕过签名与注入检测。
+      // 确需放宽的开发场景走环境变量 MJCODE_ALLOW_UNSIGNED_PLUGIN=1（仅影响签名，不涉及注入扫描）。
+      allowUnsigned: false,
+      allowUnsafeInjection: false,
     });
     if (r.ok && r.record) {
       audit('plugin.installed', r.record.name, `类型=${r.record.type} 版本=${r.record.version} 来源=git`);
@@ -1830,7 +1864,17 @@ function mcpRpc(server, method, params, timeoutMs = 30000) {
 async function connectMcpServer({ name, command, args = [], env = {} }) {
   if (mcpServers.has(name)) {
     const cached = mcpServers.get(name);
-    return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+    // P1-1 修复：缓存命中前必须校验子进程是否真的还活着。
+    // 事故背景：原实现只判断 Map 里有这个 name 就直接返回「连接成功」，
+    // 但 child 可能已经崩溃（进程挂了、stdio 管道断开）。此时缓存命中会让
+    // 上层以为工具可用，实际每次调用都失败——用户侧表现为「AI 卡住不动」。
+    const alive = cached?.child && cached.child.exitCode === null && cached.child.signalCode === null;
+    if (alive) {
+      return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+    }
+    // 进程已死但 Map 尚未清理（close 事件可能还没派发）：主动清理后走重连
+    console.warn(`[MCP ${name}] 缓存命中但子进程已退出（exitCode=${cached?.child?.exitCode}），转为重新连接`);
+    mcpServers.delete(name);
   }
   if (!name || !command) return { ok: false, error: 'name 与 command 必填' };
   const child = spawn(command, args, {
@@ -1861,8 +1905,21 @@ async function connectMcpServer({ name, command, args = [], env = {} }) {
     server.stderrTail = (server.stderrTail + d.toString()).slice(-2000);
     console.log(`[MCP ${name}]`, d.toString().trim());
   });
-  child.on('close', (code) => { mcpServers.delete(name); console.log(`[MCP ${name}] 进程退出 code=${code}`); });
-  child.on('error', (err) => { mcpServers.delete(name); console.error(`[MCP ${name}] 启动失败:`, err.message); });
+  // P1-1 修复：MCP 子进程崩溃/退出必须「可感知」而不是静默从 Map 删掉。
+  // 事故背景：原实现 close/error 仅 console + delete，渲染层完全不知道工具已失效，
+  // 用户侧表现是「AI 卡住不动」且无任何提示。现在改为：删除缓存 + 发 tasks:event
+  // 事件（AgentDock/设置页可据此把该服务标为已断开）+ 明确日志。
+  child.on('close', (code) => {
+    mcpServers.delete(name);
+    const wasConnected = server.handshakeDone === true;
+    console.log(`[MCP ${name}] 进程退出 code=${code}${wasConnected ? '（运行期崩溃，工具已失效）' : '（握手阶段退出）'}`);
+    if (wasConnected) emitMcpStatus(name, 'crashed', code);
+  });
+  child.on('error', (err) => {
+    mcpServers.delete(name);
+    console.error(`[MCP ${name}] 启动失败:`, err.message);
+    if (server.handshakeDone === true) emitMcpStatus(name, 'crashed', null);
+  });
 
   mcpServers.set(name, server);
   try {
@@ -1875,6 +1932,9 @@ async function connectMcpServer({ name, command, args = [], env = {} }) {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const listRes = await mcpRpc(server, 'tools/list', {});
     server.tools = listRes?.tools || [];
+    // P1-1：握手完成标记——此后进程退出才算「运行期崩溃」（需要通知用户），
+    // 握手阶段退出属于安装/启动失败（调用方已拿到错误返回值，无需额外事件）。
+    server.handshakeDone = true;
     // 连接成功 → 持久化配置（重启后自动重连）
     const config = loadMcpConfig().filter((s) => s.name !== name);
     config.push({ name, command, args, env });
@@ -1888,6 +1948,39 @@ async function connectMcpServer({ name, command, args = [], env = {} }) {
 }
 
 ipcMain.handle('mcp:connect', async (_, payload) => connectMcpServer(payload));
+
+// P1-1：MCP 服务状态变更 → 通知渲染层（AgentDock / 设置页据此标红断开的服务）
+function emitMcpStatus(name, status, code) {
+  try {
+    emitTaskEvent({ type: 'mcp_status', name, status, code, ts: Date.now() });
+  } catch (e) { /* 事件发送失败不影响主流程 */ }
+}
+
+// P1-1：统一清理全部 MCP 子进程（应用退出时调用）。
+// 事故背景：此前 will-quit 只落盘、停调度、清审批，**完全没管 MCP 子进程**——
+// 关闭 Electron 后 MCP Server（典型 npx 拉起的 node 进程）成为孤儿，
+// 端口与 stdio 管道占用导致下次启动握手失败，用户以为「工具坏了」其实是孤儿进程。
+function killAllMcpServers() {
+  let killed = 0;
+  for (const [name, s] of mcpServers) {
+    try {
+      const child = s?.child;
+      if (!child || child.exitCode !== null || child.signalCode !== null) continue;
+      child.kill('SIGTERM');
+      killed += 1;
+      // SIGTERM 后 1s 仍存活则强杀（某些 MCP Server 不响应 TERM）
+      setTimeout(() => {
+        try {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        } catch { /* 已退出 */ }
+      }, 1000).unref();
+    } catch (e) {
+      console.warn(`[MCP ${name}] 退出清理失败:`, e.message);
+    }
+  }
+  if (killed > 0) console.log(`[MCP] 退出清理：已终止 ${killed} 个 MCP 子进程`);
+  return killed;
+}
 
 // P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
 async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-request', conversationId }) {
@@ -2270,6 +2363,10 @@ agentRunner.initAgentRunner({
       approvalMode: args.approvalMode || 'on-request',
       conversationId: args.conversationId || '',
     }),
+    // P0-A：Web 检索/抓取。内网地址已由 webTools 自行拦截（SSRF 防护）。
+    // todoWrite 由 agent-core 内置处理（纯状态，不出网、不触盘），故不在此注册。
+    webSearch: (args) => webTools.webSearch(args),
+    webFetch: (args) => webTools.webFetch(args),
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
@@ -2389,6 +2486,9 @@ function setupTaskOrchestration(db) {
         ...scheduledToolHandlers(),
         // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联
         chat: (payload) => scheduledAgentChat(payload),
+        // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）
+        webSearch: (args) => webTools.webSearch(args),
+        webFetch: (args) => webTools.webFetch(args),
       }),
       buildTaskPrompt: (group, task) => {
         // 注入总体目标 + 已完成前置任务的结论摘要（跨 Worker 数据传递的唯一通道）

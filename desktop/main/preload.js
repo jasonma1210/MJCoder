@@ -80,7 +80,16 @@ contextBridge.exposeInMainWorld('mjcode', {
   // 插件市场（M6）
   marketRefresh: () => ipcRenderer.invoke('market:refresh'),
   marketSearch: (payload) => ipcRenderer.invoke('market:search', payload),
-  marketInstallGit: (payload) => ipcRenderer.invoke('market:installGit', payload),
+  // P0-S2 修复：字段白名单，不再原样透传整个 payload。
+  // 事故背景：原实现 (payload) => invoke(..., payload) 把调用方传入的任何字段
+  // 全部送进主进程，其中包括 allowUnsigned / allowUnsafeInjection 这类安全降级开关
+  // —— 渲染层一旦有 XSS 即可关闭签名校验与提示注入扫描。
+  // 现在只放行安装 Git 仓库所必需的三个字段，其余一律丢弃（纵深防御：主进程侧
+  // market:installGit 也会再剥离一次，两层独立生效）。
+  marketInstallGit: (payload) => ipcRenderer.invoke('market:installGit', {
+    url: String(payload?.url || ''),
+    ref: payload?.ref == null ? undefined : String(payload.ref),
+  }),
   marketListInstalled: () => ipcRenderer.invoke('market:listInstalled'),
   marketInspect: (payload) => ipcRenderer.invoke('market:inspect', payload),
   marketSetEnabled: (payload) => ipcRenderer.invoke('market:setEnabled', payload),

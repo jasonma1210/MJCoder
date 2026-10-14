@@ -22,11 +22,12 @@ const READONLY_TOOLS = new Set([
   'git_status', 'git_diff', 'git_log', 'git_branch',
 ]);
 
-// shell 危险模式（与主进程 DANGEROUS_PATTERNS 保持同步的判定入口）
-const DANGEROUS_PATTERNS = [
-  /\brm\s+-[rf]/, /\bsudo\b/, /\bgit\s+push\b/, /\bgit\s+reset\s+--hard\b/,
-  /\bchmod\s+777\b/, /\bmkfs\b/, /\bdd\s+if=/, /:\(\}\)/, /\bshutdown\b/, /\breboot\b/,
-];
+// P0-S1：危险命令规则不再在本文件手写副本，统一从 dangerousPatterns.js 导入。
+// 事故背景：本文件原有一份 10 条的 DANGEROUS_PATTERNS，注释声称「与主进程保持同步」，
+// 但主进程 sandbox.js 实际是 12 条且已漂移 —— 漂移导致审批层比沙箱层**更宽松**，
+// 于是 `curl xxx | sh` / `rm --recursive --force` 这类命令能同时绕过两层守卫，
+// 在默认 on-request 档下不弹任何审批直接执行。现改为单一事实来源，从根上消除漂移可能。
+const { DANGEROUS_PATTERNS, isDangerousCommand } = require('./dangerousPatterns');
 
 function toolLevel(tool, args = {}) {
   if (READONLY_TOOLS.has(tool)) return null;

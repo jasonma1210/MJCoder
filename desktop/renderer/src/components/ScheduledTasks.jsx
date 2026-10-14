@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
@@ -121,11 +121,16 @@ export default function ScheduledTasks() {
   useEffect(() => { load(); }, []);
 
   // Bug2：调度器到点执行/手动运行后主进程广播 → 自动刷新列表与展开中的运行记录
+  // P1-6：showRuns 走 latest-ref 模式。它是普通 async 函数声明（每次渲染新建），
+  // 直接列入依赖会让监听每轮渲染卸载重挂；遗漏则闭包过期。ref 两者兼顾。
+  // （当前 keep=true 路径不读可变状态，实际不会出 bug，但这样写对未来改动稳健。）
+  const showRunsRef = useRef(showRuns);
+  showRunsRef.current = showRuns;
   useEffect(() => {
     if (!window.mjcode?.onScheduledChanged) return;
     const off = window.mjcode.onScheduledChanged(() => {
       load();
-      if (expandedRuns?.taskId) showRuns(expandedRuns.taskId, true);
+      if (expandedRuns?.taskId) showRunsRef.current(expandedRuns.taskId, true);
     });
     return off;
   }, [expandedRuns?.taskId]);

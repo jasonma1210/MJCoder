@@ -95,6 +95,7 @@ export default function FilePreview({ filePath, projectPath }) {
       }
       const content = tr.content || '';
       // 未知扩展名可能其实是二进制（如 .bin / .db）：含 NUL 即判定二进制，不硬塞给代码高亮
+      // eslint-disable-next-line no-control-regex -- 有意为之：NUL 是二进制文件最可靠的特征字节
       const looksBinary = !ext && /[\u0000\u0001\u0002\u0003]/.test(content.slice(0, 4096));
       setText({ content, totalLines: tr.totalLines || 0 });
       setMeta((prev) => ({ ...prev, kind: looksBinary ? 'binary' : 'text' }));

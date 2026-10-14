@@ -3,16 +3,13 @@ const fs = require('fs');
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 
-// P0-F：跨平台兜底守卫（纯函数，可单测）
-// 背景：Seatbelt 仅 macOS。Windows/Linux 上 workspace-write/read-only 策略没有 OS 级隔离，
-// 此前只剩审批中心兜底——审批档位 'never' 或 always 规则一旦漏，LLM 生成的危险命令即裸跑。
-// 兜底策略：OS 沙箱不可用且策略非 full-access 时，硬拦截危险命令模式（审批不可绕过、不可豁免）。
-// 文档明示：这是「命令级硬拦截」，不是 OS 级隔离（与 Seatbelt 有本质差距）。
-const FALLBACK_DANGEROUS = [
-  /\brm\s+(-[a-zA-Z]*\s+)*-[rf]/, /\bsudo\b/, /\bgit\s+push\b/, /\bgit\s+reset\s+--hard\b/,
-  /\bchmod\s+777\b/, /\bmkfs\b/, /\bdd\s+if=/, /:\(\}\)/, /\bshutdown\b/, /\breboot\b/,
-  /\bcurl\b[^|]*\|\s*(ba)?sh/, /\bwget\b[^|]*\|\s*(ba)?sh/, // 管道远程脚本执行
-];
+// P0-S1：跨平台兜底守卫的危险命令规则改为与审批层**同源**（来自 dangerousPatterns.js）。
+// 事故背景：此前这里是 12 条、approval.js 是 10 条，两份手抄副本各自漂移，
+// 导致「审批层比沙箱层宽松」——两层守卫同时被绕过。现在两层共用同一份规则集，
+// 从结构上杜绝再次漂移（新增危险模式只需改dangerousPatterns.js 一处）。
+const { DANGEROUS_PATTERNS } = require('./dangerousPatterns');
+// 保留旧名导出，避免外部引用断裂（测试与main.js 均按此名引用）
+const FALLBACK_DANGEROUS = DANGEROUS_PATTERNS;
 
 // 返回 { blocked: boolean, reason: string }
 function checkCommandGuard(policy, command, platform = process.platform, execExists = true) {

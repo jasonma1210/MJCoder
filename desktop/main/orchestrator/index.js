@@ -2,13 +2,18 @@
 // 职责边界：只做「拆解与建组」；执行交给 WorkerPool；聚合交给 Aggregator。
 // LLM 调用复用定时任务通道的非流式 chatOnce（凭证解析同源，无流式需求）。
 const crypto = require('crypto');
-const { validateDag, topoLevels } = require('./dag');
+// P1-4：同时引入规模常量，让拆解提示与 DAG 校验共用同一口径（消除「提示说2~6、校验允8」的漂移）
+const { validateDag, topoLevels, MAX_TASKS, MIN_TASKS } = require('./dag');
 
 const ORCHESTRATOR_SYSTEM = [
   '你是 MJ Coder 的任务编排器。把用户目标拆解为可独立执行的子任务 DAG，输出严格 JSON（不要输出任何其他文本）：',
   '{"tasks":[{"id":"t1","title":"简短标题","prompt":"给 Worker 的完整执行指令（含验收标准）","dependsOn":["前置任务id"],"critical":false,"maxRetry":1}]}',
   '规则：',
-  '1. 任务数 2~6 个；每个任务应可由一个独立 Agent 用工具（读文件/写文件/执行命令）完成；',
+  // P1-4：规模约束与 dag.js 的 validateDag 保持严格一致（MAX_TASKS=8）。
+  // 事故背景：此处原写「2~6 个」而 dag.js 允许至多 8 个，LLM 产出 7-8 个任务时
+  // 会被提示与校验「双重口径」夹住——模型可能自我矛盾，或反复重试浪费轮次。
+  // 现在两处同源引用 dag.js 的常量，从结构上消除不一致。
+  `1. 任务数 ${MIN_TASKS}~${MAX_TASKS} 个；每个任务应可由一个独立 Agent 用工具（读文件/写文件/执行命令）完成；`,
   '2. 没有数据/产物依赖的任务必须写 dependsOn:[] 并放进同一批次并行执行——仅在真正需要前置任务产出时才声明依赖；禁止把可并行的任务串成链；',
   '3. critical:true 仅用于「失败后后续任务都无意义」的核心步骤（如初始化、编译基线），其余一律 false；',
   '4. prompt 必须自包含：写清楚目标、涉及路径、验收方式；禁止引用对话上下文；',

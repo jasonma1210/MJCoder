@@ -3,6 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!--
+    P0-S2 修复：补Content-Security-Policy。
+    事故背景：本文件此前完全没有 CSP 声明。Electron 渲染层默认 nodeIntegration 关闭、
+    contextIsolation 开启，理论上不该有 XSS 面；但一旦出现（依赖投毒、Markdown 渲染、
+    未来引入外部内容渲染等），就没有第二道防线——而 market:installGit 这类 IPC 一旦被
+    渲染层任意调用即可安装插件，破坏面极大。纵深防御要求：主进程侧已做字段白名单与参数剥离，
+    这里再加浏览器侧的内容来源限制。
+
+    取舍说明：
+    · script-src 用 sha256 哈希而非 'unsafe-inline'，因为下方主题前置脚本必须内联
+      （用于消除启动 dark→light 闪变），而放通 'unsafe-inline' 等于 CSP 对 XSS 形同虚设。
+    · style-src 保留 'unsafe-inline'：Tailwind 与 React 内联样式需要它。
+    · img/font/connect 覆盖本地协议与 data:，不放开任意外域。
+    · Vite dev 走同一文件，dev server 的 ws: 已显式放开，避免影响本地开发。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' 'sha256-r6bCK3RgwZdHDrPh/Cb1F7M53SCupiMCFVVCUzxTRB0=';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob:;
+    font-src 'self' data:;
+    connect-src 'self' data: blob: ws://localhost:5173 ws://127.0.0.1:5173;
+    object-src 'none';
+    base-uri 'none';
+    form-action 'none';
+    frame-ancestors 'none';
+  " />
   <title>MJ Code</title>
   <script>
     // TH6：React 挂载前先落主题，消除启动时 dark→light 闪变

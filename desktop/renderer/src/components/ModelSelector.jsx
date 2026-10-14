@@ -29,6 +29,9 @@ export default function ModelSelector({ providers, selected, onSelect }) {
   // 每次展开面板时，右栏回到当前选中模型
   useEffect(() => {
     if (open) { setDetail(selected); setExpanded(null); }
+    // setDetail/setExpanded 为稳定 setter 无需列入依赖；selected 由父组件受控更新，
+    // 随 open 变化重新同步即可。刻意不列 selected：否则父组件每次传新 selected
+    // 都会重置展开态，用户点开的模型详情会被反复收起。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

@@ -1,0 +1,172 @@
+[
+  {
+    "id": "bugfix-paginate-offbyone",
+    "category": "bugfix",
+    "difficulty": "easy",
+    "prompt": "lib/paginate.js 的 paginate(items, page, pageSize) 分页结果不正确：最后一页会把上一页的数据重复带出来，且页码越界时返回了空数组之外还多包了一层。请修复使其满足 verify.js 的全部断言（不要修改 verify.js）。修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/paginate.js",
+        "content": "// 纯函数分页：返回 { rows, total, page, pages }\nfunction paginate(items, page, pageSize) {\n  const list = Array.isArray(items) ? items : [];\n  const size = Math.max(1, pageSize | 0);\n  const total = list.length;\n  const pages = Math.max(1, Math.ceil(total / size));\n  const p = Math.min(Math.max(1, page | 0), pages);\n  const start = (p - 1) * size + 1; // BUG: 偏移多加了 1，导致每页第一条被跳过且跨页重复\n  const rows = list.slice(start, start + size);\n  return { rows, total, page: p, pages };\n}\n\nmodule.exports = { paginate };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { paginate } = require('./lib/paginate.js');\n\nconst items = [1, 2, 3, 4, 5, 6, 7];\n\n// 第 1 页\nlet r = paginate(items, 1, 3);\nassert.deepStrictEqual(r.rows, [1, 2, 3], '第 1 页应为前 3 条');\nassert.strictEqual(r.total, 7);\nassert.strictEqual(r.pages, 3);\n\n// 第 2 页不重复\nr = paginate(items, 2, 3);\nassert.deepStrictEqual(r.rows, [4, 5, 6], '第 2 页应为第 4-6 条');\n\n// 第 3 页只剩 1 条\nr = paginate(items, 3, 3);\nassert.deepStrictEqual(r.rows, [7], '第 3 页应只剩 1 条');\n\n// 页码越界收敛到最后一页\nr = paginate(items, 99, 3);\nassert.deepStrictEqual(r.rows, [7]);\n\n// 空输入\nr = paginate([], 1, 3);\nassert.deepStrictEqual(r.rows, []);\nassert.strictEqual(r.pages, 1);\n\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "bugfix-async-sequential",
+    "category": "bugfix",
+    "difficulty": "medium",
+    "prompt": "lib/pipeline.js 的 runSteps(steps) 应当按顺序逐步执行异步步骤：上一步的返回值作为下一步的输入，任一步抛错时整个 promise 立即以该错误拒绝。当前实现存在顺序与错误传播问题。请修复使其满足 verify.js（不要修改 verify.js），修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/pipeline.js",
+        "content": "// 顺序执行异步步骤：runSteps([fn1, fn2, ...]) -> Promise<最后一步结果>\nasync function runSteps(steps) {\n  let value;\n  // BUG: 用 forEach 启动了全部步骤，没有等待前一步完成，错误也不会向外传播\n  steps.forEach((step) => {\n    value = step(value);\n  });\n  return value;\n}\n\nmodule.exports = { runSteps };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { runSteps } = require('./lib/pipeline.js');\n\n(async () => {\n  const order = [];\n  const result = await runSteps([\n    async (v) => { order.push(1); return (v || 0) + 1; },\n    async (v) => { order.push(2); return v * 10; },\n    async (v) => { order.push(3); return v + 5; },\n  ]);\n  assert.deepStrictEqual(order, [1, 2, 3], '步骤必须按顺序执行');\n  assert.strictEqual(result, 15, '上一步结果应作为下一步输入');\n\n  // 错误传播：第二步抛错，整链拒绝\n  await assert.rejects(\n    runSteps([async () => 1, async () => { throw new Error('boom'); }, async (v) => v]),\n    /boom/,\n    '中间步骤的错误必须向外传播'\n  );\n\n  // 空步骤列表\n  assert.strictEqual(await runSteps([]), undefined);\n  console.log('verify: all pass');\n})().catch((e) => { console.error(e.message); process.exit(1); });\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "bugfix-csv-quoted-comma",
+    "category": "bugfix",
+    "difficulty": "medium",
+    "prompt": "lib/csv.js 的 parseCsv(line) 无法正确处理被双引号包裹、内部含逗号的字段（如 \"a,b\",c 应解析为 ['a,b', 'c']），也不支持成对双引号转义为字面引号。请修复解析逻辑使其满足 verify.js（不要修改 verify.js），修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/csv.js",
+        "content": "// 解析单行 CSV 为字符串数组（RFC 4180 子集：双引号包裹 + \"\" 转义）\nfunction parseCsv(line) {\n  // BUG: 简单按逗号切分，不处理引号\n  return String(line || '').split(',').map((s) => s.trim());\n}\n\nmodule.exports = { parseCsv };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { parseCsv } = require('./lib/csv.js');\n\nassert.deepStrictEqual(parseCsv('a,b,c'), ['a', 'b', 'c']);\nassert.deepStrictEqual(parseCsv('\"a,b\",c'), ['a,b', 'c'], '引号内逗号不应切分');\nassert.deepStrictEqual(parseCsv('\"he said \"\"hi\"\"\",x'), ['he said \"hi\"', 'x'], '\"\" 应转义为字面引号');\nassert.deepStrictEqual(parseCsv('a, b , c'), ['a', 'b', 'c'], '未加引号的字段应去除首尾空格');\nassert.deepStrictEqual(parseCsv('\" a,b \",c'), [' a,b ', 'c'], '引号内空格应保留');\nassert.deepStrictEqual(parseCsv(''), ['']);\nassert.deepStrictEqual(parseCsv(','), ['', '']);\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "bugfix-cache-expiry",
+    "category": "bugfix",
+    "difficulty": "easy",
+    "prompt": "lib/ttlcache.js 的 TTLCache 过期判断有误：过期条目没有被清除且 get 仍会返回旧值，另外 set 不会重置已有键的过期时间。请修复使其满足 verify.js（不要修改 verify.js），修复后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/ttlcache.js",
+        "content": "class TTLCache {\n  constructor(ttlMs) {\n    this.ttl = ttlMs;\n    this.map = new Map(); // key -> { value, expiresAt }\n  }\n  set(key, value, now = Date.now()) {\n    // BUG: 没有写入 expiresAt\n    this.map.set(key, { value });\n  }\n  get(key, now = Date.now()) {\n    const hit = this.map.get(key);\n    if (!hit) return undefined;\n    // BUG: 判断写反，过期后仍返回旧值\n    if (hit.expiresAt !== undefined && hit.expiresAt < now) {\n      return hit.value;\n    }\n    return hit.value;\n  }\n  size() { return this.map.size; }\n}\n\nmodule.exports = { TTLCache };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { TTLCache } = require('./lib/ttlcache.js');\n\nconst c = new TTLCache(100);\nc.set('a', 1, 1000);\nassert.strictEqual(c.get('a', 1050), 1, '未过期应命中');\nassert.strictEqual(c.get('a', 1101), undefined, '过期后应返回 undefined');\nassert.strictEqual(c.size(), 0, '过期条目应在读取时清除');\n\nc.set('b', 2, 1000);\nc.set('b', 3, 1050); // 重置应刷新过期时间\nassert.strictEqual(c.get('b', 1100), 3, 'set 应刷新过期时间');\nassert.strictEqual(c.get('b', 1200), undefined, '刷新后的 TTL 生效');\n\nc.set('c', 9, 1000);\nc.set('c', 9, 1000);\nassert.strictEqual(c.size(), 1, '重复 set 同一键不应增加条目');\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "feature-throttle",
+    "category": "feature",
+    "difficulty": "medium",
+    "prompt": "请在 lib/throttle.js 中实现 throttle(fn, wait)：返回节流函数——第一次调用立即执行，wait 毫秒内的后续调用最多触发一次尾部执行（保证最后一次调用的参数不丢失），this 按调用方上下文透传。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/throttle.js",
+        "content": "// TODO: 实现 throttle(fn, wait)\n// 规则：\n//   1) 首次调用立即执行\n//   2) wait 毫秒窗口内的后续调用最多补一次尾部执行（执行的是最后一次调用的参数与 this）\n//   3) 返回的函数需保留 fn 的返回值语义：立即执行的那次返回 fn 的返回值，其余返回 undefined\n\nfunction throttle(fn, wait) {\n  throw new Error('not implemented');\n}\n\nmodule.exports = { throttle };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { throttle } = require('./lib/throttle.js');\n\n(async () => {\n  let calls = 0;\n  let lastArg = null;\n  const t = throttle((x) => { calls += 1; lastArg = x; return calls; }, 50);\n\n  assert.strictEqual(t(1), 1, '首次调用立即执行并返回结果');\n  assert.strictEqual(t(2), undefined, '窗口内调用不执行');\n  assert.strictEqual(t(3), undefined);\n  assert.strictEqual(calls, 1);\n\n  await new Promise((r) => setTimeout(r, 70));\n  assert.strictEqual(calls, 2, '窗口结束后应有且仅有一次尾部执行');\n  assert.strictEqual(lastArg, 3, '尾部执行应使用最后一次调用的参数');\n\n  // this 透传\n  const obj = { n: 7, t: throttle(function () { return this.n; }, 50) };\n  assert.strictEqual(obj.t(), 7, 'this 应按调用方上下文透传');\n  console.log('verify: all pass');\n  process.exit(0);\n})().catch((e) => { console.error(e.message); process.exit(1); });\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "feature-deep-get",
+    "category": "feature",
+    "difficulty": "easy",
+    "prompt": "请在 lib/deepget.js 中实现 get(obj, path, defaultValue)：path 支持 'a.b.c' 点分字符串与 ['a', 0, 'b'] 数组两种形式；中间节点为 null/undefined 或非对象时返回 defaultValue；数组索引按数字访问。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/deepget.js",
+        "content": "// TODO: 实现 get(obj, path, defaultValue)\n// path: 'a.b.0.c' 或 ['a', 'b', 0, 'c']\n\nfunction get(obj, path, defaultValue) {\n  throw new Error('not implemented');\n}\n\nmodule.exports = { get };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { get } = require('./lib/deepget.js');\n\nconst obj = { a: { b: [{ c: 1 }] }, x: null };\nassert.strictEqual(get(obj, 'a.b.0.c'), 1);\nassert.strictEqual(get(obj, ['a', 'b', 0, 'c']), 1, '数组路径形式');\nassert.strictEqual(get(obj, 'a.b.2.c', 'miss'), 'miss', '索引越界返回默认值');\nassert.strictEqual(get(obj, 'x.y.z', 'miss'), 'miss', 'null 中间节点返回默认值');\nassert.strictEqual(get(obj, 'a.b', undefined), obj.a.b, '路径部分存在时返回该值');\nassert.strictEqual(get(null, 'a.b', 'd'), 'd', '根对象为 null 不抛错');\nassert.strictEqual(get(obj, '', 'd'), 'd', '空路径返回默认值');\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "feature-unique-by",
+    "category": "feature",
+    "difficulty": "easy",
+    "prompt": "请在 lib/uniqueby.js 中实现 uniqueBy(items, keyFn)：按 keyFn(item) 的返回值去重，保留首次出现的元素（稳定），返回新数组不修改原数组；keyFn 返回值经 String() 归一（undefined/null 视为 'undefined'/'null' 字符串参与去重）。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/uniqueby.js",
+        "content": "// TODO: 实现 uniqueBy(items, keyFn)\n\nfunction uniqueBy(items, keyFn) {\n  throw new Error('not implemented');\n}\n\nmodule.exports = { uniqueBy };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst { uniqueBy } = require('./lib/uniqueby.js');\n\nconst users = [{ id: 2, n: 'b' }, { id: 1, n: 'a' }, { id: 2, n: 'b2' }, { id: 3, n: 'c' }];\nconst out = uniqueBy(users, (u) => u.id);\nassert.deepStrictEqual(out.map((u) => u.id), [2, 1, 3], '保留首次出现（稳定）');\nassert.strictEqual(out[0], users[0], '元素引用保持不变（不复制）');\nassert.notStrictEqual(out, users, '返回新数组');\nassert.strictEqual(users.length, 4, '不修改原数组');\n\nassert.deepStrictEqual(uniqueBy(['a', 'b', 'A'], (s) => s.toLowerCase()), ['a', 'b'], 'keyFn 自定义归一');\nassert.deepStrictEqual(uniqueBy([1, undefined, 1, null, undefined], (x) => x), [1, undefined, null], 'undefined/null 参与去重');\nassert.deepStrictEqual(uniqueBy([], (x) => x), []);\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "refactor-extract-discount",
+    "category": "refactor",
+    "difficulty": "medium",
+    "prompt": "lib/pricing.js 中 calculateOrder 与 quoteTotal 存在两段完全重复的折扣计算逻辑（VIP 打 8 折、满 100 减 10）。请将其提取为导出函数 calcDiscount(price, { isVip })（返回折后金额，四舍五入到分），两处改为调用它，对外行为完全不变。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/pricing.js",
+        "content": "// 定价模块（内部存在重复的折扣逻辑，需要提取）\n\nfunction calculateOrder(items, user) {\n  let sum = items.reduce((a, b) => a + b, 0);\n  // 重复逻辑 #1\n  if (user && user.isVip) sum = sum * 0.8;\n  if (sum >= 100) sum = sum - 10;\n  return Math.round(sum * 100) / 100;\n}\n\nfunction quoteTotal(price, user) {\n  let sum = price;\n  // 重复逻辑 #2（与上面完全相同）\n  if (user && user.isVip) sum = sum * 0.8;\n  if (sum >= 100) sum = sum - 10;\n  return Math.round(sum * 100) / 100;\n}\n\nmodule.exports = { calculateOrder, quoteTotal };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst fs = require('fs');\nconst src = fs.readFileSync('./lib/pricing.js', 'utf8');\nconst { calculateOrder, quoteTotal, calcDiscount } = require('./lib/pricing.js');\n\n// 行为不变\nassert.strictEqual(calculateOrder([60, 60], { isVip: true }), 86); // (120*0.8)-10\nassert.strictEqual(calculateOrder([30, 30], { isVip: false }), 60);\nassert.strictEqual(quoteTotal(125, { isVip: true }), 90);          // 125*0.8=100 -> 100-10\nassert.strictEqual(quoteTotal(50, null), 50);\n\n// 重构目标：calcDiscount 存在且两处重复逻辑消失\nassert.strictEqual(typeof calcDiscount, 'function', '必须导出 calcDiscount');\nassert.strictEqual(calcDiscount(125, { isVip: true }), 90);\nassert.strictEqual(calcDiscount(80, { isVip: false }), 80);\nconst dupCount = (src.match(/0\\.8/g) || []).length;\nassert.ok(dupCount <= 1, `折扣逻辑应只存在一处，发现 ${dupCount} 处 0.8`);\nassert.ok(!/sum \\* 0\\.8.*\\n[\\s\\S]*sum >= 100.*sum - 10/.test(src.split('calcDiscount')[1] || ''), '折后规则应收敛到 calcDiscount 内');\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "refactor-fix-typo-receive",
+    "category": "refactor",
+    "difficulty": "easy",
+    "prompt": "lib/inbox.js 中函数与变量名把 receive 拼成了 recieve。请在保持对外行为不变的前提下完成重命名：导出收件函数更名为 receiveMessage，同时为兼容旧调用保留 receiveMessage 旧名的别名导出（即 module.exports 同时含新名与旧名，指向同一实现）；内部所有 recieve 拼写一并修正，源文件中不允许再出现 recieve 字样（字符串字面量除外，本模块没有此类字面量）。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/inbox.js",
+        "content": "const inbox = [];\n\nfunction recieveMessage(msg) {\n  if (msg === undefined || msg === null) throw new Error('msg required');\n  const record = { id: inbox.length + 1, msg, recievedAt: Date.now() }; // 注意：字段名也要修正为 receivedAt\n  inbox.push(record);\n  return record;\n}\n\nfunction listInbox() {\n  return inbox.slice();\n}\n\nmodule.exports = { recieveMessage, listInbox };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst fs = require('fs');\nconst src = fs.readFileSync('./lib/inbox.js', 'utf8');\nconst mod = require('./lib/inbox.js');\n\nassert.ok(!src.includes('recieve'), '源文件不得再出现 recieve 拼写');\nassert.strictEqual(typeof mod.receiveMessage, 'function', '新名 receiveMessage 必须导出');\nassert.strictEqual(mod.receiveMessage, mod.recieveMessage, '旧名别名导出且指向同一实现（兼容旧调用）');\n\nmod.receiveMessage('hello');\nconst list = mod.listInbox();\nassert.strictEqual(list.length, 1);\nassert.ok(list[0].receivedAt > 0, '记录字段应为 receivedAt');\nassert.strictEqual(list[0].msg, 'hello');\n\nassert.throws(() => mod.receiveMessage(null), /msg required/, '空值校验行为不变');\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  },
+  {
+    "id": "refactor-remove-side-effect",
+    "category": "refactor",
+    "difficulty": "easy",
+    "prompt": "lib/format.js 的 formatPrice(price) 是纯格式化函数，却在内部直接 console.log 输出调试信息（副作用），导致测试与生产日志被污染。请移除该副作用，保持返回值行为完全不变；模块级也不得产生任何 console 输出。满足 verify.js（不要修改 verify.js），完成后运行 node verify.js 验证。",
+    "files": [
+      {
+        "path": "lib/format.js",
+        "content": "function formatPrice(price) {\n  const n = Number(price);\n  console.log('[formatPrice] called with', price); // BUG: 纯函数中的副作用，必须移除\n  if (!Number.isFinite(n)) return 'N/A';\n  return '¥' + n.toFixed(2).replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');\n}\n\nmodule.exports = { formatPrice };\n"
+      },
+      {
+        "path": "verify.js",
+        "content": "const assert = require('assert');\nconst fs = require('fs');\nconst { formatPrice } = require('./lib/format.js');\n\n// 捕获 stdout：纯函数不得产生任何输出\nconst origLog = console.log;\nlet emitted = '';\nconsole.log = (...a) => { emitted += a.join(' '); };\nlet out;\ntry {\n  out = [formatPrice(12345.6), formatPrice(0), formatPrice('abc'), formatPrice(-9.5)];\n} finally {\n  console.log = origLog;\n}\nassert.strictEqual(emitted, '', 'formatPrice 不得产生 console 输出，实际输出: ' + emitted);\nassert.deepStrictEqual(out, ['¥12,345.60', '¥0.00', 'N/A', '¥-9.50'], '返回值行为不变');\nassert.ok(!/console\\.log/.test(fs.readFileSync('./lib/format.js', 'utf8')), '源码中不得残留 console.log');\nconsole.log('verify: all pass');\n"
+      }
+    ],
+    "verify": { "command": "node verify.js", "expect_exit": 0, "baseline_should_fail": true }
+  }
+]

@@ -123,7 +123,30 @@ function dispatch(group, task) {
     }
     const runCwd = iso?.worktreePath || group.cwd || '';
     await runWorkerTask({ group, task, runKey, controller, name, runCwd, iso });
-  })();
+  })().catch((e) => {
+    // P0-C 修复：此前这个IIFE 是「浮动 Promise」且无 .catch()。
+    // runWorkerTask 之外抛出的异常（典型：workerIsolation.createIsolated 失败、
+    // deps.emit 抛错等）没有任何人接住 → 冒泡成 unhandledRejection →
+    // Electron 主进程默认行为是**直接退出**，用户的全部会话与正在跑的任务一起丢失。
+    // 这里兜住：把异常降级为该任务 failed + 组暂停，让用户看到可操作的信息，
+    // 而不是整个应用无声消失。
+    const msg = String(e?.message || e);
+    console.error(`[workerPool] 任务派发异常（任务「${task?.title || task?.taskId}」）:`, msg);
+    try {
+      activeRuns.delete(runKey);
+      deps.store?.setTaskStatus?.(group.group_id, task.taskId, 'failed', { error: `任务执行异常：${msg}` });
+      deps.emit?.({
+        type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name,
+        kind: 'error', text: `任务执行异常：${msg}`,
+      });
+      // 不静默：组状态置为paused，用户可读可重试；绝不让主进程带病退出
+      deps.store?.setGroupStatus?.(group.group_id, 'paused', { error: `任务「${task?.title || task.taskId}」执行异常：${msg}` });
+      deps.emit?.({ type: 'group_update', groupId: group.group_id, status: 'paused' });
+    } catch (inner) {
+      // 连降级处理都失败时只记日志——此处绝不能再抛，否则又回到 unhandledRejection
+      console.error('[workerPool] 异常降级处理失败:', String(inner?.message || inner));
+    }
+  });
 }
 
 async function runWorkerTask({ group, task, runKey, controller, name, runCwd, iso }) {

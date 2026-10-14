@@ -20,11 +20,24 @@ dist/
 .vscode/
 *.swp
 
-# 测试代码与评测（GitHub 不发布）
+# 测试覆盖率报告（产物不入库；测试**源码**现已入库，见下方说明）
 coverage/
-desktop/test/
-server/test/
-desktop/eval/
+# eval 历史运行产物（每次跑评测都会生成，属本地记录，不入库）
+desktop/eval/results/
+
+# ─────────────────────────────────────────────────────────────
+# P0-0 修复（2026-10-14）：测试与 CI 现已入库
+#
+# 事故背景：此前本文件排除了 desktop/test/、server/test/、desktop/eval/ 与 .github/，
+# 注释写着「测试代码与评测（GitHub 不发布）」「CI / 发布流水线（离线代码发布，不上传）」。
+# 后果是 —— 50 余套测试与整套 CI 配置**只存在于作者本机**，任何 clone 本仓库的人拿不到
+# 一个测试文件，GitHub Actions 从未运行过（actions/runs total_count = 0）。
+# 对一个自称开源的项目，这是质量承诺完全无法被外部验证：1150 余条断言的效力归零，
+# 且外部贡献者无法提交带测试的 PR。
+#
+# 项目已明确定位为「开源项目」，故测试与CI 随仓库分发。
+# 保留排除的仅：coverage/（本地覆盖率产物）。
+# ─────────────────────────────────────────────────────────────
 
 # ══════════ GitHub 发布排除项 ══════════
 
@@ -43,5 +56,24 @@ desktop/eval/
 .continue/
 .qwen/
 
-# CI / 发布流水线（离线代码发布，不上传）
-.github/
+# 注：.github/ 已不再排除（见上方 P0-0 说明）——CI 必须随仓库分发才能被 GitHub 触发。
+
+# 备份文件（*.deprecated.bak 等）：本地冗余，勿入库
+# 注意：desktop/main.js.deprecated.bak 与 desktop/renderer/src/components/
+# ApprovalDialog.jsx.deprecated.bak 在加入本规则之前已被 git 跟踪，
+# 本规则只阻止新增；要真正移出版本库需执行（需人工确认）：
+#   git rm --cached desktop/main.js.deprecated.bak \
+#            desktop/renderer/src/components/ApprovalDialog.jsx.deprecated.bak
+*.bak
+*.deprecated.bak
+
+# ─────────────────────────────────────────────────────────────
+# 与项目无关的个人文件/本地产物（2026-10-14 推送前发现）
+# 这三项是用户本机的个人资产，不属于 MJCoder 项目，仅阻止误入库、不做删除：
+#   .backup-20261014/   审查修复前的版本备份（本地回滚用）
+#   com.user.ai-news.plist  macOS launchd 定时任务定义（个人 AI 新闻推送）
+#   fetch_ai_news.sh       个人每日 AI 新闻抓取脚本
+# ─────────────────────────────────────────────────────────────
+.backup-*/
+com.user.ai-news.plist
+fetch_ai_news.sh

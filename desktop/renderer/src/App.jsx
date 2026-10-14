@@ -143,7 +143,13 @@ export default function App() {
       .catch((err) => console.warn('[app] 全局模型列表加载失败:', err));
   }, []);
   // 本地模式下同样需要刷新（本机模型保存后要立刻可选中）
-  useEffect(() => { if (token || localMode) loadData(); }, [token, localMode]);
+  // 刻意只依赖 [token, localMode]：本 effect 的语义是「认证态变化时重载数据」，
+  // 不是「loadData 闭包变化时重载」。loadData 内部还读 selectedModel，若列入依赖，
+  // 用户每次切换模型都会触发一次全量 threads/providers 请求——那是多余往返。
+  // 需要刷新时由各业务点显式调用 loadData()/scheduleLoadData()。
+  useEffect(() => { if (token || localMode) loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, localMode]);
 
   // P1-F：401 登出闭环——服务端 401 时 api.request 已清 localStorage 并派发 auth-changed；
   // 此前无人监听该事件 → token 失效后仍是伪登录态，之后每个请求都 401（人类可读化后

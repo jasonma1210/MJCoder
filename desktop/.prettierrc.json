@@ -1,0 +1,20 @@
+{
+  "//": "Prettier 配置（P1-6）。风格刻意与项目既有代码保持一致，避免一次性全库重排造成巨大 diff。",
+  "printWidth": 120,
+  "singleQuote": true,
+  "semi": true,
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "overrides": [
+    {
+      "files": "*.{jsx,tsx}",
+      "options": { "printWidth": 110 }
+    },
+    {
+      "files": "*.{json,md}",
+      "options": { "printWidth": 80 }
+    }
+  ]
+}
