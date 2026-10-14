@@ -77,3 +77,6 @@ desktop/eval/results/
 .backup-*/
 com.user.ai-news.plist
 fetch_ai_news.sh
+
+# 已废弃的历史文件本地留档：保留在磁盘供对照，但不进版本库（避免污染发布包与包体积）
+*.deprecated.bak
