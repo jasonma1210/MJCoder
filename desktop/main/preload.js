@@ -197,6 +197,11 @@ contextBridge.exposeInMainWorld('mjcode', {
   memoryBgTasks: (opts) => ipcRenderer.invoke('memory:bgTasks', opts),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
   serverBase: (payload) => ipcRenderer.invoke('local:server/base', payload),
+  // Phase 3-1：断点持久化（「继续」时取回并清除；保存由主进程在熔断时自动完成）
+  checkpointGet: (threadKey) => ipcRenderer.invoke('checkpoint:get', threadKey),
+  checkpointClear: (threadKey) => ipcRenderer.invoke('checkpoint:clear', threadKey),
+  // Phase 3-4：token 仪表盘数据源（最近一次运行的逐轮用量快照）
+  tokenState: () => ipcRenderer.invoke('agent:token/state'),
   tasksRetryTask: (groupId, taskId) => ipcRenderer.invoke('tasks:retryTask', { groupId, taskId }),
   tasksConfig: (payload) => ipcRenderer.invoke('tasks:config', payload),
   onTasksEvent: (cb) => {

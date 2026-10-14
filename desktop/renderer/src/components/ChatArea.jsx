@@ -412,6 +412,23 @@ export default function ChatArea({
     const expertPrompt = sessionExtras?.expert ? buildExpertPrompt(sessionExtras.expert) : null;
     const runHistory = expertPrompt ? [{ role: 'system', content: expertPrompt }, ...history] : history;
     const runSkills = [...new Set([...(enabledSkills || []), ...(sessionExtras?.skillIds || [])])];
+    // Phase 3-1：断点恢复——「继续」类消息时取回最近熔断断点，把摘要注入本轮 system
+    // （不进持久化历史）；加载成功即清除断点（一次性恢复垫脚石，不累积）
+    let resumeContext = '';
+    const checkpointKey = String(currentThread.id || 'local');
+    if (/^(继续|continue)/i.test(content.trim())) {
+      try {
+        const cp = await window.mjcode?.checkpointGet?.(checkpointKey);
+        if (cp) {
+          const total = cp.usage ? (cp.usage.prompt_tokens || 0) + (cp.usage.completion_tokens || 0) : 0;
+          resumeContext = `任务暂停原因：单任务 token 预算触顶（已自动压缩续跑 ${cp.rescues || 0} 次，累计消耗 ${total} tokens）。`
+            + `\n\n断点摘要（上一任务中断前的最后输出）：\n${cp.summary || '（无）'}`;
+          await window.mjcode?.checkpointClear?.(checkpointKey);
+        }
+      } catch (err) {
+        console.warn('[chat] 断点读取失败（按普通继续执行）:', err);
+      }
+    }
     abortRef.current = new AbortController();
 
     try {
@@ -438,6 +455,8 @@ export default function ChatArea({
         approvalMode: thread?.approval_mode || approvalSettings?.approval_mode || 'on-request',
         planMode,
         conversationId: thread?.id ? String(thread.id) : 'local',
+        // Phase 3-1：断点摘要注入（仅「继续」且有已保存断点时非空）
+        resumeContext,
         onMessage: async (msg) => {
           // 中间轮 assistant（含 tool_calls）与 tool 结果消息全量持久化
           try {

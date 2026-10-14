@@ -306,6 +306,13 @@ ipcMain.handle('memory:bgTasks', async (_, opts) => (memoryScheduler ? { ok: tru
 const { ResourceQuotaCenter } = require('./resourceQuotaCenter');
 const quota = new ResourceQuotaCenter({ providerLimit: 8, fgReserve: 2 });
 ipcMain.handle('quota:snapshot', () => quota.snapshot());
+// Phase 3-1：Agent 任务断点持久化（预算熔断 = 暂停；「继续」时渲染层取回断点摘要注入）
+const checkpointStore = require('./checkpointStore');
+checkpointStore.initCheckpointStore(app.getPath('userData'));
+ipcMain.handle('checkpoint:get', (_, threadKey) => checkpointStore.getCheckpoint(threadKey));
+ipcMain.handle('checkpoint:clear', (_, threadKey) => ({ ok: checkpointStore.clearCheckpoint(threadKey) }));
+// Phase 3-4：token 仪表盘数据源（最近一次运行的逐轮用量快照）
+ipcMain.handle('agent:token/state', () => agentRunner.getTokenState());
 // P3-4：本地后端探测（Ollama）——启动时一次 + 每 5 分钟复探；结果进快照供渲染层展示
 quota.detectLocalBackend().catch(() => {});
 setInterval(() => { quota.detectLocalBackend().catch(() => {}); }, 5 * 60 * 1000).unref?.();

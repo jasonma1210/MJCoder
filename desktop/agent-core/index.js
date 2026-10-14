@@ -533,6 +533,88 @@ export function truncateToolResult(result, maxChars = TOOL_RESULT_MAX_CHARS) {
   return clipText(json, maxChars); // 字段裁无可裁：整体硬截（仍带标记）
 }
 
+// ── Phase 3-3：长输出摘要化（PASS 折叠 + 头尾保留 + 原文落盘）──
+// 背景：npm test / grep / 大文件读取动辄上万字进 prompt，其中大量是逐用例 PASS 行，
+// 每轮重复读取上下文时反复计费——这是长任务 token 滚动增大的主因之一。
+// 策略：超阈值 → 先折叠连续 PASS 行 → 头尾保留，完整原文落盘临时文件，
+// 模型需要细节时按落盘路径 read_file 按需取回（而非一次性全量进上下文）。
+export const TOOL_OUTPUT_SAVE_THRESHOLD = 8000;
+export const TOOL_OUTPUT_HEAD = 2500;
+export const TOOL_OUTPUT_TAIL = 3500;
+export const PASS_COLLAPSE_RUN = 20;
+
+// 折叠连续「通过用例」行（✓/✅/PASS/ok/通过…）：超过 maxRun 连续命中 → 中段折叠为一行汇总
+export function collapsePassLines(text, maxRun = PASS_COLLAPSE_RUN) {
+  const lines = String(text ?? '').split('\n');
+  const isPass = (l) => /^\s*(✓|✅|✔|PASS\b|ok\b|通过[:：]?)/i.test(l);
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (run.length > maxRun) {
+      out.push(run[0]);
+      out.push(`……（另有 ${run.length - 2} 行通过用例日志已折叠，均 PASS）……`);
+      out.push(run[run.length - 1]);
+    } else {
+      out.push(...run);
+    }
+    run = [];
+  };
+  for (const l of lines) {
+    if (isPass(l)) run.push(l);
+    else { flush(); out.push(l); }
+  }
+  flush();
+  return out.join('\n');
+}
+
+// 长输出摘要化入口。仅处理纯字符串结果，或带 stdout/content 字段的对象结果；
+// 其余结构原样返回（走既有 truncateToolResult 兜底）。fs 不可用时只折叠不落盘。
+export async function summarizeToolOutput(result, toolName = 'tool') {
+  const pick = (r) => {
+    if (typeof r === 'string') return { obj: null, field: null, text: r };
+    if (r && typeof r === 'object') {
+      for (const f of ['stdout', 'content']) {
+        if (typeof r[f] === 'string' && r[f].length > TOOL_OUTPUT_SAVE_THRESHOLD) {
+          return { obj: r, field: f, text: r[f] };
+        }
+      }
+    }
+    return null;
+  };
+  const hit = pick(result);
+  if (!hit) return result;
+
+  const folded = collapsePassLines(hit.text);
+  if (folded.length <= TOOL_OUTPUT_SAVE_THRESHOLD) {
+    return hit.obj ? { ...hit.obj, [hit.field]: folded } : folded;
+  }
+
+  // 原文落盘（fs 可用时），供模型按需 read_file 取回
+  let fullOutputPath = '';
+  try {
+    const fs = await ensureNodeFs();
+    if (fs) {
+      const dir = `${process.env.TMPDIR || process.env.TEMP || '/tmp'}/mjcode-tool-outputs`;
+      fs.mkdirSync(dir, { recursive: true });
+      fullOutputPath = `${dir}/${Date.now()}-${String(toolName).replace(/[^\w-]/g, '_')}.txt`;
+      fs.writeFileSync(fullOutputPath, hit.text, 'utf8');
+    }
+  } catch (e) {
+    console.warn('[agent] 长输出落盘失败（仅头尾保留）:', e.message);
+    fullOutputPath = '';
+  }
+
+  const head = folded.slice(0, TOOL_OUTPUT_HEAD);
+  const tail = folded.slice(-TOOL_OUTPUT_TAIL);
+  const note = [
+    `……[长输出摘要化：原文共 ${hit.text.length} 字符，仅保留折叠后头 ${head.length} + 尾 ${tail.length} 字符。`,
+    fullOutputPath ? `完整原文已落盘：${fullOutputPath}（需要细节时用 read_file 读取该路径）` : '（当前环境无法落盘，如需更多内容请用 grep/offset 分段获取）',
+    ']……',
+  ].join(' ');
+  const summarized = `${head}\n${note}\n${tail}`;
+  return hit.obj ? { ...hit.obj, [hit.field]: summarized } : summarized;
+}
+
 // P1-I：轮次预算双闸——单任务总轮次硬顶（AGENT_HARD_ROUND_CAP）+ 可选单任务 token 预算
 // 背景：原 maxRounds 硬顶对大任务过早收尾；续期指令以 user 角色 push 进 convo，
 // 污染会话历史（重进线程时用户会看到一条自己没说过的话）。
@@ -543,6 +625,9 @@ export const AGENT_HARD_ROUND_CAP = 120;
 // 「模型不知道怎么纠正，只会原样重试」——此时再跑就是纯烧 token 与用户等待时间。
 export const REPEAT_FAIL_WARN = 2;
 export const REPEAT_FAIL_STOP = 4;
+
+// Phase 3-2：文件读取缓存门槛——内容小于该值的文件重复读取直接放行（小文件不值得缓存）
+export const FILE_CACHE_MIN_CHARS = 4000;
 
 // 工具调用签名：用于识别「用同样的参数重试同一个操作」。
 // 对象 key 排序后再序列化，避免模型换个 key 顺序就被当成新操作而绕过熔断。
@@ -574,12 +659,13 @@ export function isToolFailure(r) {
 }
 
 export async function runAgent({
-  messages, model, onStream, onToolCall, onDone, onMessage,
+  messages, model, onStream, onToolCall, onDone, onMessage, onSuspend, onBudget,
   mcpTools = [], enabledSkills = [], skills = [], maxRounds = 40, signal, cwd, agentsMd,
   approvalMode = 'on-request', conversationId, tools: customTools, systemPrompt: customSystemPrompt,
   sandboxPolicy, memories = [], chatRetryBaseMs = 1000,
   toolHandlers, sessionDir, planMode = false,
   maxTotalRounds = AGENT_HARD_ROUND_CAP, tokenBudget = 0,
+  resumeContext = '',
 }) {
   // 模型调用通道：toolHandlers.chat 优先，回落 window.mjcode.chat
   const chatFn = (payload) => {
@@ -612,6 +698,11 @@ export async function runAgent({
   // 两阶段记忆 POC（stage2 注入：项目历史会话沉淀）
   if (Array.isArray(memories) && memories.length) {
     systemPrompt += `\n\n## 相关记忆（本项目历史会话沉淀）\n${memories.map((m) => `- ${String(m).slice(0, 300)}`).join('\n')}`;
+  }
+  // 断点恢复注入（Phase 3-1）：上一任务因预算触顶暂停，恢复时把断点摘要放进 system——
+  // 只进 system 消息不进持久化历史（与续期指令同语义），模型据此接续待办而非重读全部文件
+  if (resumeContext) {
+    systemPrompt += `\n\n## 断点恢复（上一任务因预算触顶暂停，以下是断点摘要）\n${String(resumeContext).slice(0, 6000)}\n\n请从「待办」处接续执行，已完成部分不要重做；需要细节时按摘要中的文件路径按需重读。`;
   }
 
   let convo = [{ role: 'system', content: systemPrompt }, ...normalizeMessages(messages)];
@@ -648,6 +739,7 @@ export async function runAgent({
   let tokenWindowSpent = 0; // token 预算口径：当前窗口累计消耗（压缩救援后清零）
   let contextRescued = false; // 上下文超限（provider 400）压缩救援已尝试过
   let renewNotice = '';
+  let suspendNoticed = false; // Phase 3-1：断点是否已通过 onSuspend 成功保存
 
   // ── 重复失败熔断：空转循环防线 ──
   // 真机反馈：「明明代码已经改完了，但一直在那边循环不结束」。
@@ -658,6 +750,11 @@ export async function runAgent({
   const failStreak = new Map();
   let repeatFailTool = '';
   let repeatFailCount = 0;
+
+  // Phase 3-2：run 内文件读取缓存——绝对路径 → { mtimeMs, size, len, round }。
+  // 同一文件 mtime/size 未变时重复全量读取不再注入全文（长任务每轮重复读上下文
+  // 是 token 滚动增大的主因）；带 offset/limit 的分段读取与 Stat 失败一律直读不缓存。
+  const readFileCache = new Map();
 
   while (true) {
     if (budgetExhausted) break; // 熔断可能在上一轮的工具循环内触发
@@ -719,6 +816,15 @@ export async function runAgent({
       lastPromptTokens = roundUsage.prompt_tokens;
       tokenWindowSpent += roundUsage.prompt_tokens + roundUsage.completion_tokens;
     }
+    // Phase 3-4：逐轮 token 用量上报（仪表盘数据源）——runner 侧缓存最新状态供渲染层轮询
+    try {
+      onBudget?.({
+        round: roundsUsed, windowSpent: tokenWindowSpent, budget: tokenBudget,
+        rescues: tokenRescues, rescueMax: TOKEN_RESCUE_MAX,
+        promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
+        running: true,
+      });
+    } catch (e) { /* 仪表盘上报绝不影响主流程 */ }
 
     // P1-I：token 预算闸——窗口消耗达预算 70%（TOKEN_COMPACTION_TRIGGER）即预判式压缩续跑
     // （最多 TOKEN_RESCUE_MAX 次），救援用尽仍触闸才收尾。
@@ -739,6 +845,16 @@ export async function runAgent({
         continue;
       }
       budgetExhausted = true; budgetKind = 'tokens';
+      // Phase 3-1：预算熔断 = 暂停而非失败。挂起钩子（runner 侧落盘断点），
+      // 保存成功后在收尾文案明示「断点已保存」，引导用户「继续」走断点恢复而非全量重放
+      try {
+        suspendNoticed = !!onSuspend?.({
+          kind: 'tokens', summary: finalText, usage: { ...usage },
+          roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
+        });
+      } catch (e) {
+        console.warn('[agent] 断点保存钩子异常:', e.message);
+      }
       break;
     }
 
@@ -835,6 +951,44 @@ export async function runAgent({
             };
             break;
           }
+          case 'read_file': {
+            // Phase 3-2：run 内读取缓存。全文未变更的重复读取返回提示而非再次注入全文。
+            const fs2 = await ensureNodeFs();
+            const reqPath = String(toolArgs?.path || '');
+            const isSegmented = toolArgs?.offset !== undefined || toolArgs?.limit !== undefined;
+            let cacheAbs = null;
+            let stat = null;
+            if (fs2 && reqPath && !isSegmented) {
+              try {
+                cacheAbs = reqPath.startsWith('/') ? reqPath : `${cwd || '.'}/${reqPath}`;
+                stat = fs2.statSync(cacheAbs);
+                const prev = readFileCache.get(cacheAbs);
+                if (prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size
+                    && prev.len > FILE_CACHE_MIN_CHARS) {
+                  toolResult = {
+                    ok: true, path: cacheAbs, cached: true,
+                    content: `（缓存命中：该文件自第 ${prev.round} 轮读取后未变更（mtime/size 一致，约 ${prev.len} 字符），完整内容已在上文中，本次不重复注入以节省上下文。如需重新查看请用 offset/limit 分段读取。）`,
+                  };
+                  break;
+                }
+              } catch { /* stat 失败照常直读 */ }
+            }
+            const readChannel = resolveChannel(toolHandlers, 'readFile');
+            if (!readChannel) throw new Error('未知工具: read_file');
+            toolResult = await readChannel(toolArgs, { signal });
+            // 成功的全量大读取记录缓存锚点（后续同文件重复读取才会命中）
+            try {
+              if (fs2 && cacheAbs && stat && toolResult?.ok !== false
+                  && typeof toolResult?.content === 'string'
+                  && toolResult.content.length > FILE_CACHE_MIN_CHARS) {
+                readFileCache.set(cacheAbs, {
+                  mtimeMs: stat.mtimeMs, size: stat.size,
+                  len: toolResult.content.length, round: roundsUsed,
+                });
+              }
+            } catch { /* 缓存记录失败不影响结果返回 */ }
+            break;
+          }
           default: {
             if (tc.function.name.startsWith('mcp__')) {
               const parts = tc.function.name.split('__');
@@ -876,7 +1030,8 @@ export async function runAgent({
       }
       onToolCall?.({ name: tc.function.name, args: toolArgs, result: toolResult });
       // P1-B：截断带标记；对象结果逐字段裁剪保持 JSON 完整，不在中间下刀
-      const toolContent = truncateToolResult(toolResult);
+      // Phase 3-3：超长输出先摘要化（PASS 折叠 + 头尾保留 + 原文落盘），再走截断兜底
+      const toolContent = truncateToolResult(await summarizeToolOutput(toolResult, tc.function.name));
       const toolMsg = { role: 'tool', tool_call_id: tc.id, content: toolContent };
       convo.push(toolMsg);
       // tool 结果消息持久化（重进线程可完整重放工具链）
@@ -895,8 +1050,21 @@ export async function runAgent({
         ? `（含每轮重复读取上下文的消耗，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens，期间已自动压缩续跑 ${tokenRescues} 次；这是防失控上限，不是上下文放不下——上下文会自动压缩）`
         : '';
       finalText = `${finalText || '任务尚未完成。'}\n\n（单任务${kindText}已用尽${exhaustDetail}，任务未完全完成。发送「继续」让我接着执行。）`.trim();
+      // Phase 3-1：断点保存成功 → 明示恢复语义（继续 = 断点摘要接续，不重读全部文件）
+      if (suspendNoticed && budgetKind === 'tokens') {
+        finalText += '\n\n（断点已保存：回复「继续」将从断点摘要接续执行，已完成部分不会重做。）';
+      }
     }
   }
+  // Phase 3-4：收尾时的最终用量快照（running=false，仪表盘定格显示）
+  try {
+    onBudget?.({
+      round: roundsUsed, windowSpent: tokenWindowSpent, budget: tokenBudget,
+      rescues: tokenRescues, rescueMax: TOKEN_RESCUE_MAX,
+      promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens,
+      running: false, budgetKind: budgetExhausted ? budgetKind : 'normal',
+    });
+  } catch (e) { /* 仪表盘上报绝不影响主流程 */ }
   onDone?.(finalText, usage, aborted);
   return finalText;
 }

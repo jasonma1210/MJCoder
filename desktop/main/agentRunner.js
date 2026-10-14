@@ -12,6 +12,9 @@
 //   createToolHandlers: ({ sender, signal }) => obj  —— 每次运行的工具处理器（含流式 chat）
 let deps = null;
 
+// Phase 3-4：最近一次运行的 token 用量状态（渲染层 AgentDock 仪表盘经 IPC 轮询）
+let lastBudgetState = null;
+
 function initAgentRunner(d) {
   deps = d;
 }
@@ -61,11 +64,37 @@ function startAgentRun(payload, sender) {
         planMode: !!payload.planMode,
         conversationId: payload.conversationId,
         tokenBudget: payload.tokenBudget || 0,
+        // Phase 3-1：断点恢复上下文（渲染层「继续」时从 checkpointStore 取回注入）
+        resumeContext: payload.resumeContext || '',
         signal: controller.signal,
         toolHandlers: handlers,
         onMessage: (m) => emit('message', m),
         onStream: (s) => emit('stream', s),
         onToolCall: (tc) => emit('tool_call', tc),
+        // Phase 3-1：token 预算熔断 → 保存断点（threadKey = conversationId）+ 通知渲染层
+        onSuspend: (info) => {
+          let saved = false;
+          try {
+            const cp = require('./checkpointStore');
+            saved = cp.saveCheckpoint(String(payload.conversationId || 'local'), {
+              summary: String(info?.summary || '').slice(-4000),
+              usage: info?.usage || null,
+              rounds: info?.roundsUsed || 0,
+              rescues: info?.rescues || 0,
+              budget: info?.budget || 0,
+              model: payload?.model?.model?.model_id || '',
+              cwd: payload?.cwd || '',
+            });
+          } catch (e) {
+            console.warn('[agentRunner] 断点保存失败:', e.message);
+          }
+          emit('suspended', { saved, ...info });
+          return saved;
+        },
+        // Phase 3-4：逐轮用量上报 → 缓存最新状态（仪表盘轮询数据源）
+        onBudget: (s) => {
+          lastBudgetState = { ...s, runId, model: payload?.model?.model?.model_id || '', ts: Date.now() };
+        },
         onDone: (ft, usage, aborted) => {
           doneSent = true;
           console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
@@ -104,4 +133,9 @@ function abortAllRuns() {
   return n;
 }
 
-module.exports = { initAgentRunner, startAgentRun, abortRun, abortAllRuns };
+// Phase 3-4：仪表盘数据源（main.js IPC 'agent:token/state' 直接透传）
+function getTokenState() {
+  return lastBudgetState;
+}
+
+module.exports = { initAgentRunner, startAgentRun, abortRun, abortAllRuns, getTokenState };

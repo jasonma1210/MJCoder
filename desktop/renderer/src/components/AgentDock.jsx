@@ -71,6 +71,52 @@ function useQuotaSnapshot() {
   return snap;
 }
 
+// Phase 3-4：token 用量仪表盘——轮询最近一次运行（主会话）的逐轮用量快照，
+// 进度条展示窗口消耗/预算占比，≥80% 预警「即将触发上下文压缩」
+function useTokenState() {
+  const [ts, setTs] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => window.mjcode?.tokenState?.()
+      .then((s) => { if (alive && s) setTs(s); }).catch(() => {});
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  return ts;
+}
+
+function TokenDashboard({ state }) {
+  if (!state || !(state.budget > 0)) return null;
+  const pct = Math.min(100, Math.round((state.windowSpent / state.budget) * 100));
+  const warn = pct >= 80;
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  return (
+    <div className="px-4 py-2 border-t border-border shrink-0 text-xs space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-text2">
+          Token 用量{state.model ? ` · ${state.model}` : ''}
+          {state.running === false && '（已结束）'}
+        </span>
+        <span className={warn ? 'text-danger' : 'text-text2'}>
+          {fmt(state.windowSpent)} / {fmt(state.budget)}（{pct}%）
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-border overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${warn ? 'bg-danger' : 'bg-accent'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex items-center gap-x-3 flex-wrap text-text2">
+        <span>累计 in {fmt(state.promptTokens)} / out {fmt(state.completionTokens)}</span>
+        {state.rescues > 0 && <span className="text-warn">自动压缩续跑 {state.rescues} 次</span>}
+        {warn && state.running !== false && <span className="text-danger">即将触发上下文压缩</span>}
+      </div>
+    </div>
+  );
+}
+
 const THROTTLE_LABEL = {
   idle: '空闲',
   busy: '繁忙（后台任务让路中）',
@@ -89,6 +135,7 @@ function ActivityText({ kind, text }) {
 function AgentDockPanel({ agents, onClose, onAbort, onAbortAll, allMsg }) {
   const groupIds = [...new Set(agents.map((a) => a.groupId))];
   const quota = useQuotaSnapshot();
+  const tokenState = useTokenState();
   const providerEntries = Object.entries(quota?.providers || {});
   return (
     <div className="absolute bottom-full left-0 mb-2 w-[26rem] max-h-[24rem] flex flex-col bg-surface border border-border rounded-2xl shadow-[var(--shadow-pop)] z-30 overflow-hidden">
@@ -136,6 +183,8 @@ function AgentDockPanel({ agents, onClose, onAbort, onAbortAll, allMsg }) {
           </div>
         ))}
       </div>
+      {/* Phase 3-4：token 用量仪表盘（最近一次主会话运行） */}
+      <TokenDashboard state={tokenState} />
       {quota && (
         <div className="px-4 py-2 border-t border-border shrink-0 text-xs text-text2 flex items-center gap-x-3 gap-y-1 flex-wrap">
           <span>模型资源：{THROTTLE_LABEL[quota.throttle] || quota.throttle}</span>
