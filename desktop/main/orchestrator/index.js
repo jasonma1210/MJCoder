@@ -4,6 +4,7 @@
 const crypto = require('crypto');
 // P1-4：同时引入规模常量，让拆解提示与 DAG 校验共用同一口径（消除「提示说2~6、校验允8」的漂移）
 const { validateDag, topoLevels, MAX_TASKS, MIN_TASKS } = require('./dag');
+const { toChatRequest } = require('../modelShape');
 
 const ORCHESTRATOR_SYSTEM = [
   '你是 MJ Coder 的任务编排器。把用户目标拆解为可独立执行的子任务 DAG，输出严格 JSON（不要输出任何其他文本）：',
@@ -35,11 +36,10 @@ function buildUserMessage(goal, cwd, extra) {
 
 async function askDag(userMessage) {
   const model = deps.resolveModel(); // 未选模型时抛出明确错误
+  // 扁平形由共享转换产出：resolveModel 若改返回嵌套形，此处不再静默拿到 undefined
+  const req = toChatRequest(model);
   const res = await deps.chatOnce({
-    providerId: model.providerId,
-    isGlobal: !!model.isGlobal,
-    baseUrl: model.baseUrl || '',
-    model: model.model,
+    ...req,
     messages: [
       { role: 'system', content: ORCHESTRATOR_SYSTEM },
       { role: 'user', content: userMessage },

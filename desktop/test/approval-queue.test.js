@@ -1,0 +1,142 @@
+// 审批队列测试：结束回调（决策/超时/退出）+ 并发不串扰 + 渲染层 FIFO 队列 + abort 监听器不泄漏
+//
+// 事故背景（2026-10-15 真机）：自动 DAG 下多个 Worker 并发申请审批，
+// ① 审批卡只有一个槽位，新请求覆盖旧的 → 被覆盖那条界面上点不到，只能等 120s 超时 deny；
+// ② 主进程 pending 超时消失后 UI 卡片仍常驻，用户事后点击 → 「收到无法匹配的审批响应，已忽略」。
+// 同一批日志里还有 MaxListenersExceededWarning：一次运行的 abort 监听器每轮累加不摘除。
+const fs = require('fs');
+const path = require('path');
+const { getEventListeners } = require('node:events');
+const { ApprovalChannel } = require('../main/approvalChannel');
+
+let pass = 0;
+let fail = 0;
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`✅ ${name}${detail ? ` — ${detail}` : ''}`); }
+  else { fail++; console.log(`❌ ${name}${detail ? ` — ${detail}` : ''}`); }
+}
+
+(async () => {
+  // ── 结束回调：用户决策 ──
+  const ch = new ApprovalChannel();
+  const idA = ch.nextId();
+  let settled = null;
+  let decision = null;
+  const pA = ch.wait(idA, (id, reason) => { settled = { id, reason }; }).then((d) => { decision = d; });
+  check('决策前未触发结束回调', settled === null);
+  ch.dispatch(idA, 'once');
+  await pA;
+  check('决策后触发结束回调（reason=decided）', settled?.reason === 'decided' && settled?.id === idA);
+  check('决策值正确透传', decision === 'once');
+
+  // ── 结束回调：超时（关键：UI 靠它撤卡片）──
+  const chT = new ApprovalChannel({ timeoutMs: 40 });
+  const idT = chT.nextId();
+  let settledT = null;
+  const pT = chT.wait(idT, (id, reason) => { settledT = { id, reason }; });
+  // 保活：审批超时定时器是 unref 的（不阻止进程退出），此处必须另挂一个普通定时器
+  // 把事件循环撑到超时触发之后，否则 Node 会在超时前静默退出（退出码 0 但断言没跑完）。
+  await new Promise((r) => setTimeout(r, 150));
+  await pT;
+  check('超时也触发结束回调（reason=timeout）', settledT?.reason === 'timeout');
+  check('超时后 pending 已清空', chT.size === 0);
+
+  // ── 结束回调：进程退出/disposeAll ──
+  const chD = new ApprovalChannel();
+  const idD = chD.nextId();
+  let settledD = null;
+  const pD = chD.wait(idD, (id, reason) => { settledD = { id, reason }; });
+  chD.disposeAll();
+  await pD;
+  check('disposeAll 触发结束回调（reason=disposed）', settledD?.reason === 'disposed');
+
+  // ── 结束回调只触发一次（重复 dispatch 不得二次回调）──
+  const ch1 = new ApprovalChannel();
+  const id1 = ch1.nextId();
+  let calls = 0;
+  const p1 = ch1.wait(id1, () => { calls += 1; });
+  ch1.dispatch(id1, 'once');
+  await p1;
+  ch1.dispatch(id1, 'once'); // 重放
+  check('结束回调幂等：重复分发不再回调', calls === 1);
+  check('已结束的 id 不可重放', ch1.dispatch(id1, 'once') === false);
+
+  // ── 并发 4 个（自动 DAG 默认并发数）：按 id 精确分发，互不串扰 ──
+  const ch4 = new ApprovalChannel();
+  const ids = [ch4.nextId(), ch4.nextId(), ch4.nextId(), ch4.nextId()];
+  const got = [];
+  const ps = ids.map((id, i) => ch4.wait(id, () => {}).then((d) => { got[i] = d; }));
+  check('4 个并发挂起', ch4.size === 4);
+  // 故意乱序应答：中间的先答，验证不会「谁先答归谁」
+  ch4.dispatch(ids[2], 'always');
+  ch4.dispatch(ids[0], 'deny');
+  ch4.dispatch(ids[3], 'conversation');
+  ch4.dispatch(ids[1], 'once');
+  await Promise.all(ps);
+  check('乱序并发应答不串扰', JSON.stringify(got) === JSON.stringify(['deny', 'once', 'always', 'conversation']),
+    JSON.stringify(got));
+  check('全部应答后无残留', ch4.size === 0);
+
+  // ── 渲染层 / 主进程接线（源码级护栏）──
+  const cardSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'components', 'ApprovalCard.jsx'), 'utf8');
+  const preloadSrc = fs.readFileSync(path.join(__dirname, '..', 'main', 'preload.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main', 'main.js'), 'utf8');
+  check('审批卡改为队列存储（不是单槽位 pending）',
+    /useState\(\[\]\)/.test(cardSrc) && /setQueue/.test(cardSrc) && !/useState\(null\);\s*\n\s*const \[collapsed/.test(cardSrc));
+  check('审批卡按 approvalId 入队且去重',
+    /q\.some\(\(r\) => r\.approvalId === req\.approvalId\)/.test(cardSrc));
+  check('审批卡取队首展示（FIFO）', /const pending = queue\[0\]/.test(cardSrc));
+  check('审批卡显示「第 i/N 条」', /第 1\/\$\{total\}/.test(cardSrc) || /第 1\//.test(cardSrc));
+  check('审批卡监听审批结束回执并出队',
+    /onApprovalEnd/.test(cardSrc) && /q\.filter\(\(r\) => r\.approvalId !== approvalId\)/.test(cardSrc));
+  check('preload 暴露 onApprovalEnd 且可退订',
+    /onApprovalEnd: \(cb\) =>/.test(preloadSrc) && /removeListener\('tool:approval-end'/.test(preloadSrc));
+  check('主进程广播 tool:approval-end', /send\('tool:approval-end'/.test(mainSrc));
+  check('主进程把结束回调挂到 wait 上',
+    /approvalChannel\.wait\(approvalId, broadcastApprovalEnd\)/.test(mainSrc));
+  check('决策回传仍携带 approvalId', /approvalId: pending\.approvalId/.test(cardSrc));
+
+  // ── abort 监听器泄漏：一次运行连发 N 次 chat，监听器不得累加 ──
+  // 修复前：每次 chat 往同一个 run signal 挂一个监听且从不摘除 → 11 次后
+  // MaxListenersExceededWarning，闭包持有请求 controller 造成内存泄漏。
+  const run = new AbortController();
+  const N = 15; // 超过 Node 默认的 10 个告警阈值
+  for (let i = 0; i < N; i += 1) {
+    const controller = new AbortController();
+    let onExternalAbort = null;
+    if (!run.signal.aborted) {
+      onExternalAbort = () => controller.abort();
+      run.signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    // finally：摘除（与 main.js chatStreamOnce 修复后的写法一致）
+    if (onExternalAbort && run.signal.removeEventListener) {
+      run.signal.removeEventListener('abort', onExternalAbort);
+    }
+  }
+  check(`${N} 次 chat 后 run signal 无监听器残留`, getEventListeners(run.signal, 'abort').length === 0,
+    `实际 ${getEventListeners(run.signal, 'abort').length}`);
+
+  // 对照组：不摘除的旧写法确实会累加（证明上面的断言不是恒真）
+  const runOld = new AbortController();
+  for (let i = 0; i < N; i += 1) {
+    runOld.signal.addEventListener('abort', () => {}, { once: true });
+  }
+  check(`对照组：不摘除时确实累加到 ${N} 个（断言有效）`,
+    getEventListeners(runOld.signal, 'abort').length === N);
+
+  // 级联中止语义未被破坏
+  const run2 = new AbortController();
+  const chat2 = new AbortController();
+  const h = () => chat2.abort();
+  run2.signal.addEventListener('abort', h, { once: true });
+  run2.abort();
+  check('外部信号仍能级联中止本次 chat', chat2.signal.aborted === true);
+
+  // 源码级：main.js 的 finally 里确实做了摘除
+  check('chatStreamOnce 在 finally 中摘除监听器',
+    /removeEventListener\('abort', onExternalAbort\)/.test(mainSrc)
+    && /\blet onExternalAbort = null\b/.test(mainSrc));
+
+  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
+  process.exit(fail === 0 ? 0 : 1);
+})();

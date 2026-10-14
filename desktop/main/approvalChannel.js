@@ -19,15 +19,26 @@ class ApprovalChannel {
   }
 
   // 发起一次审批等待：返回 Promise<'once'|'conversation'|'always'|'deny'>，超时按 deny
-  wait(approvalId) {
+  // onSettle(approvalId, reason)：本次审批**无论以何种方式结束**（用户决策 / 超时 /
+  // 进程退出）都会回调一次。渲染层据此撤下卡片——
+  // 事故背景：此前卡片一旦弹出就常驻，主进程侧 pending 超时消失后用户再点，
+  // 主进程找不到该 id 只能记「收到无法匹配的审批响应，已忽略」，用户看到的是
+  // 「点了没反应 / 命令继续执行」，实际是这次审批早已按 deny 收尾。
+  wait(approvalId, onSettle) {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      let settled = false;
+      const finish = (value, reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         this.pending.delete(approvalId);
-        resolve('deny');
-      }, this.timeoutMs);
+        resolve(value);
+        try { onSettle?.(approvalId, reason); } catch { /* 回调失败不影响审批结果 */ }
+      };
+      const timer = setTimeout(() => finish('deny', 'timeout'), this.timeoutMs);
       // unref：测试/纯 Node 环境下不阻止进程退出
       if (typeof timer.unref === 'function') timer.unref();
-      this.pending.set(approvalId, { resolve, timer });
+      this.pending.set(approvalId, { finish, timer });
     });
   }
 
@@ -35,9 +46,7 @@ class ApprovalChannel {
   dispatch(approvalId, decision) {
     const entry = (approvalId != null) ? this.pending.get(approvalId) : null;
     if (!entry) return false;
-    clearTimeout(entry.timer);
-    this.pending.delete(approvalId);
-    entry.resolve(decision || 'deny');
+    entry.finish(decision || 'deny', 'decided');
     return true;
   }
 
@@ -46,9 +55,7 @@ class ApprovalChannel {
   dispatchLegacy(decision) {
     if (this.pending.size !== 1) return false;
     const [id, entry] = [...this.pending.entries()][0];
-    clearTimeout(entry.timer);
-    this.pending.delete(id);
-    entry.resolve(decision || 'deny');
+    entry.finish(decision || 'deny', 'decided');
     return true;
   }
 
@@ -58,8 +65,7 @@ class ApprovalChannel {
   // 退出/重置：全部按 deny 收尾，清理定时器
   disposeAll() {
     for (const [, entry] of this.pending) {
-      clearTimeout(entry.timer);
-      entry.resolve('deny');
+      try { entry.finish('deny', 'disposed'); } catch { /* 已收尾的忽略 */ }
     }
     this.pending.clear();
   }

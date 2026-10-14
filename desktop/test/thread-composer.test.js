@@ -124,8 +124,11 @@ check('审批挂起即置线程状态 awaiting_approval（写入端闭环）', (
   assert.match(app, /onPendingChange=/);
   assert.match(app, /awaiting_approval/);
   assert.match(card, /onPendingChange/);
-  assert.match(card, /pendingCbRef\.current\?\.\(true\)/, '审批请求到达需上报挂起');
-  assert.match(card, /pendingCbRef\.current\?\.\(false\)/, '审批决策需上报恢复');
+  // 2026-10-15：审批卡改为 FIFO 队列后，上报由「队列是否非空」驱动，
+  // 不再是在两处各写死一次 true/false。契约不变：有挂起必上报、清空必上报恢复。
+  assert.match(card, /pendingCbRef\.current\?\.\(queue\.length > 0\)/, '有挂起需上报（队列非空）');
+  assert.match(card, /\[queue\.length\]/, '队列清空需上报恢复（依赖队列长度）');
+  assert.match(card, /const pending = queue\[0\]/, '取队首展示，保证上报与展示同一条');
 });
 
 check('侧栏待审批徽标可点击直达审批卡', () => {

@@ -783,6 +783,29 @@ export function isToolFailure(r) {
   return false;
 }
 
+// 模型参数形状守卫：只校验、不转换（转换的唯一事实来源是 main/modelShape.js）。
+// 目的是把入口处的 `Cannot read properties of undefined (reading 'id')` 换成可诊断消息。
+// 与 modelShape.js 的一致性由 test/model-shape.test.js 交叉验证（toAgentModel 的
+// 产物必须能通过本校验），避免两处对形状的理解再次漂移。
+function assertAgentModelShape(m) {
+  if (!m || typeof m !== 'object') {
+    throw new Error(`模型参数无效：需要对象，实为 ${typeof m}`);
+  }
+  if (!m.model || typeof m.model !== 'object' || !m.model.model_id) {
+    throw new Error('模型参数形状错误：缺少 model.model_id。'
+      + '期望嵌套形 { provider: { id, base_url }, model: { model_id } }；'
+      + '若手上是扁平形 { providerId, baseUrl, model }，请先用 main/modelShape.js 的 toAgentModel() 转换。');
+  }
+  if (!m.provider || typeof m.provider !== 'object') {
+    throw new Error('模型参数形状错误：缺少 provider 对象。'
+      + '期望嵌套形 { provider: { id, base_url }, model: { model_id } }；'
+      + '若手上是扁平形 { providerId, baseUrl, model }，请先用 main/modelShape.js 的 toAgentModel() 转换。');
+  }
+  return true;
+}
+// 导出供测试交叉验证形状定义一致性
+export { assertAgentModelShape };
+
 export async function runAgent({
   messages, model, onStream, onToolCall, onDone, onMessage, onSuspend, onBudget, onTodos,
   mcpTools = [], enabledSkills = [], skills = [], maxRounds = 40, signal, cwd, agentsMd,
@@ -792,6 +815,12 @@ export async function runAgent({
   maxTotalRounds = AGENT_HARD_ROUND_CAP, tokenBudget = 0,
   resumeContext = '',
 } = {}) {
+  // 入口形状校验（2026-10-15）：Worker 曾收到扁平形 model（{providerId, baseUrl, model}），
+  // 而本函数与 compactHistory/decomposeTask 一律读 model.provider.id →
+  // `Cannot read properties of undefined (reading 'id')`。该 TypeError 不含任何上下文，
+  // 被引擎当成普通「模型调用失败」记录后整组降级，排查成本极高。
+  // 此处挡在入口，直接指出缺哪个字段、期望什么形状（转换请用 main/modelShape.js）。
+  assertAgentModelShape(model);
   // 模型调用通道：toolHandlers.chat 优先，回落 window.mjcode.chat
   const chatFn = (payload) => {
     const channel = resolveChannel(toolHandlers, 'chat');

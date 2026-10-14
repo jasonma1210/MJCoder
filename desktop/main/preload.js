@@ -185,6 +185,13 @@ contextBridge.exposeInMainWorld('mjcode', {
   // P0-2：决策负载携带 approvalId 回传（payload: { approvalId, decision }），
   // 主进程按 id 精确分发，并发审批不再串扰
   resolveApproval: (payload) => ipcRenderer.send('tool:approval-response', payload),
+  // 审批结束回执：已决策 / 超时 / 窗口销毁时主进程广播，渲染层据此撤下卡片
+  // （否则卡片常驻，用户事后点击 → 主进程已无该 pending → 「无法匹配的审批响应」）
+  onApprovalEnd: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('tool:approval-end', handler);
+    return () => ipcRenderer.removeListener('tool:approval-end', handler);
+  },
   // P0-4：主进程 Agent 运行通道——循环在主进程执行，渲染层发起/订阅/中止
   agentRun: (payload) => ipcRenderer.invoke('agent:run', payload),
   agentAbort: (runId) => ipcRenderer.invoke('agent:abort', { runId }),

@@ -13,23 +13,49 @@ const LEVEL_META = {
 // B16：键盘 1=拒绝 2=允许一次 3=本对话 4=始终允许
 // P1-D：审批挂起/决策上报 onPendingChange（App 据此置线程状态 awaiting_approval/running）；
 //       监听 mjcode:focus-approval（侧栏「N 待审批」徽标点击）→ 展开并高亮闪现
+//
+// 2026-10-15 修复：待审批改为 **FIFO 队列**。
+// 事故背景：原实现只有一个 pending 槽位。自动 DAG 下多个 Worker 并发申请审批时，
+// 新请求直接覆盖旧的——被覆盖的那条在界面上再也点不到，只能等主进程 120s 超时按
+// 拒绝收尾；用户看到的现象是「卡片弹了但命令继续执行，点了又没反应」。
+// 现在每条审批都进队，逐条作答，并显示「第 i/N 条」让用户知道后面还有几条。
 export default function ApprovalCard({ onPendingChange }) {
-  const [pending, setPending] = useState(null);
+  const [queue, setQueue] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [flash, setFlash] = useState(false);
   // 回调走 ref：避免父组件每次渲染传入新函数导致审批监听重复订阅
   const pendingCbRef = useRef(onPendingChange);
   pendingCbRef.current = onPendingChange;
 
+  // 当前展示的永远是队首（FIFO），保证先申请的先被回答
+  const pending = queue[0] || null;
+
   useEffect(() => {
-    if (!window.mjcode?.onApprovalRequest) return;
+    if (!window.mjcode?.onApprovalRequest) return undefined;
     const off = window.mjcode.onApprovalRequest((req) => {
-      setPending(req);
+      if (!req?.approvalId) return; // 无 id 的请求无法回传决策，丢弃（主进程按 id 分发）
+      setQueue((q) => (q.some((r) => r.approvalId === req.approvalId) ? q : [...q, req]));
       setCollapsed(false);
-      pendingCbRef.current?.(true);
     });
     return () => { if (typeof off === 'function') off(); };
   }, []);
+
+  // 审批结束回执：已决策 / 超时 / 窗口销毁 —— 撤下对应卡片。
+  // 没有它，超时后的卡片会一直挂着，用户点击时主进程已无该 pending，
+  // 只能记「收到无法匹配的审批响应，已忽略」。
+  useEffect(() => {
+    if (!window.mjcode?.onApprovalEnd) return undefined;
+    const off = window.mjcode.onApprovalEnd(({ approvalId } = {}) => {
+      if (!approvalId) return;
+      setQueue((q) => q.filter((r) => r.approvalId !== approvalId));
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+
+  // 队列空/非空变化时上报（App 据此置线程状态）
+  useEffect(() => {
+    pendingCbRef.current?.(queue.length > 0);
+  }, [queue.length]);
 
   // P1-D：侧栏徽标点击直达——展开卡片并短暂高亮（不切换视图，保持当前上下文可见）
   useEffect(() => {
@@ -46,16 +72,17 @@ export default function ApprovalCard({ onPendingChange }) {
   // 一旦被 useEffect 列入依赖（键盘处理器需要它），就会让监听每轮渲染卸载重挂。
   // 依赖只有 pending（其余是稳定 setter 与 ref），与键盘 effect 的触发条件一致。
   const resolve = useCallback((decision) => {
+    if (!pending?.approvalId) return;
     // P0-2：决策负载必须回带 approvalId——主进程按 id 精确分发，
     // 并发审批时决策才能落到正确的请求上（否则把「允许」发给另一条命令）
-    window.mjcode.resolveApproval({ approvalId: pending?.approvalId, decision });
-    setPending(null);
-    pendingCbRef.current?.(false);
+    window.mjcode.resolveApproval({ approvalId: pending.approvalId, decision });
+    // 乐观出队：主进程的 tool:approval-end 回执到达时会再过滤一次，幂等
+    setQueue((q) => q.filter((r) => r.approvalId !== pending.approvalId));
   }, [pending]);
 
   // 键盘 1-4 快捷决策（仅审批卡非折叠时生效）
   useEffect(() => {
-    if (!pending || collapsed) return;
+    if (!pending || collapsed) return undefined;
     const onKey = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // 输入焦点守卫：用户正在输入框打字（内容里出现数字 1-4 很常见）时
@@ -78,6 +105,7 @@ export default function ApprovalCard({ onPendingChange }) {
 
   if (!pending) return null;
   const meta = LEVEL_META[pending.level] || LEVEL_META.L2;
+  const total = queue.length;
 
   return (
     <div className={`fixed bottom-14 right-4 w-[460px] max-w-[calc(100vw-2rem)] z-approval transition-shadow${flash ? ' ring-2 ring-accent rounded-2xl' : ''}`}>
@@ -86,6 +114,9 @@ export default function ApprovalCard({ onPendingChange }) {
           <span className={meta.color}><meta.Icon size={15} /></span>
           <span className="text-sm font-medium">{meta.label}确认</span>
           <span className="text-text2 text-xs font-mono truncate">{pending.tool}</span>
+          {total > 1 && (
+            <span className="text-text2 text-xs shrink-0">第 1/{total} 条</span>
+          )}
           <button
             onClick={() => setCollapsed((v) => !v)}
             className="ml-auto text-text2 hover:text-text text-xs"

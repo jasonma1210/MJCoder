@@ -52,11 +52,24 @@ function saveAlwaysRules() {
 // 多工具并发审批时第一个响应会被任一等待者消费，决策可能张冠李戴（把「允许」发给更危险的命令）。
 const { ApprovalChannel } = require('./approvalChannel');
 const approvalChannel = new ApprovalChannel({ timeoutMs: 120000 });
+// 模型形状转换（扁平形 ⇄ 嵌套形）：全项目唯一事实来源，见 modelShape.js 顶部事故背景
+const { toAgentModel, toChatRequest } = require('./modelShape');
+
+// 审批结束广播：让渲染层撤下对应卡片。
+// 没有这条通道时，主进程侧 pending 一旦因超时消失，UI 卡片却仍挂着——用户事后点击
+// 会命中「无法匹配的审批响应」。并发（自动 DAG 多 Worker 同时申请）下尤其明显。
+function broadcastApprovalEnd(approvalId, reason) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('tool:approval-end', { approvalId, reason });
+    }
+  } catch { /* 窗口已销毁时无需广播 */ }
+}
 
 function requestApproval(tool, args) {
   const summary = approval.approvalSummary(tool, args);
   const approvalId = approvalChannel.nextId();
-  const waitP = approvalChannel.wait(approvalId);
+  const waitP = approvalChannel.wait(approvalId, broadcastApprovalEnd);
   mainWindow.webContents.send('tool:approval-request', { approvalId, tool, ...summary });
   return waitP;
 }
@@ -2183,9 +2196,18 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
   let usage = null;
   const controller = new AbortController();
   activeChats.add(controller);
+  // 级联中止：外部信号（一次 Agent 运行的 controller.signal）→ 本次 chat。
+  // 注意必须保存 handler 引用并在 finally 里摘除：一次运行会连续发起十几次 chat，
+  // 每次都往同一个 externalSignal 上挂一个 abort 监听。{ once: true } 只在**触发时**
+  // 才自动摘除，运行不中止就永远留着 → 11 次后触发 MaxListenersExceededWarning，
+  // 且每个闭包都持有本次请求的 controller/缓冲区，长任务下是实打实的内存泄漏。
+  let onExternalAbort = null;
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    else {
+      onExternalAbort = () => controller.abort();
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
   }
   try {
     const res = await fetch(`${root}/chat/completions`, {
@@ -2252,6 +2274,9 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
     quota.reportError(providerId || 'default');
     throw err;
   } finally {
+    if (onExternalAbort && externalSignal?.removeEventListener) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
     activeChats.delete(controller);
     slot.release();
   }
@@ -2442,10 +2467,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
   if (!schedModel || !schedModel.model) {
     throw new Error('未配置执行模型：请在任意会话中选择模型（定时任务复用会话模型与凭证）');
   }
-  const runModel = {
-    provider: { id: schedModel.providerId, isGlobal: !!schedModel.isGlobal, base_url: schedModel.baseUrl || '' },
-    model: { model_id: schedModel.model, context_window: 128000 },
-  };
+  // 扁平形 → 嵌套形：改用共享转换（此前是此处手抄，Worker 路径漏抄导致崩溃）
+  const runModel = toAgentModel(schedModel);
   const cwd = schedModel.cwd || '';
   let toolCount = 0;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };

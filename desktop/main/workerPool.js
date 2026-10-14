@@ -10,6 +10,7 @@
 
 const { aggregateGroup } = require('./aggregator/merge');
 const workerIsolation = require('./workerIsolation');
+const { toAgentModel } = require('./modelShape');
 const path = require('path');
 
 let deps = null;
@@ -168,7 +169,11 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, is
       try {
         const finalText = await core.runAgent({
           messages: [{ role: 'user', content: deps.buildTaskPrompt(group, task) }],
-          model: deps.resolveModel(),
+          // 2026-10-15 修复：此处原先直接传 deps.resolveModel()（扁平形），而 runAgent
+        // 读 model.provider.id（嵌套形）→ 每个子任务第 1 轮即崩
+        // `Cannot read properties of undefined (reading 'id')`，整组随后降级/重规划。
+        // 转换统一走 modelShape.js，不再各调用链手抄（定时任务路径曾手抄过一份）。
+        model: toAgentModel(deps.resolveModel()),
           cwd: runCwd,
           signal: controller.signal,
           approvalMode: 'auto-safe',
