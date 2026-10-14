@@ -1,0 +1,2647 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-12",
+  "description": "MJ Code 主流 MCP 连接器目录，共 100 条。所有包名与端点均经过 2026-10 的公开资料核实；无法确认确切包名的条目 install.type 标为 manual 并在 notes 中说明。",
+  "categories": [
+    "本地工具与文件系统",
+    "版本控制与代码托管",
+    "浏览器自动化与网页抓取",
+    "云与基础设施",
+    "数据库与数据仓库",
+    "协作项目管理",
+    "沟通与办公",
+    "监控可观测与数据分析",
+    "文档知识库与搜索",
+    "设计工具",
+    "支付与金融",
+    "CRM与营销",
+    "记忆与AI能力",
+    "媒体生成与音视频",
+    "自动化与集成平台"
+  ],
+  "connectors": [
+    {
+      "id": "mcp-filesystem",
+      "name": "filesystem",
+      "display_name": "MCP Filesystem Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@modelcontextprotocol/server-filesystem",
+        "args": ["${ALLOWED_DIR}"]
+      },
+      "env_vars": [],
+      "description": "在用户显式允许的目录内进行受限的文件读写、目录遍历与搜索。",
+      "capabilities": ["读取文件", "写入文件", "列出目录", "搜索文件", "创建目录"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "官方参考实现，当前仍在 modelcontextprotocol/servers 的 src/ 中维护。必须传入明确的允许目录列表，建议 MJ Code 强制要求传入工作区路径而非用户主目录。"
+    },
+    {
+      "id": "mcp-git",
+      "name": "git",
+      "display_name": "MCP Git Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "mcp-server-git",
+        "args": ["--repository", "${REPO_PATH}"]
+      },
+      "env_vars": [],
+      "description": "在本地 Git 仓库上执行日志查询、状态查看、差异对比与分支操作。",
+      "capabilities": ["查看 git log", "查看 git status", "git diff", "git show", "创建与切换分支", "git add/commit"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "shell", "scope": "git" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "官方参考实现，Python 包 mcp-server-git，通过 uvx 启动。写操作（commit/branch）建议在 MJ Code 中默认关闭，仅在用户显式确认后放开。"
+    },
+    {
+      "id": "mcp-memory",
+      "name": "memory",
+      "display_name": "MCP Memory Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@modelcontextprotocol/server-memory",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "MEMORY_FILE_PATH",
+          "required": false,
+          "label": "记忆图谱存储文件路径",
+          "docs_url": "https://github.com/modelcontextprotocol/servers"
+        }
+      ],
+      "description": "以本地 JSONL 文件保存实体、关系与观察，充当跨会话的持久知识图谱记忆。",
+      "capabilities": ["创建实体", "创建关系", "追加观察", "检索图谱节点", "读取整图"],
+      "permissions": [
+        { "level": "filesystem", "scope": "memory-file" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "官方参考实现。默认落在用户当前目录的 memory.json，MJ Code 应强制把 MEMORY_FILE_PATH 重定向到应用数据目录，避免污染用户仓库。"
+    },
+    {
+      "id": "mcp-sequential-thinking",
+      "name": "sequential-thinking",
+      "display_name": "MCP Sequential Thinking Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@modelcontextprotocol/server-sequential-thinking",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "提供分步思考序列工具，引导模型以可回溯的顺序拆解复杂问题。",
+      "capabilities": ["逐步推演", "回溯修订前序步骤", "分支探索"],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "纯推理脚手架，不触碰任何本地资源，是权限预扣成本最低的连接器之一。"
+    },
+    {
+      "id": "mcp-time",
+      "name": "time",
+      "display_name": "MCP Time Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "mcp-server-time",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "查询当前时间并做时区转换，让模型不再猜测本地时间。",
+      "capabilities": ["获取当前时间", "时区转换"],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "官方参考实现，Python 包 mcp-server-time。纯计算，无网络与文件系统访问。"
+    },
+    {
+      "id": "mcp-desktop-commander",
+      "name": "desktop-commander",
+      "display_name": "Desktop Commander",
+      "vendor": "社区（wonderwhy-er / Eduard Ruzga）",
+      "official": false,
+      "category": "本地工具与文件系统",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@wonderwhy-er/desktop-commander",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "在桌面端执行终端命令并对本地文件做读取、搜索与编辑的通用代理工具。",
+      "capabilities": ["执行终端命令", "读取文件", "编辑文件", "列出目录", "搜索文本"],
+      "permissions": [
+        { "level": "shell", "scope": "arbitrary" },
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/wonderwhy-er/DesktopCommanderMCP",
+      "maturity": "community",
+      "notes": "社区项目，安装量最高的桌面控制类之一。权限面极大（任意 shell），MJ Code 建议默认不预置，启用时必须逐条确认 shell 与目录白名单。"
+    },
+
+    {
+      "id": "mcp-github",
+      "name": "github",
+      "display_name": "GitHub MCP Server",
+      "vendor": "GitHub",
+      "official": true,
+      "category": "版本控制与代码托管",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "env_vars": [],
+      "description": "GitHub 官方托管 MCP，把仓库读取、Issue、PR、Actions 与代码搜索全套 API 暴露给编码代理。",
+      "capabilities": ["读取仓库与代码", "代码搜索", "创建与管理 Issue", "创建与评审 PR", "查询 Actions 运行", "Dependabot 安全告警", "Release 管理"],
+      "permissions": [
+        { "level": "network", "scope": "api.githubcopilot.com" },
+        { "level": "network", "scope": "api.github.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/github/github-mcp-server",
+      "maturity": "stable",
+      "notes": "优先用远程端点（OAuth 一键授权）。也可用本地 Docker 镜像 ghcr.io/github/github-mcp-server，此时需 GITHUB_PERSONAL_ACCESS_TOKEN 环境变量。GitHub Enterprise Server 不支持远程托管，只能本地 + --gh-host。"
+    },
+    {
+      "id": "mcp-gitlab",
+      "name": "gitlab",
+      "display_name": "GitLab MCP Server",
+      "vendor": "GitLab",
+      "official": true,
+      "category": "版本控制与代码托管",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://gitlab.com/api/v4/mcp"
+      },
+      "env_vars": [],
+      "description": "GitLab 内置 MCP server，覆盖项目、Issue、合并请求、流水线与语义代码搜索。",
+      "capabilities": ["读取项目信息", "创建与读取 Issue", "读取合并请求与 diff", "管理流水线", "读取作业日志", "实例级搜索", "语义代码搜索"],
+      "permissions": [
+        { "level": "network", "scope": "gitlab.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      "maturity": "community",
+      "notes": "由 GitLab 官方在 18.3 引入实验、18.6 转 Beta。自托管实例端点为 https://<你的实例>/api/v4/mcp。使用 OAuth 2.0 动态客户端注册，需要交互式浏览器授权，无法用于无头任务。当前不支持写仓库文件、分支、Release、Webhook。"
+    },
+    {
+      "id": "mcp-deepwiki",
+      "name": "deepwiki",
+      "display_name": "DeepWiki MCP Server",
+      "vendor": "Cognition（Devin 团队）",
+      "official": true,
+      "category": "版本控制与代码托管",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.deepwiki.com/mcp"
+      },
+      "env_vars": [],
+      "description": "免费免鉴权的公开远程服务，为任意公开 GitHub 仓库生成并提供 AI 问答式代码库文档。",
+      "capabilities": ["列出 Wiki 目录结构", "读取 Wiki 全文", "对仓库提问并获得带上下文的回答"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.deepwiki.com" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+      "maturity": "stable",
+      "notes": "只覆盖公开仓库，且答案基于上次索引快照，快速迭代的项目可能落后于默认分支。旧版 /sse 端点已废弃，务必使用 /mcp。"
+    },
+    {
+      "id": "mcp-git-mcp",
+      "name": "git-mcp",
+      "display_name": "GitMCP",
+      "vendor": "社区（idosal）",
+      "official": false,
+      "category": "版本控制与代码托管",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://gitmcp.io/docs"
+      },
+      "env_vars": [],
+      "description": "为任意公开 GitHub 仓库即时生成文档端点，免克隆即可读取源码与文档。",
+      "capabilities": ["读取仓库文档结构", "检索仓库文件与说明", "免鉴权访问公开仓库"],
+      "permissions": [
+        { "level": "network", "scope": "gitmcp.io" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/idosal/git-mcp",
+      "maturity": "community",
+      "notes": "URL 规则为 https://gitmcp.io/{owner}/{repo}，上面的 /docs 是其介绍页。适合让模型在拉取第三方依赖源码前先看文档。"
+    },
+    {
+      "id": "mcp-serena",
+      "name": "serena",
+      "display_name": "Serena Coding Agent Toolkit",
+      "vendor": "社区（oraios）",
+      "official": false,
+      "category": "版本控制与代码托管",
+      "transport": "stdio",
+      "install": {
+        "type": "manual",
+        "args": ["--from", "git+https://github.com/oraios/serena", "serena-mcp-server", "--context", "ide-assistant"]
+      },
+      "env_vars": [],
+      "description": "基于语言服务器的符号级代码检索与精确编辑，大幅降低大型代码库的上下文成本。",
+      "capabilities": ["符号级检索定义与引用", "精确重命名与重构", "项目索引与激活", "结构化编辑"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "shell", "scope": "language-servers" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/oraios/serena",
+      "maturity": "community",
+      "notes": "官方文档给出的启动方式是 uvx --from git+https://github.com/oraios/serena serena-mcp-server，走 Git 直装而非固定版本包，因此 install.type 标为 manual。请在 MJ Code 中把项目路径作为必填参数传入。"
+    },
+    {
+      "id": "mcp-huggingface",
+      "name": "huggingface",
+      "display_name": "Hugging Face MCP Server",
+      "vendor": "Hugging Face",
+      "official": true,
+      "category": "版本控制与代码托管",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://huggingface.co/mcp"
+      },
+      "env_vars": [],
+      "description": "Hugging Face 官方托管 MCP，用于检索 Hub 上的模型、数据集与 Space。",
+      "capabilities": ["搜索模型与数据集", "读取模型卡", "浏览 Space", "检索 Hub 元数据"],
+      "permissions": [
+        { "level": "network", "scope": "huggingface.co" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://huggingface.co/docs/hub/mcp",
+      "maturity": "stable",
+      "notes": "只读 Hub 元数据，不涉及本地文件系统。写操作（推送模型/数据集）需用户 OAuth 令牌，MJ Code 默认应按只读处理。"
+    },
+    {
+      "id": "mcp-shopify-dev",
+      "name": "shopify-dev",
+      "display_name": "Shopify Dev MCP Server",
+      "vendor": "Shopify",
+      "official": true,
+      "category": "版本控制与代码托管",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@shopify/dev-mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "OPT_OUT_INSTRUMENTATION",
+          "required": false,
+          "label": "关闭匿名使用统计",
+          "docs_url": "https://shopify.dev/docs/apps/build/mcp"
+        }
+      ],
+      "description": "Shopify 官方开发助手 MCP，检索 shopify.dev 文档、内省 GraphQL schema 并校验 GraphQL 与 Liquid 代码。",
+      "capabilities": ["检索开发者文档", "内省 Admin/Storefront/Functions GraphQL schema", "校验 GraphQL 代码块", "校验 Liquid 主题", "解析支持的 API 版本"],
+      "permissions": [
+        { "level": "network", "scope": "shopify.dev" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/Shopify/dev-mcp",
+      "maturity": "stable",
+      "notes": "无需 API Key 或 OAuth，本地 stdio 运行。发布版会向 shopify.dev/mcp/usage 上报使用事件，可用 OPT_OUT_INSTRUMENTATION=true 关闭——这属于网络权限，MJ Code 应在默认状态下显式关闭。"
+    },
+
+    {
+      "id": "mcp-playwright",
+      "name": "playwright",
+      "display_name": "Playwright MCP",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@playwright/mcp",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "用无障碍树快照驱动真实浏览器完成点击、填表、导航与页面读取，跨 Chromium/Firefox/WebKit。",
+      "capabilities": ["页面导航", "无障碍树快照", "点击与填表", "截图", "多标签页管理", "网络与控制台观察"],
+      "permissions": [
+        { "level": "filesystem", "scope": "browser-profile" },
+        { "level": "network", "scope": "any" },
+        { "level": "shell", "scope": "browser-launch" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/microsoft/playwright-mcp",
+      "maturity": "stable",
+      "notes": "浏览器自动化事实标准。首次运行需下载浏览器二进制（npx playwright install）。可用 --cdp-endpoint 挂接到已开着的 Chrome 以降低权限面。"
+    },
+    {
+      "id": "mcp-chrome-devtools",
+      "name": "chrome-devtools",
+      "display_name": "Chrome DevTools MCP",
+      "vendor": "Google（Chrome DevTools 团队）",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "chrome-devtools-mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS",
+          "required": false,
+          "label": "关闭使用统计上报",
+          "docs_url": "https://github.com/ChromeDevTools/chrome-devtools-mcp"
+        }
+      ],
+      "description": "把 Chrome DevTools 协议能力交给编码代理，做性能追踪、网络调试与控制台分析。",
+      "capabilities": ["性能追踪与洞察", "网络请求分析", "控制台消息与源码映射堆栈", "截图", "DOM 检查", "堆快照"],
+      "permissions": [
+        { "level": "filesystem", "scope": "browser-profile" },
+        { "level": "network", "scope": "any" },
+        { "level": "shell", "scope": "browser-launch" },
+        { "level": "network", "scope": "chromeuserreportapi-pa.googleapis.com" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+      "maturity": "stable",
+      "notes": "默认开启向 Google 上报使用统计并把性能 trace URL 发到 CrUX API，可用 --no-usage-statistics 与 --no-performance-crux 关闭。MJ Code 默认应追加这两个参数。官方只支持 Google Chrome 与 Chrome for Testing。"
+    },
+    {
+      "id": "mcp-firecrawl",
+      "name": "firecrawl",
+      "display_name": "Firecrawl MCP Server",
+      "vendor": "Firecrawl",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "firecrawl-mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "FIRECRAWL_API_KEY",
+          "required": true,
+          "label": "Firecrawl API Key",
+          "docs_url": "https://www.firecrawl.dev"
+        }
+      ],
+      "description": "把任意 URL 转为干净 Markdown 或结构化数据，支持整站爬取、站内搜索与深度抽取。",
+      "capabilities": ["单页抓取转 Markdown", "整站爬取", "站点地图发现", "站内搜索", "结构化抽取", "交互式浏览器抓取"],
+      "permissions": [
+        { "level": "network", "scope": "any" },
+        { "level": "network", "scope": "api.firecrawl.dev" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/firecrawl/firecrawl-mcp-server",
+      "maturity": "stable",
+      "notes": "按 API 用量计费（有免费额度）。抓取结果会进入模型上下文，存在提示注入风险，MJ Code 建议对返回内容做来源标记。"
+    },
+    {
+      "id": "mcp-exa",
+      "name": "exa",
+      "display_name": "Exa MCP Server",
+      "vendor": "Exa",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "exa-mcp-server",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "EXA_API_KEY",
+          "required": true,
+          "label": "Exa API Key",
+          "docs_url": "https://docs.exa.ai"
+        }
+      ],
+      "description": "面向 AI 代理设计的语义网页搜索与正文抓取，返回结构化结果便于模型直接消费。",
+      "capabilities": ["语义网页搜索", "相似页面搜索", "网页正文抽取", "研究型内容返回"],
+      "permissions": [
+        { "level": "network", "scope": "api.exa.ai" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/exa-labs/exa-mcp-server",
+      "maturity": "stable",
+      "notes": "按查询计费，有免费层。也提供远程托管版本，本目录收录本地 stdio 版本。"
+    },
+    {
+      "id": "mcp-brave-search",
+      "name": "brave-search",
+      "display_name": "Brave Search MCP Server",
+      "vendor": "Brave",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@brave/brave-search-mcp-server",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "BRAVE_API_KEY",
+          "required": true,
+          "label": "Brave Search API Key",
+          "docs_url": "https://api-dashboard.search.brave.com"
+        }
+      ],
+      "description": "使用 Brave 自有索引做网页、新闻、图片、视频与本地地点搜索，隐私友好。",
+      "capabilities": ["网页搜索", "新闻搜索", "图片搜索", "视频搜索", "本地地点搜索"],
+      "permissions": [
+        { "level": "network", "scope": "api.search.brave.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/brave/brave-search-mcp-server",
+      "maturity": "stable",
+      "notes": "原 modelcontextprotocol/server-brave-search 已被归档，官方接替包是 @brave/brave-search-mcp-server，MJ Code 只应内置后者。免费额度约每月 2000 次查询。"
+    },
+    {
+      "id": "mcp-tavily",
+      "name": "tavily",
+      "display_name": "Tavily MCP Server",
+      "vendor": "Tavily",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "tavily-mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "TAVILY_API_KEY",
+          "required": true,
+          "label": "Tavily API Key",
+          "docs_url": "https://docs.tavily.com"
+        }
+      ],
+      "description": "为代理提供网页搜索、正文抽取以及站点地图与爬取能力。",
+      "capabilities": ["网页搜索", "页面正文抽取", "站点地图生成", "站点爬取"],
+      "permissions": [
+        { "level": "network", "scope": "api.tavily.com" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/tavily-ai/tavily-mcp",
+      "maturity": "stable",
+      "notes": "按查询计费，有免费层。Tavily 同时提供远程托管端点。"
+    },
+    {
+      "id": "mcp-perplexity",
+      "name": "perplexity",
+      "display_name": "Perplexity MCP Server",
+      "vendor": "Perplexity",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "PERPLEXITY_API_KEY",
+          "required": true,
+          "label": "Perplexity API Key",
+          "docs_url": "https://docs.perplexity.ai"
+        }
+      ],
+      "description": "把 Perplexity 的联网搜索与深度研究能力包装成 MCP 工具，返回带引用的综合答案。",
+      "capabilities": ["联网搜索", "快速问答", "推理式检索", "深度研究"],
+      "permissions": [
+        { "level": "network", "scope": "api.perplexity.ai" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/perplexityai/model-context-protocol",
+      "maturity": "stable",
+      "notes": "各资料源对其远程端点写法不一致，未能核实官方 URL，因此 install.type 标为 manual，接入前需查 Perplexity 官方文档确认端点。调用成本较高，MJ Code 建议设置单会话调用上限。"
+    },
+    {
+      "id": "mcp-apify",
+      "name": "apify",
+      "display_name": "Apify MCP Server",
+      "vendor": "Apify",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "APIFY_TOKEN",
+          "required": true,
+          "label": "Apify API Token",
+          "docs_url": "https://docs.apify.com"
+        }
+      ],
+      "description": "按需调用 Apify Store 上数千个现成爬虫与抓取 Actor，覆盖社交、地图、电商与搜索场景。",
+      "capabilities": ["运行 Actor", "查询 Actor 运行状态", "拉取抓取结果数据集", "浏览 Actor 商店"],
+      "permissions": [
+        { "level": "network", "scope": "api.apify.com" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://apify.com/actors",
+      "maturity": "stable",
+      "notes": "仓库为 apify/actors-mcp-server，同时提供本地 stdio 与远程托管两种形态，本目录按远程收录。运行任意 Actor 等同于把第三方代码拉进流程，MJ Code 应在调用前展示 Actor 来源。"
+    },
+    {
+      "id": "mcp-browserbase",
+      "name": "browserbase",
+      "display_name": "Browserbase MCP Server",
+      "vendor": "Browserbase",
+      "official": true,
+      "category": "浏览器自动化与网页抓取",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.browserbase.com/mcp"
+      },
+      "env_vars": [],
+      "description": "在 Browserbase 云端托管浏览器中导航、交互与抽取数据，适合本地跑不动浏览器或需要并行会话的场景。",
+      "capabilities": ["创建/复用云端浏览器会话", "页面导航", "执行交互动作", "观察页面可操作元素", "抽取页面数据", "关闭会话"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.browserbase.com" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/browserbase/mcp-server-browserbase",
+      "maturity": "stable",
+      "notes": "优先用托管端点；需自托管时 npm 包为 @browserbasehq/mcp-server-browserbase，配 BROWSERBASE_API_KEY 与 BROWSERBASE_PROJECT_ID。云端浏览意味着页面内容离开本机，需在 UI 上提示用户。"
+    },
+
+    {
+      "id": "mcp-aws",
+      "name": "aws",
+      "display_name": "AWS MCP Suite",
+      "vendor": "AWS",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aws-mcp.us-east-1.api.aws/mcp"
+      },
+      "env_vars": [],
+      "description": "AWS 官方托管 MCP 门面，聚合 15000+ AWS API 操作、文档检索与沙箱脚本执行。",
+      "capabilities": ["调用 AWS API", "检索 AWS 官方文档", "沙箱内执行脚本", "查询成本与云资源"],
+      "permissions": [
+        { "level": "network", "scope": "api.aws" },
+        { "level": "network", "scope": "docs.aws.amazon.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/awslabs/mcp",
+      "maturity": "stable",
+      "notes": "托管端点 2026-05-06 正式 GA。若改用本地 stdio（awslabs/mcp 仓库内 30+ 个按服务拆分的 server），则需 AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY 或 AWS_PROFILE。沙箱脚本执行能力权限面极大，建议在 MJ Code 中默认禁用。"
+    },
+    {
+      "id": "mcp-cloudflare",
+      "name": "cloudflare",
+      "display_name": "Cloudflare API MCP Server",
+      "vendor": "Cloudflare",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.cloudflare.com/mcp"
+      },
+      "env_vars": [],
+      "description": "以 Code Mode 形式覆盖 Cloudflare 全部 API 的官方 MCP，2500+ 端点只占约 1k token 上下文。",
+      "capabilities": ["检索 Cloudflare API 规格", "执行 Cloudflare API 调用", "检索官方文档", "查询当前身份"],
+      "permissions": [
+        { "level": "network", "scope": "api.cloudflare.com" },
+        { "level": "network", "scope": "developers.cloudflare.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/cloudflare/mcp",
+      "maturity": "stable",
+      "notes": "默认走 OAuth，也可换成 CLOUDFLARE_API_TOKEN（仅支持 user/account token，不支持带 IP 过滤的令牌）。追加 ?codemode=false 会把每个端点注册为独立工具，上下文成本暴涨到约 244k token，MJ Code 不应开启。"
+    },
+    {
+      "id": "mcp-google-bigquery",
+      "name": "google-bigquery",
+      "display_name": "BigQuery MCP Server",
+      "vendor": "Google Cloud",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://bigquery.googleapis.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Google 托管的数据云 MCP，让代理直接在 BigQuery 上执行查询与数据集探查。",
+      "capabilities": ["执行 SQL 查询", "列出数据集与表", "查看表结构", "任务状态查询"],
+      "permissions": [
+        { "level": "network", "scope": "bigquery.googleapis.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://cloud.google.com/bigquery/docs",
+      "maturity": "stable",
+      "notes": "Google 托管 MCP 系列之一（另有 Cloud SQL、AlloyDB、Spanner、Spark、Knowledge Catalog 等独立端点）。使用 Google Workspace/Cloud 的 OAuth 2.0 范围。查询会在真实仓库产生费用，MJ Code 应提示用户预估扫描量。"
+    },
+    {
+      "id": "mcp-azure",
+      "name": "azure",
+      "display_name": "Azure MCP Server",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@azure/mcp",
+        "args": ["server", "start"]
+      },
+      "env_vars": [],
+      "description": "微软官方 MCP Server，覆盖 Azure Storage、Cosmos DB、Log Analytics、App Configuration 等服务。",
+      "capabilities": ["列举与查询 Azure 资源", "管理存储容器与 Blob", "查询 Cosmos DB", "执行 KQL 日志查询", "执行 az CLI 与 azd 命令"],
+      "permissions": [
+        { "level": "network", "scope": "management.azure.com" },
+        { "level": "shell", "scope": "az-cli" },
+        { "level": "shell", "scope": "azd" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/Azure/azure-mcp",
+      "maturity": "stable",
+      "notes": "开发已迁往 microsoft/mcp 仓库，Azure/azure-mcp 为归档地址。通过 Azure Identity SDK 走 Entra ID 认证。包含执行 az/azd 命令的工具，属高危 shell 能力，MJ Code 应默认关闭。"
+    },
+    {
+      "id": "mcp-vercel",
+      "name": "vercel",
+      "display_name": "Vercel MCP",
+      "vendor": "Vercel",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.vercel.com"
+      },
+      "env_vars": [],
+      "description": "Vercel 官方远程 MCP，管理项目、查看部署状态与构建运行日志、检索官方文档。",
+      "capabilities": ["列出与管理项目", "查询部署状态", "读取构建与运行日志", "管理环境变量", "检索 Vercel 文档"],
+      "permissions": [
+        { "level": "network", "scope": "api.vercel.com" },
+        { "level": "network", "scope": "vercel.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://vercel.com/docs/mcp",
+      "maturity": "stable",
+      "notes": "OAuth 授权，scope 跟随用户授予的 Vercel 权限。Vercel 也维护多个远程 MCP server 模板用于自建服务。"
+    },
+    {
+      "id": "mcp-docker",
+      "name": "docker-mcp",
+      "display_name": "Docker MCP Gateway",
+      "vendor": "Docker",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "stdio",
+      "install": {
+        "type": "docker",
+        "args": ["mcp", "gateway", "run"]
+      },
+      "env_vars": [],
+      "description": "Docker 官方网关，在容器隔离中运行 Docker MCP Catalog 里的服务器并统一暴露为一个端点。",
+      "capabilities": ["从官方目录启停服务器", "容器隔离执行", "统一 OAuth 流程", "统一密钥管理", "按 profile 组织工具集"],
+      "permissions": [
+        { "level": "shell", "scope": "docker-daemon" },
+        { "level": "filesystem", "scope": "docker-mcp-config" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/docker/mcp-gateway",
+      "maturity": "community",
+      "notes": "需要 Docker Desktop 并在设置中启用 MCP Toolkit。这是「运行别人的 MCP」的推荐安全路径，比 npx/uvx 直接执行安全得多，但 MJ Code 仍应把每个启用的 server 单独建模以做权限预扣。"
+    },
+    {
+      "id": "mcp-kubernetes",
+      "name": "kubernetes",
+      "display_name": "Kubernetes MCP Server",
+      "vendor": "社区（denist）",
+      "official": false,
+      "category": "云与基础设施",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "mcp-server-kubernetes",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "通过 kubectl 能力浏览集群资源、Pod 日志与部署状态，支持只读模式。",
+      "capabilities": ["列出命名空间与资源", "查看 Pod 状态与日志", "查看 rollout 历史", "查询资源利用率与事件"],
+      "permissions": [
+        { "level": "network", "scope": "kubernetes-api" },
+        { "level": "filesystem", "scope": "kubeconfig" },
+        { "level": "shell", "scope": "kubectl" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/denist/mcp-server-kubernetes",
+      "maturity": "community",
+      "notes": "社区项目，提供 non-destructive 模式可关闭删除/缩容操作，MJ Code 应强制默认开启该模式。凭据来自 kubeconfig 或 KUBECONFIG，属敏感文件读取。"
+    },
+    {
+      "id": "mcp-terraform",
+      "name": "terraform",
+      "display_name": "Terraform MCP Server",
+      "vendor": "HashiCorp",
+      "official": true,
+      "category": "云与基础设施",
+      "transport": "stdio",
+      "install": {
+        "type": "docker",
+        "args": ["run", "-i", "--rm", "hashicorp/terraform-mcp-server"]
+      },
+      "env_vars": [
+        {
+          "name": "TFE_TOKEN",
+          "required": false,
+          "label": "HCP Terraform / Enterprise 令牌",
+          "docs_url": "https://developer.hashicorp.com/terraform"
+        },
+        {
+          "name": "ENABLE_TF_OPERATIONS",
+          "required": false,
+          "label": "开启破坏性 Terraform 操作（默认 false）",
+          "docs_url": "https://github.com/hashicorp/terraform-mcp-server"
+        }
+      ],
+      "description": "HashiCorp 官方 MCP，检索 Terraform Registry 真实 provider/module schema，并管理 HCP Terraform 工作区。",
+      "capabilities": ["发现 provider 与 module", "读取资源与数据源文档", "管理 HCP Terraform 工作区与变量", "触发与查询 run"],
+      "permissions": [
+        { "level": "network", "scope": "registry.terraform.io" },
+        { "level": "network", "scope": "app.terraform.io" },
+        { "level": "shell", "scope": "terraform" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/hashicorp/terraform-mcp-server",
+      "maturity": "community",
+      "notes": "注意 npm 上不存在 @hashicorp/terraform-mcp-server，只有 Docker 镜像与 Go 二进制；MJ Code 若走 npx 配置必然失败。破坏性操作默认关闭，务必保持该默认值。"
+    },
+
+    {
+      "id": "mcp-supabase",
+      "name": "supabase",
+      "display_name": "Supabase MCP Server",
+      "vendor": "Supabase",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.supabase.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Supabase 官方 MCP，管理项目、执行 SQL、查看表结构、跑迁移与部署 Edge Function。",
+      "capabilities": ["列出与管理项目", "列出表与迁移", "执行 SQL", "应用迁移", "读取项目日志", "生成本地开发分支", "生成 TypeScript 类型"],
+      "permissions": [
+        { "level": "network", "scope": "api.supabase.com" },
+        { "level": "network", "scope": "*.supabase.co" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/supabase-community/supabase-mcp",
+      "maturity": "stable",
+      "notes": "远程端点支持 OAuth 与 read_only 等 URL 参数（如 ?project_ref=xxx&read_only=true&features=database,docs），MJ Code 应默认附加 read_only=true。本地 stdio 版本包名同为 @supabase/mcp-server-supabase，用 SUPABASE_ACCESS_TOKEN。"
+    },
+    {
+      "id": "mcp-mongodb",
+      "name": "mongodb",
+      "display_name": "MongoDB MCP Server",
+      "vendor": "MongoDB",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "mongodb-mcp-server",
+        "args": ["--readOnly"]
+      },
+      "env_vars": [
+        {
+          "name": "MDB_MCP_CONNECTION_STRING",
+          "required": true,
+          "label": "MongoDB 连接字符串",
+          "docs_url": "https://www.mongodb.com/docs/mcp-server/get-started/"
+        }
+      ],
+      "description": "MongoDB 官方 MCP，支持集合查询、schema 探查、聚合管线以及 Atlas 集群管理。",
+      "capabilities": ["查询集合", "探查集合 schema", "执行聚合", "读写文档", "管理 Atlas 项目与集群", "管理访问列表"],
+      "permissions": [
+        { "level": "network", "scope": "mongodb-endpoint" },
+        { "level": "network", "scope": "cloud.mongodb.com" },
+        { "level": "filesystem", "scope": "mongodb-log-path" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/mongodb-js/mongodb-mcp-server",
+      "maturity": "stable",
+      "notes": "官方示例默认带 --readOnly，MJ Code 应保留该参数。连接串建议通过环境变量传入，不要走命令行参数（会出现在进程列表里）。Atlas 管理工具还需要 Service Account 凭据。"
+    },
+    {
+      "id": "mcp-database-toolbox",
+      "name": "google-mcp-toolbox",
+      "display_name": "MCP Toolbox for Databases",
+      "vendor": "Google",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@toolbox-sdk/server",
+        "args": ["--stdio", "--prebuilt", "postgres"]
+      },
+      "env_vars": [],
+      "description": "Google 出品的通用数据库网关，自带连接池与鉴权，支持 30+ 种数据源与自定义 YAML 工具定义。",
+      "capabilities": ["预置通用查询工具", "自定义工具集定义", "连接池与认证托管", "参数化 SQL 模板"],
+      "permissions": [
+        { "level": "network", "scope": "database-endpoint" },
+        { "level": "filesystem", "scope": "tools-yaml" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/googleapis/mcp-toolbox",
+      "maturity": "stable",
+      "notes": "支持 PostgreSQL、MySQL、SQL Server、ClickHouse、MongoDB、Redis、Neo4j、Snowflake、BigQuery 等。可用 --prebuilt <engine> 快速起步，或用 tools.yaml 定义受限的结构化查询——生产场景强烈建议走后者，避免把任意 SQL 暴露给模型。"
+    },
+    {
+      "id": "mcp-neon",
+      "name": "neon",
+      "display_name": "Neon MCP Server",
+      "vendor": "Neon",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.neon.tech/mcp"
+      },
+      "env_vars": [],
+      "description": "Neon 官方 MCP，管理无服务器 Postgres 项目与分支，在临时分支上安全地演练迁移。",
+      "capabilities": ["列出与管理项目", "创建与重置分支", "执行 SQL 与事务", "准备与提交迁移", "查询慢查询", "查询执行计划"],
+      "permissions": [
+        { "level": "network", "scope": "neon.tech" },
+        { "level": "network", "scope": "*.neon.tech" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/neondatabase/mcp-server-neon",
+      "maturity": "stable",
+      "notes": "run_sql 支持写操作。远程端点走 OAuth；本地 stdio 版包名 @neondatabase/mcp-server-neon，需要 NEON_API_KEY。迁移工具的「准备—提交」两段式设计本身就是防误操作机制，应完整启用。"
+    },
+    {
+      "id": "mcp-redis",
+      "name": "redis",
+      "display_name": "Redis MCP Server",
+      "vendor": "Redis",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "mcp-server-redis",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "REDIS_URL",
+          "required": true,
+          "label": "Redis 连接串",
+          "docs_url": "https://redis.io/docs/latest/develop/clients/mcp/"
+        }
+      ],
+      "description": "Redis 官方 MCP，用自然语言读取、写入与检索 Redis 中的键值。",
+      "capabilities": ["列出键", "读取键", "写入键", "删除键", "类型与 TTL 查询", "向量集合检索"],
+      "permissions": [
+        { "level": "network", "scope": "redis-endpoint" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/redis/mcp-redis",
+      "maturity": "stable",
+      "notes": "原 modelcontextprotocol/server-redis 已归档，现由 Redis 官方 mcp-redis 维护。写入与删除能力较强，MJ Code 建议连接只读副本或开启只读 ACL。"
+    },
+    {
+      "id": "mcp-clickhouse",
+      "name": "clickhouse",
+      "display_name": "ClickHouse MCP Server",
+      "vendor": "ClickHouse",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@clickhouse/mcp-server",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "ClickHouse 官方 MCP，列举数据库与表并执行分析型 SQL 查询。",
+      "capabilities": ["列出数据库与表", "查询表结构", "执行 SQL", "分析型数据探查"],
+      "permissions": [
+        { "level": "network", "scope": "clickhouse-endpoint" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/ClickHouse/mcp-clickhouse",
+      "maturity": "stable",
+      "notes": "ClickHouse 是 Docker MCP Catalog 最早一批合作方之一，容器镜像带签名与 SBOM。大查询会产生真实集群负载，MJ Code 应加超时与行数上限。"
+    },
+    {
+      "id": "mcp-snowflake",
+      "name": "snowflake",
+      "display_name": "Snowflake Managed MCP Server",
+      "vendor": "Snowflake",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Snowflake 仓库托管的 MCP 端点，按账号开通，提供 Cortex Analyst、Cortex Search、Agents 与 SQL 执行。",
+      "capabilities": ["执行 SQL", "Cortex Analyst 自然语言分析", "Cortex Search 语义检索", "调用 Snowflake Agents"],
+      "permissions": [
+        { "level": "network", "scope": "*.snowflakecomputing.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://docs.snowflake.com",
+      "maturity": "stable",
+      "notes": "端点形如 https://<account>.snowflakecomputing.com/api/v2/.../mcp-servers/{name}，每个账号不同，公开资料未给出统一 URL，因此 install.type 标为 manual。SQL 执行有真实成本，需在 UI 上明确提示。"
+    },
+    {
+      "id": "mcp-dbhub",
+      "name": "dbhub",
+      "display_name": "DBHub",
+      "vendor": "Bytebase",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@bytebase/dbhub",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "Bytebase 官方出品的通用数据库 MCP，一个二进制同时支持 PostgreSQL、MySQL、SQL Server、MariaDB 与 SQLite。",
+      "capabilities": ["跨库统一查询", "schema 浏览", "只读模式", "多数据源切换"],
+      "permissions": [
+        { "level": "network", "scope": "database-endpoint" },
+        { "level": "filesystem", "scope": "sqlite-file" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/bytebase/dbhub",
+      "maturity": "stable",
+      "notes": "主打 token 效率，适合不想为每种数据库装独立 server 的场景。SQLite 模式需要读取本地数据库文件，MJ Code 必须校验路径在允许目录内。"
+    },
+    {
+      "id": "mcp-elastic",
+      "name": "elastic",
+      "display_name": "Elastic Agent Builder MCP Server",
+      "vendor": "Elastic",
+      "official": true,
+      "category": "数据库与数据仓库",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "ELASTICSEARCH_URL",
+          "required": true,
+          "label": "Elasticsearch 服务地址",
+          "docs_url": "https://www.elastic.co"
+        }
+      ],
+      "description": "Elastic 官方 MCP，用 ES|QL 查询集群并调用 Elastic Agent Builder 的工具。",
+      "capabilities": ["检索与聚合查询", "执行 ES|QL", "索引结构探查", "调用 Agent Builder 工具"],
+      "permissions": [
+        { "level": "network", "scope": "elasticsearch-endpoint" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://www.elastic.co/docs",
+      "maturity": "stable",
+      "notes": "同时有托管远程端点与本地 stdio 两种形态，具体接入方式请以 Elastic 官方文档为准，故标 manual。检索结果可能包含敏感业务字段。"
+    },
+
+    {
+      "id": "mcp-notion",
+      "name": "notion",
+      "display_name": "Notion MCP",
+      "vendor": "Notion",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.notion.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Notion 官方托管 MCP，搜索、读取并创建/更新工作区页面与数据库。",
+      "capabilities": ["关键词搜索", "AI 搜索（可达已连接来源）", "读取页面与数据库", "创建与更新页面", "管理评论"],
+      "permissions": [
+        { "level": "network", "scope": "api.notion.com" },
+        { "level": "network", "scope": "mcp.notion.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.notion.com/docs/mcp",
+      "maturity": "stable",
+      "notes": "只支持 OAuth，不接受 Bearer Token 或 PAT，因此无法用于无头定时任务——无头场景需退回本地 @notionhq/notion-mcp-server 并用 NOTION_TOKEN。写入工具没有审批环节，MJ Code 应对写操作加确认。官方明确不支持文件上传。"
+    },
+    {
+      "id": "mcp-notion-local",
+      "name": "notion-local",
+      "display_name": "Notion MCP Server（本地自建）",
+      "vendor": "Notion",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@notionhq/notion-mcp-server",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "NOTION_TOKEN",
+          "required": true,
+          "label": "Notion 内部集成令牌",
+          "docs_url": "https://developers.notion.com/docs/create-a-notion-integration"
+        }
+      ],
+      "description": "Notion 开源本地 server，用集成令牌认证，适合无头自动化场景。",
+      "capabilities": ["搜索页面", "读取与创建页面", "更新页面属性", "管理数据库"],
+      "permissions": [
+        { "level": "network", "scope": "api.notion.com" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/makenotion/notion-mcp-server",
+      "maturity": "community",
+      "notes": "Notion 官方已声明该开源包不再积极维护，推荐优先用托管端点。集成令牌只能访问显式共享给它的页面。"
+    },
+    {
+      "id": "mcp-atlassian",
+      "name": "atlassian",
+      "display_name": "Atlassian Rovo MCP Server",
+      "vendor": "Atlassian",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.atlassian.com/v2/mcp"
+      },
+      "env_vars": [],
+      "description": "Atlassian 官方托管 MCP，跨 Jira、Confluence、JSM、Bitbucket、Loom 等应用检索与创建工作项。",
+      "capabilities": ["检索与创建 Jira 工作项", "读写 Confluence 页面", "查询 Jira Service Management", "浏览 Bitbucket PR 与流水线", "读取 Loom 录像与转写", "Teamwork Graph 跨应用查询", "Rovo 语义搜索"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.atlassian.com" },
+        { "level": "network", "scope": "api.atlassian.com" },
+        { "level": "network", "scope": "api.media.atlassian.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.atlassian.com/cloud/rovo-mcp",
+      "maturity": "stable",
+      "notes": "所有操作继承登录用户已有权限，server 不缓存 Jira/Confluence 内容。白板与附件工具还需放行 api.media.atlassian.com 与 *.frontend.public.atl-paas.net。旧版 /v1/sse 端点已于 2026-06-30 停止支持。部分工具消耗 Rovo credits。网关要求完整工具列表时用 ?tools=all。"
+    },
+    {
+      "id": "mcp-linear",
+      "name": "linear",
+      "display_name": "Linear MCP Server",
+      "vendor": "Linear",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.linear.app/mcp"
+      },
+      "env_vars": [],
+      "description": "Linear 官方托管 MCP，把完整 GraphQL API 暴露为工具，覆盖 Issue、项目与 Cycle 运营。",
+      "capabilities": ["检索与创建 Issue", "更新状态/优先级/标签", "评论与线程", "查询项目与周期", "团队与成员管理"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.linear.app" },
+        { "level": "network", "scope": "api.linear.app" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://linear.app/docs/mcp",
+      "maturity": "stable",
+      "notes": "使用 OAuth 2.1 + 动态客户端注册，首次连接打开浏览器同意页。另提供只读端点 https://mcp.linear.app/mcp/readonly，MJ Code 建议默认使用只读端点。旧 /sse 端点已弃用。"
+    },
+    {
+      "id": "mcp-asana",
+      "name": "asana",
+      "display_name": "Asana MCP Server",
+      "vendor": "Asana",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Asana 官方远程 MCP，用于检索、创建与更新任务、项目与组合视图。",
+      "capabilities": ["搜索任务与项目", "创建与更新任务", "管理项目与组合", "读取任务详情与评论"],
+      "permissions": [
+        { "level": "network", "scope": "app.asana.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.asana.com",
+      "maturity": "stable",
+      "notes": "公开资料未给出稳定的统一端点地址，故 install.type 标为 manual，接入前需查 Asana 官方开发者文档确认。"
+    },
+    {
+      "id": "mcp-monday",
+      "name": "monday",
+      "display_name": "monday.com MCP",
+      "vendor": "monday.com",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "monday.com 官方 MCP，读取与更新看板、条目、列与表单数据。",
+      "capabilities": ["读取看板与列", "创建与更新条目", "管理表单", "跨工作区检索"],
+      "permissions": [
+        { "level": "network", "scope": "api.monday.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.monday.com",
+      "maturity": "stable",
+      "notes": "同时支持远程与本地 stdio 两种形态。端点地址需以 monday.com 开发者文档为准，故标 manual。"
+    },
+    {
+      "id": "mcp-clickup",
+      "name": "clickup",
+      "display_name": "ClickUp MCP Server",
+      "vendor": "ClickUp",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "ClickUp 官方 MCP（Preview），覆盖任务、文档、工时记录与聊天。",
+      "capabilities": ["搜索与更新任务", "文档管理", "工时记录", "团队聊天"],
+      "permissions": [
+        { "level": "network", "scope": "api.clickup.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.clickup.com",
+      "maturity": "experimental",
+      "notes": "官方标注为 Preview 阶段，工具面可能变动。具体端点需查 ClickUp 开发者文档，故标 manual。"
+    },
+    {
+      "id": "mcp-todoist",
+      "name": "todoist",
+      "display_name": "Todoist MCP",
+      "vendor": "Doist",
+      "official": true,
+      "category": "协作项目管理",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Todoist 官方 MCP，用于查找、新增、更新与完成任务和项目。",
+      "capabilities": ["任务增删改查", "项目管理", "完成任务", "筛选查询"],
+      "permissions": [
+        { "level": "network", "scope": "api.todoist.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.todoist.com",
+      "maturity": "stable",
+      "notes": "同时提供远程与本地 stdio 形态。具体包名与端点请以 Doist 开发者文档为准，故标 manual。"
+    },
+
+    {
+      "id": "mcp-slack",
+      "name": "slack",
+      "display_name": "Slack MCP Server",
+      "vendor": "Slack",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.slack.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Slack 官方远程 MCP，检索工作区消息、读取频道与线程、发送消息与回复。",
+      "capabilities": ["全文检索消息", "读取频道与线程历史", "发送消息与线程回复", "表情回应", "用户与频道查询", "Canvas 管理"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.slack.com" },
+        { "level": "network", "scope": "slack.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://docs.slack.dev",
+      "maturity": "stable",
+      "notes": "Slack MCP 需要预先注册好的 OAuth 客户端才能完成握手，多数主机需自行申请 client id 并指定回调端口。消息内容本身是提示注入高风险面，MJ Code 应在 UI 上标注外部内容来源。"
+    },
+    {
+      "id": "mcp-slack-local",
+      "name": "slack-local",
+      "display_name": "Slack MCP Server（本地 Bot Token 版）",
+      "vendor": "Zencoder",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@zencoderai/slack-mcp-server",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "SLACK_BOT_TOKEN",
+          "required": true,
+          "label": "Slack Bot Token（xoxb- 开头）",
+          "docs_url": "https://api.slack.com/authentication/token-types"
+        },
+        {
+          "name": "SLACK_TEAM_ID",
+          "required": true,
+          "label": "Slack 工作区 ID（T 开头）",
+          "docs_url": "https://api.slack.com/authentication/token-types"
+        }
+      ],
+      "description": "Slack 官方参考 server 的继任维护方（原 Anthropic 参考实现已归档），用 Bot Token 在本地 stdio 运行。",
+      "capabilities": ["列出频道", "读取频道与线程历史", "发送消息与线程回复", "添加表情回应", "查询用户资料"],
+      "permissions": [
+        { "level": "network", "scope": "slack.com" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/zencoderai/slack-mcp-server",
+      "maturity": "stable",
+      "notes": "需要在 Slack 后台自建 App 并授予 channels:history、chat:write、reactions:write、users:read 等 scope。Bot 只能看到被邀请进的频道，权限面小于远程 OAuth 版但需要用户自行配置。"
+    },
+    {
+      "id": "mcp-gmail",
+      "name": "gmail",
+      "display_name": "Gmail MCP Server",
+      "vendor": "Google Workspace",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://gmailmcp.googleapis.com/mcp/v1"
+      },
+      "env_vars": [],
+      "description": "Google Workspace 官方 Gmail MCP，检索会话、读取邮件并创建草稿。",
+      "capabilities": ["检索邮件会话", "读取会话内容", "创建邮件草稿", "管理标签"],
+      "permissions": [
+        { "level": "network", "scope": "gmailmcp.googleapis.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "maturity": "experimental",
+      "notes": "属 Google Workspace Developer Preview 系列，每款产品一个独立端点（Gmail/Drive/Docs/Sheets/Slides/Calendar/Chat/People）。使用 OAuth 2.0。邮件内容是高危提示注入源，MJ Code 应默认只读。"
+    },
+    {
+      "id": "mcp-google-drive",
+      "name": "google-drive",
+      "display_name": "Google Drive MCP Server",
+      "vendor": "Google Workspace",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://drivemcp.googleapis.com/mcp/v1"
+      },
+      "env_vars": [],
+      "description": "Google Workspace 官方 Drive MCP，在 Workspace 管控下检索、读取、创建与复制文件。",
+      "capabilities": ["检索文件", "读取文件内容", "创建文件", "复制与整理文件"],
+      "permissions": [
+        { "level": "network", "scope": "drivemcp.googleapis.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "maturity": "experimental",
+      "notes": "Developer Preview。使用 OAuth 2.0，权限继承登录用户的 Drive 授权。"
+    },
+    {
+      "id": "mcp-google-calendar",
+      "name": "google-calendar",
+      "display_name": "Google Calendar MCP Server",
+      "vendor": "Google Workspace",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://calendarmcp.googleapis.com/mcp/v1"
+      },
+      "env_vars": [],
+      "description": "Google Workspace 官方 Calendar MCP，查询日程空闲时间并管理日程邀请。",
+      "capabilities": ["查询日程区间", "空闲时间查找", "创建与更新日程", "管理邀请"],
+      "permissions": [
+        { "level": "network", "scope": "calendarmcp.googleapis.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "maturity": "experimental",
+      "notes": "Developer Preview。创建日程会向受邀人发出真实邮件，MJ Code 应在确认环节明确展示参与人。"
+    },
+    {
+      "id": "mcp-microsoft-365",
+      "name": "microsoft-365",
+      "display_name": "Microsoft Work IQ MCP",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "沟通与办公",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "微软官方 M365 MCP，在 Microsoft 365 邮件、日历、Teams 聊天与文件上读写与执行动作。",
+      "capabilities": ["检索与操作 Outlook 邮件", "管理日历", "读取 Teams 聊天", "检索 SharePoint/OneDrive 文件"],
+      "permissions": [
+        { "level": "network", "scope": "graph.microsoft.com" },
+        { "level": "network", "scope": "mcp.microsoft.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://learn.microsoft.com",
+      "maturity": "experimental",
+      "notes": "微软 Work IQ 系列标注为 Preview。具体端点与包名请以 Microsoft Learn 官方文档为准，故标 manual。M365 内容含大量内部沟通，属高敏感数据面。"
+    },
+    {
+      "id": "mcp-discord",
+      "name": "discord",
+      "display_name": "Discord MCP Server",
+      "vendor": "社区（SaseQ）",
+      "official": false,
+      "category": "沟通与办公",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "DISCORD_BOT_TOKEN",
+          "required": true,
+          "label": "Discord Bot Token",
+          "docs_url": "https://discord.com/developers/applications"
+        }
+      ],
+      "description": "社区实现的 Discord MCP，可发消息、管理频道与角色、执行服务器管理操作。",
+      "capabilities": ["发送消息", "读取频道历史", "管理频道与角色", "服务器审核操作"],
+      "permissions": [
+        { "level": "network", "scope": "discord.com" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/SaseQ/discord-mcp",
+      "maturity": "community",
+      "notes": "Discord 未提供官方 MCP，社区项目质量参差。管理类工具可能触及封禁等高危动作，MJ Code 默认应只暴露只读与发消息能力。"
+    },
+    {
+      "id": "mcp-telegram",
+      "name": "telegram",
+      "display_name": "Telegram MCP Server",
+      "vendor": "社区（chigwell）",
+      "official": false,
+      "category": "沟通与办公",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "TELEGRAM_API_ID",
+          "required": true,
+          "label": "Telegram API ID",
+          "docs_url": "https://my.telegram.org/apps"
+        },
+        {
+          "name": "TELEGRAM_API_HASH",
+          "required": true,
+          "label": "Telegram API Hash",
+          "docs_url": "https://my.telegram.org/apps"
+        }
+      ],
+      "description": "通过用户会话读取与管理 Telegram 消息、对话与联系人。",
+      "capabilities": ["读取对话历史", "发送消息", "搜索消息", "管理联系人"],
+      "permissions": [
+        { "level": "network", "scope": "api.telegram.org" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/chigwell/telegram-mcp",
+      "maturity": "community",
+      "notes": "使用用户级 API 凭据而非 Bot，等同于把整个账号会话交给 server，安全风险高。MJ Code 不应默认预置。"
+    },
+
+    {
+      "id": "mcp-sentry",
+      "name": "sentry",
+      "display_name": "Sentry MCP",
+      "vendor": "Sentry",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.sentry.dev/mcp"
+      },
+      "env_vars": [],
+      "description": "Sentry 官方 MCP，把错误、trace、发布健康度等真实遥测数据带进编码会话。",
+      "capabilities": ["检索错误事件", "查看堆栈与源码映射", "查询性能与 trace", "发布与版本健康度", "生成问题修复建议"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.sentry.dev" },
+        { "level": "network", "scope": "sentry.io" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/getsentry/sentry-mcp",
+      "maturity": "stable",
+      "notes": "云端端点用 OAuth 设备码授权，首次运行会打开浏览器登录，用户令牌不会透传给 Sentry API。自托管需配 org:read、project:read/write、team:read/write、event:write 等上游 scope。与 Git/GitHub MCP 组合可形成「读 trace—定位代码—提 PR」闭环。"
+    },
+    {
+      "id": "mcp-posthog",
+      "name": "posthog",
+      "display_name": "PostHog MCP Server",
+      "vendor": "PostHog",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.posthog.com/mcp"
+      },
+      "env_vars": [],
+      "description": "PostHog 官方免费托管 MCP，用自然语言查询事件、洞察、漏斗与功能开关。",
+      "capabilities": ["错误分组排行", "查询堆栈与元数据", "HogQL 查询", "功能开关与实验管理", "支持工单分流", "语义层指标查询"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.posthog.com" },
+        { "level": "network", "scope": "us.posthog.com" },
+        { "level": "network", "scope": "eu.posthog.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://posthog.com/docs/model-context-protocol",
+      "maturity": "stable",
+      "notes": "认证服务会按登录账号自动路由到 US 或 EU 数据区。部分工具内部调用 LLM，会产生 PostHog AI 费用，且需组织开启 AI 数据处理。官方推荐用 npx @posthog/wizard mcp add 安装。"
+    },
+    {
+      "id": "mcp-grafana",
+      "name": "grafana",
+      "display_name": "Grafana MCP Server",
+      "vendor": "Grafana Labs",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "GRAFANA_URL",
+          "required": true,
+          "label": "Grafana 实例地址",
+          "docs_url": "https://grafana.com/docs/grafana/latest"
+        },
+        {
+          "name": "GRAFANA_API_KEY",
+          "required": true,
+          "label": "Grafana 服务账号令牌",
+          "docs_url": "https://grafana.com/docs/grafana/latest"
+        }
+      ],
+      "description": "Grafana Labs 官方 MCP，查询仪表盘、Prometheus/Loki 数据源与告警。",
+      "capabilities": ["检索仪表盘与面板", "查询 Prometheus 指标", "查询 Loki 日志", "管理告警规则", "查询 OnCall"],
+      "permissions": [
+        { "level": "network", "scope": "grafana-instance" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/grafana/mcp-grafana",
+      "maturity": "stable",
+      "notes": "官方推荐用 uvx mcp-grafana 启动（走 Git 仓库而非固定包），包名在不同版本间有差异，故 install.type 标为 manual，notes 给出仓库地址。建议使用权限受限的服务账号。"
+    },
+    {
+      "id": "mcp-clarity",
+      "name": "clarity",
+      "display_name": "Microsoft Clarity MCP Server",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@microsoft/clarity-mcp-server",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "微软官方 Clarity MCP，让模型直接查询网页分析数据、热力图与会话回放。",
+      "capabilities": ["查询流量与用户行为", "查看热力图与会话回放", "生成分析报告"],
+      "permissions": [
+        { "level": "network", "scope": "clarity.microsoft.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/microsoft/clarity-mcp-server",
+      "maturity": "stable",
+      "notes": "会话回放可能包含用户输入的敏感信息，MJ Code 建议默认关闭回放类工具。"
+    },
+    {
+      "id": "mcp-google-analytics",
+      "name": "google-analytics",
+      "display_name": "Google Analytics MCP Server",
+      "vendor": "Google Analytics",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Google Analytics 官方只读 MCP，用 9 个工具跑报表、实时数据、漏斗与转化分析。",
+      "capabilities": ["运行 GA4 报表", "实时数据查询", "漏斗与转化分析", "受众细分"],
+      "permissions": [
+        { "level": "network", "scope": "analyticsdata.googleapis.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.google.com/analytics",
+      "maturity": "stable",
+      "notes": "官方定位为只读报表服务器。公开资料未核实到确切的 npm 包名或远程端点，install.type 标为 manual，接入前需查 Google Analytics 官方文档。"
+    },
+    {
+      "id": "mcp-netdata",
+      "name": "netdata",
+      "display_name": "Netdata MCP Server",
+      "vendor": "Netdata",
+      "official": true,
+      "category": "监控可观测与数据分析",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Netdata 官方 MCP，查询基础设施实时指标、日志、告警与基于 ML 的异常检测结果。",
+      "capabilities": ["查询节点与容器指标", "检索告警状态", "异常检测查询", "日志查询"],
+      "permissions": [
+        { "level": "network", "scope": "netdata-cloud" },
+        { "level": "network", "scope": "app.netdata.cloud" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/netdata/netdata",
+      "maturity": "stable",
+      "notes": "作为 VS Code / Docker 目录中收录的官方 MCP 发布。具体端点随部署形态（Cloud 或自建 Agent）而变，故标 manual。"
+    },
+
+    {
+      "id": "mcp-context7",
+      "name": "context7",
+      "display_name": "Context7 MCP",
+      "vendor": "Upstash",
+      "official": true,
+      "category": "文档知识库与搜索",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp"
+      },
+      "env_vars": [
+        {
+          "name": "CONTEXT7_API_KEY",
+          "required": false,
+          "label": "Context7 API Key（可选，提升配额并支持私有仓库）",
+          "docs_url": "https://context7.com/docs"
+        }
+      ],
+      "description": "按需注入最新版、版本精确的第三方库文档与代码示例，解决模型 API 幻觉与版本过期问题。",
+      "capabilities": ["解析库 ID", "拉取指定版本文档", "按主题过滤文档", "私有仓库检索"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.context7.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/upstash/context7",
+      "maturity": "stable",
+      "notes": "免 key 也能用基础功能。本地 npm 包为 @upstash/context7-mcp。这是目前对编码助手性价比最高的连接器之一：无本地权限、零 shell、显著降低幻觉。"
+    },
+    {
+      "id": "mcp-fetch",
+      "name": "fetch",
+      "display_name": "Fetch MCP Server",
+      "vendor": "Anthropic",
+      "official": true,
+      "category": "文档知识库与搜索",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "mcp-server-fetch",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "抓取网页并转成适合模型消费的纯文本，是任何 MCP 主机的基础联网能力。",
+      "capabilities": ["抓取 URL", "HTML 转 Markdown", "提取正文"],
+      "permissions": [
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/modelcontextprotocol/servers",
+      "maturity": "stable",
+      "notes": "官方参考实现，Python 包 mcp-server-fetch。网络权限是 scope:any，MJ Code 的权限预扣应显式提示用户「可访问任意 URL」。抓取内容是典型提示注入入口。"
+    },
+    {
+      "id": "mcp-microsoft-learn",
+      "name": "microsoft-learn",
+      "display_name": "Microsoft Learn Docs MCP Server",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "文档知识库与搜索",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "微软官方远程 MCP，为代码生成与问答提供权威、最新的 Microsoft Learn 官方文档。",
+      "capabilities": ["检索官方文档", "读取文档页面", "获取代码示例"],
+      "permissions": [
+        { "level": "network", "scope": "learn.microsoft.com" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/microsoftdocs/mcp",
+      "maturity": "stable",
+      "notes": "微软官方 MCP 目录中列出该仓库为「remote MCP server」。具体端点地址需查 Microsoft Learn 文档确认，故标 manual。属于纯只读文档源，权限极低。"
+    },
+    {
+      "id": "mcp-obsidian",
+      "name": "obsidian",
+      "display_name": "MCP Obsidian",
+      "vendor": "社区（Markus Pfundstein）",
+      "official": false,
+      "category": "文档知识库与搜索",
+      "transport": "stdio",
+      "install": {
+        "type": "manual",
+        "args": ["mcp-obsidian"]
+      },
+      "env_vars": [],
+      "description": "通过 Obsidian Local REST API 社区插件读写本地 Obsidian 仓库，浏览、检索与编辑笔记。",
+      "capabilities": ["列出仓库与目录文件", "读取与批量读取笔记", "简单与复杂检索", "追加与按标题插入内容", "读取日记/周记等周期笔记", "获取最近改动"],
+      "permissions": [
+        { "level": "filesystem", "scope": "obsidian-vault" },
+        { "level": "network", "scope": "127.0.0.1" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/MarkusPfundstein/mcp-obsidian",
+      "maturity": "community",
+      "notes": "社区维护，通过 Obsidian 的 Local REST API 插件（本机 HTTP，通常带 API key）通信，官方 Obsidian 未提供 MCP。官方文档给出的启动方式为 uv run mcp-obsidian（需克隆仓库），也提供 mcp/obsidian Docker 镜像，故标 manual。"
+    },
+    {
+      "id": "mcp-semgrep",
+      "name": "semgrep",
+      "display_name": "Semgrep MCP",
+      "vendor": "Semgrep",
+      "official": true,
+      "category": "文档知识库与搜索",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.semgrep.ai/mcp"
+      },
+      "env_vars": [],
+      "description": "Semgrep 官方 MCP，把静态代码分析与安全扫描能力接入编码助手，可直接在对话中查规则与告警。",
+      "capabilities": ["静态代码分析", "安全规则检索", "扫描结果查询", "规则库检索"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.semgrep.ai" },
+        { "level": "network", "scope": "semgrep.dev" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://semgrep.dev",
+      "maturity": "stable",
+      "notes": "公开端点为开放访问（无需鉴权），适合对公开代码做快速扫描。对私有仓库做扫描需要另行配置 SEMGREP_APP_TOKEN，属于高敏感数据面，MJ Code 默认不应开启。"
+    },
+    {
+      "id": "mcp-markitdown",
+      "name": "markitdown",
+      "display_name": "MarkItDown MCP Server",
+      "vendor": "Microsoft",
+      "official": true,
+      "category": "文档知识库与搜索",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "markitdown-mcp",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "把 PDF、Office 文档、图片、音频、网页等 20+ 种格式统一转成干净 Markdown，供模型直接分析。",
+      "capabilities": ["PDF/Word/Excel/PPT 转 Markdown", "图片 OCR 与 EXIF", "HTML 清洗", "ZIP/EPUB 批量转换"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/microsoft/markitdown",
+      "maturity": "stable",
+      "notes": "官方只有一个工具 convert_to_markdown(uri)，接受 http/https/file/data URI。扫描版 PDF 没有内置 OCR 会返回空内容——这是常见坑。转换全部在本机完成，不外传。"
+    },
+
+    {
+      "id": "mcp-figma",
+      "name": "figma",
+      "display_name": "Figma MCP Server（远程）",
+      "vendor": "Figma",
+      "official": true,
+      "category": "设计工具",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.figma.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Figma 官方远程 MCP，提供组件、变量、布局数据与 FigJam 内容的结构化读取，并支持写回画布。",
+      "capabilities": ["读取设计上下文", "抽取变量与组件", "从选区生成代码", "Code Connect 对齐", "写入原生画布内容"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.figma.com" },
+        { "level": "network", "scope": "api.figma.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.figma.com/docs/figma-mcp-server/",
+      "maturity": "stable",
+      "notes": "Figma 明确推荐远程版，功能覆盖最广且不限席位等级。远程版有速率限制，需要更高吞吐时应改用桌面本地 server。"
+    },
+    {
+      "id": "mcp-figma-devmode",
+      "name": "figma-devmode",
+      "display_name": "Figma Dev Mode MCP Server（本地）",
+      "vendor": "Figma",
+      "official": true,
+      "category": "设计工具",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "http://127.0.0.1:3845/mcp"
+      },
+      "env_vars": [],
+      "description": "Figma 桌面端内置的本地 MCP 服务器，只监听回环地址，读取当前打开文件的设计上下文。",
+      "capabilities": ["读取选中节点的设计结构", "抽取变量与布局", "从 frame 生成代码", "Code Connect"],
+      "permissions": [
+        { "level": "network", "scope": "127.0.0.1" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/figma/mcp-server-guide",
+      "maturity": "community",
+      "notes": "需在 Figma 桌面应用开启 Dev Mode MCP Server，且需要 Professional/Organization/Enterprise 的 Dev 或 Full 席位。走 localhost HTTP，网络权限面最小，适合对隐私敏感的团队。"
+    },
+    {
+      "id": "mcp-framelink-figma",
+      "name": "figma-framelink",
+      "display_name": "Framelink MCP for Figma",
+      "vendor": "社区（GLips / Framelink）",
+      "official": false,
+      "category": "设计工具",
+      "transport": "http",
+      "install": {
+        "type": "manual",
+        "url": "http://127.0.0.1:3845/sse"
+      },
+      "env_vars": [],
+      "description": "社区高人气实现，把 Figma 布局与样式数据精简后喂给编码代理，token 成本低于官方 Dev Mode server。",
+      "capabilities": ["读取设计节点结构", "获取样式与变量", "截图与图片引用"],
+      "permissions": [
+        { "level": "network", "scope": "127.0.0.1" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/GLips/Framelink",
+      "maturity": "community",
+      "notes": "不同版本文档里的启动包名不一致（社区常见写法为 uvx figma-developer-mcp），未能在官方仓库核实稳定包名，故 install.type 标为 manual，只给出回环 SSE 端点。"
+    },
+    {
+      "id": "mcp-canva",
+      "name": "canva",
+      "display_name": "Canva MCP Server",
+      "vendor": "Canva",
+      "official": true,
+      "category": "设计工具",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Canva 官方远程 MCP，用于生成、编辑、检索、调整尺寸并导出设计稿。",
+      "capabilities": ["生成设计", "编辑现有设计", "检索素材库", "调整尺寸", "导出成品"],
+      "permissions": [
+        { "level": "network", "scope": "canva.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://www.canva.dev/docs/mcp/",
+      "maturity": "stable",
+      "notes": "具体端点需查 Canva 开发者文档，故标 manual。会创建真实的设计文件，属写操作，需在 UI 上确认。"
+    },
+    {
+      "id": "mcp-miro",
+      "name": "miro",
+      "display_name": "Miro MCP Server",
+      "vendor": "Miro",
+      "official": true,
+      "category": "设计工具",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Miro 官方远程 MCP，读取白板内容并创建图示、文档与任务。",
+      "capabilities": ["读取白板内容", "创建图表与便签", "生成文档", "创建看板任务"],
+      "permissions": [
+        { "level": "network", "scope": "miro.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.miro.com",
+      "maturity": "stable",
+      "notes": "具体端点需查 Miro 开发者文档，故标 manual。白板内容常含未公开的规划信息，属敏感数据面。"
+    },
+    {
+      "id": "mcp-storybook",
+      "name": "storybook",
+      "display_name": "Storybook MCP",
+      "vendor": "Storybook",
+      "official": true,
+      "category": "设计工具",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Storybook 官方 MCP，让编码代理发现项目 UI 组件、编写 stories 并运行组件测试。",
+      "capabilities": ["发现组件清单", "生成 story", "运行组件测试", "可视化校验"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "shell", "scope": "storybook" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://storybook.js.org",
+      "maturity": "experimental",
+      "notes": "官方标注 Preview。需要本地已存在 Storybook 工程，起动方式随 Storybook 版本变化，公开资料未核实到统一包名，故标 manual。"
+    },
+
+    {
+      "id": "mcp-stripe",
+      "name": "stripe",
+      "display_name": "Stripe MCP Server",
+      "vendor": "Stripe",
+      "official": true,
+      "category": "支付与金融",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.stripe.com"
+      },
+      "env_vars": [],
+      "description": "Stripe 官方 MCP，查询客户与支付、管理订阅与退款，并检索 Stripe 文档。",
+      "capabilities": ["查询客户与订阅", "创建支付链接", "检查扣款与退款", "管理产品与价格", "检索 Stripe 文档"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.stripe.com" },
+        { "level": "network", "scope": "api.stripe.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://github.com/stripe/agent-toolkit",
+      "maturity": "stable",
+      "notes": "本地形态为 @stripe/mcp，运行时必须显式带 --tools=all 与 --api-key=<密钥>。远程端点支持 OAuth；无头代理需改用 Restricted API Key 而非 OAuth。属于直接影响真实资金的工具，MJ Code 必须对所有写操作强制人工确认。Stripe 官方明确标注：任何由模型自主触发的工具调用结果都应由人工审核。"
+    },
+    {
+      "id": "mcp-paypal",
+      "name": "paypal",
+      "display_name": "PayPal MCP Server",
+      "vendor": "PayPal",
+      "official": true,
+      "category": "支付与金融",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.paypal.com/mcp"
+      },
+      "env_vars": [],
+      "description": "PayPal 官方 MCP，管理支付数据与交易，可创建发票并处理订单、争议与订阅。",
+      "capabilities": ["查询支付与交易", "创建发票", "管理订单", "处理争议", "管理订阅"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.paypal.com" },
+        { "level": "network", "scope": "api.paypal.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.paypal.com",
+      "maturity": "stable",
+      "notes": "真实资金工具，风险等级与 Stripe 相同，所有写操作需人工确认。端点地址来自 MCP 目录收录，接入前建议以 PayPal 开发者文档二次确认。"
+    },
+    {
+      "id": "mcp-square",
+      "name": "square",
+      "display_name": "Square MCP Server",
+      "vendor": "Square",
+      "official": true,
+      "category": "支付与金融",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "SQUARE_ACCESS_TOKEN",
+          "required": true,
+          "label": "Square 访问令牌",
+          "docs_url": "https://developer.squareup.com"
+        }
+      ],
+      "description": "Square 官方 MCP，可调用 Square API 处理客户、订单、商品目录与支付。",
+      "capabilities": ["管理客户", "创建与查询订单", "管理商品目录", "发起支付"],
+      "permissions": [
+        { "level": "network", "scope": "connect.squareup.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://developer.squareup.com",
+      "maturity": "experimental",
+      "notes": "官方标注 Preview。令牌通过环境变量传入。涉及真实支付，MJ Code 应默认只读。端点需查 Square 官方文档，故标 manual。"
+    },
+    {
+      "id": "mcp-razorpay",
+      "name": "razorpay",
+      "display_name": "Razorpay MCP Server",
+      "vendor": "Razorpay",
+      "official": true,
+      "category": "支付与金融",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Razorpay 官方 MCP，管理支付、订单、退款、支付链接与二维码。",
+      "capabilities": ["创建与管理支付", "查询订单", "发起退款", "生成支付链接", "生成二维码"],
+      "permissions": [
+        { "level": "network", "scope": "api.razorpay.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://razorpay.com/docs",
+      "maturity": "stable",
+      "notes": "同时支持远程与本地 stdio。印度市场主流支付网关，涉及真实资金，写操作需强制确认。包名与端点请以 Razorpay 官方文档为准，故标 manual。"
+    },
+    {
+      "id": "mcp-adyen",
+      "name": "adyen",
+      "display_name": "Adyen MCP Server",
+      "vendor": "Adyen",
+      "official": true,
+      "category": "支付与金融",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Adyen 官方 MCP，创建支付链接并管理账户、终端与 Webhook。",
+      "capabilities": ["创建支付链接", "管理商户账户", "管理支付终端", "配置 Webhook"],
+      "permissions": [
+        { "level": "network", "scope": "*.adyen.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://docs.adyen.com",
+      "maturity": "experimental",
+      "notes": "官方标注 Preview。涉及真实资金，写操作需强制确认。包名未能在官方文档核实，故标 manual。"
+    },
+
+    {
+      "id": "mcp-hubspot",
+      "name": "hubspot",
+      "display_name": "HubSpot MCP Server",
+      "vendor": "HubSpot",
+      "official": true,
+      "category": "CRM与营销",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.hubspot.com"
+      },
+      "env_vars": [],
+      "description": "HubSpot 官方远程 MCP，检索并更新联系人、商机、管道与工单。",
+      "capabilities": ["检索 CRM 记录", "创建与更新联系人", "管理商机与管道", "管理工单", "营销活动查询"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.hubspot.com" },
+        { "level": "network", "scope": "api.hubapi.com" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.hubspot.com",
+      "maturity": "stable",
+      "notes": "OAuth 授权，scope 跟随用户权限。客户联系人为个人数据，MJ Code 接入时应在隐私说明中明确用途。"
+    },
+    {
+      "id": "mcp-salesforce",
+      "name": "salesforce",
+      "display_name": "Salesforce DX MCP Server",
+      "vendor": "Salesforce",
+      "official": true,
+      "category": "CRM与营销",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Salesforce 官方 MCP，通过 Salesforce CLI 让编码助手查询、部署并测试组织元数据。",
+      "capabilities": ["查询组织元数据", "执行 Apex/SOQL", "部署元数据变更", "运行测试"],
+      "permissions": [
+        { "level": "network", "scope": "*.salesforce.com" },
+        { "level": "shell", "scope": "sf-cli" },
+        { "level": "filesystem", "scope": "sf-project-directory" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developer.salesforce.com",
+      "maturity": "stable",
+      "notes": "依赖本机 Salesforce CLI（sf）与项目目录，跨客户端启动方式不一致，公开资料未核实到统一包名，故标 manual。部署能力可改写生产组织元数据，必须严格人工确认。"
+    },
+    {
+      "id": "mcp-intercom",
+      "name": "intercom",
+      "display_name": "Intercom MCP Server",
+      "vendor": "Intercom",
+      "official": true,
+      "category": "CRM与营销",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.intercom.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Intercom 官方远程 MCP，检索客户对话、联系人、公司与帮助中心文章。",
+      "capabilities": ["检索对话记录", "查询联系人与公司", "检索帮助中心文章", "汇总支持工单"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.intercom.com" },
+        { "level": "network", "scope": "api.intercom.io" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://developers.intercom.com",
+      "maturity": "stable",
+      "notes": "对话记录含大量用户个人可识别信息，属最高敏感级数据面，MJ Code 应强制提示并限定 scope。"
+    },
+    {
+      "id": "mcp-zendesk",
+      "name": "zendesk",
+      "display_name": "Zendesk MCP Server",
+      "vendor": "Zendesk",
+      "official": true,
+      "category": "CRM与营销",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "ZENDESK_SUBDOMAIN",
+          "required": true,
+          "label": "Zendesk 子域名",
+          "docs_url": "https://developer.zendesk.com"
+        }
+      ],
+      "description": "Zendesk 官方 MCP，用于检索、创建、评论与更新支持工单。",
+      "capabilities": ["检索工单", "创建与更新工单", "添加内部备注", "工单指标查询"],
+      "permissions": [
+        { "level": "network", "scope": "*.zendesk.com" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://developer.zendesk.com",
+      "maturity": "stable",
+      "notes": "需要 API 令牌认证（email/token 组合）。社区另有多个非官方 Zendesk server，本目录只收录官方条目。官方支持本地 stdio 与远程两种形态，具体端点需按官方文档确认，故 install.type 标为 manual。"
+    },
+    {
+      "id": "mcp-apollo",
+      "name": "apollo",
+      "display_name": "Apollo.io MCP Server",
+      "vendor": "Apollo.io",
+      "official": true,
+      "category": "CRM与营销",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Apollo.io 官方 MCP，用于查找潜客、补全联系人信息并导入到 Apollo 序列中。",
+      "capabilities": ["人员与公司检索", "联系人补全", "邮件数据查询", "导入到序列"],
+      "permissions": [
+        { "level": "network", "scope": "apollo.io" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://apolloio.github.io/apollo-mcp-server/",
+      "maturity": "stable",
+      "notes": "涉及大规模个人数据补全，属合规高风险面，MJ Code 建议不打入默认预置清单。端点需查 Apollo 官方文档，故标 manual。"
+    },
+
+    {
+      "id": "mcp-graphiti",
+      "name": "graphiti",
+      "display_name": "Graphiti MCP Server",
+      "vendor": "Zep",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "stdio",
+      "install": {
+        "type": "manual",
+        "args": ["graphiti_mcp_server.py"]
+      },
+      "env_vars": [
+        {
+          "name": "OPENAI_API_KEY",
+          "required": true,
+          "label": "用于实体抽取与嵌入的 LLM API Key",
+          "docs_url": "https://github.com/getzep/graphiti"
+        },
+        {
+          "name": "NEO4J_URI",
+          "required": false,
+          "label": "图数据库地址（FalkorDB/Neo4j/Kuzu/Neptune）",
+          "docs_url": "https://github.com/getzep/graphiti"
+        }
+      ],
+      "description": "Zep 出品的时间感知知识图谱 MCP，为代理提供带有效期的长期记忆而非静态事实快照。",
+      "capabilities": ["写入与检索 episode", "语义与混合检索", "带时间窗的事实检索", "实体边管理", "图谱状态查询"],
+      "permissions": [
+        { "level": "network", "scope": "graph-database" },
+        { "level": "network", "scope": "llm-provider" },
+        { "level": "filesystem", "scope": "graphiti-config" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/getzep/graphiti",
+      "maturity": "stable",
+      "notes": "官方推荐 Docker Compose 部署（内置 FalkorDB），裸跑需克隆仓库后 uv sync 再 uv run graphiti_mcp_server.py，故标 manual。依赖 LLM API key，会产生持续调用成本。clear_graph 是破坏性工具，MJ Code 必须硬性拦截。"
+    },
+    {
+      "id": "mcp-cognee",
+      "name": "cognee",
+      "display_name": "Cognee MCP",
+      "vendor": "Cognee（topoteretes）",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "把数据沉淀为知识图谱并用图感知检索召回的 AI 记忆框架官方 MCP。",
+      "capabilities": ["数据摄取与图谱构建", "图感知检索", "记忆持久化"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" },
+        { "level": "network", "scope": "llm-provider" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/topoteretes/cognee",
+      "maturity": "stable",
+      "notes": "与 Graphiti 同属新一代图记忆方案。官方安装以 Python 包与 CLI 为主，未核实到标准 MCP 启动包名，故标 manual。"
+    },
+    {
+      "id": "mcp-mem0",
+      "name": "mem0",
+      "display_name": "Mem0 MCP",
+      "vendor": "Mem0",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "MEM0_API_KEY",
+          "required": true,
+          "label": "Mem0 平台 API Key",
+          "docs_url": "https://docs.mem0.ai"
+        }
+      ],
+      "description": "Mem0 官方托管记忆平台 MCP，存取跨会话的长期用户与项目记忆。",
+      "capabilities": ["写入长期记忆", "检索记忆", "管理记忆条目"],
+      "permissions": [
+        { "level": "network", "scope": "api.mem0.ai" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://docs.mem0.ai",
+      "maturity": "stable",
+      "notes": "记忆数据会离开本机上传到第三方托管服务，属于明确的外发数据面，MJ Code 接入前应在 UI 上明示。端点未核实，故标 manual。"
+    },
+    {
+      "id": "mcp-qdrant",
+      "name": "qdrant",
+      "display_name": "Qdrant MCP Server",
+      "vendor": "Qdrant",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "mcp-server-qdrant",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "QDRANT_URL",
+          "required": true,
+          "label": "Qdrant 服务地址",
+          "docs_url": "https://qdrant.tech/documentation"
+        },
+        {
+          "name": "QDRANT_API_KEY",
+          "required": false,
+          "label": "Qdrant API Key",
+          "docs_url": "https://qdrant.tech/documentation"
+        }
+      ],
+      "description": "把信息以语义向量形式存入 Qdrant 并按需检索，常用作代理的长期语义记忆层。",
+      "capabilities": ["写入带元数据的记忆", "语义相似检索", "集合管理"],
+      "permissions": [
+        { "level": "network", "scope": "qdrant-endpoint" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/qdrant/mcp-server-qdrant",
+      "maturity": "stable",
+      "notes": "支持 Docker 与 uvx 两种部署。写入工具名为 qdrant-store，需搭配 EMBEDDING_MODEL 环境变量。Qdrant 亦支持 MCP 语义缓存/语义命中等官方功能扩展。"
+    },
+    {
+      "id": "mcp-pinecone",
+      "name": "pinecone",
+      "display_name": "Pinecone Developer MCP",
+      "vendor": "Pinecone",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@pinecone-database/mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "PINECONE_API_KEY",
+          "required": false,
+          "label": "Pinecone API Key（无 key 时仅文档检索可用）",
+          "docs_url": "https://docs.pinecone.io/guides/operations/mcp-server"
+        }
+      ],
+      "description": "Pinecone 官方 MCP，检索官方文档、管理索引，并对集成推理索引执行写入与检索。",
+      "capabilities": ["检索 Pinecone 文档", "列举与描述索引", "创建集成推理索引", "写入与检索记录", "跨索引级联搜索", "文档重排"],
+      "permissions": [
+        { "level": "network", "scope": "api.pinecone.io" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://github.com/pinecone-io/pinecone-mcp",
+      "maturity": "stable",
+      "notes": "仅支持 stdio 本地形态，没有托管的 mcp.pinecone.io 端点，且只支持集成推理索引（不支持管理外部 embedding 索引）。无 API key 时 search-docs 仍可用。建议把密钥限定到目标项目并按需使用只读密钥。"
+    },
+    {
+      "id": "mcp-basic-memory",
+      "name": "basic-memory",
+      "display_name": "Basic Memory",
+      "vendor": "Basic Machines",
+      "official": true,
+      "category": "记忆与AI能力",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "basic-mcp",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "基于 Markdown 文件的本地优先知识库，通过文件实现 LLM 双向同步，天然可在 Git 中版本化。",
+      "capabilities": ["Markdown 笔记读写", "双向同步", "语义搜索", "实体关系建模"],
+      "permissions": [
+        { "level": "filesystem", "scope": "user-allowed-directory" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/basicmachines-co/basic-memory",
+      "maturity": "stable",
+      "notes": "数据完全以 Markdown 落盘，可读可 diff，这是它相对托管记忆服务的核心优势。需把知识库目录限定在用户允许范围内。"
+    },
+
+    {
+      "id": "mcp-elevenlabs",
+      "name": "elevenlabs",
+      "display_name": "ElevenLabs MCP",
+      "vendor": "ElevenLabs",
+      "official": true,
+      "category": "媒体生成与音视频",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "ELEVENLABS_API_KEY",
+          "required": true,
+          "label": "ElevenLabs API Key",
+          "docs_url": "https://elevenlabs.io/docs"
+        }
+      ],
+      "description": "ElevenLabs 官方 MCP，生成语音、克隆音色、转录音频并设计声音。",
+      "capabilities": ["文本转语音", "音色克隆", "音频转写", "声音设计", "音效生成"],
+      "permissions": [
+        { "level": "network", "scope": "api.elevenlabs.io" },
+        { "level": "filesystem", "scope": "user-allowed-directory" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://elevenlabs.io",
+      "maturity": "stable",
+      "notes": "音色克隆涉及声音权与肖像/人格权合规问题，MJ Code 必须要求用户明确授权后才允许调用克隆类工具。公开资料未核实统一包名，故标 manual。按字符数计费。"
+    },
+    {
+      "id": "mcp-replicate",
+      "name": "replicate",
+      "display_name": "Replicate MCP Server",
+      "vendor": "Replicate",
+      "official": true,
+      "category": "媒体生成与音视频",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "REPLICATE_API_TOKEN",
+          "required": true,
+          "label": "Replicate API Token",
+          "docs_url": "https://replicate.com/docs"
+        }
+      ],
+      "description": "Replicate 官方 MCP，检索、对比并运行其平台上托管的数千个 AI 模型。",
+      "capabilities": ["模型检索与对比", "运行模型推理", "查看运行历史", "管理模型版本"],
+      "permissions": [
+        { "level": "network", "scope": "api.replicate.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://replicate.com",
+      "maturity": "stable",
+      "notes": "按模型计费，图像/视频类模型单次调用成本可能很高。运行第三方模型等同于执行不受控代码路径，MJ Code 应展示模型来源与费用预估后再执行。"
+    },
+    {
+      "id": "mcp-blender",
+      "name": "blender",
+      "display_name": "Blender MCP",
+      "vendor": "社区（ahujasid）",
+      "official": false,
+      "category": "媒体生成与音视频",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "blender-mcp",
+        "args": []
+      },
+      "env_vars": [
+        {
+          "name": "DISABLE_TELEMETRY",
+          "required": false,
+          "label": "关闭匿名工具遥测",
+          "docs_url": "https://github.com/ahujasid/blender-mcp"
+        }
+      ],
+      "description": "社区最主流的 Blender MCP，通过本地套接字驱动 Blender 场景创建、物体/材质编辑与代码执行。",
+      "capabilities": ["场景与物体信息查询", "创建/修改/删除物体", "应用材质", "视口截图", "执行 Blender Python 代码", "检索并下载 3D 资产"],
+      "permissions": [
+        { "level": "network", "scope": "127.0.0.1" },
+        { "level": "shell", "scope": "arbitrary-python-in-blender" },
+        { "level": "filesystem", "scope": "blender-scene" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/ahujasid/blender-mcp",
+      "maturity": "community",
+      "notes": "需要在 Blender 内安装并启用配套插件、由 Blender 侧启动套接字服务。核心工具 execute_blender_code 可在 Blender 内执行任意 Python，等价于任意代码执行权限，MJ Code 必须硬性拦截并默认禁用。2026-09 起仓库改名为 ahujasid/mcp-for-blender，新装建议用 mcp-for-blender，旧命令 uvx blender-mcp 仍兼容。默认开启匿名遥测，可用 DISABLE_TELEMETRY=true 关闭。"
+    },
+    {
+      "id": "mcp-unity",
+      "name": "unity",
+      "display_name": "Unity MCP",
+      "vendor": "社区（Ivan Murzak）",
+      "official": false,
+      "category": "媒体生成与音视频",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "把 Unity Editor 接入 MCP，让编码代理控制编辑器、创建 GameObject 与编写 C# 脚本。",
+      "capabilities": ["控制 Unity 编辑器", "创建与管理场景物体", "生成 C# 脚本", "读取资产与层级", "触发编译与测试"],
+      "permissions": [
+        { "level": "filesystem", "scope": "unity-project" },
+        { "level": "network", "scope": "127.0.0.1" },
+        { "level": "shell", "scope": "unity" }
+      ],
+      "auth_type": "none",
+      "official_url": "https://github.com/IvanMurzak/Unity-MCP",
+      "maturity": "community",
+      "notes": "采用 Unity 插件 + 本地 Python 服务桥接的架构，需要在项目中安装对应 UPM 包，因此 install.type 标为 manual。会写入 Unity 工程目录并触发编辑器操作，属高影响变更。"
+    },
+    {
+      "id": "mcp-cloudinary",
+      "name": "cloudinary",
+      "display_name": "Cloudinary MCP Server",
+      "vendor": "Cloudinary",
+      "official": true,
+      "category": "媒体生成与音视频",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "CLOUDINARY_URL",
+          "required": true,
+          "label": "Cloudinary Cloud URL",
+          "docs_url": "https://cloudinary.com/documentation"
+        }
+      ],
+      "description": "Cloudinary 官方 MCP，上传、检索、打标签、转换与分析云端图片与视频资源。",
+      "capabilities": ["上传资源", "检索资源", "打标签与管理元数据", "格式转换", "视觉分析"],
+      "permissions": [
+        { "level": "network", "scope": "api.cloudinary.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://cloudinary.com",
+      "maturity": "stable",
+      "notes": "删除与转换类工具会真实改动云端资源库，MJ Code 应对写操作强制确认。端点需查 Cloudinary 官方文档，故标 manual。"
+    },
+
+    {
+      "id": "mcp-zapier",
+      "name": "zapier",
+      "display_name": "Zapier MCP",
+      "vendor": "Zapier",
+      "official": true,
+      "category": "自动化与集成平台",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.zapier.com/api/mcp"
+      },
+      "env_vars": [],
+      "description": "Zapier 官方托管 MCP，把 8000+ 应用的动作暴露给任何 MCP 客户端。",
+      "capabilities": ["列出可用 Zap", "触发 Zap", "执行应用动作", "查询 Zap 状态"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.zapier.com" },
+        { "level": "network", "scope": "zapier.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://zapier.com/mcp",
+      "maturity": "stable",
+      "notes": "使用 Zapier 账号的 API key 而非 OAuth。触发 Zap 会连带执行用户既有的下游自动化（可能含发邮件、扣款、改生产数据），权限风险面极宽，MJ Code 建议默认不预置。"
+    },
+    {
+      "id": "mcp-pipedream",
+      "name": "pipedream",
+      "display_name": "Pipedream MCP",
+      "vendor": "Pipedream",
+      "official": true,
+      "category": "自动化与集成平台",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Pipedream 官方远程 MCP，提供 3000+ API 的 10000+ 个预置工具，并托管认证。",
+      "capabilities": ["发现并调用 API 工具", "托管认证与连接管理", "跨应用编排"],
+      "permissions": [
+        { "level": "network", "scope": "pipedream.com" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://pipedream.com/docs/connect/mcp",
+      "maturity": "stable",
+      "notes": "端点需按账号生成，公开资料未给出统一地址，故标 manual。与 Zapier 同理，跨 3000+ API 的广域权限必须显式提示用户。"
+    },
+    {
+      "id": "mcp-composio",
+      "name": "composio",
+      "display_name": "Composio Connect MCP",
+      "vendor": "Composio",
+      "official": true,
+      "category": "自动化与集成平台",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [],
+      "description": "Composio 官方 MCP，从单一连接发现、授权并运行 1000+ 应用的工具。",
+      "capabilities": ["工具发现", "OAuth 授权编排", "跨应用工具调用"],
+      "permissions": [
+        { "level": "network", "scope": "composio.dev" },
+        { "level": "network", "scope": "any" }
+      ],
+      "auth_type": "oauth",
+      "official_url": "https://composio.dev",
+      "maturity": "stable",
+      "notes": "同样属于「一把钥匙开千扇门」型聚合器，广域权限需在接入时明确告知用户。端点随账号变化，故标 manual。"
+    },
+    {
+      "id": "mcp-n8n",
+      "name": "n8n",
+      "display_name": "n8n MCP Server",
+      "vendor": "n8n",
+      "official": true,
+      "category": "自动化与集成平台",
+      "transport": "http",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "N8N_API_KEY",
+          "required": true,
+          "label": "n8n 实例 API Key",
+          "docs_url": "https://docs.n8n.io"
+        }
+      ],
+      "description": "n8n 官方 MCP，查找、运行以及在自建实例上创建工作流。",
+      "capabilities": ["列出与检索工作流", "执行工作流", "创建工作流", "读取执行历史"],
+      "permissions": [
+        { "level": "network", "scope": "n8n-instance" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://docs.n8n.io",
+      "maturity": "stable",
+      "notes": "需自建或托管的 n8n 实例。创建/修改工作流属生产影响变更，需强制确认。端点随实例地址变化，故标 manual。"
+    },
+    {
+      "id": "mcp-postman",
+      "name": "postman",
+      "display_name": "Postman MCP Server",
+      "vendor": "Postman",
+      "official": true,
+      "category": "自动化与集成平台",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.postman.com/mcp"
+      },
+      "env_vars": [],
+      "description": "Postman 官方远程 MCP，让 AI 代理直接检索并调用用户在 Postman 中定义的 API。",
+      "capabilities": ["检索集合与环境", "读取 API 定义", "发起请求", "查看历史响应"],
+      "permissions": [
+        { "level": "network", "scope": "mcp.postman.com" },
+        { "level": "network", "scope": "api.getpostman.com" }
+      ],
+      "auth_type": "api_key",
+      "official_url": "https://www.postman.com",
+      "maturity": "stable",
+      "notes": "发起真实 API 请求可能触发写操作；Postman 环境变量里常含生产密钥，属最高敏感数据面。"
+    },
+    {
+      "id": "mcp-1password",
+      "name": "1password",
+      "display_name": "1Password MCP Server",
+      "vendor": "社区（dkvdm）",
+      "official": false,
+      "category": "自动化与集成平台",
+      "transport": "stdio",
+      "install": {
+        "type": "manual"
+      },
+      "env_vars": [
+        {
+          "name": "OP_SERVICE_ACCOUNT_TOKEN",
+          "required": true,
+          "label": "1Password 服务账号令牌",
+          "docs_url": "https://developer.1password.com/docs/service-accounts/"
+        }
+      ],
+      "description": "从 1Password 安全保险库中为 AI 代理检索凭据，避免密钥落盘到环境变量或代码里。",
+      "capabilities": ["按 vault/item 读取凭据", "检索条目", "临时注入密钥"],
+      "permissions": [
+        { "level": "network", "scope": "1password.com" }
+      ],
+      "auth_type": "token",
+      "official_url": "https://github.com/dkvdm/onepassword-mcp-server",
+      "maturity": "community",
+      "notes": "社区项目。核心风险是把保险库读取能力交给模型，建议只授予专用 vault 的只读服务账号，并严格限制可访问的 vault 列表。官方安装方式为源码/容器运行，未核实统一包名，故标 manual。"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "mj-code-server",
+  "version": "1.0.0",
+  "description": "MJ Code backend - auth, sessions, model config",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "init-db": "node src/db/init.js",
+    "test": "node test/auth.test.js && node test/mpBind.test.js && node test/collab.test.js",
+    "test:db": "node test/cloud.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "croner": "^10.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}

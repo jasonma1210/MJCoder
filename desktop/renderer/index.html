@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MJ Code</title>
+  <script>
+    // TH6：React 挂载前先落主题，消除启动时 dark→light 闪变
+    try {
+      var t = localStorage.getItem('mj_theme');
+      if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+      // TH5：自定义强调色一并前置（内联变量优先于主题定义）
+      var accent = localStorage.getItem('mj_accent');
+      if (accent) {
+        document.documentElement.style.setProperty('--theme-accent', accent);
+        document.documentElement.style.setProperty('--sem-accent', accent);
+      }
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "mj-code-agent-core",
+  "version": "0.1.0",
+  "description": "MJ Code headless Agent 引擎与 CLI（供云端任务回传与桌面端复用）",
+  "type": "module",
+  "main": "./index.js",
+  "bin": {
+    "mj-code": "./cli.js"
+  }
+}

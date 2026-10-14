@@ -1,0 +1,420 @@
+// 本地优先数据层：JSON 原子持久化（零原生依赖；规模增长后可平滑升级 better-sqlite3）
+// 离线模式下线程/消息/私有凭证/偏好/记忆全部本地可用，仅模型调用需要网络
+const fs = require('fs');
+const path = require('path');
+
+// P1-M：本地数据韧性——此前 local-data.json 一损坏就静默重置为空库，
+// 用户的全部线程/消息/凭证无声消失（且无任何提示）。三级防线：
+//   1) flush 前留 .bak（上一完好版本，第一恢复源）
+//   2) 按日副本保留 7 天（防 .bak 被连锁污染/误删）
+//   3) load 损坏先 .bak 恢复，失败才重置并 console.error 明示
+const SCHEMA_VERSION = 1;
+const DAILY_BACKUP_KEEP_DAYS = 7;
+
+const EMPTY = {
+  threads: [],      // { id, title, cwd, providerId, providerName, modelName, createdAt, updatedAt }
+  messages: [],     // { id, threadId, role, content, toolCalls, toolCallId, tokensInput, tokensOutput, modelName, createdAt }
+  providers: [],    // { id, name, base_url, keyEncrypted, createdAt } —— safeStorage 加密
+  projects: [],     // { path, name, createdAt, lastOpenedAt }（B1：项目一等实体落本机）
+  preferences: {},  // { key: value }
+  memories: [],     // { id, projectPath, content, createdAt, usageCount }
+  seq: 1,
+  schemaVersion: SCHEMA_VERSION,
+};
+
+class LocalStore {
+  constructor(dataDir) {
+    this.file = path.join(dataDir, 'local-data.json');
+    this.tmp = this.file + '.tmp';
+    this.bak = this.file + '.bak';
+    this.dataDir = dataDir;
+    this.recoveredFromBackup = false; // 诊断：本次加载是否走了 .bak 恢复
+    this.pendingBakRepair = false;     // 主文件已知损坏：下次 flush 跳过 .bak 覆盖（防好备份被坏文件污染）
+    this.data = this.load();
+  }
+
+  load() {
+    let raw = null;
+    let readFailed = false;
+    try {
+      raw = fs.readFileSync(this.file, 'utf8');
+    } catch (e) {
+      readFailed = true;
+      if (e.code === 'ENOENT') return structuredClone(EMPTY); // 首次运行：无文件不是损坏，静默空库
+      console.error(`[localStore] local-data.json 读取失败（${e.message}），尝试 .bak 恢复`);
+    }
+    if (!readFailed) {
+      try {
+        return this.migrate(JSON.parse(raw));
+      } catch (e) {
+        console.error(`[localStore] local-data.json 损坏（${e.message}），尝试 .bak 恢复`);
+      }
+    }
+    // 损坏或读取异常：先尝试 .bak 恢复（不静默重置）
+    const recovered = this.loadFromBackup();
+    if (recovered) {
+      this.recoveredFromBackup = true;
+      this.pendingBakRepair = true;
+      console.error('[localStore] 已从 .bak 恢复本地数据');
+      return recovered;
+    }
+    console.error('[localStore] local-data.json 损坏且无可用备份，已重置为空库——历史线程/消息/凭证丢失');
+    return structuredClone(EMPTY);
+  }
+
+  loadFromBackup() {
+    try {
+      return this.migrate(JSON.parse(fs.readFileSync(this.bak, 'utf8')));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // schemaVersion 迁移链：按版本号依次迁移，避免「无版本旧文件反复重放迁移」
+  migrate(raw) {
+    const rawObj = raw && typeof raw === 'object' ? raw : {};
+    const data = { ...structuredClone(EMPTY), ...rawObj };
+    let version = Number(rawObj.schemaVersion) || 0;
+    if (version < 1) {
+      // v1：旧版 provider 只有 modelId 单字段 → 补生成 models 数组（多模型真值源）
+      for (const p of data.providers || []) {
+        if (!Array.isArray(p.models)) {
+          p.models = p.modelId ? [{ modelId: String(p.modelId), displayName: String(p.modelId) }] : [];
+        }
+      }
+      version = 1;
+    }
+    data.schemaVersion = version;
+    return data;
+  }
+
+  // 原子写：写临时文件后 rename，避免崩溃损坏
+  // P1-M：rename 前留 .bak（上一完好版本）；主文件已知损坏时跳过本次 .bak 覆盖
+  flush() {
+    try {
+      if (fs.existsSync(this.file) && !this.pendingBakRepair) {
+        try { fs.copyFileSync(this.file, this.bak); } catch (e) { console.warn('[localStore] .bak 备份失败:', e.message); }
+      }
+      fs.writeFileSync(this.tmp, JSON.stringify(this.data));
+      fs.renameSync(this.tmp, this.file);
+      this.pendingBakRepair = false;
+      this.dailyBackup();
+    } catch (e) {
+      console.error('[localStore] 持久化失败:', e.message);
+    }
+  }
+
+  // 按日副本：每天首次 flush 留档；超过 7 天的清理（.bak 被连锁污染时的第二恢复源）
+  dailyBackup() {
+    try {
+      const day = new Date().toISOString().slice(0, 10);
+      const daily = path.join(this.dataDir, `local-data.${day}.json`);
+      if (!fs.existsSync(daily)) fs.copyFileSync(this.file, daily);
+      const cutoff = Date.now() - DAILY_BACKUP_KEEP_DAYS * 86400000;
+      for (const name of fs.readdirSync(this.dataDir)) {
+        const m = name.match(/^local-data\.(\d{4}-\d{2}-\d{2})\.json$/);
+        if (!m) continue;
+        const ts = new Date(`${m[1]}T00:00:00Z`).getTime();
+        if (ts < cutoff) fs.rmSync(path.join(this.dataDir, name), { force: true });
+      }
+    } catch (e) {
+      console.warn('[localStore] 按日副本失败:', e.message);
+    }
+  }
+
+  nextId() { return this.data.seq++; }
+
+  // ── 线程 ──
+  listThreads(projectPath) {
+    return [...this.data.threads]
+      .filter((t) => !t.archived)
+      .filter((t) => (projectPath ? t.projectPath === projectPath : true))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  // projectPath：线程归属的项目目录，构成「项目 → 任务」二级结构（对标 Codex）
+  createThread({ title, cwd, projectPath, providerId, providerName, modelName, status }) {
+    const now = Date.now();
+    const t = {
+      id: this.nextId(), title: title || '新会话', cwd: cwd || '',
+      projectPath: projectPath || cwd || '',
+      providerId: providerId || null, providerName: providerName || '', modelName: modelName || '',
+      status: status || 'idle', // idle | running | awaiting_approval | done
+      createdAt: now, updatedAt: now,
+    };
+    this.data.threads.push(t);
+    this.flush();
+    return t;
+  }
+
+  // 线程状态：运行中 / 待审批 / 已完成（侧栏三色指示的数据来源）
+  setThreadStatus(threadId, status) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!t) return null;
+    t.status = status;
+    t.updatedAt = Date.now();
+    this.flush();
+    return t;
+  }
+
+  addMessage({ threadId, role, content, toolCalls, toolCallId, tokensInput, tokensOutput, modelName }) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!t) throw new Error('线程不存在');
+    const m = {
+      id: this.nextId(), threadId: Number(threadId), role, content: content || '',
+      toolCalls: toolCalls || null, toolCallId: toolCallId || null,
+      tokensInput: tokensInput || 0, tokensOutput: tokensOutput || 0,
+      modelName: modelName || '', createdAt: Date.now(),
+    };
+    this.data.messages.push(m);
+    t.updatedAt = Date.now();
+    if (role === 'user' && (t.title === '新对话' || t.title === '新会话' || !t.title)) {
+      t.title = String(content || '').slice(0, 50) || t.title;
+    }
+    this.flush();
+    return m;
+  }
+
+  listMessages(threadId) {
+    return this.data.messages
+      .filter((m) => m.threadId === Number(threadId))
+      // 按 id 升序（插入序）。此前写成 `a.createdAt - a.createdAt === 0 ? 0 : a.id - b.id`——
+      // 自身相减恒为 0，恒走 0 分支，排序退化为「保持数组顺序」，仅因 push 有序才碰巧正确
+      .sort((a, b) => a.id - b.id);
+  }
+
+  // /compact 落库（P2-6 收口）：压缩后用摘要历史整体替换该会话消息。
+  // 此前压缩只改渲染层 state，重进会话即失效，上下文环重新变满。
+  replaceMessages(threadId, list) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!t) return { ok: false, error: '线程不存在' };
+    const arr = Array.isArray(list) ? list : [];
+    if (arr.length === 0) return { ok: false, error: '压缩结果为空，拒绝清空历史' };
+    const now = Date.now();
+    const next = arr.map((m, i) => ({
+      id: this.nextId(), threadId: Number(threadId),
+      role: m.role || 'assistant', content: m.content || '',
+      toolCalls: null, toolCallId: null,
+      tokensInput: m.tokensInput || 0, tokensOutput: m.tokensOutput || 0,
+      modelName: m.modelName || '', createdAt: now + i,
+    }));
+    this.data.messages = this.data.messages.filter((m) => m.threadId !== Number(threadId)).concat(next);
+    t.updatedAt = now;
+    this.flush();
+    return { ok: true, replaced: next.length, removed: arr.length >= 0 ? undefined : undefined };
+  }
+
+  archiveThread(threadId) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (t) { t.archived = true; this.flush(); }
+    return { ok: true };
+  }
+
+  // A1：会话重命名（前后端此前均缺；空标题拒绝）
+  renameThread(threadId, title) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    const clean = String(title || '').trim();
+    if (!t || !clean) return { ok: false, error: '标题不能为空' };
+    t.title = clean.slice(0, 100);
+    t.updatedAt = Date.now();
+    this.flush();
+    return { ok: true, thread: t };
+  }
+
+  // A3：归档可见 —— 「删除」的本地语义是归档，必须提供恢复/彻底删除出口
+  listArchivedThreads() {
+    return this.data.threads
+      .filter((t) => t.archived)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  restoreThread(threadId) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!t) return { ok: false, error: '会话不存在' };
+    t.archived = false;
+    t.updatedAt = Date.now();
+    this.flush();
+    return { ok: true };
+  }
+
+  purgeThread(threadId) {
+    const id = Number(threadId);
+    this.data.threads = this.data.threads.filter((x) => x.id !== id);
+    this.data.messages = this.data.messages.filter((m) => m.threadId !== id);
+    this.flush();
+    return { ok: true };
+  }
+
+  // B1：孤儿会话归组到项目
+  setThreadProject(threadId, projectPath) {
+    const t = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!t) return { ok: false, error: '会话不存在' };
+    t.projectPath = projectPath || '';
+    t.updatedAt = Date.now();
+    this.flush();
+    return { ok: true };
+  }
+
+  // ── 私有凭证（safeStorage 加密在调用方完成）──
+  listProviders() {
+    return this.data.providers.map(({ keyEncrypted, ...rest }) => rest);
+  }
+
+  addProvider({ name, base_url, keyEncrypted, modelId }) {
+    const p = {
+      id: this.nextId(), name, base_url, keyEncrypted,
+      // 多模型真值源（B 方案升级）；modelId 保留为「首模型」兼容字段（老代码/测试契约依赖）
+      models: modelId ? [{ modelId: String(modelId), displayName: String(modelId) }] : [],
+      modelId: modelId ? String(modelId) : '',
+      createdAt: Date.now(),
+    };
+    this.data.providers.push(p);
+    this.flush();
+    return { id: p.id, name: p.name, base_url: p.base_url, modelId: p.modelId, models: p.models };
+  }
+
+  setProviderModel(providerId, modelId) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    if (!p) throw new Error('本地模型服务不存在');
+    const mid = String(modelId || '');
+    p.modelId = mid;
+    // 同步 models 数组：存在则更新首项，否则置为首项
+    if (mid) {
+      if (p.models?.length > 0) p.models[0] = { modelId: mid, displayName: mid };
+      else p.models = [{ modelId: mid, displayName: mid }];
+    } else {
+      p.models = [];
+    }
+    this.flush();
+    return { id: p.id, modelId: p.modelId, models: p.models };
+  }
+
+  // 多模型：添加条目（首个同步为兼容字段 modelId）
+  addProviderModel(providerId, { model_id, display_name } = {}) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    const mid = String(model_id || '').trim();
+    if (!p) throw new Error('本地模型服务不存在');
+    if (!mid) throw new Error('模型 ID 不能为空');
+    if (!Array.isArray(p.models)) p.models = [];
+    if (p.models.some((m) => m.modelId === mid)) throw new Error('该模型已存在');
+    p.models.push({ modelId: mid, displayName: String(display_name || '').trim() || mid });
+    if (!p.modelId) p.modelId = mid; // 首模型兼容字段
+    this.flush();
+    return { id: p.id, modelId: p.modelId, models: p.models };
+  }
+
+  // 多模型：删除条目（若删除的是兼容字段所指首模型，顺移到下一个）
+  removeProviderModel(providerId, modelId) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    const mid = String(modelId || '').trim();
+    if (!p) throw new Error('本地模型服务不存在');
+    if (!Array.isArray(p.models)) p.models = [];
+    const before = p.models.length;
+    p.models = p.models.filter((m) => m.modelId !== mid);
+    if (p.models.length === before) throw new Error('模型条目不存在');
+    if (p.modelId === mid) p.modelId = p.models[0]?.modelId || '';
+    this.flush();
+    return { id: p.id, modelId: p.modelId, models: p.models };
+  }
+
+  getProviderKey(providerId) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    return p ? p.keyEncrypted : null; // 调用方负责 safeStorage 解密
+  }
+
+  deleteProvider(providerId) {
+    this.data.providers = this.data.providers.filter((x) => x.id !== Number(providerId));
+    this.flush();
+    return { ok: true };
+  }
+
+  // B2：供应商可编辑（name / base_url / 可选换 Key）——此前 base_url 与 Key 不可更新
+  updateProvider(providerId, { name, base_url, keyEncrypted } = {}) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    if (!p) throw new Error('本地模型服务不存在');
+    if (typeof name === 'string' && name.trim()) p.name = name.trim();
+    if (typeof base_url === 'string' && base_url.trim()) p.base_url = base_url.trim();
+    if (typeof keyEncrypted === 'string' && keyEncrypted) p.keyEncrypted = keyEncrypted;
+    this.flush();
+    return { id: p.id, name: p.name, base_url: p.base_url, modelId: p.modelId };
+  }
+
+  // ── 项目（B1：项目一等实体，落本机持久化）──
+  listProjects() {
+    return [...this.data.projects].sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+  }
+
+  addProject({ path, name }) {
+    if (!path) return null;
+    const now = Date.now();
+    let p = this.data.projects.find((x) => x.path === path);
+    if (p) {
+      p.lastOpenedAt = now;
+      if (name) p.name = name;
+    } else {
+      p = { path, name: name || path, createdAt: now, lastOpenedAt: now };
+      this.data.projects.push(p);
+    }
+    this.flush();
+    return p;
+  }
+
+  removeProject(projectPath) {
+    this.data.projects = this.data.projects.filter((x) => x.path !== projectPath);
+    this.flush();
+    return { ok: true };
+  }
+
+  // 重命名 = 只改「显示名」，不动磁盘目录名。
+  // 目录名是路径标识（会话按 projectPath 归属、沙箱按目录授权），改名会让历史会话失联；
+  // 而用户看到的 `20261013-1271` 这类机器名又完全不可读，所以两者必须解耦。
+  renameProject(projectPath, name) {
+    const clean = String(name || '').trim().slice(0, 48);
+    if (!clean) return { ok: false, error: '名称不能为空' };
+    const p = this.data.projects.find((x) => x.path === projectPath);
+    if (!p) return { ok: false, error: '项目不存在' };
+    p.name = clean;
+    this.flush();
+    return { ok: true, project: p };
+  }
+
+  // ── 偏好 ──
+  getPreference(key) { return this.data.preferences[key]; }
+
+  setPreference(key, value) {
+    this.data.preferences[key] = value;
+    this.flush();
+    return { ok: true };
+  }
+
+  // ── 记忆（两阶段 POC：stage1 原始留存，注入时按项目与使用计数选取）──
+  addMemory({ projectPath, content }) {
+    if (!content) return null;
+    const m = { id: this.nextId(), projectPath: projectPath || '', content: String(content).slice(0, 2000), createdAt: Date.now(), usageCount: 0 };
+    this.data.memories.push(m);
+    // 上限控制：每项目最多保留 50 条，淘汰最旧
+    const same = this.data.memories.filter((x) => x.projectPath === m.projectPath);
+    if (same.length > 50) {
+      const oldest = same.sort((a, b) => a.createdAt - b.createdAt)[0];
+      this.data.memories = this.data.memories.filter((x) => x.id !== oldest.id);
+    }
+    this.flush();
+    return m;
+  }
+
+  listMemories(projectPath, limit = 5) {
+    return this.data.memories
+      .filter((m) => m.projectPath === projectPath)
+      .sort((a, b) => (b.usageCount - a.usageCount) || (b.createdAt - a.createdAt))
+      .slice(0, limit);
+  }
+
+  touchMemories(ids) {
+    for (const m of this.data.memories) {
+      if (ids.includes(m.id)) m.usageCount += 1;
+    }
+    this.flush();
+  }
+}
+
+module.exports = { LocalStore };

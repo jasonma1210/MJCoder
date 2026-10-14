@@ -1,0 +1,64 @@
+{
+  "name": "mj-code-desktop",
+  "version": "1.0.0",
+  "description": "MJ Code - AI coding assistant",
+  "main": "main/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:vite": "cd renderer && npm run dev",
+    "build": "cd renderer && npm run build && electron-builder",
+    "start": "electron .",
+    "test": "node test/ui-conventions.test.js && node test/layout-pane.test.js && node test/undef-ident.test.js && node test/props-contract.test.js && node test/smoke-load.mjs && node test/project-switch.test.js && node test/layout-resilience.test.js && node test/thread-composer.test.js && node test/plan-worktree-context.test.js && node test/featureFlags.test.js && node test/skillCompat.test.js && node test/ide.test.js && node test/skills.test.js && node test/sandbox.test.js && node test/approval.test.js && node test/localStore.test.js && node test/workspace.test.js && node test/worktree.test.js && node test/degrade.test.js && node test/ecosystem.test.js && node test/tools-cwd.test.js && node test/providerStorage.test.mjs && node test/agent-core.test.mjs && node test/message-schema.test.js && node test/agent-engine.test.mjs && node test/mcp-handshake.test.js && node test/pluginMarket.test.js && node test/computerUse.test.js && node test/cuaVision.test.js && node test/scheduler.test.js && node test/github.test.js && node test/release-update.test.js && node test/render-smoke.mjs && node test/settings-coverage.test.js && node test/tool-loop-guard.test.js",
+    "eval:check": "node eval/run-eval.mjs --check",
+    "eval": "node eval/run-eval.mjs",
+    "eval:hard": "node eval/run-eval.mjs --tasks eval/tasks-hard.json",
+    "eval:compare": "node eval/run-compare.mjs",
+    "eval:compare:hard": "node eval/run-compare.mjs --tasks eval/tasks-hard.json"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.mjcoder.desktop",
+    "productName": "MJ Coder",
+    "publish": {
+      "provider": "github",
+      "owner": "jasonma1210",
+      "repo": "MJCode",
+      "releaseType": "release",
+      "channel": "latest"
+    },
+    "files": [
+      "main/**/*",
+      "agent-core/**/*",
+      "renderer/dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dmg",
+      "icon": "renderer/src/assets/logo.png",
+      "artifactName": "MJCode-${version}-${os}-${arch}.${ext}"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "renderer/src/assets/logo.png",
+      "artifactName": "MJCode-${version}-${os}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "renderer/src/assets/logo.png",
+      "artifactName": "MJCode-${version}-${os}-${arch}.${ext}"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "yjs": "^13.6.33"
+  }
+}

@@ -1,0 +1,20 @@
+<view style="display: flex; gap: 16rpx; padding: 24rpx;">
+  <view wx:for="{{['all','running','review','done','failed']}}" wx:key="*this"
+    data-state="{{item}}" bindtap="setFilter"
+    style="padding: 8rpx 24rpx; border-radius: 999rpx; font-size: 24rpx; {{filter === item ? 'background:#10a37f;color:#fff;' : 'background:#1e1e1e;color:#888;'}}">
+    {{item === 'all' ? '全部' : item}}
+  </view>
+</view>
+
+<view wx:if="{{error}}" class="status-failed" style="padding: 24rpx;">{{error}}</view>
+<view wx:if="{{!tasks.length && !loading}}" class="muted" style="text-align: center; padding: 120rpx 0;">暂无云端任务</view>
+
+<view wx:for="{{tasks}}" wx:key="id" class="card" data-id="{{item.id}}" bindtap="openDetail">
+  <view style="font-weight: 600;">{{item.name || item.objective}}</view>
+  <view class="muted" style="margin-top: 8rpx;">
+    {{item.state}} · {{item.updatedAt || ''}}
+  </view>
+  <view class="{{'status-' + item.state || 'muted'}}" style="margin-top: 8rpx; font-size: 24rpx;">
+    {{item.state === 'review' ? '待审批' : item.state === 'running' ? '执行中' : item.state === 'done' ? '已完成' : item.state === 'failed' ? '失败' : item.state}}
+  </view>
+</view>

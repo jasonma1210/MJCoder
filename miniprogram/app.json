@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/login/login",
+    "pages/tasks/tasks",
+    "pages/detail/detail"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#0d0d0d",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "MJ Code",
+    "backgroundColor": "#0d0d0d"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,7 @@
+[
+  { "id": "dark", "name": "暗黑", "color": "#0d0d0d", "swatch": { "bg": "#0d0d0d", "surface": "#1e1e1e", "accent": "#10a37f" } },
+  { "id": "light", "name": "明亮", "color": "#ffffff", "swatch": { "bg": "#ffffff", "surface": "#f0f0f0", "accent": "#0B7C61" } },
+  { "id": "midnight", "name": "午夜蓝", "color": "#0a0e1a", "swatch": { "bg": "#0a0e1a", "surface": "#162033", "accent": "#6366f1" } },
+  { "id": "forest", "name": "森林绿", "color": "#0c120e", "swatch": { "bg": "#0c120e", "surface": "#16241c", "accent": "#22c55e" } },
+  { "id": "sunset", "name": "日落橙", "color": "#1a0f0a", "swatch": { "bg": "#1a0f0a", "surface": "#2e1c16", "accent": "#f97316" } }
+]

@@ -1,0 +1,36 @@
+<view wx:if="{{loading}}" class="muted" style="text-align:center; padding: 120rpx 0;">加载中...</view>
+<view wx:elif="{{error}}" class="status-failed" style="padding: 24rpx;">{{error}}</view>
+
+<block wx:elif="{{run}}">
+  <view class="card">
+    <view style="font-weight: 600;">{{run.name || run.objective}}</view>
+    <view class="muted" style="margin-top: 8rpx;">状态：{{run.state}}</view>
+    <view wx:if="{{run.sandboxId}}" class="muted">沙箱：{{run.sandboxId}}</view>
+  </view>
+
+  <view wx:if="{{report}}" class="card">
+    <view style="font-weight: 600; margin-bottom: 12rpx;">执行报告</view>
+    <view class="muted" style="white-space: pre-wrap;">{{report.finalText || report.error}}</view>
+    <view wx:if="{{report.usage}}" class="muted" style="margin-top: 12rpx;">
+      tokens：入 {{report.usage.prompt_tokens || 0}} / 出 {{report.usage.completion_tokens || 0}}
+    </view>
+  </view>
+
+  <view wx:if="{{diffPreview}}" class="card">
+    <view style="font-weight: 600; margin-bottom: 12rpx;">变更摘要</view>
+    <view class="muted" style="font-family: monospace; font-size: 22rpx; white-space: pre-wrap;">{{diffPreview}}</view>
+  </view>
+
+  <block wx:if="{{actionable}}">
+    <view class="card">
+      <view style="font-weight: 600; margin-bottom: 12rpx;">审批</view>
+      <input placeholder="备注（拒绝时可附重试指令）" value="{{note}}" bindinput="onNote"
+        style="background:#0d0d0d; border:1rpx solid #2a2a2a; border-radius:12rpx; padding:16rpx; margin-bottom:16rpx;" />
+      <view style="display:flex; gap:16rpx;">
+        <view class="btn-danger" style="flex:1;" data-decision="reject" bindtap="decide">拒绝</view>
+        <view class="btn-primary" style="flex:1;" data-decision="approve" bindtap="decide">批准</view>
+      </view>
+      <view class="muted" style="margin-top: 16rpx;">敏感命令（push/删除/CI 配置）需回桌面端二次确认</view>
+    </view>
+  </block>
+</block>

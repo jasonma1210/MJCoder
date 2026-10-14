@@ -1,0 +1,13 @@
+{
+  "description": "MJ Code 小程序控制面：云端任务查看与审批（仅控制面，不执行任何代码）",
+  "appid": "wx0000000000000000",
+  "projectname": "mj-code-miniprogram",
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.0.0"
+}

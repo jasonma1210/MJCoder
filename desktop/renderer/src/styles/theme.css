@@ -1,0 +1,295 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── 换肤系统 ── */
+:root {
+  --theme-bg: #0d0d0d;
+  --theme-sidebar: #161616;
+  --theme-surface: #1e1e1e;
+  --theme-border: #2a2a2a;
+  --theme-text: #e8e8e8;
+  --theme-text-secondary: #888888;
+  --theme-accent: #10a37f;
+  --theme-hover: #2a2a2a;
+  --theme-code-bg: #1a1a1a;
+}
+
+[data-theme="light"] {
+  --theme-bg: #ffffff;
+  --theme-sidebar: #f7f7f7;
+  --theme-surface: #f0f0f0;
+  --theme-border: #e0e0e0;
+  --theme-text: #1a1a1a;
+  --theme-text-secondary: #666666;
+  --theme-accent: #0B7C61;  /* light 下 4.6:1 达 AA（原 #10a37f 仅 3.0:1，A9） */
+  --theme-hover: #e8e8e8;
+  --theme-code-bg: #f6f8fa;
+}
+
+[data-theme="midnight"] {
+  --theme-bg: #0a0e1a;
+  --theme-sidebar: #0f1525;
+  --theme-surface: #162033;
+  --theme-border: #1e2d4a;
+  --theme-text: #e0e6f0;
+  --theme-text-secondary: #6b7a99;
+  --theme-accent: #6366f1;
+  --theme-hover: #1a2742;
+  --theme-code-bg: #0d1424;
+}
+
+[data-theme="forest"] {
+  --theme-bg: #0c120e;
+  --theme-sidebar: #111a14;
+  --theme-surface: #16241c;
+  --theme-border: #1e3328;
+  --theme-text: #dce8dd;
+  --theme-text-secondary: #6b8a72;
+  --theme-accent: #22c55e;
+  --theme-hover: #1a2e22;
+  --theme-code-bg: #0e1811;
+}
+
+[data-theme="sunset"] {
+  --theme-bg: #1a0f0a;
+  --theme-sidebar: #241612;
+  --theme-surface: #2e1c16;
+  --theme-border: #3d2620;
+  --theme-text: #f0e0d8;
+  --theme-text-secondary: #a08070;
+  --theme-accent: #f97316;
+  --theme-hover: #33201a;
+  --theme-code-bg: #21120c;
+}
+
+/* TH1：midnight / forest / sunset 语义层补齐（此前三套主题只定义骨架色，
+   --sem-* / --surface-raise / --border-strong 沿用暗色默认值，切换后观感割裂） */
+[data-theme="midnight"] {
+  --theme-accent-soft: #A5B4FC;   /* indigo-300，与 accent #6366f1 同色系 */
+  --sem-success: #34D399;
+  --sem-danger: #F87171;
+  --sem-warn: #FBBF24;
+  --sem-info: #93C5FD;
+  --sem-overlay: rgba(0, 0, 0, 0.65);
+  --sem-accent: #6366F1;
+  --sem-accent-bg: rgba(99, 102, 241, 0.14);
+  --sem-focus: #93C5FD;
+  --surface-raise: #1B2640;
+  --border-strong: #2A3A5C;
+  --sem-danger-bg: rgba(248, 113, 113, 0.13);
+  --sem-success-bg: rgba(52, 211, 153, 0.14);
+  --sem-warn-bg: rgba(251, 191, 36, 0.14);
+  --sem-info-bg: rgba(147, 197, 253, 0.12);
+}
+
+[data-theme="forest"] {
+  --theme-accent-soft: #86EFAC;   /* green-300，与 accent #22c55e 同色系 */
+  --sem-success: #4ADE80;
+  --sem-danger: #F87171;
+  --sem-warn: #FBBF24;
+  --sem-info: #7DD3FC;
+  --sem-overlay: rgba(0, 0, 0, 0.65);
+  --sem-accent: #22C55E;
+  --sem-accent-bg: rgba(34, 197, 94, 0.13);
+  --sem-focus: #7DD3FC;
+  --surface-raise: #1B2A1F;
+  --border-strong: #2A4433;
+  --sem-danger-bg: rgba(248, 113, 113, 0.13);
+  --sem-success-bg: rgba(74, 222, 128, 0.14);
+  --sem-warn-bg: rgba(251, 191, 36, 0.14);
+  --sem-info-bg: rgba(125, 211, 252, 0.12);
+}
+
+[data-theme="sunset"] {
+  --theme-accent-soft: #FDBA74;   /* orange-300，与 accent #f97316 同色系 */
+  --sem-success: #34D399;
+  --sem-danger: #F97066;
+  --sem-warn: #FBBF24;
+  --sem-info: #93C5FD;
+  --sem-overlay: rgba(0, 0, 0, 0.65);
+  --sem-accent: #F97316;
+  --sem-accent-bg: rgba(249, 115, 22, 0.14);
+  --sem-focus: #93C5FD;
+  --surface-raise: #38231B;
+  --border-strong: #4A3026;
+  --sem-danger-bg: rgba(249, 112, 102, 0.13);
+  --sem-success-bg: rgba(52, 211, 153, 0.14);
+  --sem-warn-bg: rgba(251, 191, 36, 0.14);
+  --sem-info-bg: rgba(147, 197, 253, 0.12);
+}
+
+/* ── 语义层（L2）：组件唯一可用层，禁止在组件内写十六进制色 ── */
+:root {
+  --theme-accent-soft: #D0BCFF;   /* 图标与次要强调（仅暗色主题适用） */
+  --sem-success: #4ADE80;
+  --sem-danger: #F97066;
+  --sem-warn: #F2B544;
+  --sem-info: #8AB4F8;
+  --sem-overlay: rgba(0, 0, 0, 0.6);
+  /* A8 修复：ContextRing 正常态圆环此前取不到值（theme.css 未定义 accent） */
+  --sem-accent: #10A37F;
+  --sem-accent-bg: rgba(16, 163, 127, 0.12);
+  --sem-focus: #8AB4F8;
+  --surface-raise: #232323;      /* 浮层抬升面 */
+  --border-strong: #3A3A3A;      /* hover 边框 */
+  /* 淡底（Tailwind v3 对纯 CSS 变量色不支持 /opacity，故单独提供底色 token） */
+  --sem-danger-bg: rgba(249, 112, 102, 0.12);
+  --sem-success-bg: rgba(74, 222, 128, 0.15);
+  --sem-warn-bg: rgba(242, 181, 68, 0.15);
+  --sem-info-bg: rgba(138, 180, 248, 0.12);
+}
+[data-theme="light"] {
+  --theme-accent-soft: #6750A4;   /* #D0BCFF 在白底对比度不足，取同色系深色 */
+  --sem-success: #16A34A;
+  --sem-danger: #DC2626;
+  --sem-warn: #B45309;
+  --sem-info: #1D4ED8;
+  --sem-overlay: rgba(0, 0, 0, 0.35);
+  --sem-accent: #0B7C61;
+  --sem-accent-bg: rgba(11, 124, 97, 0.10);
+  --sem-focus: #1D4ED8;
+  --surface-raise: #FFFFFF;
+  --border-strong: #C9C9C9;
+  --sem-danger-bg: rgba(220, 38, 38, 0.10);
+  --sem-success-bg: rgba(22, 163, 74, 0.12);
+  --sem-warn-bg: rgba(180, 83, 9, 0.12);
+  --sem-info-bg: rgba(29, 78, 216, 0.10);
+}
+
+/* ── 圆角四档（小控件=sm / 按钮·输入框=md / 卡片=lg / 模态=xl / 胶囊=full）── */
+:root {
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  /* 阴影三档（light 主题另乘 0.6 定义） */
+  --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.22);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.28);
+  /* 动效（硬约束：禁弹跳曲线，收敛三档） */
+  --dur-fast: 100ms;
+  --dur-base: 150ms;
+  --dur-slow: 250ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --font-mono: 'SF Mono', Menlo, Consolas, monospace;
+}
+[data-theme="light"] {
+  --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.11);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.13);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.17);
+}
+
+/* ── 层级层（L3）：禁止裸 z-index ──
+   次序（C6 修复）：approval 130 > toast 120 > palette 110 > diff 90 > menu 60 > settings 50 > drawer 40
+   原值 palette(110) > approval(100) 导致命令面板盖住最高优先级的审批卡
+   menu(60)：右键菜单须盖住设置浮层(50)——否则在设置页内的列表上右键会被浮层遮住 */
+:root {
+  --z-drawer: 40;
+  --z-settings: 50;
+  --z-menu: 60;
+  --z-diff: 90;
+  --z-palette: 110;
+  --z-toast: 120;
+  --z-approval: 130;
+}
+
+/* C9：全局键盘焦点可见性 */
+:focus-visible {
+  outline: 2px solid var(--sem-focus);
+  outline-offset: 1px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--theme-bg);
+  color: var(--theme-text);
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 3px; }
+
+/* 消息气泡 */
+.msg-user {
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.msg-assistant { padding: 4px 0; }
+
+/* Markdown 排版 */
+.msg-assistant p, .msg-user p { margin: 4px 0; line-height: 1.6; }
+.msg-assistant h1, .msg-assistant h2, .msg-assistant h3 { margin: 12px 0 6px; }
+.msg-assistant ul, .msg-assistant ol { margin: 4px 0 4px 20px; }
+.msg-assistant li { margin: 2px 0; }
+.msg-assistant blockquote {
+  border-left: 3px solid var(--theme-accent);
+  padding-left: 12px;
+  margin: 8px 0;
+  color: var(--theme-text-secondary);
+}
+
+/* 代码块 */
+pre {
+  background: var(--theme-code-bg, #1a1a1a);
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+code { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+:not(pre) > code {
+  background: var(--theme-hover);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--theme-accent);
+}
+
+/* 输入框 */
+textarea:focus { outline: none; }
+
+/* 动画 */
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.animate-pulse { animation: pulse 1s infinite; }
+
+/* ── Markdown 预览排版（右侧文件预览 / 应用内 md 文件查看）──
+   仅作用于 .markdown-body 容器：对话气泡沿用上方既有的 .msg-assistant 规则，
+   二者互不影响（预览栏正文不套气泡，字号与行距按阅读态给到更宽松的值）。 */
+.markdown-body { color: var(--theme-text); }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: 18px 0 8px; font-weight: 600; line-height: 1.35;
+}
+.markdown-body h1 { font-size: 20px; border-bottom: 1px solid var(--theme-border); padding-bottom: 6px; }
+.markdown-body h2 { font-size: 17px; border-bottom: 1px solid var(--theme-border); padding-bottom: 5px; }
+.markdown-body h3 { font-size: 15px; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 14px; }
+.markdown-body p { margin: 8px 0; }
+.markdown-body ul, .markdown-body ol { margin: 8px 0 8px 22px; }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li { margin: 3px 0; }
+.markdown-body li > input[type="checkbox"] { margin-right: 6px; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--theme-accent);
+  padding: 2px 0 2px 12px;
+  margin: 10px 0;
+  color: var(--theme-text-secondary);
+}
+.markdown-body a { color: var(--theme-accent); text-decoration: underline; text-underline-offset: 2px; }
+.markdown-body hr { border: 0; border-top: 1px solid var(--theme-border); margin: 16px 0; }
+.markdown-body table { border-collapse: collapse; margin: 12px 0; display: block; overflow-x: auto; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--theme-border); padding: 6px 10px; text-align: left; }
+.markdown-body th { background: var(--theme-hover); font-weight: 600; }
+.markdown-body img { max-width: 100%; border-radius: 8px; }

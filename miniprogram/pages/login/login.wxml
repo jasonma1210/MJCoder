@@ -1,0 +1,11 @@
+<view class="card" style="margin-top: 120rpx;">
+  <view style="font-size: 40rpx; font-weight: 600; margin-bottom: 16rpx;">MJ Code 控制面</view>
+  <view class="muted" style="margin-bottom: 32rpx;">绑定桌面端后，可远程查看云端任务并审批</view>
+  <view class="btn-primary" bindtap="onBind">{{loading ? '登录中...' : '微信一键绑定'}}</view>
+  <block wx:if="{{bindCode}}">
+    <view class="muted" style="margin-top: 32rpx;">绑定码（在桌面端 设置→账户 输入）：</view>
+    <view style="font-size: 48rpx; letter-spacing: 8rpx; margin: 16rpx 0;" bindtap="copyCode">{{bindCode}}</view>
+    <view class="btn-primary" bindtap="checkBound">我已在桌面端确认</view>
+  </block>
+  <view wx:if="{{error}}" class="status-failed" style="margin-top: 24rpx;">{{error}}</view>
+</view>
