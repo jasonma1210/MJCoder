@@ -40,9 +40,10 @@ import('../agent-core/index.js').then((m) => {
     assert.deepStrictEqual(item.properties.status.enum, ['pending', 'in_progress', 'completed']);
   });
 
-  check('工具总数已从 16 增至 21', () => {
+  check('工具总数随能力演进：16 → 21 → 26（新增 PR 审查闭环 5 工具）', () => {
     // 16 原有 + web_search/web_fetch/todo_write + git_add/git_branch = 21
-    assert.strictEqual(BASE_TOOLS.length, 21, `实际 ${BASE_TOOLS.length} 个工具`);
+    // + pr_list/pr_view/pr_diff/pr_review/pr_comment = 26（PR 审查闭环）
+    assert.strictEqual(BASE_TOOLS.length, 26, `实际 ${BASE_TOOLS.length} 个工具`);
   });
 
   // ── P1-5：BASE_TOOLS 与 handler 映射 / 审批分级不得断链 ──

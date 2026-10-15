@@ -151,6 +151,44 @@ export const BASE_TOOLS = [
       + '用于确认当前分支、查找可用分支名；创建或切换分支请改用 shell（会触发危险命令审批）。',
     parameters: { type: 'object', properties: {} },
   }},
+  // ── GitHub PR 审查闭环（对标 Codex 的 diff 审查交付出口）──
+  { type: 'function', function: {
+    name: 'pr_list', description: '列出 GitHub PR（gh CLI，只读）。用于审查前概览：编号/标题/作者/CI 状态。',
+    parameters: { type: 'object', properties: {
+      state: { type: 'string', description: 'open/closed/all，默认 open' },
+      limit: { type: 'number', description: '条数上限，默认 10（最大 50）' },
+      author: { type: 'number', description: '按作者过滤（可选）' },
+    }},
+  }},
+  { type: 'function', function: {
+    name: 'pr_view', description: '查看单个 PR 全貌：标题/描述/增删行数/CI 状态/已有 review（只读）。审查第一步。',
+    parameters: { type: 'object', properties: {
+      number: { type: 'number', description: 'PR 编号' },
+    }, required: ['number'] },
+  }},
+  { type: 'function', function: {
+    name: 'pr_diff', description: '拉取 PR 结构化 diff（按文件 → hunk 分组，含每文件增删行数）。逐 hunk 审查用；超大 PR 会截断并提示按文件分片。',
+    parameters: { type: 'object', properties: {
+      number: { type: 'number', description: 'PR 编号' },
+      file: { type: 'string', description: '按文件名过滤（diff 过大时分片拉取用）' },
+    }, required: ['number'] },
+  }},
+  { type: 'function', function: {
+    name: 'pr_review', description: '提交 PR 审查结论：APPROVE / REQUEST_CHANGES / COMMENT。'
+      + '对外可见动作，会弹审批卡确认；APPROVE/REQUEST_CHANGES 必须附审查意见正文。',
+    parameters: { type: 'object', properties: {
+      number: { type: 'number', description: 'PR 编号' },
+      event: { type: 'string', description: 'APPROVE / REQUEST_CHANGES / COMMENT' },
+      body: { type: 'string', description: '审查意见（APPROVE/REQUEST_CHANGES 必填）：结论 + 逐条问题（含文件与行号）+ 建议修法' },
+    }, required: ['number', 'event'] },
+  }},
+  { type: 'function', function: {
+    name: 'pr_comment', description: '在 PR 会话中追加评论（不打结论）。行级定位请在正文中写明文件与行号。',
+    parameters: { type: 'object', properties: {
+      number: { type: 'number', description: 'PR 编号' },
+      body: { type: 'string', description: '评论内容' },
+    }, required: ['number', 'body'] },
+  }},
   // 子代理
   { type: 'function', function: {
     name: 'spawn_subagent', description: '启动子代理处理独立子任务，适合并行探索或复杂任务分解',
@@ -270,6 +308,8 @@ const CWD_TOOLS = new Set([
   'write_file', 'edit_file', 'apply_patch',
   'git_status', 'git_diff', 'git_log', 'git_commit', 'git_branch', 'git_add',
   'orchestrate_task',
+  // PR 审查闭环：gh 依赖 cwd 解析仓库归属
+  'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment',
 ]);
 
 // 子代理可用工具：只读探索集（不做任何修改）
@@ -309,7 +349,7 @@ const TOKEN_RESCUE_MAX = 3;
 const TOKEN_COMPACTION_TRIGGER = 0.7;
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
-const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'install_plugin']);
+const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'install_plugin', 'pr_review', 'pr_comment']);
 
 // 工具名 → toolHandlers / window.mjcode 上的方法名（camelCase）
 const TOOL_HANDLER_NAMES = {
@@ -332,6 +372,11 @@ const TOOL_HANDLER_NAMES = {
   install_plugin: 'installPlugin',
   web_search: 'webSearch',
   web_fetch: 'webFetch',
+  pr_list: 'prList',
+  pr_view: 'prView',
+  pr_diff: 'prDiff',
+  pr_review: 'prReview',
+  pr_comment: 'prComment',
   todo_write: 'todoWrite',
 };
 

@@ -1975,8 +1975,11 @@ ipcMain.handle('files:saveUpload', async (_, { name, dataBase64 }) => {
   }
 });
 
-// ── MCP 客户端（stdio JSON-RPC）──
-const mcpServers = new Map(); // name -> { child, pending, nextId, tools, stderrTail }
+// ── MCP 客户端（多传输：stdio + Streamable HTTP）──
+// 2026-10-15：客户端实现抽到 main/mcpClient.js（God Object 拆分）并新增 HTTP 传输
+//（MCP Streamable HTTP spec）。本层只保留配置持久化与 IPC 接线。
+const mcp = require('./mcpClient');
+const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpServers() };
 
 // MCP 配置持久化（userData/mcp-servers.json）+ 子进程 env 白名单
 const MCP_CONFIG_FILE = () => path.join(app.getPath('userData'), 'mcp-servers.json');
@@ -2011,108 +2014,22 @@ function sanitizeEnv(env) {
   return { ...out, PATH: shellEnv().PATH, ...(env || {}) };
 }
 
-// 单次 JSON-RPC 请求：id 关联 + 超时清理，杜绝 initialize 提前 resolve 吞掉 tools/list
-function mcpRpc(server, method, params, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const id = server.nextId++;
-    const timer = setTimeout(() => {
-      server.pending.delete(id);
-      reject(new Error(`MCP ${method} 超时（${timeoutMs / 1000}s）`));
-    }, timeoutMs);
-    server.pending.set(id, (msg) => {
-      clearTimeout(timer);
-      if (msg.error) reject(new Error(msg.error.message || 'MCP 返回错误'));
-      else resolve(msg.result);
-    });
-    server.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params: params || {} }) + '\n');
+// MCP 连接核心逻辑（IPC 处理器与启动重连共用）：委托给 mcpClient（stdio/http 双传输）
+async function connectMcpServer({ name, transport = 'stdio', command, args = [], env = {}, url, headers = {} } = {}) {
+  const r = await mcp.connectMcpServer({
+    name, transport, command, args, env: sanitizeEnv(env), url, headers,
+    onStatus: (n, st, code) => emitMcpStatus(n, st, code),
+    onLog: (line) => console.log(`[MCP ${name}]`, line),
   });
-}
-
-// MCP 连接核心逻辑（IPC 处理器与启动重连共用）
-async function connectMcpServer({ name, command, args = [], env = {} }) {
-  if (mcpServers.has(name)) {
-    const cached = mcpServers.get(name);
-    // P1-1 修复：缓存命中前必须校验子进程是否真的还活着。
-    // 事故背景：原实现只判断 Map 里有这个 name 就直接返回「连接成功」，
-    // 但 child 可能已经崩溃（进程挂了、stdio 管道断开）。此时缓存命中会让
-    // 上层以为工具可用，实际每次调用都失败——用户侧表现为「AI 卡住不动」。
-    const alive = cached?.child && cached.child.exitCode === null && cached.child.signalCode === null;
-    if (alive) {
-      return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
-    }
-    // 进程已死但 Map 尚未清理（close 事件可能还没派发）：主动清理后走重连
-    console.warn(`[MCP ${name}] 缓存命中但子进程已退出（exitCode=${cached?.child?.exitCode}），转为重新连接`);
-    mcpServers.delete(name);
-  }
-  if (!name || !command) return { ok: false, error: 'name 与 command 必填' };
-  const child = spawn(command, args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: sanitizeEnv(env), // env 白名单（P2-10）
-  });
-  const server = { child, pending: new Map(), nextId: 1, tools: [], stderrTail: '' };
-  let buf = '';
-
-  child.stdout.on('data', (data) => {
-    buf += data.toString();
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const msg = JSON.parse(line);
-        if (msg.id !== undefined && server.pending.has(msg.id)) {
-          server.pending.get(msg.id)(msg);
-          server.pending.delete(msg.id);
-        }
-      } catch (e) {
-        console.warn(`[MCP ${name}] 非 JSON 输出:`, line.slice(0, 120));
-      }
-    }
-  });
-  child.stderr.on('data', (d) => {
-    server.stderrTail = (server.stderrTail + d.toString()).slice(-2000);
-    console.log(`[MCP ${name}]`, d.toString().trim());
-  });
-  // P1-1 修复：MCP 子进程崩溃/退出必须「可感知」而不是静默从 Map 删掉。
-  // 事故背景：原实现 close/error 仅 console + delete，渲染层完全不知道工具已失效，
-  // 用户侧表现是「AI 卡住不动」且无任何提示。现在改为：删除缓存 + 发 tasks:event
-  // 事件（AgentDock/设置页可据此把该服务标为已断开）+ 明确日志。
-  child.on('close', (code) => {
-    mcpServers.delete(name);
-    const wasConnected = server.handshakeDone === true;
-    console.log(`[MCP ${name}] 进程退出 code=${code}${wasConnected ? '（运行期崩溃，工具已失效）' : '（握手阶段退出）'}`);
-    if (wasConnected) emitMcpStatus(name, 'crashed', code);
-  });
-  child.on('error', (err) => {
-    mcpServers.delete(name);
-    console.error(`[MCP ${name}] 启动失败:`, err.message);
-    if (server.handshakeDone === true) emitMcpStatus(name, 'crashed', null);
-  });
-
-  mcpServers.set(name, server);
-  try {
-    // 1. initialize → 2. notifications/initialized → 3. tools/list（三步分离，各自超时）
-    await mcpRpc(server, 'initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'mj-coder', version: '1.0' },
-    });
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    const listRes = await mcpRpc(server, 'tools/list', {});
-    server.tools = listRes?.tools || [];
-    // P1-1：握手完成标记——此后进程退出才算「运行期崩溃」（需要通知用户），
-    // 握手阶段退出属于安装/启动失败（调用方已拿到错误返回值，无需额外事件）。
-    server.handshakeDone = true;
-    // 连接成功 → 持久化配置（重启后自动重连）
+  // 连接成功 → 持久化配置（重启后自动重连）。fail-closed：握手失败不写盘。
+  if (r.ok && name) {
     const config = loadMcpConfig().filter((s) => s.name !== name);
-    config.push({ name, command, args, env });
+    config.push(transport === 'http'
+      ? { name, transport, url, headers, env }
+      : { name, transport: 'stdio', command, args, env });
     saveMcpConfig(config);
-    return { ok: true, server: name, toolCount: server.tools.length, tools: server.tools };
-  } catch (err) {
-    child.kill();
-    mcpServers.delete(name);
-    return { ok: false, error: err.message, stderr: server.stderrTail };
   }
+  return r;
 }
 
 ipcMain.handle('mcp:connect', async (_, payload) => connectMcpServer(payload));
@@ -2124,30 +2041,9 @@ function emitMcpStatus(name, status, code) {
   } catch (e) { /* 事件发送失败不影响主流程 */ }
 }
 
-// P1-1：统一清理全部 MCP 子进程（应用退出时调用）。
-// 事故背景：此前 will-quit 只落盘、停调度、清审批，**完全没管 MCP 子进程**——
-// 关闭 Electron 后 MCP Server（典型 npx 拉起的 node 进程）成为孤儿，
-// 端口与 stdio 管道占用导致下次启动握手失败，用户以为「工具坏了」其实是孤儿进程。
+// P1-1：统一清理全部 MCP 子进程（应用退出时调用）→ 委托 mcpClient（stdio SIGTERM→SIGKILL）
 function killAllMcpServers() {
-  let killed = 0;
-  for (const [name, s] of mcpServers) {
-    try {
-      const child = s?.child;
-      if (!child || child.exitCode !== null || child.signalCode !== null) continue;
-      child.kill('SIGTERM');
-      killed += 1;
-      // SIGTERM 后 1s 仍存活则强杀（某些 MCP Server 不响应 TERM）
-      setTimeout(() => {
-        try {
-          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-        } catch { /* 已退出 */ }
-      }, 1000).unref();
-    } catch (e) {
-      console.warn(`[MCP ${name}] 退出清理失败:`, e.message);
-    }
-  }
-  if (killed > 0) console.log(`[MCP] 退出清理：已终止 ${killed} 个 MCP 子进程`);
-  return killed;
+  return mcp.killAllMcpServers();
 }
 
 // P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
@@ -2165,7 +2061,7 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
     applyApprovalDecision(decision, `mcp__${server}__${tool}`, args || {}, conversationId);
   }
   try {
-    const result = await mcpRpc(s, 'tools/call', { name: tool, arguments: args || {} });
+    const result = await mcp.mcpRpc(s, 'tools/call', { name: tool, arguments: args || {} });
     audit(`mcp:${server}`, tool, `${result?.error ? `error: ${result.error}` : 'ok'} rule=${verdict.matched || 'none'}`, verdict.need ? 'approved' : 'auto');
     return result;
   } catch (err) {
@@ -2176,9 +2072,8 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
 ipcMain.handle('mcp:callTool', (_, payload) => callMcpTool(payload));
 
 ipcMain.handle('mcp:disconnect', async (_, { name }) => {
-  const s = mcpServers.get(name);
-  if (s) { s.child.kill(); mcpServers.delete(name); }
-  // 同步移除持久化配置
+  // 断开 + 同步移除持久化配置（http 传输无子进程，close 为空操作）
+  mcp.disconnectMcpServer(name);
   saveMcpConfig(loadMcpConfig().filter((s) => s.name !== name));
   return { ok: true };
 });
@@ -2238,14 +2133,20 @@ ipcMain.handle('github:createPr', async (_, payload = {}) => {
 });
 
 ipcMain.handle('mcp:listServers', async () => {
-  return Array.from(mcpServers.entries()).map(([name, s]) => ({ name, toolCount: s.tools.length }));
+  return mcp.listMcpServers().map((name) => {
+    const s = mcp.getMcpServer(name);
+    return { name, toolCount: s?.tools?.length || 0, kind: s?.kind || 'stdio' };
+  });
 });
 
 // Bug3：已连接服务的全量工具清单（含 inputSchema）——
 // 应用重启后主进程自动重连，但渲染层 mcpTools 状态为空，
 // 渲染层启动时调此通道重建 agent 工具集，MCP 工具即全程可用
 ipcMain.handle('mcp:listTools', async () => {
-  return Array.from(mcpServers.entries()).map(([name, s]) => ({ server: name, tools: s.tools || [] }));
+  return mcp.listMcpServers().map((name) => {
+    const s = mcp.getMcpServer(name);
+    return { server: name, tools: s?.tools || [] };
+  });
 });
 
 // B3：已保存（持久化）的 MCP 配置列表 —— 前端据此渲染「已保存但未连接」状态
@@ -2485,6 +2386,43 @@ async function scheduledAgentChat(payload) {
   }
 }
 
+// ── GitHub PR 审查闭环工具（gh CLI）──
+// 读操作（list/view/diff）直连；写操作（review/comment）对外可见 → L3 审批（见 approval.js TOOL_LEVEL）
+// cwd 解析：PR 工具必须拿到项目目录 gh 才能定位仓库——优先模型显式传的 args.cwd
+// （agent-core 的 CWD_TOOLS 会注入项目 cwd），缺失时回退主进程 CWD 并在结果中提示。
+function prCwdOf(args = {}) {
+  const c = String(args.cwd || '').trim();
+  if (c) return c;
+  return process.cwd();
+}
+function prReadTool(run) {
+  return (args = {}) => run({ cwd: prCwdOf(args), ...args });
+}
+function prWriteTool(toolKey, run) {
+  return async (args = {}) => {
+    const { approvalMode = 'on-request', conversationId } = args;
+    const verdict = approval.needsApproval({ tool: toolKey, args, approvalMode, conversationId, alwaysRules, conversationRules });
+    if (verdict.need) {
+      const decision = await requestApproval(toolKey, args);
+      if (decision === 'deny') {
+        audit(toolKey, `PR #${args.number || '?'}`, '用户拒绝', 'denied');
+        return { ok: false, error: '用户拒绝执行', denied: true };
+      }
+      applyApprovalDecision(decision, toolKey, args, conversationId);
+    }
+    const r = await run({ cwd: prCwdOf(args), ...args });
+    audit(toolKey, `PR #${args.number || '?'} ${args.event || 'comment'}`, r.ok ? 'ok' : `error: ${r.error}`, verdict.need ? 'approved' : 'auto');
+    return r.ok ? r : { ...r, ...(String(args.cwd || '') ? {} : { hint: '未提供 cwd，已按主进程工作目录执行；若找不到仓库请先在项目内运行' }) };
+  };
+}
+const prTools = {
+  prList: prReadTool((a) => github.prList(a)),
+  prView: prReadTool((a) => github.prView(a)),
+  prDiff: prReadTool((a) => github.prDiff(a)),
+  prReview: prWriteTool('pr_review', (a) => github.prReview(a)),
+  prComment: prWriteTool('pr_comment', (a) => github.prComment(a)),
+};
+
 // 定时任务专用 toolHandlers：与渲染层会话同源（复用主进程工具实现）
 function scheduledToolHandlers() {
   return {
@@ -2504,6 +2442,11 @@ function scheduledToolHandlers() {
     gitCommit: toolGitCommit,
     gitAdd: toolGitAdd,
     mcpCallTool: callMcpTool,
+    prList: prTools.prList,
+    prView: prTools.prView,
+    prDiff: prTools.prDiff,
+    prReview: prTools.prReview,
+    prComment: prTools.prComment,
   };
 }
 
@@ -2559,6 +2502,12 @@ agentRunner.initAgentRunner({
     // todoWrite 由 agent-core 内置处理（纯状态，不出网、不触盘），故不在此注册。
     webSearch: (args) => webTools.webSearch(args),
     webFetch: (args) => webTools.webFetch(args),
+    // GitHub PR 审查闭环（读直连；review/comment 走 L3 审批）
+    prList: prTools.prList,
+    prView: prTools.prView,
+    prDiff: prTools.prDiff,
+    prReview: prTools.prReview,
+    prComment: prTools.prComment,
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
@@ -2836,13 +2785,22 @@ async function cuaChat(root, apiKey, model, messages) {
 }
 
 ipcMain.handle('cua:status', async () => {
-  if (process.platform !== 'darwin') {
-    return { available: false, granted: false, message: '界面自动化仅支持 macOS' };
+  // 能力矩阵：截图/屏幕尺寸已跨平台（win32 PowerShell / linux scrot 链），
+  // AX 树与键鼠执行仍 macOS 独有。UI 据此只隐藏不可用的部分，不再笼统报「仅 macOS」。
+  const support = cua.cuaSupport();
+  if (!support.automation) {
+    return {
+      available: false,
+      granted: false,
+      ...support,
+      message: support.message,
+    };
   }
   const granted = await cua.isAccessibilityGranted();
   return {
     available: true,
     granted,
+    ...support,
     message: granted
       ? ''
       : '未授予辅助功能权限：请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用后重试',

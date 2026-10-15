@@ -724,7 +724,33 @@ function readPngSize(buffer) {
 // 屏幕尺寸：优先注入 deps.screenSize，否则查询 Finder 桌面边界
 async function getScreenSize(deps = {}) {
   if (typeof deps.screenSize === 'function') return deps.screenSize();
-  if (process.platform !== 'darwin') return { width: 0, height: 0 };
+  const platform = platformOf(deps);
+  if (platform === 'win32') {
+    // PowerShell 读主显示器分辨率（与截图同源，无需额外工具）
+    const execFn = deps.execFn || execFile;
+    try {
+      const out = await new Promise((resolve, reject) => {
+        execFn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          'Add-Type -AssemblyName System.Windows.Forms; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; Write-Output "$($b.Width),$($b.Height)"'],
+          { timeout: 15000 }, (error, stdout) => {
+            if (error) { reject(new Error(String(error.message))); return; }
+            resolve(String(stdout || ''));
+          });
+      });
+      return parseDesktopBounds(out) || { width: 0, height: 0 };
+    } catch (e) {
+      return { width: 0, height: 0 };
+    }
+  }
+  if (platform !== 'darwin') {
+    // linux：截图后从 PNG 读尺寸（避免依赖 xrandr 等 X11 专属工具，Wayland 下也能用）
+    try {
+      const shot = await captureScreen(deps);
+      return { width: shot.width, height: shot.height };
+    } catch (e) {
+      return { width: 0, height: 0 }; // 探针失败按尺寸未知处理，由上层拒绝坐标动作
+    }
+  }
   const script = `
 tell application "Finder"
   set b to bounds of window of desktop
@@ -737,11 +763,91 @@ return (item 1 of b) & "," & (item 2 of b) & "," & (item 3 of b) & "," & (item 4
   }
 }
 
-// 屏幕截图：优先注入 deps.capture，否则调用 macOS screencapture 写临时 PNG 再读取
-// 返回 { width, height, dataUrl, ocrText }
+// ── 跨平台截图（2026-10-15：解除「仅 macOS」锁定）──
+// 视觉路径（截图→视觉模型→坐标动作）的价值大头在截图；AX 树与点击执行仍为 macOS 独有
+// （Windows 需 UIA，另立专项）。三平台实现：
+//   darwin  screencapture（系统自带）
+//   win32   PowerShell + System.Drawing CopyFromScreen（系统自带，零外部依赖）
+//   linux   scrot → import(ImageMagick) → gnome-screenshot 依次探测
+function platformOf(deps = {}) {
+  return deps.platform || process.platform;
+}
+
+function runWinScreenshot(file, deps = {}) {
+  const execFn = deps.execFn || execFile;
+  // System.Drawing.CopyFromScreen：主显示器全屏；路径用正斜杠（.NET 接受，免去转义）
+  const ps = [
+    'Add-Type -AssemblyName System.Windows.Forms,System.Drawing',
+    '$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds',
+    `$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height`,
+    '$g=[System.Drawing.Graphics]::FromImage($bmp)',
+    '$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size)',
+    `$bmp.Save('${file.replace(/\\/g, '/')}')`,
+  ].join(';');
+  return new Promise((resolve, reject) => {
+    execFn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { timeout: 20000 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`屏幕截图失败（PowerShell）：${String(stderr || error.message).slice(0, 200)}`));
+        return;
+      }
+      resolve(true);
+    });
+  });
+}
+
+function runLinuxScreenshot(file, deps = {}) {
+  const execFn = deps.execFn || execFile;
+  // 依次探测可用工具（Wayland/X11 差异大，不做单一假设）
+  const candidates = [
+    ['scrot', ['-z', file]],
+    ['import', ['-window', 'root', file]],
+    ['gnome-screenshot', ['-f', file]],
+  ];
+  return new Promise((resolve, reject) => {
+    const tryNext = (i) => {
+      if (i >= candidates.length) {
+        reject(new Error('屏幕截图失败：未找到可用截图工具，请安装 scrot（apt install scrot）或 ImageMagick / gnome-screenshot'));
+        return;
+      }
+      const [cmd, args] = candidates[i];
+      execFn(cmd, args, { timeout: 15000 }, (error) => {
+        if (error) { tryNext(i + 1); return; }
+        resolve(true);
+      });
+    };
+    tryNext(0);
+  });
+}
+
+// 屏幕截图：优先注入 deps.capture，否则按平台分派；返回 { width, height, dataUrl, ocrText }
 async function captureScreen(deps = {}) {
   if (typeof deps.capture === 'function') return deps.capture();
-  if (process.platform !== 'darwin') throw new Error('截图能力仅支持 macOS');
+  const platform = platformOf(deps);
+  if (platform === 'darwin') return captureScreenDarwin(deps);
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const file = path.join(os.tmpdir(), `mjcode-cua-${Date.now()}.png`);
+  try {
+    if (platform === 'win32') await runWinScreenshot(file, deps);
+    else if (platform === 'linux') await runLinuxScreenshot(file, deps);
+    else throw new Error(`截图能力不支持当前平台：${platform}`);
+    const buf = fs.readFileSync(file);
+    const { width, height } = readPngSize(buf);
+    if (!width || !height) throw new Error('截图文件无法解析尺寸（可能截到了空屏或被安全软件拦截）');
+    return {
+      width,
+      height,
+      dataUrl: `data:image/png;base64,${buf.toString('base64')}`,
+      ocrText: '',
+    };
+  } finally {
+    try { fs.unlinkSync(file); } catch (e) { /* 临时文件清理失败不影响主流程 */ }
+  }
+}
+
+// macOS 截图（原实现抽出）：screencapture 写临时 PNG 再读取
+async function captureScreenDarwin(deps = {}) {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
@@ -776,9 +882,33 @@ function runScreencapture(file, deps = {}) {
   });
 }
 
+// 平台能力矩阵（2026-10-15 解除「仅 macOS」锁定的部分）：
+//   截图/屏幕尺寸 三平台可用；AX 树与键鼠执行仍 macOS 独有（Windows 需 UIA，另立专项）。
+// 供 UI 与上层在非 macOS 平台只隐藏不可用的部分，而不是笼统报「不支持」。
+function cuaSupport(deps = {}) {
+  const platform = platformOf(deps);
+  const mac = platform === 'darwin';
+  return {
+    platform,
+    screenshot: mac || platform === 'win32' || platform === 'linux',
+    screenSize: mac || platform === 'win32' || platform === 'linux',
+    axTree: mac,
+    keyboardMouse: mac,
+    automation: mac,
+    message: mac
+      ? ''
+      : (platform === 'win32'
+        ? '当前支持屏幕截图与视觉分析；AX 树读取与键鼠执行需 Windows UIA（规划中）'
+        : '当前支持屏幕截图与视觉分析；AX 树读取与键鼠执行仅 macOS（依赖辅助功能 API）'),
+  };
+}
+
 // 坐标点击：优先注入 deps.clickAt，否则 System Events click at
 async function clickAt(x, y, deps = {}) {
   if (typeof deps.clickAt === 'function') return deps.clickAt(x, y);
+  if (platformOf(deps) !== 'darwin') {
+    throw new Error('cua_platform_unsupported: 键鼠执行仅支持 macOS（当前平台支持截图与视觉分析，坐标动作不可用）');
+  }
   await runOsascript(`tell application "System Events" to click at {${Math.round(x)}, ${Math.round(y)}}`, deps);
   return { ok: true };
 }
@@ -786,6 +916,9 @@ async function clickAt(x, y, deps = {}) {
 // 文本输入：优先注入 deps.typeText，否则 System Events keystroke
 async function typeText(text, deps = {}) {
   if (typeof deps.typeText === 'function') return deps.typeText(text);
+  if (platformOf(deps) !== 'darwin') {
+    throw new Error('cua_platform_unsupported: 键鼠执行仅支持 macOS（当前平台支持截图与视觉分析，文本输入不可用）');
+  }
   await runOsascript(`tell application "System Events" to keystroke "${escapeAppleScriptText(text)}"`, deps);
   return { ok: true };
 }
@@ -1173,6 +1306,7 @@ module.exports = {
   readPngSize,
   getScreenSize,
   captureScreen,
+  cuaSupport,
   clickAt,
   typeText,
   scrollScreen,

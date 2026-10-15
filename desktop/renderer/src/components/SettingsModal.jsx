@@ -917,7 +917,7 @@ function McpTab({ mcpStatus, setMcpStatus, mcpForm, setMcpForm, onMcpToolsChange
   const [marketOpen, setMarketOpen] = useState(false); // MCP 市场弹窗
   const [manualOpen, setManualOpen] = useState(false); // 手动添加表单
   const [marketKw, setMarketKw] = useState('');
-
+  const formTransport = mcpForm.transport || 'stdio'; // 手动添加表单的传输类型
   async function loadServers() {
     try {
       const list = await window.mjcode.mcpListServers?.();
@@ -1042,17 +1042,25 @@ function McpTab({ mcpStatus, setMcpStatus, mcpForm, setMcpForm, onMcpToolsChange
                 {s.command && (
                   <div className="text-xs text-text2 font-mono truncate mt-0.5">{s.command} {(s.args || []).join(' ')}</div>
                 )}
+                {s.url && (
+                  <div className="text-xs text-text2 font-mono truncate mt-0.5">{s.url}</div>
+                )}
               </div>
-              <Toggle on={isConnected} onChange={() => (isConnected ? disconnect(s.name) : connect({ name: s.name, command: s.command, args: s.args || [] }))} />
+              <Toggle on={isConnected} onChange={() => (isConnected
+                ? disconnect(s.name)
+                : connect(s.transport === 'http'
+                  ? { name: s.name, transport: 'http', url: s.url }
+                  : { name: s.name, command: s.command, args: s.args || [] }))} />
             </div>
           );
         })
       )}
 
-      {/* 云端占位（HTTP/SSE 托管待后端支持） */}
+      {/* 云端占位（团队托管配额待后端；自托管 HTTP/SSE 已在「手动添加 → 远程 HTTP/SSE」支持） */}
       {scope === 'cloud' && (
         <div className="py-10 text-center text-sm text-text2">
-          云端 MCP 托管即将上线：远程 HTTP/SSE 服务、统一配额与团队共享将在后端版本提供。
+          自托管远程服务已支持：请切到「本地」页签 → 添加 → 手动添加 → 远程 HTTP/SSE。
+          团队托管（统一配额与共享）将随云端 MCP 后端提供。
         </div>
       )}
 
@@ -1114,20 +1122,40 @@ function McpTab({ mcpStatus, setMcpStatus, mcpForm, setMcpForm, onMcpToolsChange
       {manualOpen && (
         <div className="mt-3 p-3 rounded-xl border border-border bg-surface">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-text2">手动添加本地 stdio 服务器</span>
+            <span className="text-xs text-text2">手动添加 MCP 服务器</span>
             <button onClick={() => setManualOpen(false)} className="text-text2 hover:text-text"><IconX size={14} /></button>
           </div>
           <Input placeholder="名称（如 my-server）" value={mcpForm.name} onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} />
-          <Input placeholder="启动命令（如 npx / uvx）" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} />
-          <Input placeholder="参数（空格分隔，如 -y @org/pkg-mcp）" value={mcpForm.args} onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
+          {/* 传输类型：stdio（本地进程）或 http（MCP Streamable HTTP，含原 SSE 类托管端点） */}
+          <div className="flex items-center gap-2 my-1">
+            <span className="text-xs text-text2 shrink-0">传输</span>
+            {[['stdio', '本地进程（stdio）'], ['http', '远程 HTTP/SSE']].map(([v, label]) => (
+              <button key={v} onClick={() => setMcpForm({ ...mcpForm, transport: v })}
+                className={`px-2.5 py-1 rounded-lg text-xs border ${formTransport === v ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'}`}>{label}</button>
+            ))}
+          </div>
+          {formTransport === 'stdio' ? (
+            <>
+              <Input placeholder="启动命令（如 npx / uvx）" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} />
+              <Input placeholder="参数（空格分隔，如 -y @org/pkg-mcp）" value={mcpForm.args} onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
+            </>
+          ) : (
+            <Input placeholder="服务地址（如 http://127.0.0.1:8931/mcp）" value={mcpForm.url} onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} />
+          )}
           <button
             onClick={async () => {
-              const r = await connect({ name: mcpForm.name, command: mcpForm.command, args: mcpForm.args.split(' ').filter(Boolean) });
+              const payload = formTransport === 'http'
+                ? { name: mcpForm.name, transport: 'http', url: mcpForm.url }
+                : { name: mcpForm.name, command: mcpForm.command, args: mcpForm.args.split(' ').filter(Boolean) };
+              const r = await connect(payload);
               if (r?.ok) setManualOpen(false);
             }}
-            disabled={!mcpForm.name || !mcpForm.command}
+            disabled={!mcpForm.name || (formTransport === 'http' ? !mcpForm.url : !mcpForm.command)}
             className="h-8 inline-flex items-center justify-center px-4 rounded-lg bg-accent text-white text-sm mt-1 disabled:opacity-40">连接并保存</button>
-          <p className="text-xs text-text2 mt-2">远程 URL（HTTP/SSE）接入将随云端 MCP 托管一并支持。</p>
+          <p className="text-xs text-text2 mt-2">
+            远程服务走 MCP Streamable HTTP（自带会话管理，兼容旧 SSE 托管端点）；
+            本地进程走 stdio，env 白名单仅透传 PATH/HOME 等基础变量。
+          </p>
         </div>
       )}
     </Section>

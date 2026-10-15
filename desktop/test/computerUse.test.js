@@ -237,11 +237,75 @@ async function loopMaxSteps() {
   check('maxSteps 耗尽输出 done+maxStepsReached', result.maxStepsReached === true && doneEvt && doneEvt.maxStepsReached === true);
 }
 
-(async () => {
-  await loopHappyPath();
-  await loopStop();
-  await loopDeny();
-  await loopMaxSteps();
-  console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
-  process.exit(fail === 0 ? 0 : 1);
-})();
+// ── 跨平台截图与能力矩阵（2026-10-15 解除「仅 macOS」锁定）──
+{
+  // 能力矩阵：三平台都能截图，AX/键鼠仍 macOS 独有
+  const mac = cua.cuaSupport({ platform: 'darwin' });
+  const win = cua.cuaSupport({ platform: 'win32' });
+  const linux = cua.cuaSupport({ platform: 'linux' });
+  check('能力矩阵：三平台均可截图/读屏尺寸', mac.screenshot && win.screenshot && linux.screenshot
+    && mac.screenSize && win.screenSize && linux.screenSize);
+  check('能力矩阵：AX 树与键鼠执行仅 macOS', mac.axTree && !win.axTree && !linux.axTree
+    && mac.keyboardMouse && !win.keyboardMouse && !linux.keyboardMouse);
+  check('能力矩阵：非 macOS 有可行动说明', !win.message && !linux.message ? false : win.message.length > 0 && linux.message.length > 0);
+
+  // win32 截图命令行构造（PowerShell + System.Drawing，零外部依赖）
+  let captured = null;
+  const fakeExec = (cmd, args, opts, cb) => {
+    captured = { cmd, args: args.join(' ') };
+    cb(null, '', '');
+  };
+  // PNG 尺寸读取依赖真实文件：注入最小合法 PNG（1×1）
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const png1x1 = Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001080600000' + '01f15c4890000000d49444154789c626001000000ffff03000006000557bfabd40000000049454e44ae426082', 'hex');
+  const origRead = fs.readFileSync;
+  fs.readFileSync = (p) => (String(p).includes('mjcode-cua-') ? png1x1 : origRead(p));
+  (async () => {
+    const shotWin = await cua.captureScreen({ platform: 'win32', execFn: fakeExec });
+    check('win32 截图走 PowerShell（系统自带，零外部依赖）',
+      captured.cmd === 'powershell.exe' && captured.args.includes('CopyFromScreen'));
+    check('win32 截图返回尺寸与 dataUrl', shotWin.width === 1 && shotWin.height === 1 && shotWin.dataUrl.startsWith('data:image/png'));
+
+    // linux：第一个工具失败自动尝试下一个（scrot → import → gnome-screenshot）
+    const tried = [];
+    const fakeExecLinux = (cmd, args, opts, cb) => {
+      tried.push(cmd);
+      if (cmd === 'scrot') { cb(new Error('no X server')); return; }
+      cb(null, '', '');
+    };
+    captured = null;
+    const shotLinux = await cua.captureScreen({ platform: 'linux', execFn: fakeExecLinux });
+    check('linux 截图工具链自动降级（scrot 失败 → import）',
+      tried[0] === 'scrot' && tried[1] === 'import' && shotLinux.width === 1);
+    // 全部失败 → 可行动错误（提示安装哪个）
+    const fakeExecNone = (cmd, args, opts, cb) => cb(new Error('not found'));
+    let err = null;
+    try { await cua.captureScreen({ platform: 'linux', execFn: fakeExecNone }); } catch (e) { err = e; }
+    check('linux 无截图工具时报可行动错误（提示安装 scrot）',
+      !!err && /scrot/.test(err.message), err && err.message.slice(0, 60));
+
+    // 键鼠执行在非 macOS 平台 fail-closed（结构化错误，不是笼统 throw）
+    let err2 = null;
+    try { await cua.clickAt(10, 20, { platform: 'win32' }); } catch (e) { err2 = e; }
+    check('非 macOS 坐标点击 fail-closed（cua_platform_unsupported）',
+      !!err2 && /cua_platform_unsupported/.test(err2.message));
+    let err3 = null;
+    try { await cua.typeText('hi', { platform: 'linux' }); } catch (e) { err3 = e; }
+    check('非 macOS 文本输入 fail-closed', !!err3 && /cua_platform_unsupported/.test(err3.message));
+    fs.readFileSync = origRead;
+    runRest();
+  })().catch((e) => { console.error('[test] 跨平台截图用例异常:', e); fs.readFileSync = origRead; runRest(); });
+}
+
+function runRest() {
+  (async () => {
+    await loopHappyPath();
+    await loopStop();
+    await loopDeny();
+    await loopMaxSteps();
+    console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
+    process.exit(fail === 0 ? 0 : 1);
+  })();
+}
