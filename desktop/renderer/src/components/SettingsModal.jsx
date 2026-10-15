@@ -35,6 +35,7 @@ const NAV = [
     { id: 'plugins', icon: <IconPuzzle size={16} />, label: '插件市场' },
     { id: 'ecosystem', icon: <IconUser size={16} />, label: '生态中心' },
     { id: 'mcp', icon: <IconPlug size={16} />, label: 'MCP 服务' },
+    { id: 'network', icon: <IconGlobe size={16} />, label: '网络配置' },
     { id: 'browser', icon: <IconGlobe size={16} />, label: '浏览器与链接' },
     { id: 'git', icon: <IconGitBranch size={16} />, label: 'Git 与 GitHub' },
     { id: 'teamspace', icon: <IconGitBranch size={16} />, label: '团队空间' },
@@ -430,6 +431,9 @@ export default function SettingsModal({
           mcpForm={mcpForm} setMcpForm={setMcpForm}
           onMcpToolsChange={onMcpToolsChange}
         />}
+
+        {/* 网络配置 */}
+        {tab === 'network' && <NetworkTab />}
 
         {/* 技能 */}
         {tab === 'skills' && (
@@ -1148,6 +1152,101 @@ function Section({ title, children }) {
       <h2 className="text-base font-semibold mb-3">{title}</h2>
       <div className="bg-surface border border-border rounded-2xl px-5">{children}</div>
     </div>
+  );
+}
+
+// ── 网络配置（web_search 提供方）──
+// 目标：把「能力已建」变成「开箱可用」。此前 web_search 只认 env 变量且无 UI，
+// 默认一调用就报 web_search_unconfigured。
+// 交互：可同时启用多家（按序 failover，第一个成功者生效），也可只开一家；
+//       DuckDuckGo 无需 Key，开箱可用。Key 仅存本机 localStore，不落审计/日志。
+function NetworkTab() {
+  const [meta, setMeta] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    window.mjcode?.webSearchGetConfig?.().then((r) => {
+      if (r?.ok) { setMeta(r.meta || []); setProviders(r.config?.providers || []); }
+      else setError(r?.error || '配置加载失败');
+    }).catch((e) => setError(e.message || String(e)));
+  }, []);
+
+  const update = (id, patch) => {
+    setProviders((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    setSaved(false);
+  };
+
+  async function save() {
+    setError('');
+    try {
+      const r = await window.mjcode.webSearchSetConfig(providers);
+      if (r?.ok) { setProviders(r.config?.providers || providers); setSaved(true); setTimeout(() => setSaved(false), 2000); }
+      else setError(r?.error || '保存失败');
+    } catch (e) { setError(e.message || String(e)); }
+  }
+
+  const enabledCount = providers.filter((p) => p.enabled).length;
+
+  return (
+    <>
+      <Section title="搜索提供方">
+        <p className="py-3 text-xs text-text2">
+          供 Agent 的 web_search 工具使用。可同时启用多家：按上方到下方的顺序依次尝试，
+          第一个成功者生效（自动容错）；也可以只开一家。启用后 Agent 无需再配置即可联网检索。
+        </p>
+        {meta.map((m) => {
+          const p = providers.find((x) => x.id === m.id) || { id: m.id, enabled: false, apiKey: '', extra: {} };
+          const extra = p.extra || {};
+          const needsKey = m.requiresKey && !String(p.apiKey || '').trim();
+          return (
+            <div key={m.id} className="py-3 border-b border-border last:border-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm flex items-center gap-2">
+                    {m.label}
+                    {m.requiresKey
+                      ? <span className="text-[10px] text-warn">需 Key</span>
+                      : <span className="text-[10px] text-text2">免 Key</span>}
+                    {needsKey && p.enabled && <span className="text-[10px] text-danger">未填 Key，将跳过</span>}
+                  </div>
+                  <div className="text-xs text-text2">{m.note}</div>
+                  {m.docsUrl && (
+                    <a href={m.docsUrl} onClick={(e) => { e.preventDefault(); window.mjcode?.openExternal?.(m.docsUrl); }}
+                      className="text-[11px] text-accent hover:underline">{m.docsUrl}</a>
+                  )}
+                </div>
+                <Toggle on={p.enabled} onChange={() => update(m.id, { enabled: !p.enabled })} />
+              </div>
+              {p.enabled && (
+                <div className="mt-2 pl-0">
+                  {m.requiresKey && (
+                    <Input placeholder={m.keyPlaceholder || m.keyLabel} value={p.apiKey}
+                      onChange={(e) => update(m.id, { apiKey: e.target.value })} />
+                  )}
+                  {(m.extraFields || []).map((f) => (
+                    <Input key={f.id} placeholder={f.label} value={extra[f.id] || ''}
+                      onChange={(e) => update(m.id, { extra: { ...extra, [f.id]: e.target.value } })} />
+                  ))}
+                  {m.id === 'searxng' && (
+                    <Input placeholder="SearXNG 实例地址（例：https://searx.example.org）" value={extra.endpoint || ''}
+                      onChange={(e) => update(m.id, { extra: { ...extra, endpoint: e.target.value } })} />
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </Section>
+      <div className="flex items-center gap-3">
+        <button onClick={save}
+          className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:opacity-90">保存网络配置</button>
+        {saved && <span className="text-xs text-success">已保存（立即生效）</span>}
+        {enabledCount > 1 && <span className="text-xs text-text2">已启用 {enabledCount} 家，将按序容错</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </div>
+    </>
   );
 }
 

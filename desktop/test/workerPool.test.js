@@ -211,6 +211,39 @@ const events = [];
   setMaxConcurrent(5);
   check('setMaxConcurrent 生效', activeCount() === 0); // 占位断言：不抛错即配置通路面可用
 
+  // ── P0-C 回归：派发链路异常不得冒泡成 unhandledRejection（会直接杀掉主进程）──
+  // 此前 dispatch 的 IIFE 是「浮动 Promise」且无 .catch()：workerIsolation.createIsolated
+  // 抛错时没有任何人接住 → Electron 主进程默认直接退出，全部会话与在跑任务一起丢失。
+  // createIsolated 自身吞错返回 null，触发不了该路径 → 这里 monkey-patch 强制 reject。
+  {
+    const isoMod = require('../main/workerIsolation');
+    const original = isoMod.createIsolated;
+    isoMod.createIsolated = async () => { throw new Error('模拟隔离创建崩溃'); };
+    try {
+      initWorkerPool({
+        loadAgentCore: async () => makeFakeCore({}),
+        createToolHandlers: () => ({}),
+        store,
+        maxConcurrent: 1,
+        emit: (e) => events.push(e),
+        resolveModel: () => ({ providerId: 1, isGlobal: false, baseUrl: '', model: 'test-model' }),
+        buildTaskPrompt: (g, t) => t.title,
+      });
+      store.createGroup({ groupId: 'w9', goal: '派发异常兜底', cwd: '/tmp/wp-iso-case', dag: null, tasks: [
+        { id: 'v1', title: '隔离崩溃任务', prompt: 'x', dependsOn: [] },
+      ] });
+      await runGroup('w9');
+      const g9 = await waitSettled(store, 'w9', 8000);
+      const v1 = g9.tasks[0];
+      check('派发链路异常被兜住：任务标记 failed 且带原因', v1.status === 'failed' && String(v1.error || '').includes('模拟隔离创建崩溃'),
+        String(v1.error || '').slice(0, 60));
+      check('派发链路异常后组进入 paused（可读可重试，不静默丢任务）', g9.status === 'paused');
+      check('异常以 task_activity error 事件告知用户', events.some((e) => e.type === 'task_activity' && e.kind === 'error'));
+    } finally {
+      isoMod.createIsolated = original; // 还原，避免影响其他用例
+    }
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);

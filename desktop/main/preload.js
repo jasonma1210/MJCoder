@@ -108,6 +108,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   ecosystemEmployees: (payload) => ipcRenderer.invoke('ecosystem:employees', payload),
   ecosystemConnectors: (payload) => ipcRenderer.invoke('ecosystem:connectors', payload),
   ecosystemSkills: () => ipcRenderer.invoke('ecosystem:skills'),
+  // 网络配置（web_search 提供方）：设置 → 网络配置
+  webSearchGetConfig: () => ipcRenderer.invoke('websearch:getConfig'),
+  webSearchSetConfig: (providers) => ipcRenderer.invoke('websearch:setConfig', { providers }),
   // Updater
   checkUpdates: () => ipcRenderer.invoke('updater:check'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),

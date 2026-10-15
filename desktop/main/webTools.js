@@ -39,7 +39,10 @@ function isPrivateHost(hostname) {
 }
 
 // ── 带超时与体积上限的 fetch ──
-function httpGet(urlStr, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BODY_BYTES } = {}) {
+// 2026-10-15 泛化出 httpRequest（支持 POST / 自定义头 / JSON body）：
+// 搜索类 API（Tavily/Exa 走 POST+Bearer，Brave 走自定义头）需要它；
+// SSRF 防护必须保持**单一实现**——所有出网都经过这里的协议/私网检查，不允许旁路。
+function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BODY_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     let parsed;
     try { parsed = new URL(urlStr); } catch (e) {
@@ -55,14 +58,18 @@ function httpGet(urlStr, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BODY_B
       return;
     }
     const client = parsed.protocol === 'https:' ? https : http;
-    const req = client.get(
+    const payload = body == null ? null : Buffer.from(String(body), 'utf8');
+    const req = client.request(
       parsed.toString(),
       {
+        method,
         timeout: timeoutMs,
         headers: {
           'User-Agent': 'MJCode-Agent/1.0 (+https://github.com/jasonma1210/MJCoder)',
           Accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.8',
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          ...(payload ? { 'Content-Length': payload.length } : {}),
+          ...headers,
         },
       },
       (res) => {
@@ -70,7 +77,7 @@ function httpGet(urlStr, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BODY_B
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           const next = new URL(res.headers.location, parsed).toString();
-          httpGet(next, { timeoutMs, maxBytes }).then(resolve, reject);
+          httpRequest(next, { method, headers, body, timeoutMs, maxBytes }).then(resolve, reject);
           return;
         }
         if (res.statusCode !== 200) {
@@ -101,7 +108,14 @@ function httpGet(urlStr, { timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = MAX_BODY_B
       reject(new Error(`请求超时（>${Math.round(timeoutMs / 1000)}s）`));
     });
     req.on('error', (e) => reject(new Error(`网络请求失败：${e.message}`)));
+    if (payload) req.write(payload);
+    req.end();
   });
+}
+
+// 兼容旧名：web_fetch 等仍是 GET 语义
+function httpGet(urlStr, opts = {}) {
+  return httpRequest(urlStr, opts);
 }
 
 // ── HTML → 纯文本 ──
@@ -136,49 +150,25 @@ function htmlToText(html) {
 
 /**
  * web_search：联网搜索。
- * 说明：此处不内置任何第三方搜索 SDK/API Key（会引入密钥管理与付费依赖），
- * 采用「无 Key 可用」策略——按配置读取搜索端点；未配置时明确告知模型不可用，
- * 而不是伪装成功或返回编造结果（伪造检索结果是 Agent 最不可接受的失败模式）。
- * 配置来源（可选）：环境变量 MJCODE_WEB_SEARCH_ENDPOINT / MJCODE_WEB_SEARCH_KEY。
+ * 2026-10-15 配置工程收口：接入 webSearchProviders.js——
+ *   · 内置 8 家提供方（Tavily / DuckDuckGo / SearXNG / Brave / Exa / Bing / Google CSE / 百度），
+ *     在 设置 → 网络配置 中按需启用（可全开做 failover，也可只开一家）；
+ *   · DuckDuckGo 无需 Key，开箱可用——解决「工具已建但默认不可用」的落差；
+ *   · 多家按序尝试，第一个成功者生效；全部失败回报逐家明细；
+ *   · 未启用任何一家时明确告知（不伪造检索结果——Agent 最不可接受的失败模式）。
  */
 async function webSearch({ query, max_results: maxResults } = {}) {
   const q = String(query || '').trim();
   if (!q) return { ok: false, error: 'search_query_missing: 必须提供 query 关键词' };
   const limit = Math.max(1, Math.min(Number(maxResults) || 5, 10));
-
-  const endpoint = String(process.env.MJCODE_WEB_SEARCH_ENDPOINT || '').trim();
-  const apiKey = String(process.env.MJCODE_WEB_SEARCH_KEY || '').trim();
-  if (!endpoint) {
-    return {
-      ok: false,
-      error: 'web_search_unconfigured',
-      hint: '当前未配置联网搜索服务。请在设置中配置搜索端点，或改用 web_fetch 直接抓取已知 URL。'
-        + '若需要官方文档，建议直接 web_fetch 该文档地址。',
-      query: q,
-    };
-  }
-
-  try {
-    const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}q=${encodeURIComponent(q)}&count=${limit}`;
-    const res = await httpGet(url, { maxBytes: 512 * 1024 });
-    let parsed = null;
-    try { parsed = JSON.parse(res.body); } catch { /* 非 JSON 则当纯文本处理 */ }
-    const items = Array.isArray(parsed) ? parsed
-      : (parsed?.results || parsed?.items || parsed?.data || null);
-    if (!Array.isArray(items)) {
-      return { ok: false, error: 'search_response_unrecognized', hint: '搜索服务返回结构无法识别', raw: res.body.slice(0, 500) };
-    }
-    const results = items.slice(0, limit).map((it) => ({
-      title: String(it?.title || it?.name || '').slice(0, 200),
-      url: String(it?.url || it?.link || '').slice(0, 500),
-      snippet: String(it?.snippet || it?.description || it?.content || '').slice(0, 600),
-      ...(apiKey ? {} : {}),
-    }));
-    return { ok: true, query: q, count: results.length, results };
-  } catch (e) {
-    return { ok: false, error: 'search_failed', message: String(e?.message || e), query: q };
-  }
+  const { searchWithProviders, loadSearchConfig } = require('./webSearchProviders');
+  const config = loadSearchConfig(localStoreRef);
+  return searchWithProviders(config, { query: q, limit });
 }
+
+// 配置来源注入：main.js 在 localStore 初始化后调用（避免 webTools 反向依赖 main）
+let localStoreRef = null;
+function setLocalStore(ls) { localStoreRef = ls || null; }
 
 /**
  * web_fetch：抓取网页并转纯文本。
@@ -210,4 +200,4 @@ async function webFetch({ url, offset, limit } = {}) {
   }
 }
 
-module.exports = { webSearch, webFetch, htmlToText, isPrivateHost, httpGet };
+module.exports = { webSearch, webFetch, htmlToText, isPrivateHost, httpGet, httpRequest, setLocalStore };

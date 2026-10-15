@@ -124,7 +124,14 @@ export default function EcosystemModal({ onClose, embedded = false }) {
   function handleDownloadConnector(c) {
     downloadConnector(c);
     setDlVer((v) => v + 1);
-    setNotice(`已下载「${c.display_name || c.name}」到本机。在会话输入框点「+」→ 连接器 中查看，或在 设置 → MCP 服务 中配置。`);
+    // 必填环境变量必须在使用前如实告知：否则用户连上后每个工具调用都报
+    // 「missing API key」，表现为「装好了但完全不能用」——这是「能力已建」与
+    // 「开箱可用」之间最典型的一道沟（2026-10-15 审查项）
+    const required = (Array.isArray(c.env_vars) ? c.env_vars : []).filter((v) => v && v.required);
+    const envHint = required.length
+      ? `连接前需在 设置 → MCP 服务 中配置环境变量：${required.map((v) => v.name).join('、')}（点击连接器卡片可查看说明与申请入口）。`
+      : '无需额外密钥，在 设置 → MCP 服务 中即可连接。';
+    setNotice(`已下载「${c.display_name || c.name}」到本机。${envHint}`);
   }
 
   async function handleDownloadSkill(s) {

@@ -26,6 +26,7 @@ const activeChats = new Set(); // 进行中的 chat AbortController
 const approval = require('./approval');
 // P0-A：Web 检索/抓取工具（含 SSRF 防护、HTML 转文本、超时与体积上限）
 const webTools = require('./webTools');
+const searchProviders = require('./webSearchProviders');
 // 本地定时任务调度器（Bug2：到点自动执行提示词，离线可用）
 const scheduler = require('./scheduler');
 const APPROVAL_RULES_FILE = () => path.join(app.getPath('userData'), 'approval-rules.json');
@@ -152,6 +153,8 @@ function resolveSecret(providerId, isGlobal = false) {
 function initLocalStore() {
   try {
     localStore = new LocalStore(app.getPath('userData'));
+    // web_search 配置来源注入（webSearchProviders 读 localStore 偏好，见 设置 → 网络配置）
+    webTools.setLocalStore(localStore);
     // 凭证加密双轨（credentialCrypto.js）：safeStorage 不可用（打包版 macOS 27 真机复现）
     // 时降级文件密钥 AES-256-GCM——凭证仍可保存，保护级别显式降级并留痕
     credentialCrypto = new CredentialCrypto(app.getPath('userData'), safeStorage);
@@ -493,6 +496,24 @@ ipcMain.handle('ecosystem:connectors', async (_, { category } = {}) => {
     return { ok: true, connectors: list };
   } catch (err) {
     return { ok: false, error: err.message, connectors: [] };
+  }
+});
+
+// ── 网络配置（web_search 提供方）：读写 + 元数据，见 设置 → 网络配置 ──
+ipcMain.handle('websearch:getConfig', async () => ({
+  ok: true,
+  meta: searchProviders.SEARCH_PROVIDERS,
+  config: searchProviders.loadSearchConfig(localStore),
+}));
+ipcMain.handle('websearch:setConfig', async (_, { providers } = {}) => {
+  try {
+    // Key 属敏感凭证：审计只记启用了哪些提供方，绝不落 Key 本体
+    const r = searchProviders.saveSearchConfig(localStore, providers);
+    const enabled = r.providers.filter((p) => p.enabled).map((p) => p.id);
+    audit('settings', 'web_search providers', `enabled=${enabled.join(',') || '(none)'}`, 'ok');
+    return { ok: true, config: r };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 });
 

@@ -12,6 +12,7 @@ const chatRoutes = require('./routes/chat');
 const auditRoutes = require('./routes/audit');
 const collabRoutes = require('./routes/collab');
 const { features, snapshot } = require('./config/features');
+const db = require('./db');
 
 const app = express();
 app.use(cors());
@@ -19,7 +20,40 @@ app.use(express.json({ limit: '10mb' }));
 
 // health 必须置于各 router 之前：router.use(authMiddleware) 会吞掉未匹配路径
 // features 下发给桌面端，用于按开关隐藏/显示功能入口
-app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: Date.now(), features: snapshot() }));
+//
+// P0-H（2026-10-15 补齐）：health 探 DB。
+// 此前 health 只回进程状态——DB 挂掉时仍 200 "ok"，桌面端/编排/负载均衡会把
+// 请求继续打进一个必然失败的后端，用户侧表现为「所有功能莫名报错但应用显示在线」。
+// 探活设计：
+//   · SELECT 1 轻量查询，带 2s 超时——DB 挂起（而非立即拒绝）时 health 不能跟着挂起；
+//   · DB 不可用 → 503 + status:'degraded' + dbError，fail-closed（说不了谎的 health 才有用）；
+//   · 附带 dbLatencyMs 便于观察连接池劣化趋势。
+app.get('/api/health', async (req, res) => {
+  const started = Date.now();
+  let dbOk = false;
+  let dbError = null;
+  try {
+    await Promise.race([
+      db.query('SELECT 1'),
+      new Promise((_, rej) => {
+        const t = setTimeout(() => rej(new Error('db probe timeout (2s)')), 2000);
+        if (typeof t.unref === 'function') t.unref(); // 探活定时器不阻止进程退出
+      }),
+    ]);
+    dbOk = true;
+  } catch (e) {
+    dbError = String(e?.message || e).slice(0, 200);
+  }
+  const body = {
+    status: dbOk ? 'ok' : 'degraded',
+    ts: Date.now(),
+    db: dbOk ? 'ok' : 'down',
+    dbLatencyMs: Date.now() - started,
+    features: snapshot(),
+  };
+  if (dbError) body.dbError = dbError;
+  return res.status(dbOk ? 200 : 503).json(body);
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api', globalModelsRoutes);
