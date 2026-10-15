@@ -176,6 +176,7 @@ function initLocalStore() {
     for (const p of localStore.data.providers) {
       if (p.source === 'file') localVault.delete(p.id); // 先清，随后 sync 重注（文件可能已删条目）
     }
+    migrateLocalModelsToFile(); // 旧 UI 模型 → 配置文件（仅文件缺失/仍是模板时触发，见下）
     syncModelsFile({ reason: 'startup' });
     console.log(`[local] 本地数据层就绪：${localStore.listThreads().length} 线程 / ${localStore.listProviders().length} 私有服务（加密轨：${credentialCrypto.scheme}）`);
   } catch (err) {
@@ -222,6 +223,80 @@ function maybeSyncModelsFile() {
   } catch { /* stat 失败按未变化处理 */ }
   return modelsFileLastStatus;
 }
+
+// ── 迁移：把 UI 手工配置的模型写入配置文件（用户要求：旧模型统一由 models.json 承载）──
+// 触发条件（防覆盖用户手写内容）：文件不存在，或内容仍是初始模板，或文件解析不出任何 provider。
+// 迁移后删除已被文件承载的 UI provider（同 url+Key 的模型已并入文件组，避免双份显示）。
+function migrateLocalModelsToFile() {
+  try {
+    const filePath = modelsFile.modelsFilePath();
+    const raw = modelsFile.readModelsFile(filePath);
+    const parsed = raw ? modelsFile.parseModelsFile(raw) : { providers: [] };
+    // 模板/占位判定：文件缺失、解析不出 provider，或全部条目都是 example.com 占位
+    // （同时兼容 v1 扁平模板与 v2 分组模板——两者文本不同，不能按文本比对）
+    const isPlaceholder = parsed.providers.length > 0
+      && parsed.providers.every((g) => g.base_url.startsWith('https://api.example.com'));
+    const uiProviders = localStore.data.providers.filter((p) => p.source !== 'file');
+    const shouldMigrate = (raw == null || parsed.providers.length === 0 || isPlaceholder) && uiProviders.length > 0;
+    if (!shouldMigrate) return;
+
+    const { raw: nextRaw, migrated } = modelsFile.migrateLocalProviders({
+      raw: isPlaceholder ? '[]' : (raw || ''), // 占位内容直接丢弃，避免示例模型混入真实列表
+      providers: uiProviders,
+      decrypt: (enc) => credentialCrypto.decrypt(enc),
+    });
+    modelsFile.writeModelsFile(nextRaw, filePath);
+    let removed = 0;
+    for (const m of migrated) {
+      try {
+        localStore.deleteProvider(m.id);
+        localVault.delete(Number(m.id));
+        removed += 1;
+      } catch { /* 已不存在则忽略 */ }
+    }
+    console.log(`[modelsFile] 迁移完成：${migrated.length} 个本机模型服务已写入 ${filePath}（其中 ${migrated.filter((x) => x.matched).length} 个并入已有组），UI 侧移除 ${removed} 个（改由文件承载）`);
+  } catch (e) {
+    console.error('[modelsFile] 迁移失败（不影响启动，可稍后在设置页重试）:', e.message);
+  }
+}
+
+// ── UI 对 file 来源 provider 的写回（删除/添加模型 → 修改 models.json → 热同步）──
+function rewriteModelsFileRaw(nextRaw, { reason }) {
+  modelsFile.writeModelsFile(nextRaw);
+  modelsFileMtime = require('fs').statSync(modelsFile.modelsFilePath()).mtimeMs; // 写回后手动对齐，防 mtime 双触发
+  return syncModelsFile({ reason });
+}
+
+ipcMain.handle('local:models-file/remove-model', async (_, { fileKey, modelId } = {}) => {
+  try {
+    const raw = modelsFile.readModelsFile();
+    const r = modelsFile.removeModelFromRaw(raw, fileKey, modelId);
+    if (!r.ok) return r;
+    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-model' }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('local:models-file/remove-provider', async (_, { fileKey } = {}) => {
+  try {
+    const raw = modelsFile.readModelsFile();
+    const r = modelsFile.removeProviderFromRaw(raw, fileKey);
+    if (!r.ok) return r;
+    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-provider' }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name } = {}) => {
+  try {
+    const raw = modelsFile.readModelsFile();
+    const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name);
+    if (!r.ok) return r;
+    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'add-model' }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 ipcMain.handle('local:models-file/status', async () => (localStore ? maybeSyncModelsFile() : modelsFileLastStatus));
 ipcMain.handle('local:models-file/open', async () => {
@@ -322,6 +397,11 @@ ipcMain.handle('model:testConnection', async (_, { id, base_url }) => {
   const vault = localVault.get(Number(id));
   const url = (base_url || vault?.base_url || '').replace(/\/+$/, '');
   if (!url) return { ok: false, error: '缺少接口地址' };
+  // Key 含非 ASCII（典型：模板占位「sk-请替换成你的Key」未替换）时 fetch 头部会抛
+  // ByteString 错误（真机复现），提前拦截给出可行动提示，而不是让用户看到天书报错
+  if (vault?.api_key && /[^\x20-\x7E]/.test(vault.api_key)) {
+    return { ok: false, error: 'API Key 含非 ASCII 字符（可能仍是模板占位符），请先替换为真实 Key' };
+  }
   const started = Date.now();
   try {
     const headers = { 'Content-Type': 'application/json' };

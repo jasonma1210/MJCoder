@@ -148,6 +148,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   // 自定义模型配置文件（~/.mjcode/models.json，对标 WorkBuddy models.json）
   localModelsFileStatus: () => ipcRenderer.invoke('local:models-file/status'),
   localModelsFileOpen: () => ipcRenderer.invoke('local:models-file/open'),
+  // UI 对 file 来源 provider 的写回（删除/添加模型会修改配置文件）
+  localModelsFileRemoveModel: (payload) => ipcRenderer.invoke('local:models-file/remove-model', payload),
+  localModelsFileRemoveProvider: (payload) => ipcRenderer.invoke('local:models-file/remove-provider', payload),
+  localModelsFileAddModel: (payload) => ipcRenderer.invoke('local:models-file/add-model', payload),
   // B1：项目一等实体
   localProjects: () => ipcRenderer.invoke('local:projects/list'),
   localAddProject: (payload) => ipcRenderer.invoke('local:projects/add', payload),

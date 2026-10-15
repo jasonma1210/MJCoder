@@ -182,6 +182,10 @@ export const api = {
   // 自定义模型配置文件（~/.mjcode/models.json）：状态查询（含 mtime 热同步）与打开/初始化
   modelsFileStatus: () => window.mjcode.localModelsFileStatus(),
   modelsFileOpen: () => window.mjcode.localModelsFileOpen(),
+  // file 来源 provider 的写回：删除/添加模型会修改配置文件（再由 mtime 热同步回流列表）
+  removeFileProviderModel: (fileKey, modelId) => window.mjcode.localModelsFileRemoveModel({ fileKey, modelId }),
+  removeFileProvider: (fileKey) => window.mjcode.localModelsFileRemoveProvider({ fileKey }),
+  addFileProviderModel: (fileKey, data) => window.mjcode.localModelsFileAddModel({ fileKey, model_id: data.model_id, display_name: data.display_name }),
 
   // Server-side global providers（离线不可用）
   globalProviders: () => fetch(`${API}/global/providers`).then(r => r.json()),

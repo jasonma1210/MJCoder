@@ -6,6 +6,7 @@ const path = require('path');
 const { LocalStore } = require('../main/localStore');
 const {
   fileKeyFor, toBaseUrl, parseModelsFile, templateContent, ensureModelsFile, syncFileModels,
+  serializeProviders, migrateLocalProviders, removeModelFromRaw, removeProviderFromRaw, addModelToRaw,
 } = require('../main/modelsFile');
 
 let pass = 0;
@@ -116,6 +117,70 @@ function makeStore() {
   check('fileKey：同输入同输出、异输入异输出',
     fileKeyFor('https://a.com', 'k1') === fileKeyFor('https://a.com', 'k1')
     && fileKeyFor('https://a.com', 'k1') !== fileKeyFor('https://a.com', 'k2'));
+
+  // ── 8. 分组格式（v2）：一个 base_url + 一个 Key + 多 ModelId ──
+  const rawGrouped = JSON.stringify([
+    { name: 'deepseek', url: 'https://api.deepseek.com', apiKey: 'sk-g1', models: ['deepseek-flash', { id: 'deepseek-v4-pro', name: 'V4 Pro' }] },
+    { name: 'mimo', baseUrl: 'https://api.xiaomimimo.com/v1/', apiKeyEnv: 'G2_KEY', models: ['mimo-v2.6-flash'] },
+  ]);
+  const rg = parseModelsFile(rawGrouped, { env: { G2_KEY: 'sk-g2' } });
+  check('分组解析：2 个 provider，主组 2 个模型', rg.providers.length === 2 && rg.providers[0].models.length === 2);
+  check('分组解析：模型对象项保留 displayName', rg.providers[0].models[1].displayName === 'V4 Pro');
+  check('分组解析：baseUrl 别名 + 尾斜杠归一', rg.providers[1].base_url === 'https://api.xiaomimimo.com/v1');
+  check('分组解析：apiKeyEnv 生效', rg.providers[1].apiKey === 'sk-g2');
+  const rgCaps = parseModelsFile(JSON.stringify([
+    { url: 'https://x.com/v1', models: [{ id: 'm1', supportsToolCall: false, supportsReasoning: true }] },
+  ]));
+  check('分组解析：模型项能力字段生效', rgCaps.providers[0].models[0].caps.supportsToolCall === false && rgCaps.providers[0].models[0].caps.supportsReasoning === true);
+
+  // 混合：分组条目 + 扁平条目共存；扁平条目同 url+Key 归并进分组组
+  const rMixed = parseModelsFile(JSON.stringify([
+    { name: 'g', url: 'https://a.com/v1', apiKey: 'k', models: ['m1'] },
+    { id: 'm2', url: 'https://a.com/v1', apiKey: 'k' },
+  ]));
+  check('混合格式：扁平条目归并进同 url+Key 分组', rMixed.providers.length === 1 && rMixed.providers[0].models.length === 2);
+
+  // ── 9. Key 含非 ASCII（模板占位中文）→ 解析告警 ──
+  const rCjk = parseModelsFile(JSON.stringify([{ url: 'https://x.com/v1', apiKey: 'sk-请替换成你的Key', models: ['m1'] }]));
+  check('非 ASCII Key：产生解析告警且仍导入', rCjk.errors.length === 1 && rCjk.providers.length === 1);
+
+  // ── 10. 序列化往返 ──
+  const round = parseModelsFile(serializeProviders(rg.providers));
+  check('序列化往返：分组格式写出后可无损解析回 2 provider / 3 模型',
+    round.providers.length === 2 && round.providers[0].models.length === 2 && round.providers[1].models.length === 1
+    && round.providers[0].apiKey === 'sk-g1');
+
+  // ── 11. 迁移：UI provider → 配置文件（并入已有组 / 新增组 / 模型去重）──
+  const store2 = makeStore();
+  const uiA = store2.addProvider({ name: 'deepseek', base_url: 'https://api.deepseek.com', keyEncrypted: 'enc(k-ds)', modelId: 'deepseek-flash' });
+  store2.addProviderModel(uiA.id, { model_id: 'deepseek-v4-pro' });
+  const uiB = store2.addProvider({ name: 'mimo', base_url: 'https://api.xiaomimimo.com/v1', keyEncrypted: 'enc(k-mimo)', modelId: 'mimo-v2.6-flash' });
+  const dec = (enc) => ({ 'enc(k-ds)': 'sk-ds', 'enc(k-mimo)': 'sk-mimo' }[enc] || '');
+  const fileRaw = serializeProviders(parseModelsFile(JSON.stringify([
+    { name: 'deepseek', url: 'https://api.deepseek.com', apiKey: 'sk-ds', models: ['deepseek-flash'] },
+  ])).providers);
+  const mig = migrateLocalProviders({ raw: fileRaw, providers: store2.listProviders().map((p) => ({ ...p, keyEncrypted: store2.getProviderKey(p.id) })), decrypt: dec });
+  const migratedStore = makeStore();
+  const migSync = syncFileModels({ store: migratedStore, encrypt, vault: new Map(), raw: mig.raw });
+  check('迁移：deepseek 并入已有组（同 url+Key），mimo 新增组',
+    mig.migrated.length === 2 && mig.migrated[0].matched === true && mig.migrated[1].matched === false);
+  check('迁移：文件承载 2 provider / 3 模型（deepseek 两模型并入，模型去重）',
+    migSync.synced === 2 && migratedStore.listProviders().reduce((n, p) => n + p.models.length, 0) === 3);
+
+  // ── 12. 文件写回：删模型 / 删组 / 加模型 ──
+  const gKey = parseModelsFile(mig.raw).providers.find((g) => g.base_url === 'https://api.deepseek.com').fileKey;
+  const rm1 = removeModelFromRaw(mig.raw, gKey, 'deepseek-v4-pro');
+  check('写回：删除组内一个模型', rm1.ok && parseModelsFile(rm1.raw).providers.find((g) => g.base_url === 'https://api.deepseek.com').models.length === 1);
+  const rmAll = removeModelFromRaw(rm1.raw, gKey, 'deepseek-flash');
+  check('写回：删掉组内最后一个模型时整组移除', rmAll.ok && !parseModelsFile(rmAll.raw).providers.some((g) => g.base_url === 'https://api.deepseek.com'));
+  const rmErr = removeModelFromRaw(mig.raw, 'f-notexist', 'x');
+  check('写回：fileKey 不存在报错', rmErr.ok === false && !!rmErr.error);
+  const add1 = addModelToRaw(rm1.raw, gKey, 'deepseek-new', '新模型');
+  check('写回：添加模型（含显示名）', add1.ok && parseModelsFile(add1.raw).providers.find((g) => g.base_url === 'https://api.deepseek.com').models.some((m) => m.modelId === 'deepseek-new' && m.displayName === '新模型'));
+  const addDup = addModelToRaw(add1.raw, gKey, 'deepseek-new', '');
+  check('写回：重复模型报错', addDup.ok === false);
+  const rmProvider = removeProviderFromRaw(mig.raw, parseModelsFile(mig.raw).providers.find((g) => g.base_url === 'https://api.xiaomimimo.com/v1').fileKey);
+  check('写回：删除整组 provider', rmProvider.ok && parseModelsFile(rmProvider.raw).providers.length === 1);
 
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);

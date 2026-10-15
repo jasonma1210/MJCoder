@@ -662,7 +662,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
   const [keyValue, setKeyValue] = useState('');
   const [testStatus, setTestStatus] = useState({}); // id -> { ok, latencyMs, error, testing }
   const [addFormPid, setAddFormPid] = useState(null);
-  const [addForm, setAddForm] = useState({ pid: null, model_id: '', display_name: '' });
+  const [addForm, setAddForm] = useState({ pid: null, fileKey: null, model_id: '', display_name: '' });
   // 自定义模型配置文件（~/.mjcode/models.json，对标 WorkBuddy models.json）
   const [mf, setMf] = useState(null);
 
@@ -678,9 +678,15 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
   async function submitAddModel() {
     if (!addForm.pid || !addForm.model_id.trim()) return;
     try {
-      await api.addProviderModel(addForm.pid, { model_id: addForm.model_id.trim(), display_name: addForm.display_name.trim() });
+      if (addForm.fileKey) {
+        // file 来源：写回 ~/.mjcode/models.json（主进程随后按 mtime 热同步回流列表）
+        await api.addFileProviderModel(addForm.fileKey, { model_id: addForm.model_id.trim(), display_name: addForm.display_name.trim() });
+        loadModelsFile();
+      } else {
+        await api.addProviderModel(addForm.pid, { model_id: addForm.model_id.trim(), display_name: addForm.display_name.trim() });
+      }
       setAddFormPid(null);
-      setAddForm({ pid: null, model_id: '', display_name: '' });
+      setAddForm({ pid: null, fileKey: null, model_id: '', display_name: '' });
       onProvidersChange();
     } catch (err) {
       setTestStatus((s) => ({ ...s, [addForm.pid]: { ok: false, error: err.message } }));
@@ -795,31 +801,37 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                       {isFile && (
                         <button onClick={() => testConn(p)} className="text-text2 hover:text-text text-xs">测试连接</button>
                       )}
-                      {!isFile && (
                       <button onClick={async () => {
-                        // A2：删除需确认（加密 Key 不可逆销毁）
+                        // A2：删除需确认。file 来源：删除动作写回配置文件（整组移除，可编辑文件恢复）；
+                        // 本机/UI 来源：加密 Key 不可逆销毁
                         const ok = await confirm({
                           title: '删除模型服务',
-                          message: `确定删除「${p.name}」吗？其 API Key 将被销毁且不可恢复。`,
+                          message: isFile
+                            ? `将从配置文件删除「${p.name}」及其 ${p.models?.length || 0} 个模型（可手动编辑 models.json 恢复）。`
+                            : `确定删除「${p.name}」吗？其 API Key 将被销毁且不可恢复。`,
                           danger: true,
                           confirmLabel: '删除',
                         });
                         if (!ok) return;
                         try {
-                          await api.deleteProvider(p.id);
+                          if (isFile) {
+                            await api.removeFileProvider(p.fileKey);
+                            loadModelsFile(); // 刷新文件同步状态
+                          } else {
+                            await api.deleteProvider(p.id);
+                          }
                           onProvidersChange();
                         } catch (err) {
                           setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: err?.message || '删除失败' } }));
                         }
                       }} className="text-danger text-xs">删除</button>
-                      )}
                     </span>
                   </>
                 )}
               </div>
               {!editing && <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>}
               {isFile && (
-                <div className="text-[10px] text-text2 mt-0.5">由 {mf?.path || '~/.mjcode/models.json'} 管理，在文件中增删改后自动同步（本面板只读）</div>
+                <div className="text-[10px] text-text2 mt-0.5">由 {mf?.path || '~/.mjcode/models.json'} 管理；在面板删除/添加模型会写回配置文件，名称与 Key 请在文件中修改</div>
               )}
               {st?.testing && <div className="text-xs text-text2 mt-1">测试中…</div>}
               {st && !st.testing && (st.ok
@@ -841,18 +853,25 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                       <div key={m.id ?? mid} className="flex items-center gap-1.5 pl-4 text-xs text-text2 group">
                         <span className="w-1 h-1 rounded-full bg-text2 shrink-0" />
                         <span className="truncate">{m.display_name || mid}</span>
-                        {!isServer && !isFile && (
+                        {!isServer && (
                           <button
                             onClick={async () => {
                               const ok = await confirm({
                                 title: '删除模型条目',
-                                message: `从「${p.name}」移除「${m.display_name || mid}」？不影响服务本身与 Key。`,
+                                message: isFile
+                                  ? `从配置文件的「${p.name}」移除「${m.display_name || mid}」？（写回 models.json）`
+                                  : `从「${p.name}」移除「${m.display_name || mid}」？不影响服务本身与 Key。`,
                                 danger: true,
                                 confirmLabel: '移除',
                               });
                               if (!ok) return;
                               try {
-                                await api.removeProviderModel(p.id, mid);
+                                if (isFile) {
+                                  await api.removeFileProviderModel(p.fileKey, mid);
+                                  loadModelsFile();
+                                } else {
+                                  await api.removeProviderModel(p.id, mid);
+                                }
                                 onProvidersChange();
                               } catch (err) {
                                 setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: err.message } }));
@@ -870,22 +889,22 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                   })}
                 </div>
               )}
-              {/* 添加模型：默认收起（修复「已添加模型仍常驻输入框」的逻辑混乱） */}
-              {!isServer && !isFile && (
+              {/* 添加模型：默认收起（修复「已添加模型仍常驻输入框」的逻辑混乱）；file 来源写回配置文件 */}
+              {!isServer && (
                 addFormPid === p.id ? (
                   <div className="flex gap-2 mt-2">
                     <input placeholder="模型 ID（如 mimo-v2.6-pro）" value={addForm.pid === p.id ? addForm.model_id : ''}
-                      onChange={(e) => setAddForm({ pid: p.id, model_id: e.target.value, display_name: addForm.display_name })}
+                      onChange={(e) => setAddForm({ pid: p.id, fileKey: p.fileKey || null, model_id: e.target.value, display_name: addForm.display_name })}
                       className="flex-1 bg-surface border border-border rounded px-2 py-1 text-xs" />
                     <input placeholder="显示名（可选）" value={addForm.pid === p.id ? addForm.display_name : ''}
                       onChange={(e) => setAddForm({ ...addForm, display_name: e.target.value })}
                       className="w-28 bg-surface border border-border rounded px-2 py-1 text-xs" />
                     <button onClick={submitAddModel} className="bg-accent text-white px-3 rounded text-xs">添加</button>
-                    <button onClick={() => { setAddFormPid(null); setAddForm({ pid: null, model_id: '', display_name: '' }); }}
+                    <button onClick={() => { setAddFormPid(null); setAddForm({ pid: null, fileKey: null, model_id: '', display_name: '' }); }}
                       className="text-text2 text-xs">取消</button>
                   </div>
                 ) : (
-                  <button onClick={() => { setAddFormPid(p.id); setAddForm({ pid: p.id, model_id: '', display_name: '' }); }}
+                  <button onClick={() => { setAddFormPid(p.id); setAddForm({ pid: p.id, fileKey: p.fileKey || null, model_id: '', display_name: '' }); }}
                     className="mt-2 ml-4 text-xs text-accent hover:opacity-80 border border-dashed border-border rounded px-2 py-1">
                     + 添加模型
                   </button>
