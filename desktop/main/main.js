@@ -137,6 +137,8 @@ const worktree = require('./worktree');
 // ── 本地优先数据层（离线模式）──
 const { LocalStore } = require('./localStore');
 const { CredentialCrypto } = require('./credentialCrypto');
+// 自定义模型配置文件（对标 WorkBuddy models.json）：~/.mjcode/models.json → providers 同步
+const modelsFile = require('./modelsFile');
 let localStore = null;   // whenReady 后初始化
 let credentialCrypto = null; // 凭证加密双轨：safeStorage 首选，不可用降级文件密钥 AES-GCM（打包版真机事故）
 const localVault = new Map(); // 本地 provider id -> { api_key, base_url }（解密后的内存态）
@@ -169,11 +171,68 @@ function initLocalStore() {
         console.warn('[local] 凭证解密失败:', p.id, e.message);
       }
     }
+    // 配置文件来源的模型（~/.mjcode/models.json）：Key 不走 keyEncrypted 解密回填，
+    // 由 sync 直接注入 vault（文件是事实来源，见 syncModelsFile）
+    for (const p of localStore.data.providers) {
+      if (p.source === 'file') localVault.delete(p.id); // 先清，随后 sync 重注（文件可能已删条目）
+    }
+    syncModelsFile({ reason: 'startup' });
     console.log(`[local] 本地数据层就绪：${localStore.listThreads().length} 线程 / ${localStore.listProviders().length} 私有服务（加密轨：${credentialCrypto.scheme}）`);
   } catch (err) {
     console.error('[local] 初始化失败:', err);
   }
 }
+
+// ── 自定义模型配置文件（~/.mjcode/models.json）同步 ──
+// 时机：启动一次 + providers/list 与 status 查询时按 mtime 变化热同步（保存文件即生效，无需重启）。
+// 失败/文件不存在只告警不影响启动；解析错误收集后在设置页展示，绝不静默吞。
+let modelsFileMtime = 0;
+let modelsFileLastStatus = { path: modelsFile.modelsFilePath(), exists: false, synced: 0, removed: 0, errors: [] };
+
+function syncModelsFile({ reason = 'manual' } = {}) {
+  const filePath = modelsFile.modelsFilePath();
+  const exists = require('fs').existsSync(filePath);
+  try {
+    if (!exists) {
+      modelsFileLastStatus = { path: filePath, exists: false, synced: 0, removed: 0, errors: [] };
+      return modelsFileLastStatus;
+    }
+    modelsFileMtime = require('fs').statSync(filePath).mtimeMs;
+    const raw = modelsFile.readModelsFile(filePath);
+    const r = modelsFile.syncFileModels({ store: localStore, encrypt: (k) => credentialCrypto.encrypt(k), vault: localVault, raw, filePath });
+    modelsFileLastStatus = { path: filePath, exists: true, synced: r.synced, removed: r.removed.length, errors: r.errors };
+    if (r.synced || r.removed.length) {
+      console.log(`[modelsFile] 同步完成（${reason}）：导入 ${r.synced} 个模型 / 移除 ${r.removed.length} 个 provider${r.errors.length ? `，${r.errors.length} 条解析告警` : ''}`);
+    }
+    if (r.errors.length) console.warn('[modelsFile] 配置告警:', r.errors.map((e) => e.error).join('；'));
+  } catch (e) {
+    console.error('[modelsFile] 同步失败:', e.message);
+    modelsFileLastStatus = { path: filePath, exists, synced: 0, removed: 0, errors: [{ error: `同步失败：${e.message}` }] };
+  }
+  return modelsFileLastStatus;
+}
+
+// mtime 未变则跳过（cheap：一次 statSync），变了才重新解析对账
+function maybeSyncModelsFile() {
+  try {
+    const filePath = modelsFile.modelsFilePath();
+    if (!require('fs').existsSync(filePath)) return modelsFileLastStatus;
+    const mtime = require('fs').statSync(filePath).mtimeMs;
+    if (mtime !== modelsFileMtime) return syncModelsFile({ reason: 'file-changed' });
+  } catch { /* stat 失败按未变化处理 */ }
+  return modelsFileLastStatus;
+}
+
+ipcMain.handle('local:models-file/status', async () => (localStore ? maybeSyncModelsFile() : modelsFileLastStatus));
+ipcMain.handle('local:models-file/open', async () => {
+  try {
+    const r = modelsFile.ensureModelsFile();
+    const err = await shell.openPath(r.path);
+    return { ok: !err, created: r.created, error: err || null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 ipcMain.handle('server:health', async () => {
   try {
@@ -213,7 +272,11 @@ ipcMain.handle('local:threads/purge', async (_, { threadId }) => localStore ? lo
 // B1：孤儿会话归组
 ipcMain.handle('local:threads/set-project', async (_, { threadId, projectPath }) => localStore ? localStore.setThreadProject(threadId, projectPath) : { ok: false });
 
-ipcMain.handle('local:providers/list', async () => localStore ? localStore.listProviders() : []);
+ipcMain.handle('local:providers/list', async () => {
+  if (!localStore) return [];
+  maybeSyncModelsFile(); // 文件保存即生效（mtime 变化才真正重解析）
+  return localStore.listProviders();
+});
 ipcMain.handle('local:providers/add', async (_, { name, base_url, api_key, model_id }) => {
   if (!localStore) throw new Error('本地数据层未初始化');
   if (!credentialCrypto) throw new Error('本地数据层未初始化');
@@ -2490,6 +2553,12 @@ async function toolOrchestrateTask(args, { signal } = {}) {
 
 agentRunner.initAgentRunner({
   loadAgentCore,
+  // 2026-10-15：会话消息持久化通道（agentRunner 收归主进程落库用）——
+  // conversationId 即 threadKey（thread.id），camelCase 形状与 localStore.addMessage 对齐
+  persistMessage: ({ conversationId, message }) => {
+    if (!localStore) throw new Error('本地数据层未初始化');
+    return localStore.addMessage({ threadId: conversationId, ...message });
+  },
   // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
   createToolHandlers: ({ sender, signal, runId }) => ({

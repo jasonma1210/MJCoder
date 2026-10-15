@@ -87,7 +87,8 @@ async function localProviders() {
   // 与服务端结构对齐：models 由多模型数组派生；对未迁移的旧结构（仅 modelId）做容错回落
   return list.map((p) => ({
     ...p,
-    source: 'local',
+    // source: 'file' = ~/.mjcode/models.json 同步（UI 只读展示）；其余为本机手工添加
+    source: p.source || 'local',
     models: (p.models || (p.modelId ? [{ modelId: p.modelId, displayName: p.modelId }] : []))
       .map((m) => ({ id: m.modelId, model_id: m.modelId, display_name: m.displayName || m.modelId })),
   }));
@@ -178,6 +179,9 @@ export const api = {
     : window.mjcode.localUpdateProvider({ id, name: data.name, base_url: data.base_url, api_key: data.api_key })),
   // B2：测试连接（本机 provider 由主进程内存解析 Key）
   testConnection: (id, baseUrl) => window.mjcode.testConnection({ id, base_url: baseUrl }),
+  // 自定义模型配置文件（~/.mjcode/models.json）：状态查询（含 mtime 热同步）与打开/初始化
+  modelsFileStatus: () => window.mjcode.localModelsFileStatus(),
+  modelsFileOpen: () => window.mjcode.localModelsFileOpen(),
 
   // Server-side global providers（离线不可用）
   globalProviders: () => fetch(`${API}/global/providers`).then(r => r.json()),

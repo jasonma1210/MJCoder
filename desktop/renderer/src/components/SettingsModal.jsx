@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, loadFeatures, setApiBase } from '../lib/api';
+import { api, loadFeatures } from '../lib/api';
 import MarketModal from './MarketModal';
 import TeamSpace from './TeamSpace';
 import EcosystemModal from './EcosystemModal';
@@ -102,16 +102,6 @@ export default function SettingsModal({
   const sandbox = approvalSettings?.sandbox_policy || 'workspace-write';
   // P0-F：沙箱能力状态（无 OS 级沙箱时明示兜底边界）
   const [sandboxStatus, setSandboxStatus] = useState(null);
-  // 服务端地址（设置-通用）：打包版唯一可行的服务端数据入口（dev 时本地 3001 已在跑）
-  const [serverBaseInput, setServerBaseInput] = useState('');
-  const [serverBaseCur, setServerBaseCur] = useState('');
-  const [serverBaseMsg, setServerBaseMsg] = useState('');
-  useEffect(() => {
-    window.mjcode?.serverBase?.().then((r) => {
-      setServerBaseCur(r?.base || '');
-      setServerBaseInput(r?.base || '');
-    }).catch(() => {});
-  }, []);
   // A10：读取时迁移遗留值（auto → auto-safe、always-ask → always）
   const approvalMode = migrateApprovalMode(approvalSettings?.approval_mode);
 
@@ -241,58 +231,61 @@ export default function SettingsModal({
     }
   }
 
-  return (
-    <div className="fixed inset-0 bg-bg z-settings flex">
-      {/* 左侧导航 */}
-      <div className="w-[280px] border-r border-border flex flex-col">
-        {/* 交通灯安全区（真机反馈「设置页顶部还没修复」的根因）：
-            主窗口是 titleBarStyle: 'hiddenInset'，macOS 的红/黄/绿三灯悬浮在
-            窗口左上角（约 78x38）并且永远盖在网页内容之上。
-            设置浮层铺满整窗，原先把「← 返回应用」放在这里 → 按钮被交通灯压住，
-            看不清也点不到。现在整块留空并设为可拖拽区，功能入口全部下移。 */}
-        <div className="h-11 shrink-0" style={{ WebkitAppRegion: 'drag' }} />
-        <div className="px-4 pb-4 flex flex-col flex-1 min-h-0">
-          <input placeholder="搜索设置项..." value={search} onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm mb-4 outline-none shrink-0" />
-          <div className="flex-1 min-h-0 overflow-y-auto">
-            {nav.map((group) => {
-              const items = group.items.filter(i => !search || i.label.includes(search));
-              if (!items.length) return null;
-              return (
-                <div key={group.group} className="mb-4">
-                  <div className="text-xs text-text2 px-2 mb-1">{group.group}</div>
-                  {items.map((item) => (
-                    <button key={item.id} onClick={() => setTab(item.id)}
-                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-0.5 ${tab === item.id ? 'bg-surface text-text' : 'text-text2 hover:bg-hover'}`}>
-                      <span className="shrink-0">{item.icon}</span> {item.label}
-                    </button>
-                  ))}
-                </div>
-              );
-            })}
-            {nav.every(g => !g.items.filter(i => !search || i.label.includes(search)).length) && (
-              <p className="text-xs text-text2 px-2 py-3">没有匹配「{search}」的设置项</p>
-            )}
-          </div>
-        </div>
-      </div>
+  // 平台相关关闭按钮（用户要求按系统环境定义）：macOS 沿用交通灯语义（左上红点），
+  // Windows/Linux 沿用窗口按钮语义（右上 X）。主窗口仍为 hiddenInset，浮窗化后
+  // 系统交通灯回到背景窗口左上角，不再与设置页内容重叠，原拖拽安全区随之移除。
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.userAgent || '');
 
-      {/* 右侧内容 */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-8 relative">
-        {/* 顶部拖拽条 + 关闭：窗口无系统标题栏，设置页必须自带关闭出口；
-            放在右侧内容区顶端，既避开交通灯，也不占用导航栏的高度 */}
-        <div className="absolute top-0 left-0 right-0 h-11 flex items-center justify-end px-6"
-          style={{ WebkitAppRegion: 'drag' }}>
+  return (
+    <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay p-6">
+      <div className="w-[920px] max-w-[calc(100vw-3rem)] h-[680px] max-h-[calc(100vh-3rem)] bg-bg border border-border rounded-2xl shadow-[var(--shadow-modal)] flex overflow-hidden relative">
+        {isMac ? (
           <button onClick={onClose}
-            className="text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
-            style={{ WebkitAppRegion: 'no-drag' }}
+            className="absolute top-[18px] left-[18px] w-3 h-3 rounded-full bg-danger hover:brightness-90 z-10"
+            title="关闭设置（Esc）" aria-label="关闭设置" />
+        ) : (
+          <button onClick={onClose}
+            className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
             title="关闭设置（Esc）" aria-label="关闭设置">
             <IconX size={16} />
           </button>
+        )}
+
+        {/* 左侧导航 */}
+        <div className="w-[240px] border-r border-border flex flex-col shrink-0">
+          {/* macOS 红点让位区（红点悬浮在左栏顶部，搜索框下移避让） */}
+          <div className={isMac ? 'h-9 shrink-0' : 'h-3 shrink-0'} />
+          <div className="px-4 pb-4 flex flex-col flex-1 min-h-0">
+            <input placeholder="搜索设置项..." value={search} onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm mb-4 outline-none shrink-0" />
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {nav.map((group) => {
+                const items = group.items.filter(i => !search || i.label.includes(search));
+                if (!items.length) return null;
+                return (
+                  <div key={group.group} className="mb-4">
+                    <div className="text-xs text-text2 px-2 mb-1">{group.group}</div>
+                    {items.map((item) => (
+                      <button key={item.id} onClick={() => setTab(item.id)}
+                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-0.5 ${tab === item.id ? 'bg-surface text-text' : 'text-text2 hover:bg-hover'}`}>
+                        <span className="shrink-0">{item.icon}</span> {item.label}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+              {nav.every(g => !g.items.filter(i => !search || i.label.includes(search)).length) && (
+                <p className="text-xs text-text2 px-2 py-3">没有匹配「{search}」的设置项</p>
+              )}
+            </div>
+          </div>
         </div>
-        <h1 className="text-2xl font-semibold mb-8 mt-8">
-          {nav.flatMap(g => g.items).find(i => i.id === tab)?.label || '设置'}
-        </h1>
+
+        {/* 右侧内容 */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-8">
+          <h1 className="text-2xl font-semibold mb-6">
+            {nav.flatMap(g => g.items).find(i => i.id === tab)?.label || '设置'}
+          </h1>
 
         {/* 通用 */}
         {tab === 'general' && (
@@ -340,31 +333,6 @@ export default function SettingsModal({
                 </div>
                 <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)} />
               </div>
-            </Section>
-            <Section title="服务端地址">
-              <p className="text-xs text-text2 mb-2">本地优先：会话、本机模型、任务编排不依赖服务端；服务端仅提供登录、共享模型与团队数据。打包版默认指向本机 3001，若服务端部署在远端请在此填写（以 http:// 或 https:// 开头）。</p>
-              <div className="flex items-center gap-2">
-                <input value={serverBaseInput} onChange={(e) => setServerBaseInput(e.target.value)}
-                  placeholder="http://localhost:3001/api"
-                  className="flex-1 bg-surface border border-border rounded-lg px-3 py-1.5 text-sm font-mono outline-none focus:border-accent" />
-                <button
-                  onClick={async () => {
-                    setServerBaseMsg('');
-                    try {
-                      const r = await window.mjcode.serverBase({ base: serverBaseInput });
-                      setServerBaseCur(r.base);
-                      setApiBase(r.base);
-                      loadFeatures();
-                      setServerBaseMsg('已保存并生效（当前地址：' + r.base + '，来源：' + r.source + '）');
-                    } catch (err) {
-                      setServerBaseMsg(err?.message || '保存失败');
-                    }
-                  }}
-                  className="bg-accent text-white px-3 py-1.5 rounded-lg text-xs shrink-0"
-                >保存并测试</button>
-              </div>
-              {serverBaseMsg && <p className="text-xs text-text2 mt-1">{serverBaseMsg}</p>}
-              {serverBaseCur && <p className="text-xs text-text2 mt-1">当前生效：{serverBaseCur}</p>}
             </Section>
           </>
         )}
@@ -536,6 +504,7 @@ export default function SettingsModal({
 
         {/* Git 与 GitHub：环境只读探测 + 集成状态 + 审批边界说明 */}
         {tab === 'git' && <GitTab projectPath={projectPath} />}
+        </div>
       </div>
     </div>
   );
@@ -694,6 +663,17 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
   const [testStatus, setTestStatus] = useState({}); // id -> { ok, latencyMs, error, testing }
   const [addFormPid, setAddFormPid] = useState(null);
   const [addForm, setAddForm] = useState({ pid: null, model_id: '', display_name: '' });
+  // 自定义模型配置文件（~/.mjcode/models.json，对标 WorkBuddy models.json）
+  const [mf, setMf] = useState(null);
+
+  async function loadModelsFile() {
+    try {
+      const s = await api.modelsFileStatus(); // 主进程按 mtime 热同步（文件保存即生效）
+      setMf(s);
+      if (s?.exists) onProvidersChange(); // 同步可能增删了 provider，刷新列表
+    } catch { /* 通道不可用（旧版 preload）静默降级 */ }
+  }
+  useEffect(() => { loadModelsFile(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function submitAddModel() {
     if (!addForm.pid || !addForm.model_id.trim()) return;
@@ -738,11 +718,52 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
     }
   }
 
+  async function openModelsFile() {
+    try {
+      await api.modelsFileOpen(); // 不存在则先写模板并打开
+      setTimeout(loadModelsFile, 600); // 等编辑器打开后刷新同步状态
+    } catch (err) {
+      console.warn('[settings] 打开配置文件失败:', err);
+    }
+  }
+
   return (
     <>
+      {/* WorkBuddy 式「自定义模型」文件入口（用户要求：配置文件路径放模型页，参考 WorkBuddy 样式）。
+          路径内联可点击（打开/初始化文件）；文件保存后主进程按 mtime 自动同步，无需重启。 */}
+      <div className="mb-3">
+        <div className="text-sm font-semibold">自定义模型</div>
+        <p className="text-xs text-text2 mt-1 leading-relaxed">
+          模型添加后会自动写入到本地{' '}
+          <button onClick={openModelsFile}
+            className="font-mono bg-hover text-accent px-1 rounded hover:underline align-baseline"
+            title="点击打开配置文件" aria-label="打开模型配置文件">
+            {mf?.path || '~/.mjcode/models.json'}
+          </button>
+          {' '}文件中，保存后自动同步到下方列表（无需重启）。
+          {mf && !mf.exists && ' 文件尚未创建，点击路径即可生成模板。'}
+        </p>
+        {mf?.errors?.length > 0 && (
+          <div className="mt-1 space-y-0.5">
+            {mf.errors.slice(0, 5).map((e, i) => (
+              <p key={i} className="text-xs text-danger">解析告警：{e.error}</p>
+            ))}
+          </div>
+        )}
+        {mf?.exists && mf?.errors?.length === 0 && mf?.synced > 0 && (
+          <p className="text-xs text-success mt-1">已从配置文件同步 {mf.synced} 个模型服务</p>
+        )}
+        <div className="flex gap-3 mt-2">
+          <button onClick={openModelsFile} className="text-xs text-accent hover:underline">
+            {mf?.exists ? '打开配置文件' : '初始化配置文件'}
+          </button>
+          <button onClick={loadModelsFile} className="text-xs text-text2 hover:text-text">重新同步</button>
+        </div>
+      </div>
       <Section title="我的模型服务">
         {providers.map((p) => {
           const isServer = String(p.id).startsWith('s');
+          const isFile = p.source === 'file'; // ~/.mjcode/models.json 同步：文件是事实来源，UI 只读
           const st = testStatus[p.id];
           const editing = editingId === p.id;
           return (
@@ -760,9 +781,9 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                 ) : (
                   <>
                     <span className="text-sm font-medium">{p.name}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-hover text-text2">{isServer ? '共享' : '本机'}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-hover text-text2">{isFile ? '配置文件' : (isServer ? '共享' : '本机')}</span>
                     <span className="ml-auto flex items-center gap-2 shrink-0">
-                      {!isServer && (
+                      {!isServer && !isFile && (
                         <>
                           <button onClick={() => { setEditingId(p.id); setEditForm({ name: p.name, base_url: p.base_url }); }}
                             className="text-text2 hover:text-text text-xs">编辑</button>
@@ -771,6 +792,10 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                           <button onClick={() => testConn(p)} className="text-text2 hover:text-text text-xs">测试连接</button>
                         </>
                       )}
+                      {isFile && (
+                        <button onClick={() => testConn(p)} className="text-text2 hover:text-text text-xs">测试连接</button>
+                      )}
+                      {!isFile && (
                       <button onClick={async () => {
                         // A2：删除需确认（加密 Key 不可逆销毁）
                         const ok = await confirm({
@@ -787,11 +812,15 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                           setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: err?.message || '删除失败' } }));
                         }
                       }} className="text-danger text-xs">删除</button>
+                      )}
                     </span>
                   </>
                 )}
               </div>
               {!editing && <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>}
+              {isFile && (
+                <div className="text-[10px] text-text2 mt-0.5">由 {mf?.path || '~/.mjcode/models.json'} 管理，在文件中增删改后自动同步（本面板只读）</div>
+              )}
               {st?.testing && <div className="text-xs text-text2 mt-1">测试中…</div>}
               {st && !st.testing && (st.ok
                 ? <div className="text-xs text-success mt-1">连接正常 · {st.latencyMs}ms</div>
@@ -812,7 +841,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                       <div key={m.id ?? mid} className="flex items-center gap-1.5 pl-4 text-xs text-text2 group">
                         <span className="w-1 h-1 rounded-full bg-text2 shrink-0" />
                         <span className="truncate">{m.display_name || mid}</span>
-                        {!isServer && (
+                        {!isServer && !isFile && (
                           <button
                             onClick={async () => {
                               const ok = await confirm({
@@ -842,7 +871,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                 </div>
               )}
               {/* 添加模型：默认收起（修复「已添加模型仍常驻输入框」的逻辑混乱） */}
-              {!isServer && (
+              {!isServer && !isFile && (
                 addFormPid === p.id ? (
                   <div className="flex gap-2 mt-2">
                     <input placeholder="模型 ID（如 mimo-v2.6-pro）" value={addForm.pid === p.id ? addForm.model_id : ''}

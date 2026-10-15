@@ -292,17 +292,53 @@ class LocalStore {
     return this.data.providers.map(({ keyEncrypted, ...rest }) => rest);
   }
 
-  addProvider({ name, base_url, keyEncrypted, modelId }) {
+  addProvider({ name, base_url, keyEncrypted, modelId, source, fileKey }) {
     const p = {
       id: this.nextId(), name, base_url, keyEncrypted,
       // 多模型真值源（B 方案升级）；modelId 保留为「首模型」兼容字段（老代码/测试契约依赖）
       models: modelId ? [{ modelId: String(modelId), displayName: String(modelId) }] : [],
       modelId: modelId ? String(modelId) : '',
+      // 来源标记：'file' = ~/.mjcode/models.json 同步（UI 只读，文件为事实来源）；undefined = UI 手工添加
+      ...(source ? { source } : {}),
+      ...(fileKey ? { fileKey } : {}),
       createdAt: Date.now(),
     };
     this.data.providers.push(p);
     this.flush();
     return { id: p.id, name: p.name, base_url: p.base_url, modelId: p.modelId, models: p.models };
+  }
+
+  // ── 配置文件来源 provider（modelsFile.js 对账专用）──
+  findProviderByFileKey(fileKey) {
+    return this.data.providers.find((x) => x.fileKey === fileKey) || null;
+  }
+
+  // 文件同步：整体覆盖名称/地址/Key/模型列表（文件是事实来源）；modelId 兼容字段随首模型
+  updateFileProvider(providerId, { name, base_url, keyEncrypted, models } = {}) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    if (!p) throw new Error('本地模型服务不存在');
+    if (typeof name === 'string' && name.trim()) p.name = name.trim();
+    if (typeof base_url === 'string' && base_url.trim()) p.base_url = base_url.trim();
+    if (typeof keyEncrypted === 'string') p.keyEncrypted = keyEncrypted;
+    if (Array.isArray(models)) {
+      p.models = models.map((m) => ({ modelId: String(m.modelId), displayName: String(m.displayName || m.modelId) }));
+      if (!p.models.some((m) => m.modelId === p.modelId)) p.modelId = p.models[0]?.modelId || '';
+    }
+    this.flush();
+    return p;
+  }
+
+  // 文件同步对账：删除 source==='file' 且 fileKey 不在 keep 列表内的 provider（返回被删 id）
+  pruneFileProviders(keepFileKeys) {
+    const keep = new Set(keepFileKeys || []);
+    const removed = this.data.providers
+      .filter((x) => x.source === 'file' && x.fileKey && !keep.has(x.fileKey))
+      .map((x) => x.id);
+    if (removed.length) {
+      this.data.providers = this.data.providers.filter((x) => !removed.includes(x.id));
+      this.flush();
+    }
+    return removed;
   }
 
   setProviderModel(providerId, modelId) {

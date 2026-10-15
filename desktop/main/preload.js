@@ -145,6 +145,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   // B2：供应商编辑与测试连接
   localUpdateProvider: (payload) => ipcRenderer.invoke('local:providers/update', payload),
   testConnection: (payload) => ipcRenderer.invoke('model:testConnection', payload),
+  // 自定义模型配置文件（~/.mjcode/models.json，对标 WorkBuddy models.json）
+  localModelsFileStatus: () => ipcRenderer.invoke('local:models-file/status'),
+  localModelsFileOpen: () => ipcRenderer.invoke('local:models-file/open'),
   // B1：项目一等实体
   localProjects: () => ipcRenderer.invoke('local:projects/list'),
   localAddProject: (payload) => ipcRenderer.invoke('local:projects/add', payload),

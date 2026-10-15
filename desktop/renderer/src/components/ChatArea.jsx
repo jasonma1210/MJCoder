@@ -625,16 +625,20 @@ export default function ChatArea({
           if (activeThreadIdRef.current === threadKey) setToolCalls((prev) => [...prev, tc]);
           for (const f of agentFilesOf(tc)) agentFilesRef.current.add(f);
         },
-        onDone: async (finalText, usage, aborted) => {
+        onDone: async (finalText, usage, aborted, meta = {}) => {
           // 运行保活：完成时用户可能已切到其他会话（wasActive=false）。
           // 持久化/状态收敛/记忆留存线程无关照做；仅「仍在本会话」才直接动可见 UI，
           // 否则完成消息会打进别的会话的消息区（串显根因之二）。
           const wasActive = activeThreadIdRef.current === threadKey;
           // Bugfix：即时中止收尾时 finalText 为空串（引擎真实结果尚未返回），
           // 不再拼出 "\n\n（已停止）" 的空尾消息，直接显示「（已停止）」
-          const content = aborted
+          let content = aborted
             ? (finalText ? `${finalText}\n\n（已停止）` : '（已停止）')
             : finalText;
+          // 2026-10-15：非中止但引擎返回空文本 → 给出可行动提示，不再落一条视觉上不可见的空消息
+          if (!aborted && !String(content || '').trim()) {
+            content = '（模型未返回任何文本内容，任务可能未正常收尾。请发送「继续」让我重新总结。）';
+          }
           const assistantMsg = {
             role: 'assistant',
             content,
@@ -658,12 +662,21 @@ export default function ChatArea({
             endedAt: Date.now(),
           };
           if (activeRunIdRef.current === rs.runId) activeRunIdRef.current = null;
-          // 先落库再补挂 UI：切换拉取历史时能拿到完成消息（顺带消除追加/拉取竞态）
-          await api.sendMessage(currentThread.id, {
-            ...assistantMsg,
-            tokens_input: usage?.prompt_tokens || 0,
-            tokens_output: usage?.completion_tokens || 0,
-          });
+          // 2026-10-15 修复：落库去重 + 收尾加固——
+          // ① 主进程模式（meta.mainPersisted）最终消息已由 agentRunner 在主进程落库，渲染层不重复写；
+          // ② 进程内回退模式仍在此落库，但失败只告警——此前 await sendMessage 抛错会跳过
+          //    setMessages/setRunSummary，症状是「无总结消息 + 无结束信息条」双双静默消失。
+          if (!meta?.mainPersisted) {
+            try {
+              await api.sendMessage(currentThread.id, {
+                ...assistantMsg,
+                tokens_input: usage?.prompt_tokens || 0,
+                tokens_output: usage?.completion_tokens || 0,
+              });
+            } catch (err) {
+              console.warn('[chat] 完成消息持久化失败（UI 收尾不受影响）:', err);
+            }
+          }
           rs.finalMsg = assistantMsg;
           rs.applied = wasActive; // 活跃路径马上追加进可见列表；后台路径留给切回时的拉取/补挂
           if (wasActive) setMessages((m) => [...m, assistantMsg]);

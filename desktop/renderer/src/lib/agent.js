@@ -40,7 +40,9 @@ let runSeq = 0;
 // 主进程模式：把 runAgent 语义映射为「发起 + 事件订阅 + 中止」，对外保持原签名不变
 // （ChatArea 零改动：onMessage/onStream/onToolCall/onDone 回调与 AbortSignal 语义完全一致）
 function runAgentViaMain(options) {
-  const { signal, onMessage, onStream, onToolCall, onDone, ...rest } = options;
+  // onMessage 解构弃用（_前缀 = 有意不转发）：中间消息已由主进程 agentRunner 落库，
+  // 若留在 rest 里经 IPC 传函数会 structured-clone 失败；进程内回退模式仍走渲染层 onMessage
+  const { signal, onMessage: _onMessage, onStream, onToolCall, onDone, ...rest } = options;
   return new Promise((resolve, reject) => {
     const mj = globalThis.window?.mjcode;
     if (!mj?.agentRun || !mj?.onAgentEvent) {
@@ -62,12 +64,14 @@ function runAgentViaMain(options) {
       if (!evt || evt.runId !== runId) return;
       try {
         switch (evt.type) {
-          case 'message': onMessage?.(evt.data); break;
+          // 2026-10-15：'message' 事件不再转发——中间消息已由主进程 agentRunner 直接落库，
+          // 渲染层 onMessage 的落库职责仅保留给进程内回退模式（主进程模式收不到此回调）。
           case 'stream': onStream?.(evt.data); break; // 引擎轮次边界信号（清空上一轮流式文本）
           case 'tool_call': onToolCall?.(evt.data); break;
           case 'done':
             finish(null);
-            onDone?.(evt.data.finalText, evt.data.usage, evt.data.aborted);
+            // 第 4 参 meta.mainPersisted：最终消息已由主进程落库，渲染层不重复写（防双份）
+            onDone?.(evt.data.finalText, evt.data.usage, evt.data.aborted, { mainPersisted: !!evt.data.mainPersisted });
             resolve(evt.data.finalText);
             break;
           case 'error':

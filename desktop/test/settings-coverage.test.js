@@ -63,16 +63,30 @@ check('浏览器 / Git 设置页有真实内容（不再回落「即将上线」
 });
 
 check('设置页顶部避开 macOS 交通灯（hiddenInset 窗口）', () => {
-  // 主窗口是 titleBarStyle: 'hiddenInset'，交通灯悬浮在内容左上角且永远在最上层
+  // 主窗口是 titleBarStyle: 'hiddenInset'，交通灯悬浮在窗口左上角且永远在最上层
   const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'main.js'), 'utf8');
   assert.match(main, /titleBarStyle: 'hiddenInset'/,
     '窗口标题栏样式已变，请同步核对交通灯安全区');
-  assert.match(settings, /WebkitAppRegion: 'drag'/,
-    '设置页缺少拖拽安全区，交通灯会压住左上角内容');
+  // 2026-10-15 浮窗化：设置页从「铺满整窗」改为居中浮窗（bg-overlay 背景 + rounded-2xl 面板），
+  // 不再覆盖窗口左上角——系统交通灯悬在背景层，与设置内容完全无重叠，
+  // 原「拖拽安全区」要求（WebkitAppRegion: 'drag'）随之移除。
+  // 本守卫改为断言浮窗形态：只要设置页仍试图铺满整窗（fixed inset-0 直接做内容层）即失败。
+  assert.match(settings, /fixed inset-0 z-settings flex items-center justify-center bg-overlay/,
+    '设置页应为中心浮窗（bg-overlay 背景），不得铺满整窗压住交通灯');
+  assert.match(settings, /rounded-2xl shadow-\[var\(--shadow-modal\)\]/,
+    '设置页缺少浮窗面板（rounded-2xl + shadow-modal）');
   // 只禁「渲染出来的按钮」，注释里记录这段历史是允许的
   assert.ok(!/>\s*← 返回应用\s*</.test(settings),
     '左上角仍渲染返回按钮：该位置被交通灯覆盖，既看不清也点不到');
   assert.match(settings, /aria-label="关闭设置"/, '设置页缺少明确关闭出口');
+});
+
+check('设置页关闭按钮按平台环境定义', () => {
+  // macOS：交通灯语义 → 左上红点（bg-danger）；Windows/Linux：窗口按钮语义 → 右上 X。
+  // 实现依据 navigator.userAgent 平台分支，两套样式都必须存在且共用同一 aria-label。
+  assert.match(settings, /isMac[\s\S]*?navigator\.userAgent/, '缺少平台检测（navigator.userAgent）');
+  assert.match(settings, /isMac \?[\s\S]*?bg-danger[\s\S]*?<IconX size=\{16\} \/>/,
+    '缺少平台分支关闭按钮（mac 红点 / 其他系统 X）');
 });
 
 check('设置项没有假开关（写入的键必须有人读取）', () => {

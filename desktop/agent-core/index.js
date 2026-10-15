@@ -985,6 +985,17 @@ export async function runAgent({
   let renewNotice = '';
   let suspendNoticed = false; // Phase 3-1：断点是否已通过 onSuspend 成功保存
 
+  // ── 空收尾守卫（2026-10-15）──
+  // 真机反馈：「大任务跑完结束后没有任何总结文本，感觉没做完就偷偷结束了」。
+  // 根因：模型（尤其兼容端点/推理模型）偶尔返回**空 content 且无 tool_calls** 的轮——
+  // 引擎原逻辑把它当「正常收尾」直接 return ''，渲染层落库一条空消息（视觉上不可见）
+  // + 结束信息条，用户看到的就是「无总结 + 任务没做完就结束」。
+  // 修法：空收尾先旁路注入续跑指令（最多 2 次）让模型补输出总结；仍空则返回
+  // 明示「任务未完全完成」的兜底文案（该措辞同时是 workerPool 未完成收尾的判定标记，
+  // 编排 Worker 空收尾会被判 failed 走重试，不会拿空 summary 伪装成功）。
+  let emptyFinalNudges = 0;
+  const EMPTY_FINAL_NUDGE_MAX = 2;
+
   // ── 重复失败熔断：空转循环防线 ──
   // 真机反馈：「明明代码已经改完了，但一直在那边循环不结束」。
   // 根因不是轮次不够，而是**同一个失败操作被无限重试**：工具失败只回一句不可行动的错误
@@ -1110,6 +1121,18 @@ export async function runAgent({
         convo.push({ role: 'assistant', content: finalText || '' });
         renewNotice = '系统提示：上一条回复因长度限制被截断。请从中断处继续，不要重复已输出内容。';
         continue;
+      }
+      // 空收尾守卫：空 content 且无 tool_calls 不算完成任务（见 emptyFinalNudges 处注释）
+      const trimmedFinal = String(finalText || '').trim();
+      if (!trimmedFinal && emptyFinalNudges < EMPTY_FINAL_NUDGE_MAX && !signal?.aborted) {
+        emptyFinalNudges += 1;
+        console.warn(`[agent] 空响应轮（无文本无工具调用），旁路注入续跑指令（第 ${emptyFinalNudges}/${EMPTY_FINAL_NUDGE_MAX} 次）`);
+        renewNotice = '系统提示：上一轮你没有输出任何文本内容，也没有调用任何工具（可能是空响应）。'
+          + '若任务已完成，请输出完整的最终总结；若尚未完成，请继续执行下一步。';
+        continue;
+      }
+      if (!trimmedFinal) {
+        finalText = '（模型连续多轮未返回任何文本内容，任务未完全完成。请发送「继续」让我重新总结，或换个说法重试。）';
       }
       // 纯文本收尾视为本轮对话完成。「只说不做」由系统提示第 8 条（持续执行纪律）约束，
       // 不做无条件续跑：否则闲聊/正常总结每条都会多一轮请求，延迟与 token 翻倍。

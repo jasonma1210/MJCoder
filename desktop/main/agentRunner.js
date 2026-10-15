@@ -47,6 +47,27 @@ function startAgentRun(payload, sender) {
     let doneSent = false;
     const startedAt = Date.now();
     console.warn(`[agentRun] 启动 runId=${runId} model=${payload?.model?.model?.model_id || '?'} cwd=${payload?.cwd || '-'} msgs=${payload?.messages?.length || 0} budget=${payload?.tokenBudget || 0}`);
+    // 2026-10-15 修复：会话消息持久化收归主进程（此前由渲染层 onMessage/onDone 回调落库）。
+    // 事故链：长任务（17min/675k tokens）运行期间渲染层刷新/重载 → 订阅与回调随页面销毁 →
+    // 中间消息与**最终总结**全部不落库，任务「偷偷消失」；渲染层 onDone 里 await sendMessage
+    // 抛错也会静默跳过 UI 追加与结束信息条（双重丢总结）。
+    // 现在主进程直写 localStore：刷新/切走/渲染层异常都丢不了总结。失败仅告警，不影响运行。
+    const persistChatMessage = (m) => {
+      if (!deps.persistMessage || !payload.conversationId) return;
+      try {
+        deps.persistMessage({ conversationId: payload.conversationId, message: m });
+      } catch (e) {
+        console.warn(`[agentRun] 消息持久化失败 runId=${runId} role=${m?.role}:`, e.message);
+      }
+    };
+    const toStoreShape = (m) => ({
+      role: m.role,
+      content: m.content || '',
+      toolCalls: m.tool_calls || null,
+      toolCallId: m.tool_call_id || null,
+      tokensInput: m.tokens_input || 0,
+      tokensOutput: m.tokens_output || 0,
+    });
     try {
       const core = await deps.loadAgentCore();
       const handlers = deps.createToolHandlers({ sender, signal: controller.signal, runId });
@@ -68,7 +89,11 @@ function startAgentRun(payload, sender) {
         resumeContext: payload.resumeContext || '',
         signal: controller.signal,
         toolHandlers: handlers,
-        onMessage: (m) => emit('message', m),
+        // 中间轮（assistant+tool_calls / tool 结果）主进程直接落库，再照常推事件
+        onMessage: (m) => {
+          persistChatMessage(toStoreShape(m));
+          emit('message', m);
+        },
         onStream: (s) => emit('stream', s),
         onToolCall: (tc) => emit('tool_call', tc),
         // P0-B：任务清单 → 渲染层实时展示（让长任务进度对用户可见）
@@ -100,13 +125,24 @@ function startAgentRun(payload, sender) {
         onDone: (ft, usage, aborted) => {
           doneSent = true;
           console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
-          emit('done', { finalText: ft, usage, aborted });
+          // 最终 assistant 消息主进程落库（唯一落库点；渲染层凭 mainPersisted 标记去重）
+          persistChatMessage({
+            ...toStoreShape({ role: 'assistant', content: ft || '' }),
+            modelName: payload?.model?.model?.model_id || '',
+            tokensInput: usage?.prompt_tokens || 0,
+            tokensOutput: usage?.completion_tokens || 0,
+          });
+          emit('done', { finalText: ft, usage, aborted, mainPersisted: true });
         },
       });
       // 兜底：引擎部分退出路径若未触发 onDone（防御性），保证渲染层一定能收到终止事件
       if (typeof finalText === 'string' && !doneSent) {
         console.warn(`[agentRun] 兜底收尾 runId=${runId}（引擎未触发 onDone）：textLen=${(finalText || '').length} aborted=${controller.signal.aborted}`);
-        emit('done', { finalText, usage: null, aborted: controller.signal.aborted });
+        persistChatMessage({
+          ...toStoreShape({ role: 'assistant', content: finalText || '' }),
+          modelName: payload?.model?.model?.model_id || '',
+        });
+        emit('done', { finalText, usage: null, aborted: controller.signal.aborted, mainPersisted: true });
       }
     } catch (err) {
       console.error(`[agentRun] 异常终止 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s：${String(err?.message || err).slice(0, 400)}`);

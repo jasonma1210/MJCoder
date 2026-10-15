@@ -94,6 +94,47 @@ function makeSender() {
   await sleep(30);
   check('sender 销毁后事件推送静默跳过（不崩溃）', s7.events.length === 0);
 
+  // ── 2026-10-15：主进程侧消息持久化（总结不再依赖渲染层回调落库）──
+  const persisted = [];
+  initAgentRunner({
+    loadAgentCore: async () => ({
+      runAgent: async (opts) => {
+        opts.onMessage?.({ role: 'assistant', content: '中间轮', tool_calls: [{ id: 't1' }], tokens_input: 5, tokens_output: 2 });
+        opts.onMessage?.({ role: 'tool', tool_call_id: 't1', content: 'tool 结果' });
+        opts.onDone?.('最终总结', { prompt_tokens: 10, completion_tokens: 5 }, false);
+        return '最终总结';
+      },
+    }),
+    createToolHandlers: () => ({}),
+    persistMessage: ({ conversationId, message }) => { persisted.push({ conversationId, message }); return { ok: true }; },
+  });
+  const s8 = makeSender();
+  startAgentRun({ runId: 'r8', conversationId: '42', model: { model: { model_id: 'test-model' } } }, s8);
+  await sleep(30);
+  const persistedRoles = persisted.map((p) => p.message.role);
+  check('主进程落库：中间轮 assistant/tool/最终总结全部写入',
+    JSON.stringify(persistedRoles) === JSON.stringify(['assistant', 'tool', 'assistant']),
+    persistedRoles.join(','));
+  check('主进程落库：threadId 取自 conversationId', persisted.every((p) => p.conversationId === '42'));
+  const finalPersisted = persisted[persisted.length - 1]?.message || {};
+  check('主进程落库：最终消息含 camelCase 用量与模型名',
+    finalPersisted.tokensInput === 10 && finalPersisted.tokensOutput === 5 && finalPersisted.modelName === 'test-model');
+  const doneEvt8 = s8.events.find((e) => e.type === 'done');
+  check('done 事件携带 mainPersisted 标记（渲染层去重依据）', doneEvt8?.data?.mainPersisted === true);
+
+  // ── 2026-10-15：持久化通道抛错不影响运行收尾 ──
+  initAgentRunner({
+    loadAgentCore: async () => ({
+      runAgent: async (opts) => { opts.onDone?.('总结', { prompt_tokens: 1, completion_tokens: 1 }, false); return '总结'; },
+    }),
+    createToolHandlers: () => ({}),
+    persistMessage: () => { throw new Error('线程不存在'); },
+  });
+  const s9 = makeSender();
+  startAgentRun({ runId: 'r9', conversationId: '99' }, s9);
+  await sleep(30);
+  check('持久化失败仅告警，done 事件照常送达', s9.events.some((e) => e.type === 'done' && e.data.finalText === '总结'));
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);
 })();

@@ -305,6 +305,47 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
   check('对象结果仅摘要化超长字段（结构完整可解析）',
     JSON.parse(JSON.stringify(objSum)).ok === true && objSum.stdout.includes('长输出摘要化') && objSum.stderr === '');
 
+  // ── 测试 R：空收尾守卫（2026-10-15）——空响应轮不再被当成任务完成 ──
+  // R1：第 1 轮空响应 → 旁路注入续跑指令 → 第 2 轮正常输出 → 正常收尾
+  reset();
+  chatScript = [
+    { content: '', usage: { prompt_tokens: 10, completion_tokens: 0 } },
+    { content: '任务已完成：改了 a.js 并通过测试', usage: { prompt_tokens: 20, completion_tokens: 10 } },
+  ];
+  let emptyNudgeDone = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '做个任务' }],
+    model,
+    cwd: '/tmp/project',
+    onMessage: () => {},
+    onDone: (t, u, a) => { emptyNudgeDone = { t, u, a }; },
+  });
+  check('空收尾守卫：空响应后注入续跑指令再请求（共 2 次 chat）', chatCalls.length === 2, `chat ${chatCalls.length} 次`);
+  check('空收尾守卫：续跑指令拼进当轮 system（不污染会话历史）',
+    String(chatCalls[1]?.messages?.[0]?.content || '').includes('空响应'),
+    String(chatCalls[1]?.messages?.[0]?.content || '').slice(-60));
+  check('空收尾守卫：续跑后正常返回总结文本', emptyNudgeDone?.t === '任务已完成：改了 a.js 并通过测试');
+
+  // R2：连续 3 轮空响应（超过 2 次续跑上限）→ 返回「任务未完全完成」兜底文案
+  reset();
+  chatScript = [
+    { content: '', usage: { prompt_tokens: 10, completion_tokens: 0 } },
+    { content: '', usage: { prompt_tokens: 10, completion_tokens: 0 } },
+    { content: '', usage: { prompt_tokens: 10, completion_tokens: 0 } },
+  ];
+  let emptyFallbackDone = null;
+  await runAgent({
+    messages: [{ role: 'user', content: '做个任务' }],
+    model,
+    cwd: '/tmp/project',
+    onMessage: () => {},
+    onDone: (t, u, a) => { emptyFallbackDone = { t, u, a }; },
+  });
+  check('空收尾守卫：连续空响应在 2 次续跑后收尾（共 3 次 chat）', chatCalls.length === 3, `chat ${chatCalls.length} 次`);
+  check('空收尾守卫：兜底文案明示「任务未完全完成」且非空',
+    String(emptyFallbackDone?.t || '').includes('任务未完全完成') && String(emptyFallbackDone?.t || '').trim().length > 0,
+    String(emptyFallbackDone?.t || '').slice(0, 50));
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error('FAIL:', e); process.exit(1); });

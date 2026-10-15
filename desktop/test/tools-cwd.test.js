@@ -92,7 +92,7 @@ fs.writeFileSync(path.join(REPO, 'new.txt'), 'hello\n');
   console.log('[6] glob:', gl.files);
 
   // 7. applyPatch 在 cwd 执行
-  const patch = `--- a/app.js\n+++ b/app.js\n@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n console.log(a, b);\n`;
+  const patch = `--- a/app.js\n+++ b/app.js\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n console.log(a, b);\n`;
   const ap = await h('tool:applyPatch')({}, { patch, cwd: REPO });
   const after = fs.readFileSync(path.join(REPO, 'app.js'), 'utf8');
   if (!after.includes('const b = 3')) { console.error('FAIL: applyPatch 未生效', JSON.stringify(ap)); process.exit(1); }
