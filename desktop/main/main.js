@@ -860,7 +860,12 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 const SHELL_PATH = '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin';
 const shellEnv = () => {
   const home = process.env.HOME || '';
-  const userPaths = home ? [`${home}/.bun/bin`, `${home}/.volta/bin`] : [];
+  // 打包版冒烟实测（2026-10-15）：MCP 重连 spawn uvx ENOENT——uv 官方装到
+  // ~/.local/bin（pipx 风格），uv 亦可能装到 ~/.cargo/bin；此前缺这两个目录，
+  // 打包版里 uvx 类 MCP Server 全部启动失败（开发版因继承终端 PATH 而复现不了）。
+  const userPaths = home
+    ? [`${home}/.bun/bin`, `${home}/.volta/bin`, `${home}/.local/bin`, `${home}/.cargo/bin`]
+    : [];
   return { ...process.env, PATH: [...userPaths, SHELL_PATH].join(':') };
 };
 
