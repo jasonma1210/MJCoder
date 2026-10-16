@@ -1,4 +1,4 @@
-// 自定义模型配置文件（对标 WorkBuddy ~/.workbuddy/models.json）：
+// 自定义模型配置文件（分组格式：providers[] 内嵌 models[]，对齐主流桌面 AI 工具的 models.json 约定）：
 // ~/.mjcode/models.json → 解析校验 → 同步进 LocalStore providers（source:'file'）+ localVault。
 // 路径跨 OS：os.homedir()（macOS /Users/x/.mjcode、Linux /home/x/.mjcode、Windows C:\Users\x\.mjcode）。
 //
