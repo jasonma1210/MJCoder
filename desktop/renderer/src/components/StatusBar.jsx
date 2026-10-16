@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { IconLaptop, IconMessage } from './icons';
+import { useI18n } from '../i18n';
 
 // 底部状态条（P0-信任闭环）：把「离线 / 本机数据 / 密钥不出本机」从抽象定位变成常驻可见事实
 export default function StatusBar({ localMode, threadCount, projectPath, modelName }) {
+  const { t } = useI18n();
   const [dataPath, setDataPath] = useState('');
 
   useEffect(() => {
@@ -18,9 +20,9 @@ export default function StatusBar({ localMode, threadCount, projectPath, modelNa
 
   return (
     <footer className="h-7 shrink-0 px-4 flex items-center gap-3 text-[11px] text-text2 border-t border-border bg-sidebar">
-      <span className="flex items-center gap-1" title={localMode ? '服务端不可达，线程与消息保存在本机' : '已连接本地服务端'}>
+      <span className="flex items-center gap-1" title={localMode ? t('statusBar.offlineTitle') : t('statusBar.connectedTitle')}>
         <span className={`w-1.5 h-1.5 rounded-full ${localMode ? 'bg-[var(--sem-warn)]' : 'bg-[var(--sem-success)]'}`} />
-        {localMode ? '离线模式 · 数据仅在本机' : '已连接本地服务端'}
+        {localMode ? t('statusBar.offlineMode') : t('statusBar.connected')}
       </span>
 
       {projectPath && (
@@ -29,18 +31,18 @@ export default function StatusBar({ localMode, threadCount, projectPath, modelNa
         </span>
       )}
 
-      {modelName && <span className="truncate max-w-[160px]">模型：{modelName}</span>}
+      {modelName && <span className="truncate max-w-[160px]">{t('statusBar.model', { name: modelName })}</span>}
 
-      <span className="flex items-center gap-1" title="会话与消息保存在本机，模型密钥不离开本机">
-        <IconMessage size={12} /> {threadCount} 个会话
+      <span className="flex items-center gap-1" title={t('statusBar.dataTitle')}>
+        <IconMessage size={12} /> {t('statusBar.threadCount', { n: threadCount })}
       </span>
 
-      <span className="ml-auto truncate max-w-[280px]" title={dataPath || '数据保存在本机用户目录'}>
-        {dataPath ? `本机数据：${dataPath}` : '数据保存在本机'}
+      <span className="ml-auto truncate max-w-[280px]" title={dataPath || t('statusBar.dataPathTitle')}>
+        {dataPath ? t('statusBar.dataPath', { path: dataPath }) : t('statusBar.dataLocal')}
       </span>
 
-      <span title="模型 API Key 仅保存在本机（离线模式经系统密钥链加密），不会上传到任何服务器">
-        密钥不出本机
+      <span title={t('statusBar.keyTitle')}>
+        {t('statusBar.keyBadge')}
       </span>
     </footer>
   );

@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import SettingsModal from './components/SettingsModal';
-import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
 import ApprovalCard from './components/ApprovalCard';
 import DiffReviewPanel from './components/DiffReviewPanel';
@@ -15,29 +14,37 @@ import FileViewerPane from './components/FileViewerPane';
 import StatusBar from './components/StatusBar';
 import CommandPalette from './components/CommandPalette';
 import RightPane, { PanelEmpty } from './components/RightPane';
+import SubtaskTree from './components/tools/SubtaskTree';
 import ArchiveModal from './components/ArchiveModal';
 import { IconChart, IconFile, IconFolderOpen, IconPalette, IconSidebar } from './components/icons';
 import { api, setLocalMode, isLocalMode } from './lib/api';
-import { restoreMcpTools, mergeMcpTools } from './lib/mcpTools';
+import { restoreMcpTools } from './lib/mcpTools';
 import { loadAgentsMd } from './lib/agentsMd';
 import ipc from './lib/ipc';
 import FeedbackHost, { confirm, toast } from './components/feedback';
 import { projectDisplayName } from './lib/projectName';
 import THEMES from './lib/themes.json';
+import { useI18n, tGlobal } from './i18n';
 
-const DEFAULT_PROJECT = { id: 'default', name: '默认项目', path: '' };
+// i18n：顶层常量改为工厂函数，避免模块加载即冻结文案（切换语言不更新）
+const getDefaultProject = () => ({ id: 'default', name: tGlobal('app.defaultProject'), path: '' });
+
+// 登录系统已移除：恒用本机数据层（local-first）。
+// 模块级置位，确保任何 api 请求发起前本地路由已生效。
+setLocalMode(true);
 
 function loadJSON(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key)) || fallback;
   } catch (e) {
-    console.warn('[app] 本地数据解析失败:', key);
+    console.warn('[app] failed to parse local data:', key);
     return fallback;
   }
 }
 
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('mj_token'));
+  // 本文件多处 map/filter 回调参数名为 t（会话/主题项），解构改名 tr 避免遮蔽
+  const { t: tr } = useI18n();
   const [threads, setThreads] = useState([]);
   const [activeThread, setActiveThread] = useState(null);
   const [userProviders, setUserProviders] = useState([]);
@@ -54,7 +61,7 @@ export default function App() {
   const [showScheduled, setShowScheduled] = useState(false);
   const [showEcosystem, setShowEcosystem] = useState(false); // 生态中心（侧栏一级导航，对标 Codex Plugins）
   const [showProjectPicker, setShowProjectPicker] = useState(false);
-  const [activeProject, setActiveProject] = useState(() => loadJSON('mj_active_project', DEFAULT_PROJECT));
+  const [activeProject, setActiveProject] = useState(() => loadJSON('mj_active_project', getDefaultProject()));
   // Bug2 + P0-D：当前选中模型与项目目录实时推送主进程定时任务调度器
   // （到点执行时复用同一凭证/模型；项目目录决定 Agent 通道的 cwd 与沙箱档位：
   //   有项目 → workspace-write，无项目 → read-only）
@@ -71,7 +78,7 @@ export default function App() {
         model: selectedModel.model.model_id,
         cwd: activeProject?.path || '',
       });
-    } catch (e) { console.warn('[app] 定时任务执行模型推送失败:', e); }
+    } catch (e) { console.warn('[app] failed to push scheduled-task model:', e); }
   }, [selectedModel, activeProject]);
   const [projects, setProjects] = useState(() => loadJSON('mj_projects', []));
   // 是否为「本次使用中主动选择」的项目：欢迎页据此区分「用户有意在此工作」与
@@ -82,6 +89,12 @@ export default function App() {
   const [mcpTools, setMcpTools] = useState([]);
   // Bug3：启动时从主进程重建 MCP 工具集（重启后自动重连的服务不再丢工具）
   useEffect(() => { restoreMcpTools().then(setMcpTools); }, []);
+  // 生态中心连接/断开/JSON 保存 → dirty 事件重建工具集（替代已删除的设置页 McpTab 回调）
+  useEffect(() => {
+    const onDirty = () => { restoreMcpTools().then(setMcpTools); };
+    window.addEventListener('mjcode:mcp-tools-dirty', onDirty);
+    return () => window.removeEventListener('mjcode:mcp-tools-dirty', onDirty);
+  }, []);
   // A6：Skill 启用态持久化（此前 useState 初始值从不落盘，重启即重置）
   // 数组守卫：localStorage 曾被写入过非数组（如插件安装误把 plugin 对象存进来）时，
   // 不得原样进入 state，否则下游 enabledSkills.filter 崩溃且每次重启都崩
@@ -97,7 +110,8 @@ export default function App() {
   const [onboarded, setOnboarded] = useState(() => localStorage.getItem('mj_onboarded') === '1');
   const [initialPrompt, setInitialPrompt] = useState('');
   const [approvalSettings, setApprovalSettings] = useState(() => loadJSON('mj_approval_settings', { sandbox_policy: 'workspace-write', approval_mode: 'on-request' }));
-  const [localMode, setLocalModeState] = useState(false);
+  // 登录系统已移除：恒用本机数据层（local-first），启动即直达主界面
+  const [localMode] = useState(true);
   // 右侧预览栏：多文件标签（openedFiles 为打开顺序，activeFilePath 为当前标签）
   const [openedFiles, setOpenedFiles] = useState([]);
   const [activeFilePath, setActiveFilePath] = useState(null);
@@ -110,8 +124,8 @@ export default function App() {
   const [paneOpen, setPaneOpen] = useState(() => loadJSON('mj_pane_open', false));
   const [paneTab, setPaneTab] = useState('diff'); // diff | files | preview
   const [agentFiles, setAgentFiles] = useState([]); // 本轮 Agent 改动的文件（Diff 面板「上一轮」筛选）
-  // 连接态探测完成前不渲染登录页（P0：离线免账户直达，首帧不闪登录）
-  const [probing, setProbing] = useState(() => !localStorage.getItem('mj_token'));
+  // T1-4：子任务事件按会话分桶（threadId -> 事件流），后台会话的子任务照常入桶，切回仍可见
+  const [subagentsByThread, setSubagentsByThread] = useState({});
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -134,31 +148,26 @@ export default function App() {
     setTheme(THEMES[(idx + 1) % THEMES.length].id);
   }
 
+  // 主题显示名（i18n：themes.json 只存 nameKey，渲染期经 tr 解析，切语言即时生效）
+  function themeLabel() {
+    const th = THEMES.find((x) => x.id === theme);
+    return th ? tr(th.nameKey) : theme;
+  }
+
   // 审批档位持久化（沙箱策略 + 审批模式）
   useEffect(() => { localStorage.setItem('mj_approval_settings', JSON.stringify(approvalSettings)); }, [approvalSettings]);
 
   useEffect(() => {
     api.globalProviders()
       .then(setGlobalProviders)
-      .catch((err) => console.warn('[app] 全局模型列表加载失败:', err));
+      .catch((err) => console.warn('[app] failed to load global providers:', err));
   }, []);
-  // 本地模式下同样需要刷新（本机模型保存后要立刻可选中）
-  // 刻意只依赖 [token, localMode]：本 effect 的语义是「认证态变化时重载数据」，
-  // 不是「loadData 闭包变化时重载」。loadData 内部还读 selectedModel，若列入依赖，
-  // 用户每次切换模型都会触发一次全量 threads/providers 请求——那是多余往返。
-  // 需要刷新时由各业务点显式调用 loadData()/scheduleLoadData()。
-  useEffect(() => { if (token || localMode) loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, localMode]);
-
-  // P1-F：401 登出闭环——服务端 401 时 api.request 已清 localStorage 并派发 auth-changed；
-  // 此前无人监听该事件 → token 失效后仍是伪登录态，之后每个请求都 401（人类可读化后
-  // 也只提示「登录状态已失效」却不回登录页）。此处回退登录页，由用户重登或走离线模式。
-  useEffect(() => {
-    const onAuthChanged = () => { setToken(null); setLocalModeState(false); };
-    window.addEventListener('auth-changed', onAuthChanged);
-    return () => window.removeEventListener('auth-changed', onAuthChanged);
-  }, []);
+  // 挂载即加载本机数据（登录系统已移除：恒本地模式，无认证态变化重载的触发源）。
+  // loadData 内部读 selectedModel，不列入依赖——用户每次切换模型都会触发全量
+  // threads/providers 请求，那是多余往返。需要刷新时由各业务点显式调用
+  // loadData()/scheduleLoadData()。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadData(); }, []);
 
   // 能力矩阵加载（冻结项集中判定）
   useEffect(() => { ipc.loadCaps(); }, []);
@@ -195,6 +204,34 @@ export default function App() {
     return () => window.removeEventListener('mjcode:open-settings', open);
   }, []);
 
+  // T5：「+」菜单 manual 连接器引导跳生态中心（同 CustomEvent 模式，避免层层传 prop）
+  useEffect(() => {
+    const open = () => setShowEcosystem(true);
+    window.addEventListener('mjcode:open-ecosystem', open);
+    return () => window.removeEventListener('mjcode:open-ecosystem', open);
+  }, []);
+
+  // 生态中心「招募」：开新会话并关闭设置/生态页，待 ChatArea 切到新会话
+  // （thread=null 清空 extras）的 effect 落定后，再派发 enable-expert 注入角色。
+  // 顺序不可颠倒：同步连发两条事件会被「切会话清空 sessionExtras」覆盖掉 expert；
+  // setTimeout(0) 是宏任务，保证在 React 提交渲染+effect 之后执行。
+  // 新会话首条消息创建线程后，ChatArea 的 extras 持久化会把 expert 落到新线程存档。
+  useEffect(() => {
+    const recruit = (e) => {
+      if (!e.detail) return;
+      setActiveThread(null);
+      resetView();
+      setShowSettings(false);
+      setShowEcosystem(false);
+      const detail = e.detail;
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('mjcode:enable-expert', { detail }));
+      }, 0);
+    };
+    window.addEventListener('mjcode:recruit-expert', recruit);
+    return () => window.removeEventListener('mjcode:recruit-expert', recruit);
+  }, []);
+
   // B3：右侧面板任务作用域 —— 无任务自动收起；切任务清空上一任务的文件视图与改动列表。
   // 此前 agentFiles/viewFile 为 App 级全局态且 RightPane 用 hidden 保活，
   // 导致未进入任何会话时仍显示上一任务的 diff/文件树/代码（跨任务数据泄漏）
@@ -212,10 +249,15 @@ export default function App() {
   }, [activeThreadId]);
 
   // 打开文件到右侧预览栏（已在标签中则仅切换，不重复入栈）
-  function openFileInPane(path) {
-    if (!path) return;
-    setOpenedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
-    setActiveFilePath(path);
+  // 相对路径统一按当前项目根解析：聊天里模型常只写文件名（如「报告已生成：xxx.md」），
+  // 若原样入栈，FileViewerPane 会以主进程 cwd 为基准去找 → 必然找不到文件。
+  function openFileInPane(filePath) {
+    if (!filePath) return;
+    const raw = String(filePath);
+    const isAbsolute = /^([a-zA-Z]:[\\/]|\\\\)/.test(raw) || raw.startsWith('/');
+    const resolved = (!isAbsolute && activeProject?.path) ? `${activeProject.path}/${raw.replace(/^\.\//, '')}` : raw;
+    setOpenedFiles((prev) => (prev.includes(resolved) ? prev : [...prev, resolved]));
+    setActiveFilePath(resolved);
     setPaneTab('preview');
     setPaneOpen(true);
   }
@@ -249,32 +291,8 @@ export default function App() {
   useEffect(() => { localStorage.setItem('mj_sidebar_open', JSON.stringify(sidebarOpen)); }, [sidebarOpen]);
   useEffect(() => { localStorage.setItem('mj_pane_open', JSON.stringify(paneOpen)); }, [paneOpen]);
 
-  // 离线检测（M3-1）：服务端不可达时进入本地模式；探测结束（或 2 秒兜底）后解锁首帧
-  useEffect(() => {
-    let done = false;
-    const finish = () => { if (!done) { done = true; setProbing(false); } };
-    const timer = setTimeout(finish, 2000); // 兜底：避免探测悬挂导致永久加载态
-    if (!window.mjcode?.serverHealth) { finish(); return () => clearTimeout(timer); }
-    // 服务端不可达 → 一律走本机数据层（本地优先：无论是否持有令牌）
-    window.mjcode.serverHealth().then(async (r) => {
-      if (!r?.online) await enterLocalMode();
-    }).catch((err) => console.warn('[app] 健康探测失败:', err)).finally(finish);
-    return () => clearTimeout(timer);
-  }, []);
-
-  async function enterLocalMode() {
-    console.log('[app] 服务端不可达，进入离线模式（本地优先数据层）');
-    setLocalMode(true);
-    setLocalModeState(true);
-    api.setLocalMode(true);
-    const [t, p] = await Promise.all([window.mjcode.localThreads(), window.mjcode.localProviders()]);
-    setThreads(t);
-    const plist = p.map((x) => ({ ...x, models: x.modelId ? [{ id: x.id, model_id: x.modelId, display_name: x.modelId }] : [] }));
-    setUserProviders(plist);
-    if (plist.length > 0 && plist[0].models?.length > 0) {
-      setSelectedModel({ provider: plist[0], model: plist[0].models[0] });
-    }
-  }
+  // 登录系统已移除：不再有 serverHealth 探测与登录页跳转。
+  // 本地模式在模块级置位（setLocalMode(true)），数据由挂载时 loadData() 加载。
 
   // 项目状态持久化
   useEffect(() => { localStorage.setItem('mj_active_project', JSON.stringify(activeProject)); }, [activeProject]);
@@ -294,7 +312,7 @@ export default function App() {
           setProjects(list.map((p) => ({ id: p.path, name: p.name, path: p.path, branch: '' })));
         }
       })();
-    }).catch((err) => console.warn('[app] 项目列表本机加载失败:', err));
+    }).catch((err) => console.warn('[app] failed to load local projects:', err));
   }, []);
 
   // 切换项目后探测 git 分支（Composer 真实状态用）
@@ -302,7 +320,7 @@ export default function App() {
     if (!activeProject?.path || !window.mjcode?.probeProject) return;
     window.mjcode.probeProject({ path: activeProject.path })
       .then((probe) => setActiveProject((prev) => (prev?.path === activeProject.path ? { ...prev, branch: probe.branch || '', languages: probe.languages || [] } : prev)))
-      .catch((err) => console.warn('[app] 项目探测失败:', err));
+      .catch((err) => console.warn('[app] project probe failed:', err));
   }, [activeProject?.path]);
 
   // AGENTS.md 项目规范：上提到 App 层按项目路径缓存
@@ -313,7 +331,7 @@ export default function App() {
     let cancelled = false;
     loadAgentsMd(activeProject.path)
       .then((r) => { if (!cancelled) setAgentsMd(r); })
-      .catch((err) => console.warn('[app] AGENTS.md 加载失败:', err));
+      .catch((err) => console.warn('[app] failed to load AGENTS.md:', err));
     return () => { cancelled = true; };
   }, [activeProject?.path]);
 
@@ -326,8 +344,8 @@ export default function App() {
   async function loadData() {
     const results = await Promise.allSettled([api.threads(), api.providers()]);
     const [t, p] = results.map((r) => (r.status === 'fulfilled' ? r.value : null));
-    if (results[0].status === 'rejected') console.warn('[app] 线程列表加载失败:', results[0].reason?.message);
-    if (results[1].status === 'rejected') console.warn('[app] 模型列表加载失败:', results[1].reason?.message);
+    if (results[0].status === 'rejected') console.warn('[app] failed to load threads:', results[0].reason?.message);
+    if (results[1].status === 'rejected') console.warn('[app] failed to load providers:', results[1].reason?.message);
     if (t) setThreads(t);
     if (p) {
       setUserProviders(p);
@@ -335,7 +353,6 @@ export default function App() {
         setSelectedModel({ provider: p[0], model: p[0].models[0] });
       }
     }
-    refreshSecrets();
   }
 
   // G4：消息级刷新 debounce —— 收发消息不再立即全量拉取 threads（600ms 合并），
@@ -347,37 +364,7 @@ export default function App() {
   }
   useEffect(() => () => clearTimeout(loadDataTimerRef.current), []);
 
-  // 拉取模型凭证到主进程内存（渲染层不接触 Key）
-  // 离线模式下服务端不可达，直接短路：既省掉无谓连接请求，也避免主进程日志噪音
-  function refreshSecrets() {
-    if (localMode) return;
-    const t = localStorage.getItem('mj_token');
-    if (!t || !window.mjcode?.getSecrets) return;
-    window.mjcode.getSecrets({ token: t }).then((r) => {
-      if (!r?.ok) console.warn('[app] 模型凭证加载失败:', r?.error);
-    }).catch((err) => console.warn('[app] 模型凭证加载异常:', err?.message));
-  }
-
-  // 连接态探测中：渲染骨架，避免服务端不可达时首帧闪现登录页
-  if (probing && !token && !localMode) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-bg text-text2 text-sm">
-        正在检测本地服务…
-      </div>
-    );
-  }
-
-  // 登录门禁：离线免账户是差异化能力，登录页必须提供「跳过」出口
-  if (!token && !localMode) {
-    return (
-      <LoginPage
-        onLogin={(t) => { setToken(t); localStorage.setItem('mj_token', t); }}
-        onSkip={enterLocalMode}
-      />
-    );
-  }
-
-  // 首启向导未完成时优先展示（登录后）
+  // 首启向导未完成时优先展示（登录系统已移除：直达主界面，仅保留首启向导门禁）
   if (!onboarded) {
     return (
       <Onboarding
@@ -385,6 +372,9 @@ export default function App() {
         userProviders={userProviders}
         onProviderAdded={loadData}
         onProjectSelected={selectProject}
+        // B5：安全默认档步骤——向导内选择即落地为审批/沙箱设置（用户跳过选择时也带安全默认离开）
+        approvalSettings={approvalSettings}
+        onApprovalSettingsChange={setApprovalSettings}
         onFinish={(prompt) => {
           localStorage.setItem('mj_onboarded', '1');
           setOnboarded(true);
@@ -413,7 +403,7 @@ export default function App() {
     if (project.path) {
       setProjects((prev) => [project, ...prev.filter((x) => x.path !== project.path)].slice(0, 10));
       // B1：同步落本机项目表（失败不影响 UI）
-      try { window.mjcode?.localAddProject?.({ path: project.path, name: project.name }); } catch (e) { console.warn('[app] 项目落本机失败:', e); }
+      try { window.mjcode?.localAddProject?.({ path: project.path, name: project.name }); } catch (e) { console.warn('[app] failed to persist project locally:', e); }
     }
   }
 
@@ -427,24 +417,24 @@ export default function App() {
       if (activeProject?.path === p.path) setActiveProject((cur) => ({ ...cur, name: n }));
     };
     apply(name); // 乐观更新，失败回滚
-    if (!localStoreReady()) { apply(prevName); toast({ message: '本机存储未就绪，重命名未生效' }); return; }
+    if (!localStoreReady()) { apply(prevName); toast({ message: tr('app.renameStorageNotReady') }); return; }
     const r = await window.mjcode.localRenameProject?.({ path: p.path, name });
-    if (r && r.ok === false) { apply(prevName); toast({ message: r.error || '重命名失败' }); return; }
-    toast({ message: `已重命名为「${name}」` });
+    if (r && r.ok === false) { apply(prevName); toast({ message: r.error || tr('app.renameFailed') }); return; }
+    toast({ message: tr('app.renamed', { name }) });
   }
 
   function removeProject(p) {
     // A2 + B1：轻量确认，明确「不会删除磁盘文件」；说明其下会话去向
     confirm({
-      title: '移除项目',
-      message: `从列表移除「${projectDisplayName(p)}」？\n项目磁盘文件不受影响；其下的会话将归入「未归属项目」。`,
+      title: tr('app.removeProjectTitle'),
+      message: tr('app.removeProjectMessage', { name: projectDisplayName(p) }),
       danger: false,
-      confirmLabel: '移除',
+      confirmLabel: tr('app.remove'),
     }).then(async (ok) => {
       if (!ok) return;
       setProjects((prev) => prev.filter((x) => x.path !== p.path));
       if (localStoreReady()) window.mjcode.localRemoveProject?.({ path: p.path });
-      if (activeProject?.path === p.path) setActiveProject(DEFAULT_PROJECT);
+      if (activeProject?.path === p.path) setActiveProject(getDefaultProject());
     });
   }
 
@@ -453,14 +443,14 @@ export default function App() {
     selectProject(p);
     try {
       const t = await api.createThread({
-        title: '新会话',
+        title: tr('app.newThread'),
         cwd: p.path || '',
         project_path: p.path || '',
       });
       setActiveThread(t);
       loadData();
     } catch (err) {
-      console.warn('[app] 在项目中新建会话失败:', err);
+      console.warn('[app] failed to create thread in project:', err);
     }
   }
 
@@ -488,12 +478,12 @@ export default function App() {
           // A2：删除前确认；本地模式语义为归档，提供 5s 撤销（A3）
           const local = isLocalMode();
           const ok = await confirm({
-            title: '删除会话',
+            title: tr('app.deleteThreadTitle'),
             message: local
-              ? `「${t.title || '新会话'}」将移入归档，可在侧栏「已归档」中恢复。`
-              : `确定删除「${t.title || '新会话'}」吗？此操作不可恢复。`,
+              ? tr('app.deleteThreadLocalMsg', { name: t.title || tr('app.newThread') })
+              : tr('app.deleteThreadOnlineMsg', { name: t.title || tr('app.newThread') }),
             danger: true,
-            confirmLabel: '删除',
+            confirmLabel: tr('app.delete'),
           });
           if (!ok) return;
           await api.deleteThread(t.id);
@@ -501,8 +491,8 @@ export default function App() {
           if (activeThread?.id === t.id) setActiveThread(null);
           if (local) {
             toast({
-              message: '已删除会话',
-              actionLabel: '撤销',
+              message: tr('app.threadDeleted'),
+              actionLabel: tr('app.undo'),
               onAction: async () => {
                 const r = await api.restoreThread(t.id);
                 if (r?.ok) loadData();
@@ -537,42 +527,42 @@ export default function App() {
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="flex items-center gap-3 px-3 h-12 shrink-0 border-b border-border">
           <button onClick={() => setSidebarOpen((v) => !v)}
-            className="text-text2 hover:text-text text-xs px-2 py-1" title="显示/隐藏左侧栏（⌘B）">
+            className="text-text2 hover:text-text text-xs px-2 py-1" title={tr('app.toggleSidebarTitle')}>
             <IconSidebar size={15} />
           </button>
           <span className="text-xs text-text2 truncate" title={activeProject?.path || ''}>
-            {activeProject?.path ? projectDisplayName(activeProject) : '未选择项目'}
+            {activeProject?.path ? projectDisplayName(activeProject) : tr('app.noProject')}
           </span>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={cycleTheme}
-              className="text-text2 hover:text-text px-1.5 py-1 rounded-lg" title={`主题：${THEMES.find((t) => t.id === theme)?.name || theme}（点击切换）`} aria-label="切换主题">
+              className="text-text2 hover:text-text px-1.5 py-1 rounded-lg" title={tr('app.themeTitle', { name: themeLabel() })} aria-label={tr('app.switchTheme')}>
               <IconPalette size={15} />
             </button>
             {localMode && (
-              <span className="text-xs px-2 py-1 rounded bg-warn-bg text-warn" title="服务端不可达，线程与消息保存在本机">
-                离线模式
+              <span className="text-xs px-2 py-1 rounded bg-warn-bg text-warn" title={tr('app.offlineTitle')}>
+                {tr('app.offlineMode')}
               </span>
             )}
             <button onClick={() => { if (activeThread) { setPaneTab('diff'); setPaneOpen(true); } }}
               disabled={!activeThread}
               className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'diff' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
-              title={activeThread ? '变更面板（⌘⌥B）' : '进入会话后可查看该任务的变更'}
-            >变更</button>
+              title={activeThread ? tr('app.changesTitle') : tr('app.changesDisabledHint')}
+            >{tr('app.changes')}</button>
             <button onClick={() => { if (activeThread) { setPaneTab('files'); setPaneOpen(true); } }}
               disabled={!activeThread}
               className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'files' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
-              title={activeThread ? '文件树（当前会话所属项目）' : '进入会话后可查看该任务的项目文件'}
-            >文件</button>
+              title={activeThread ? tr('app.filesTitle') : tr('app.filesDisabledHint')}
+            >{tr('app.files')}</button>
             <button onClick={() => { if (activeThread) { setPaneTab('preview'); setPaneOpen(true); } }}
               disabled={!activeThread || openedFiles.length === 0}
               className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'preview' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
               title={activeThread
-                ? (openedFiles.length ? `预览已打开文件（${openedFiles.length}）` : '先在「文件」标签中打开文件')
-                : '进入会话后可预览该任务的文件'}
-            >预览</button>
+                ? (openedFiles.length ? tr('app.previewCount', { n: openedFiles.length }) : tr('app.previewOpenFirst'))
+                : tr('app.previewDisabledHint')}
+            >{tr('app.preview')}</button>
             <button onClick={() => { resetView(); setShowDashboard(true); }}
               className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 ${showDashboard ? 'bg-accent text-white' : 'text-text2 hover:text-text'}`}>
-              <IconChart size={14} /> 数据
+              <IconChart size={14} /> {tr('app.data')}
             </button>
           </div>
         </header>
@@ -594,6 +584,10 @@ export default function App() {
             onSelectModel={setSelectedModel}
             onApprovalChange={(patch) => setApprovalSettings((prev) => ({ ...prev, ...patch }))}
             onAgentFilesChange={setAgentFiles}
+            onSubagentEvent={(threadId, evt) => {
+              // T1-4：子代理/编排事件入桶（threadId 由 ChatArea 闭包携带，后台会话不错桶）
+              setSubagentsByThread((prev) => ({ ...prev, [threadId]: [...(prev[threadId] || []), evt] }));
+            }}
             onThreadStatus={(status) => {
               if (activeThread?.id) api.setThreadStatus(activeThread.id, status).then(() => loadData());
             }}
@@ -606,6 +600,7 @@ export default function App() {
             initialPrompt={initialPrompt}
             onPromptConsumed={() => setInitialPrompt('')}
             approvalSettings={approvalSettings}
+            onOpenFile={openFileInPane}
           />
         </div>
       </div>
@@ -619,7 +614,7 @@ export default function App() {
         diffPanel={<DiffReviewPanel projectPath={activeProject?.path} agentFiles={agentFiles} />}
         filesPanel={activeProject?.path
           ? <FileTree root={activeProject.path} onOpenFile={openFileInPane} />
-          : <PanelEmpty icon={IconFolderOpen} title="尚未选择项目" hint="按 ⌘O 打开或创建项目" />}
+          : <PanelEmpty icon={IconFolderOpen} title={tr('app.noProjectSelected')} hint={tr('app.openProjectHint')} />}
         previewPanel={openedFiles.length
           ? <FileViewerPane
               files={openedFiles}
@@ -628,11 +623,16 @@ export default function App() {
               onSelect={setActiveFilePath}
               onClose={closeFileInPane}
             />
-          : <PanelEmpty icon={IconFile} title="未打开文件" hint="在「文件」标签中点击文件，或用 ⌘P 搜索文件" />}
+          : <PanelEmpty icon={IconFile} title={tr('app.noFileOpen')} hint={tr('app.openFileHint')} />}
+        subtasksPanel={<SubtaskTree events={(activeThread?.id && subagentsByThread[activeThread.id]) || []} />}
       />
 
       {showEcosystem && (
-        <EcosystemModal onClose={() => setShowEcosystem(false)} />
+        <EcosystemModal
+          onClose={() => setShowEcosystem(false)}
+          enabledSkills={enabledSkills}
+          onSkillsChange={setEnabledSkillsSafe}
+        />
       )}
       {showSettings && (
         <SettingsModal
@@ -642,7 +642,6 @@ export default function App() {
           theme={theme}
           onThemeChange={setTheme}
           globalProviders={globalProviders}
-          onMcpToolsChange={(server, tools) => setMcpTools((prev) => mergeMcpTools(prev, server, tools))}
           onSkillsChange={setEnabledSkillsSafe}
           enabledSkills={enabledSkills}
           autoDecompose={autoDecompose}
@@ -676,15 +675,15 @@ export default function App() {
         projectPath={activeProject?.path || ''}
         onOpenFile={openFileInPane}
         commands={[
-          { label: '新建会话', hint: '⌘N', run: () => { setActiveThread(null); resetView(); } },
-          { label: '打开项目', hint: '⌘O', run: () => setShowProjectPicker(true) },
-          { label: '打开设置', hint: '⌘,', run: () => setShowSettings(true) },
-          { label: '查看用量概览', run: () => { resetView(); setShowDashboard(true); } },
-          { label: '打开变更面板', hint: '⌘⌥B', run: () => { if (activeThread) { setPaneTab('diff'); setPaneOpen(true); } } },
-          { label: '打开文件树', run: () => { if (activeThread) { setPaneTab('files'); setPaneOpen(true); } } },
-          { label: '显示/隐藏左侧栏', hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
-          { label: '打开定时任务', run: () => { resetView(); setShowScheduled(true); } },
-          { label: `切换主题（当前：${THEMES.find((t) => t.id === theme)?.name || theme}）`, run: cycleTheme },
+          { label: tr('app.cmdNewThread'), hint: '⌘N', run: () => { setActiveThread(null); resetView(); } },
+          { label: tr('app.cmdOpenProject'), hint: '⌘O', run: () => setShowProjectPicker(true) },
+          { label: tr('app.cmdOpenSettings'), hint: '⌘,', run: () => setShowSettings(true) },
+          { label: tr('app.cmdUsage'), run: () => { resetView(); setShowDashboard(true); } },
+          { label: tr('app.cmdChanges'), hint: '⌘⌥B', run: () => { if (activeThread) { setPaneTab('diff'); setPaneOpen(true); } } },
+          { label: tr('app.cmdFiles'), run: () => { if (activeThread) { setPaneTab('files'); setPaneOpen(true); } } },
+          { label: tr('app.cmdToggleSidebar'), hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
+          { label: tr('app.cmdScheduled'), run: () => { resetView(); setShowScheduled(true); } },
+          { label: tr('app.cmdTheme', { name: themeLabel() }), run: cycleTheme },
         ]}
       />
       {/* P1-D：审批挂起即置线程状态 awaiting_approval（侧栏徽标数据源）；决策后回到 running。

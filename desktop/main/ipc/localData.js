@@ -1,0 +1,308 @@
+// T2-1：本地数据域 IPC（自主进程 main.js 原样搬移，行为不变）
+// 覆盖：models.json 同步（mtime 驱动）/ UI 对 file 来源 provider 的写回 /
+//       会话·消息·provider·项目·偏好·记忆的本地 IPC（localStore 薄封装）。
+//
+// 依赖注入（沿用 initXxx(deps) 模式）：
+//   initLocalDataIpc({ getLocalStore, getCredentialCrypto, localVault, serverBase,
+//                      MJ_SERVER_DEFAULT, getMemoryManager, getMemoryScheduler })
+//   - localVault 为共享 Map 引用（provider id → 解密内存态），resolveSecret 在 main.js 读取；
+//   - localStore/credentialCrypto 在 whenReady 后才初始化，故用 getter。
+const { ipcMain, shell } = require('electron');
+const modelsFile = require('../modelsFile');
+
+let deps = null;
+
+let modelsFileMtime = 0;
+let modelsFileLastStatus = { path: modelsFile.modelsFilePath(), exists: false, synced: 0, removed: 0, errors: [] };
+
+// ── 自定义模型配置文件（~/.mjcode/models.json）同步 ──
+// 时机：启动一次 + providers/list 与 status 查询时按 mtime 变化热同步（保存文件即生效，无需重启）。
+// 失败/文件不存在只告警不影响启动；解析错误收集后在设置页展示，绝不静默吞。
+function syncModelsFile({ reason = 'manual' } = {}) {
+  const localStore = deps.getLocalStore();
+  const credentialCrypto = deps.getCredentialCrypto();
+  const filePath = modelsFile.modelsFilePath();
+  const exists = require('fs').existsSync(filePath);
+  try {
+    if (!exists) {
+      modelsFileLastStatus = { path: filePath, exists: false, synced: 0, removed: 0, errors: [] };
+      return modelsFileLastStatus;
+    }
+    modelsFileMtime = require('fs').statSync(filePath).mtimeMs;
+    const raw = modelsFile.readModelsFile(filePath);
+    const r = modelsFile.syncFileModels({ store: localStore, encrypt: (k) => credentialCrypto.encrypt(k), vault: deps.localVault, raw, filePath });
+    modelsFileLastStatus = { path: filePath, exists: true, synced: r.synced, removed: r.removed.length, errors: r.errors };
+    if (r.synced || r.removed.length) {
+      console.log(`[modelsFile] 同步完成（${reason}）：导入 ${r.synced} 个模型 / 移除 ${r.removed.length} 个 provider${r.errors.length ? `，${r.errors.length} 条解析告警` : ''}`);
+    }
+    if (r.errors.length) console.warn('[modelsFile] 配置告警:', r.errors.map((e) => e.error).join('；'));
+  } catch (e) {
+    console.error('[modelsFile] 同步失败:', e.message);
+    modelsFileLastStatus = { path: filePath, exists, synced: 0, removed: 0, errors: [{ error: `同步失败：${e.message}` }] };
+  }
+  return modelsFileLastStatus;
+}
+
+// mtime 未变则跳过（cheap：一次 statSync），变了才重新解析对账
+function maybeSyncModelsFile() {
+  try {
+    const filePath = modelsFile.modelsFilePath();
+    if (!require('fs').existsSync(filePath)) return modelsFileLastStatus;
+    const mtime = require('fs').statSync(filePath).mtimeMs;
+    if (mtime !== modelsFileMtime) return syncModelsFile({ reason: 'file-changed' });
+  } catch { /* stat 失败按未变化处理 */ }
+  return modelsFileLastStatus;
+}
+
+// ── 迁移：把 UI 手工配置的模型写入配置文件（用户要求：旧模型统一由 models.json 承载）──
+// 触发条件（防覆盖用户手写内容）：文件不存在，或内容仍是初始模板，或文件解析不出任何 provider。
+// 迁移后删除已被文件承载的 UI provider（同 url+Key 的模型已并入文件组，避免双份显示）。
+function migrateLocalModelsToFile() {
+  const localStore = deps.getLocalStore();
+  const credentialCrypto = deps.getCredentialCrypto();
+  try {
+    const filePath = modelsFile.modelsFilePath();
+    const raw = modelsFile.readModelsFile(filePath);
+    const parsed = raw ? modelsFile.parseModelsFile(raw) : { providers: [] };
+    // 模板/占位判定：文件缺失、解析不出 provider，或全部条目都是 example.com 占位
+    // （同时兼容 v1 扁平模板与 v2 分组模板——两者文本不同，不能按文本比对）
+    const isPlaceholder = parsed.providers.length > 0
+      && parsed.providers.every((g) => g.base_url.startsWith('https://api.example.com'));
+    const uiProviders = localStore.data.providers.filter((p) => p.source !== 'file');
+    const shouldMigrate = (raw == null || parsed.providers.length === 0 || isPlaceholder) && uiProviders.length > 0;
+    if (!shouldMigrate) return;
+
+    const { raw: nextRaw, migrated } = modelsFile.migrateLocalProviders({
+      raw: isPlaceholder ? '[]' : (raw || ''), // 占位内容直接丢弃，避免示例模型混入真实列表
+      providers: uiProviders,
+      decrypt: (enc) => credentialCrypto.decrypt(enc),
+    });
+    modelsFile.writeModelsFile(nextRaw, filePath);
+    let removed = 0;
+    for (const m of migrated) {
+      try {
+        localStore.deleteProvider(m.id);
+        deps.localVault.delete(Number(m.id));
+        removed += 1;
+      } catch { /* 已不存在则忽略 */ }
+    }
+    console.log(`[modelsFile] 迁移完成：${migrated.length} 个本机模型服务已写入 ${filePath}（其中 ${migrated.filter((x) => x.matched).length} 个并入已有组），UI 侧移除 ${removed} 个（改由文件承载）`);
+  } catch (e) {
+    console.error('[modelsFile] 迁移失败（不影响启动，可稍后在设置页重试）:', e.message);
+  }
+}
+
+// ── UI 对 file 来源 provider 的写回（删除/添加模型 → 修改 models.json → 热同步）──
+function rewriteModelsFileRaw(nextRaw, { reason }) {
+  modelsFile.writeModelsFile(nextRaw);
+  modelsFileMtime = require('fs').statSync(modelsFile.modelsFilePath()).mtimeMs; // 写回后手动对齐，防 mtime 双触发
+  return syncModelsFile({ reason });
+}
+
+function register() {
+  ipcMain.handle('local:models-file/remove-model', async (_, { fileKey, modelId } = {}) => {
+    try {
+      const raw = modelsFile.readModelsFile();
+      const r = modelsFile.removeModelFromRaw(raw, fileKey, modelId);
+      if (!r.ok) return r;
+      return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-model' }) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+  ipcMain.handle('local:models-file/remove-provider', async (_, { fileKey } = {}) => {
+    try {
+      const raw = modelsFile.readModelsFile();
+      const r = modelsFile.removeProviderFromRaw(raw, fileKey);
+      if (!r.ok) return r;
+      return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-provider' }) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+  ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name } = {}) => {
+    try {
+      const raw = modelsFile.readModelsFile();
+      const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name);
+      if (!r.ok) return r;
+      return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'add-model' }) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('local:models-file/status', async () => (deps.getLocalStore() ? maybeSyncModelsFile() : modelsFileLastStatus));
+  ipcMain.handle('local:models-file/open', async () => {
+    try {
+      const r = modelsFile.ensureModelsFile();
+      const err = await shell.openPath(r.path);
+      return { ok: !err, created: r.created, error: err || null };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('server:health', async () => {
+    try {
+      const r = await fetch(`${deps.serverBase()}/health`, { signal: AbortSignal.timeout(3000) });
+      return { online: r.ok };
+    } catch (e) {
+      return { online: false };
+    }
+  });
+
+  ipcMain.handle('local:threads/list', async (_, { projectPath } = {}) => (deps.getLocalStore() ? deps.getLocalStore().listThreads(projectPath) : []));
+  ipcMain.handle('local:threads/create', async (_, payload) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().createThread(payload || {});
+  });
+  ipcMain.handle('local:threads/set-status', async (_, { id, status }) => {
+    if (!deps.getLocalStore()) return null;
+    return deps.getLocalStore().setThreadStatus(id, status);
+  });
+  ipcMain.handle('local:messages/add', async (_, payload) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().addMessage(payload || {});
+  });
+  ipcMain.handle('local:messages/list', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().listMessages(threadId) : []);
+  // /compact 落库：压缩摘要历史整体替换（P2-6 收口）
+  ipcMain.handle('local:messages/replace', async (_, payload) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().replaceMessages(payload?.threadId, payload?.messages || []);
+  });
+  ipcMain.handle('local:threads/delete', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().archiveThread(threadId) : { ok: false });
+  // A1：会话重命名
+  ipcMain.handle('local:threads/rename', async (_, { threadId, title }) => deps.getLocalStore() ? deps.getLocalStore().renameThread(threadId, title) : { ok: false });
+  // A3：归档可见 —— 恢复 / 彻底删除 / 列表
+  ipcMain.handle('local:threads/archived', async () => deps.getLocalStore() ? deps.getLocalStore().listArchivedThreads() : []);
+  ipcMain.handle('local:threads/restore', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().restoreThread(threadId) : { ok: false });
+  ipcMain.handle('local:threads/purge', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().purgeThread(threadId) : { ok: false });
+  // B1：孤儿会话归组
+  ipcMain.handle('local:threads/set-project', async (_, { threadId, projectPath }) => deps.getLocalStore() ? deps.getLocalStore().setThreadProject(threadId, projectPath) : { ok: false });
+
+  ipcMain.handle('local:providers/list', async () => {
+    if (!deps.getLocalStore()) return [];
+    maybeSyncModelsFile(); // 文件保存即生效（mtime 变化才真正重解析）
+    return deps.getLocalStore().listProviders();
+  });
+  ipcMain.handle('local:providers/add', async (_, { name, base_url, api_key, model_id }) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    if (!deps.getCredentialCrypto()) throw new Error('本地数据层未初始化');
+    const keyEncrypted = deps.getCredentialCrypto().encrypt(String(api_key || ''));
+    const p = deps.getLocalStore().addProvider({ name, base_url, keyEncrypted, modelId: model_id });
+    deps.localVault.set(p.id, { api_key: String(api_key || ''), base_url });
+    return p;
+  });
+  ipcMain.handle('local:providers/set-model', async (_, { id, model_id }) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().setProviderModel(id, model_id);
+  });
+  // 多模型：本机 provider 模型条目可增可删（修复「单模型不可删、UI 假装无限添加」）
+  ipcMain.handle('local:providers/add-model', async (_, { id, model_id, display_name }) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().addProviderModel(id, { model_id, display_name });
+  });
+  ipcMain.handle('local:providers/remove-model', async (_, { id, model_id }) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().removeProviderModel(id, model_id);
+  });
+  ipcMain.handle('local:providers/delete', async (_, { id }) => {
+    if (deps.getLocalStore()) deps.getLocalStore().deleteProvider(id);
+    deps.localVault.delete(Number(id));
+    return { ok: true };
+  });
+  // B2：供应商编辑（name/base_url/换 Key；Key 走凭证加密双轨落库）
+  ipcMain.handle('local:providers/update', async (_, { id, name, base_url, api_key }) => {
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    if (!deps.getCredentialCrypto()) throw new Error('本地数据层未初始化');
+    let keyEncrypted;
+    if (api_key) {
+      keyEncrypted = deps.getCredentialCrypto().encrypt(String(api_key));
+      const cur = deps.localVault.get(Number(id)) || {};
+      deps.localVault.set(Number(id), { ...cur, api_key: String(api_key), base_url: base_url || cur.base_url });
+    } else if (base_url && deps.localVault.get(Number(id))) {
+      deps.localVault.get(Number(id)).base_url = base_url;
+    }
+    return deps.getLocalStore().updateProvider(id, { name, base_url, keyEncrypted });
+  });
+  // B2：测试连接（对 base_url 的 /models 发起探测，返回延迟；Key 仅在主进程内存解析）
+  ipcMain.handle('model:testConnection', async (_, { id, base_url }) => {
+    const vault = deps.localVault.get(Number(id));
+    const url = (base_url || vault?.base_url || '').replace(/\/+$/, '');
+    if (!url) return { ok: false, error: '缺少接口地址' };
+    // Key 含非 ASCII（典型：模板占位「sk-请替换成你的Key」未替换）时 fetch 头部会抛
+    // ByteString 错误（真机复现），提前拦截给出可行动提示，而不是让用户看到天书报错
+    if (vault?.api_key && /[^\x20-\x7E]/.test(vault.api_key)) {
+      return { ok: false, error: 'API Key 含非 ASCII 字符（可能仍是模板占位符），请先替换为真实 Key' };
+    }
+    const started = Date.now();
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (vault?.api_key) headers['Authorization'] = `Bearer ${vault.api_key}`;
+      const r = await fetch(`${url}/models`, { headers, signal: AbortSignal.timeout(8000) });
+      const latencyMs = Date.now() - started;
+      if (!r.ok) return { ok: false, latencyMs, error: `HTTP ${r.status}` };
+      return { ok: true, latencyMs };
+    } catch (err) {
+      return { ok: false, latencyMs: Date.now() - started, error: err.message };
+    }
+  });
+
+  // B1：项目一等实体（本机持久化）
+  ipcMain.handle('local:projects/list', async () => deps.getLocalStore() ? deps.getLocalStore().listProjects() : []);
+  ipcMain.handle('local:projects/add', async (_, { path, name }) => deps.getLocalStore() ? deps.getLocalStore().addProject({ path, name }) : null);
+  ipcMain.handle('local:projects/remove', async (_, { path }) => deps.getLocalStore() ? deps.getLocalStore().removeProject(path) : { ok: false });
+  ipcMain.handle('local:projects/rename', async (_, { path, name }) => deps.getLocalStore() ? deps.getLocalStore().renameProject(path, name) : { ok: false });
+
+  ipcMain.handle('local:preferences/get', async (_, { key }) => deps.getLocalStore() ? deps.getLocalStore().getPreference(key) : undefined);
+  ipcMain.handle('local:preferences/set', async (_, { key, value }) => deps.getLocalStore() ? deps.getLocalStore().setPreference(key, value) : { ok: false });
+
+  // 服务端地址读写（设置-通用）：写偏好（三级解析之首）；读返回当前生效地址与来源
+  ipcMain.handle('local:server/base', async (_, { base } = {}) => {
+    if (base != null) {
+      const v = String(base).trim().replace(/\/+$/, '');
+      if (!/^https?:\/\//.test(v)) throw new Error('服务端地址需以 http:// 或 https:// 开头');
+      if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+      deps.getLocalStore().setPreference('server.apiBase', v);
+    }
+    return {
+      base: deps.serverBase(),
+      default: deps.MJ_SERVER_DEFAULT,
+      source: deps.getLocalStore()?.getPreference?.('server.apiBase') ? 'preference' : (process.env.MJ_SERVER_API ? 'env' : 'default'),
+    };
+  });
+
+  ipcMain.handle('local:memories/add', async (_, { projectPath, content }) => {
+    // P2-1：写入收口 MemoryManager（SQLite）；不可用时回落旧 localStore 链路
+    const memoryManager = deps.getMemoryManager();
+    if (memoryManager) {
+      const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source: 'ipc' });
+      return m ? { id: m.id, content: m.content } : null;
+    }
+    return deps.getLocalStore() ? deps.getLocalStore().addMemory({ projectPath, content }) : null;
+  });
+  ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query } = {}) => {
+    // P2-6：分层召回路由（importance×recency×相关性 Top-K）；不可用时回落旧链路
+    const memoryManager = deps.getMemoryManager();
+    if (memoryManager) {
+      return memoryManager.recallContents({ spaceId: projectPath, query, topK: limit || 5 });
+    }
+    return deps.getLocalStore() ? deps.getLocalStore().listMemories(projectPath, limit) : [];
+  });
+  // P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
+  ipcMain.handle('memory:stats', async () => (deps.getMemoryManager() ? { ok: true, stats: deps.getMemoryManager().stats() } : { ok: false }));
+  ipcMain.handle('memory:bgTasks', async (_, opts) => (deps.getMemoryScheduler() ? { ok: true, tasks: deps.getMemoryScheduler().listTasks(opts) } : { ok: false }));
+}
+
+function initLocalDataIpc(d) {
+  deps = d;
+  register();
+}
+
+module.exports = {
+  initLocalDataIpc,
+  syncModelsFile,
+  maybeSyncModelsFile,
+  migrateLocalModelsToFile,
+  getModelsFileLastStatus: () => modelsFileLastStatus,
+};

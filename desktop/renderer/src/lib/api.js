@@ -21,20 +21,6 @@ let localMode = false;
 export function setLocalMode(v) { localMode = !!v; }
 export function isLocalMode() { return localMode; }
 
-// 功能开关快照（云端委派 / 小程序控制面），默认全关（fail-closed）
-let featureFlags = { cloud: false, miniprogram: false };
-export function getFeatures() { return featureFlags; }
-export async function loadFeatures() {
-  try {
-    const r = await fetch(`${API}/health`);
-    const j = await r.json();
-    if (j && j.features) featureFlags = { ...featureFlags, ...j.features };
-  } catch {
-    // 服务不可达时保持默认关闭（fail-closed）
-  }
-  return featureFlags;
-}
-
 function getToken() {
   return localStorage.getItem('mj_token');
 }
@@ -99,23 +85,27 @@ function markServerProviders(list) {
   return (list || []).map((p) => ({ ...p, id: `s${p.id}`, source: 'server' }));
 }
 
-// 底层错误中文可读化：UI 禁止直接暴露 Failed to fetch 一类原始英文错误
+// i18n：本文件被纯 Node 测试静态导入，不能 import i18n/index.ts（TS+React）；
+// 经 globalThis.__MJ_T__ 运行时通道取翻译（i18n 模块加载时置位；未置位回落返回 key）
+const t = (key, params) => (typeof globalThis.__MJ_T__ === 'function' ? globalThis.__MJ_T__(key, params) : key);
+
+// 底层错误可读化：UI 禁止直接暴露 Failed to fetch 一类原始英文错误
 export function humanizeError(err) {
-  const raw = String((err && err.message) || err || '未知错误');
+  const raw = String((err && err.message) || err || t('runtime.unknownError'));
   if (/failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
-    return '无法连接本地服务（localhost:3001），已改由本机数据库处理';
+    return t('runtime.localServiceDown');
   }
-  if (raw === 'Unauthorized') return '登录状态已失效，请重新登录或切换到离线模式';
+  if (raw === 'Unauthorized') return t('runtime.authFailed');
+  // A3（2026-10-16）：沙箱/隔离类失败不得只把底层原文甩给用户——补「安全下一步」指引。
+  // 关键约束：指引里**不出现**「改用 full-access」这类建议（那会关闭全部隔离）。
+  // 匹配串只保留 ASCII 标识（主进程发出的 errorCode / 后端名），裸中文会被 i18n 门禁拒绝。
+  if (/sandbox-unavailable|command-guard-blocked|operation not permitted|bubblewrap|sandboxed/i.test(raw)) {
+    return `${raw}\n\n${t('runtime.sandboxNextStepGeneric')}`;
+  }
   return raw;
 }
 
 export const api = {
-  // Auth（离线模式不支持账户操作）
-  register: (data) => request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
-  login: (data) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
-  // 微信小程序绑定确认（M5 控制面）：桌面端输入小程序展示的绑定码完成关联
-  confirmMpBind: (bindCode) => request('/auth/mp-confirm', { method: 'POST', body: JSON.stringify({ bindCode }) }),
-
   // Threads（projectPath 用于「项目 → 任务」二级筛选）
   threads: (projectPath) => (localMode
     ? localThreads(projectPath)
@@ -128,7 +118,7 @@ export const api = {
   sendMessage: (id, data) => (localMode ? localSendMessage(id, data) : request(`/threads/${id}/messages`, { method: 'POST', body: JSON.stringify(data) })),
   // /compact 落库：压缩摘要整体替换消息历史（仅本地模式；服务端无替换路由）
   replaceMessages: (id, messages) => {
-    if (!localMode) return Promise.reject(new Error('在线模式下压缩结果暂不持久化（仅本地模式生效）'));
+    if (!localMode) return Promise.reject(new Error(t('runtime.compactOnlineUnsupported')));
     return window.mjcode.localReplaceMessages({ threadId: id, messages });
   },
   deleteThread: (id) => (localMode ? window.mjcode.localDeleteThread({ threadId: id }) : request(`/threads/${id}`, { method: 'DELETE' })),
@@ -139,7 +129,7 @@ export const api = {
   // A3：归档管理（本地能力；服务端删除同为归档语义，恢复走本地通道）
   archivedThreads: () => (localMode
     ? window.mjcode.localArchivedThreads()
-    : Promise.reject(new Error('归档管理需离线模式或等待服务端支持'))),
+    : Promise.reject(new Error(t('runtime.archiveNeedsLocal')))),
   restoreThread: (id) => window.mjcode.localRestoreThread({ threadId: id }),
   purgeThread: (id) => window.mjcode.localPurgeThread({ threadId: id }),
   // B1：会话归组到项目（本地通道）
@@ -153,7 +143,7 @@ export const api = {
     try {
       return [...local, ...markServerProviders(await request('/providers'))];
     } catch (err) {
-      console.warn('[api] 服务端模型列表不可达，降级为本机列表:', err.message);
+      console.warn('[api] server model list unreachable, falling back to local list:', err.message);
       return local;
     }
   },
@@ -168,14 +158,14 @@ export const api = {
     ? request(`/providers/${String(pid).slice(1)}/models`, { method: 'POST', body: JSON.stringify(data) })
     : window.mjcode.localAddProviderModel({ id: pid, model_id: data.model_id, display_name: data.display_name })),
   removeProviderModel: (pid, modelId) => (String(pid).startsWith('s')
-    ? Promise.reject(new Error('服务端共享模型不支持在本机删除'))
+    ? Promise.reject(new Error(t('runtime.serverModelDeleteUnsupported')))
     : window.mjcode.localRemoveProviderModel({ id: pid, model_id: modelId })),
   deleteProvider: (id) => (String(id).startsWith('s')
     ? request(`/providers/${String(id).slice(1)}`, { method: 'DELETE' })
     : window.mjcode.localDeleteProvider({ id })),
   // B2：供应商编辑（仅本机 provider；服务端 provider 名称/地址由服务端管理）
   updateProvider: (id, data) => (String(id).startsWith('s')
-    ? Promise.reject(new Error('服务端共享模型不支持在本机编辑'))
+    ? Promise.reject(new Error(t('runtime.serverModelEditUnsupported')))
     : window.mjcode.localUpdateProvider({ id, name: data.name, base_url: data.base_url, api_key: data.api_key })),
   // B2：测试连接（本机 provider 由主进程内存解析 Key）
   testConnection: (id, baseUrl) => window.mjcode.testConnection({ id, base_url: baseUrl }),
@@ -187,12 +177,19 @@ export const api = {
   removeFileProvider: (fileKey) => window.mjcode.localModelsFileRemoveProvider({ fileKey }),
   addFileProviderModel: (fileKey, data) => window.mjcode.localModelsFileAddModel({ fileKey, model_id: data.model_id, display_name: data.display_name }),
 
-  // Server-side global providers（离线不可用）
-  globalProviders: () => fetch(`${API}/global/providers`).then(r => r.json()),
-
-  // Preferences
-  preferences: () => (localMode ? Promise.resolve({}) : request('/preferences')),
-  updatePreferences: (data) => (localMode ? window.mjcode.localSetPreference({ key: 'preferences', value: data }) : request('/preferences', { method: 'PUT', body: JSON.stringify(data) })),
+  // Server-side global providers（离线不可用）。
+  // 离线模式必须静默跳过——否则启动即打 3001 被 CSP connect-src 拦截，产生无意义控制台报错
+  // （2026-10-15 真机噪声）；在线模式仍照常拉取，失败静默回空数组不阻断界面（与 providers() 同款降级）。
+  globalProviders: async () => {
+    if (localMode) return [];
+    try {
+      const res = await fetch(`${API}/global/providers`);
+      return await res.json();
+    } catch (err) {
+      console.warn('[api] global providers unreachable:', err.message);
+      return [];
+    }
+  },
 
   // Scheduled tasks：桌面端本地调度器优先（离线可用，主进程 20s 轮询 cron 到点执行）；
   // 无本地通道（旧构建/浏览器调试）时回落服务端 /scheduled-tasks
@@ -217,9 +214,6 @@ export const api = {
     return request(`/scheduled-tasks/${id}/runs`);
   },
 
-  // Audit log（服务端功能，离线不可用）
-  auditLog: () => request('/audit'),
-
   // Dashboard（离线降级：返回本地统计）
   dashboard: async () => {
     if (!localMode) return request('/dashboard');
@@ -227,6 +221,9 @@ export const api = {
     let messages = [];
     for (const t of threads) messages = messages.concat(await window.mjcode.localMessages({ threadId: t.id }));
     return {
+      // B3（2026-10-16）：标明数据口径为「本地统计」——前端据此解释为何部分图表无数据，
+      // 避免用户把「本地不计算该维度」误读为「没有任何活动」。
+      data_scope: 'local',
       threads: threads.length,
       messages: messages.length,
       tokens_input: messages.reduce((s, m) => s + (m.tokensInput || 0), 0),

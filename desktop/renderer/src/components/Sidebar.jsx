@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
 import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSearch, IconSettings, IconArchive } from './icons';
 import logo from '../assets/logo.png';
+import { useI18n } from '../i18n';
 
 // 左侧栏（对标 Codex）：New chat / Scheduled / Tasks / Plugins + Projects→会话嵌套；底部 Settings
 // 「打开项目」不设一级导航：Projects 区头「+」承担添加（Codex 同款），
@@ -13,6 +14,7 @@ export default function Sidebar({
   onNewThread,
   onOpenSearch,
 }) {
+  const { t } = useI18n();
   // 版本号从主进程 app.getVersion() 动态获取（此前硬编码 v1.0.0，发版后永远显示旧版本）
   const [version, setVersion] = useState('');
   useEffect(() => {
@@ -24,7 +26,7 @@ export default function Sidebar({
           应用名 + 版本独立成行，不再与交通灯挤在同一行 */}
       <div className="shrink-0">
         <div className="flex items-center justify-end px-4 h-11">
-          <button onClick={() => onOpenSearch?.()} className="text-text2 hover:text-text" title="搜索会话、文件与命令（⌘K）" aria-label="搜索会话、文件与命令">
+          <button onClick={() => onOpenSearch?.()} className="text-text2 hover:text-text" title={t('sidebar.searchTitle')} aria-label={t('sidebar.searchAria')}>
             <IconSearch size={16} />
           </button>
         </div>
@@ -33,21 +35,21 @@ export default function Sidebar({
             <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
             <div className="font-semibold text-[15px] leading-none">MJ Code</div>
           </div>
-          <div className="text-xs text-text2 mt-1">{version ? `v${version}` : ''} · 本地优先 AI 工作台</div>
+          <div className="text-xs text-text2 mt-1">{version ? `v${version} ${t('sidebar.beta')}` : ''} · {t('sidebar.tagline')}</div>
         </div>
       </div>
 
       {/* 主操作（对标 Codex：New chat / Scheduled / Plugins） */}
       <div className="px-2 space-y-0.5">
-        <NavItem icon={<IconEdit size={16} />} label="新建会话" onClick={onNew} active={!activeThread} />
-        <NavItem icon={<IconClock size={16} />} label="定时任务" onClick={onOpenScheduled} />
-        <NavItem icon={<IconPuzzle size={16} />} label="生态中心" onClick={onOpenEcosystem} />
+        <NavItem icon={<IconEdit size={16} />} label={t('sidebar.newChat')} onClick={onNew} active={!activeThread} />
+        <NavItem icon={<IconClock size={16} />} label={t('sidebar.scheduled')} onClick={onOpenScheduled} />
+        <NavItem icon={<IconPuzzle size={16} />} label={t('sidebar.ecosystem')} onClick={onOpenEcosystem} />
       </div>
 
       {/* 会话（项目 → 会话 二级结构） */}
       <div className="flex items-center justify-between mt-4 px-4 mb-1 text-xs text-text2 uppercase tracking-wider">
-        <span>会话</span>
-        <button onClick={onOpenProjectPicker} className="text-text2 hover:text-text" title="添加项目" aria-label="添加项目">
+        <span>{t('sidebar.threadsSection')}</span>
+        <button onClick={onOpenProjectPicker} className="text-text2 hover:text-text" title={t('sidebar.addProject')} aria-label={t('sidebar.addProject')}>
           <IconPlus size={13} />
         </button>
       </div>
@@ -71,8 +73,8 @@ export default function Sidebar({
       <div className="border-t border-border px-2 py-2 shrink-0">
         {/* P1-E：归档管理仅本地模式可用（服务端归档 API 未实现）——在线模式隐藏入口，
             此前在线模式点击会直接弹「归档管理需离线模式或等待服务端支持」错误 */}
-        {onOpenArchive && <NavItem icon={<IconArchive size={16} />} label="已归档" onClick={onOpenArchive} />}
-        <NavItem icon={<IconSettings size={16} />} label="设置" onClick={onOpenSettings} />
+        {onOpenArchive && <NavItem icon={<IconArchive size={16} />} label={t('sidebar.archived')} onClick={onOpenArchive} />}
+        <NavItem icon={<IconSettings size={16} />} label={t('sidebar.settings')} onClick={onOpenSettings} />
       </div>
     </aside>
   );

@@ -1,0 +1,779 @@
+// T2-1：Agent 工具执行层（自主进程 main.js 原样搬移，行为不变）
+// 覆盖：shell（三平台 OS 沙箱 + 审批 + 命令守卫）/ 读写工具（白名单 + editFile 未命中诊断 +
+//       apply_patch 加固）/ 文件预览与系统打开 / list_dir·grep·glob / Git 工具（argv 化）。
+// IPC 注册在本模块内完成（与 main.js 顶层注册等价，注册顺序无行为差异）。
+//
+// 依赖注入：initToolExec({ requestApproval, applyApprovalDecision, getAlwaysRules, conversationRules })
+//   - 审批中心（requestApproval/applyApprovalDecision/alwaysRules/conversationRules）归属 main.js；
+//   - audit/sandbox/writeGuard/approval 为独立模块，直接 require 同源单例。
+// 导出供 main.js 复用：scheduledToolHandlers / createToolHandlers / 项目探测 runGit / MCP shellEnv。
+const { app, ipcMain, shell } = require('electron');
+const path = require('path');
+const { execFile, spawn } = require('child_process');
+const fsp = require('fs/promises');
+const fs = require('fs');
+const approval = require('../approval');
+const sandbox = require('../sandbox');
+const writeGuard = require('../writeGuard');
+const { audit } = require('../audit/auditLog');
+
+let deps = null;
+function initToolExec(d) {
+  deps = d; // { requestApproval, applyApprovalDecision, getAlwaysRules, conversationRules }
+  registerIpc();
+}
+
+// 打包版 GUI 进程（Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
+// homebrew（node/npm/git 等用户工具）全部找不到——真机复盘：模型被迫每轮先
+// `export PATH=...` 自救，白烧轮次。统一为子 shell 注入完整 PATH，沙箱内外一致。
+//
+// 2026-10-16：PATH 逻辑抽到 ./shellEnv.js。原内联实现用 POSIX 常量 + ':' 拼接，
+// 在 Windows 上会把整串当单个非法目录条目 ⇒ node/npm/git/python 全部 ENOENT；
+// 且取 HOME 在 Windows 上取不到（应取 USERPROFILE）。抽模块同时避免本文件
+// 触及 800 行 max-lines 上限（该门禁正是为防上帝文件而设）。
+const { shellEnv, SHELL_PATH } = require('./shellEnv');
+// N2 执行契约（cwd 信任 + 真实进程终态描述 + 工具路径解析）抽到 ./execCwd.js
+const { shellErrorNote, resolveToolCwd, defaultToolCwd, resolveToolPath } = require('./execCwd');
+const { diagnoseEditMiss, nearestContext } = require('./editMissDiagnostics');
+// N2 ShellProfile + argv 优先（字符串命令显式 shell 契约；argv 数组完全绕开 shell）
+const shellProfile = require('../cmd/shellProfile');
+// 文件预览单元（file:preview，2026-10-16 拆出）
+const preview = require('./previewTool');
+
+// 命令失败审查修复（真机复盘 2026-10-14）：
+// 1）execFile 的 err.message 是 "Command failed: <file> <args 全文>"——沙箱路径下 args 含整个
+//    Seatbelt profile（数千字符），每次非零退出都把 profile 全文灌进模型上下文，
+//    并让「Command failed」成为模型看到的主信号（stdout 里明明已有答案）。
+// 2）链式命令（a; b; c）退出码只取最后一段：探测类命令（ls 不存在的目录、env|grep 无命中）
+//    非零退出是正常控制流，不是失败。
+// 统一收敛为简洁的退出码说明；stdout/stderr 原样返回（答案在输出里，不靠 error 字段）。
+// 仅真正的 spawn 异常（ENOENT 等，code 非数字且非 killed）保留原始 message。
+// （shellErrorNote 已抽至 ./execCwd.js，2026-10-16）
+
+// P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
+async function toolShell(args) {
+  const { timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy } = args;
+  // N2 argv 优先（方案 §8.1）：模型可传 argv 数组（executable + args）——
+  // 直接 execFile，完全不经过 shell（无拼接/展开/注入面），空格与 $ 等字面量按原样传递。
+  // 给 argv 时忽略字符串 command；审批/守卫/审计用 argv 的空格连接形态展示。
+  let argvList = null;
+  let command = args.command;
+  if (Array.isArray(args.argv)) {
+    argvList = args.argv.map((v) => String(v)).filter((s) => s.length > 0);
+    if (argvList.length === 0) {
+      audit('shell', '(argv)', 'argv 为空数组', 'blocked');
+      return { stdout: '', stderr: 'argv 为空：请提供非空的 [executable, ...args] 数组，或改用 command 字符串。', exitCode: -1, error: 'argv-empty', blocked: true };
+    }
+    command = argvList.join(' ');
+  } else if (typeof command !== 'string' || !command.trim()) {
+    return { stdout: '', stderr: 'command 为空：请提供要执行的命令字符串，或改用 argv 数组。', exitCode: -1, error: 'command-empty', blocked: true };
+  }
+  // N2：cwd 契约先行——执行位置不可信时拒绝执行（fail-closed）
+  const cwdInfo = await resolveToolCwd(deps, args.cwd);
+  if (!cwdInfo.ok) {
+    audit('shell', command, `cwd 不可信：${cwdInfo.resolved}`, 'blocked');
+    return { stdout: '', stderr: cwdInfo.error, exitCode: -1, error: 'cwd-not-found', blocked: true, cwd: cwdInfo.resolved };
+  }
+  const cwd = cwdInfo.resolved;
+  const cwdMeta = { cwd, ...(cwdInfo.cwdFallback ? { cwdFallback: true } : {}) };
+  let neededApproval = false;
+  let ruleMatched = 'none'; // 审批规则命中情况（always/conversation/none），随审计留痕
+  if (requireApproval) {
+    const verdict = approval.needsApproval({ tool: 'shell', args: { command }, approvalMode, conversationId, alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules });
+    if (verdict.matched) ruleMatched = verdict.matched;
+    if (verdict.need) {
+      neededApproval = true;
+      const decision = await deps.requestApproval('shell', { command });
+      if (decision === 'deny') {
+        audit('shell', command, `用户拒绝（cwd=${cwd}）`, 'denied');
+        return { stdout: '', stderr: '用户拒绝执行', exitCode: -1, error: 'Approval denied', ...cwdMeta };
+      }
+      deps.applyApprovalDecision(decision, 'shell', { command }, conversationId);
+    }
+  }
+  // 三平台 OS 级沙箱（2026-10）：macOS Seatbelt / Linux bubblewrap / Windows 受限用户。
+  // 方案对齐 OpenAI Codex（各后端实现见 main/sandbox*.js 顶部注释）。
+  // P0-B fail-safe：调用方未显式指定策略时，有项目目录至少 workspace-write，无目录则 read-only。
+  // 此前默认 full-access——任何漏传 sandboxPolicy 的新调用链（定时任务/CUA/skill 自造工具）都会无隔离直跑。
+  // N2：cwd 判定用**原始入参**（cwd 现在恒有值=宿主默认根，不代表用户选定了项目）。
+  const policy = sandboxPolicy || (args.cwd ? 'workspace-write' : 'read-only');
+  // sb 仍是 macOS Seatbelt 的专用判定（shouldSandbox 历史上只管 darwin，保留语义不扩散）
+  const sb = sandbox.shouldSandbox(policy, cwd);
+  // 三平台各自的「为何没能 OS 级沙箱」原因，用于日志自解释。
+  // Linux 走统一分发读取 bwrap 真实原因；Windows 的就绪态是异步的，此处只能给静态提示。
+  // N3：macOS 的 Seatbelt 探测失败时会被下面的分支改写为可行动的真实原因。
+  let fallbackReason = process.platform === 'linux'
+    ? (sandbox.osSandboxUsable(policy, cwd).reason || 'bubblewrap 不可用')
+    : (sb.reason || (process.platform === 'win32' ? 'Windows 受限用户沙箱未就绪' : 'seatbelt 不可用'));
+
+  // 守卫 + 直跑：无 OS 级沙箱（或沙箱未就绪/执行失败）时的统一落点。
+  // V03（2026-10-16）：受限策略（read-only/workspace-write）下 OS 沙箱不可满足 = 能力不可用，
+  // 默认 **阻断**，不再「黑名单守卫后裸跑」——黑名单是提示分类器，不是安全边界，
+  // 此前等价于沙箱一失效就静默降级为宿主普通权限执行（权限提升且用户不可见）。
+  // 两条显式逃生口（均不留痕为「已隔离」）：
+  //   1) 环境变量 MJCODE_ALLOW_UNCONFINED_FALLBACK=1：开发态显式豁免（仍过黑名单守卫）；
+  //   2) 当场弹一次 unconfined_exec 审批（L1）：用户显式批准本次非沙箱执行，决策不沉淀任何规则。
+  const runFallback = async (resolve) => {
+    if (policy !== 'full-access') {
+      const envFallback = process.env.MJCODE_ALLOW_UNCONFINED_FALLBACK === '1';
+      if (!envFallback) {
+        if (!deps || typeof deps.requestApproval !== 'function') {
+          audit('shell', command, `沙箱不可用且无审批通道，fail-closed 阻断（${fallbackReason}）`, 'blocked');
+          resolve({
+            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），且本次调用无审批通道，已按 fail-closed 阻断执行。`,
+            exitCode: -1, error: 'sandbox-unavailable-blocked', errorCode: 'sandbox-unavailable',
+            blocked: true, sandboxed: false, sandbox: { policy, sandboxed: false, reason: fallbackReason }, ...cwdMeta,
+          });
+          return;
+        }
+        const decision = await deps.requestApproval('unconfined_exec', { command });
+        if (decision !== 'once') {
+          audit('shell', command, `非沙箱执行未获显式批准（decision=${decision}）`, 'blocked');
+          resolve({
+            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），非沙箱执行未获显式批准，已阻断。`,
+            exitCode: -1, error: 'sandbox-unavailable-blocked', errorCode: 'sandbox-unavailable',
+            blocked: true, sandboxed: false, sandbox: { policy, sandboxed: false, reason: fallbackReason }, ...cwdMeta,
+          });
+          return;
+        }
+        console.warn(`[sandbox] 用户显式批准单次非沙箱执行（${fallbackReason}）policy=${policy}`);
+      } else {
+        console.warn(`[sandbox] MJCODE_ALLOW_UNCONFINED_FALLBACK=1：显式豁免单次审批，非沙箱执行（${fallbackReason}）policy=${policy}`);
+      }
+      // 黑名单守卫保留为纵深防御（非安全边界）：即使走到非沙箱执行，命中危险模式的命令仍然拒绝
+      // 已确认走到这里 = 本次没有 OS 级沙箱兜底，显式传 backendAvail=false，避免再走平台推断
+      const guard = sandbox.checkCommandGuard(policy, command, process.platform, false, false);
+      if (guard.blocked) {
+        audit('shell', command, guard.reason, 'blocked');
+        resolve({ stdout: '', stderr: guard.reason, exitCode: -1, error: guard.reason, errorCode: 'command-guard-blocked', blocked: true, sandbox: { policy, sandboxed: false, reason: 'no-os-sandbox' }, ...cwdMeta });
+        return;
+      }
+      console.warn(`[sandbox] 非沙箱执行（${fallbackReason}）policy=${policy}`);
+    }
+    // N2：argv 优先——execFile 直接执行，无 shell 面；字符串命令走显式 ShellProfile（非交互 /bin/sh -c）
+    const finishShell = (error, stdout, stderr) => {
+      const result = {
+        stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000),
+        exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0),
+        // N2：真实进程终态——signal/killed 透出，不再把信号终止折叠成裸 -1
+        signal: error?.signal || null, killed: !!error?.killed,
+        error: shellErrorNote(error),
+        ...cwdMeta,
+      };
+      audit('shell', command, `cwd=${cwd} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+      resolve(result);
+    };
+    if (argvList) {
+      const child = execFile(argvList[0], argvList.slice(1), { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
+      try { deps?.registerChild?.(child); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+    } else {
+      const sp = shellProfile.resolveShellProfile();
+      if (!sp.ok) {
+        audit('shell', command, `shell 不可用：${sp.reason}`, 'blocked');
+        resolve({ stdout: '', stderr: `shell 不可用：${sp.reason}`, exitCode: -1, error: 'shell-unavailable', errorCode: 'shell-unavailable', blocked: true, ...cwdMeta });
+        return;
+      }
+      const child = execFile(sp.exe, [...sp.args, command], { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
+      try { deps?.registerChild?.(child); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+    }
+  };
+
+  // ── macOS：Seatbelt ──
+  // N3：先做真实可用性探测（sandbox-exec 存在 ≠ 能 apply；嵌套沙箱环境一律 Operation not permitted）。
+  // 探测失败 → 落到统一兜底（V03：blocked / 单次 unconfined 审批），错误信息可行动。
+  if (sb.use) {
+    const belt = await sandbox.seatbeltUsable();
+    if (!belt.ok) {
+      fallbackReason = belt.reason;
+      console.warn(`[sandbox] Seatbelt 不可真实应用（${belt.reason}），落到统一兜底`);
+    } else {
+      const profile = sandbox.buildSeatbeltProfile(policy, cwd, writeGuard.protectedPathsFor(cwd));
+      // N2：argv 优先——sandbox-exec 支持直接传程序 argv（不经过 /bin/zsh -c，无 shell 面）
+      const sbArgv = argvList
+        ? ['-p', profile, ...argvList]
+        : ['-p', profile, '/bin/zsh', '-c', command];
+      return new Promise((resolve) => {
+        const seatbeltChild = execFile(sandbox.SANDBOX_EXEC, sbArgv,
+          { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
+            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'seatbelt', ...cwdMeta };
+            audit('shell', command, `cwd=${cwd} sandbox=${policy} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+            resolve(result);
+          });
+        try { deps?.registerChild?.(seatbeltChild); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+      });
+    }
+  }
+
+  // ── Linux：bubblewrap（ro-bind 全盘 + unshare-all 断网 + seccomp + 项目目录唯一可写）──
+  if (process.platform === 'linux' && policy !== 'full-access') {
+    // N2：bwrap 后端接收字符串命令；argv 用 POSIX 单引号转义降级（文档已注明，非精确等价）
+    const shellCommand = argvList ? shellProfile.argvToShellCommand(argvList) : command;
+    const built = sandbox.linuxBackend.buildBwrapExec(policy, cwd, shellCommand, '/bin/sh', null, writeGuard.protectedPathsFor(cwd));
+    if (built.argv.length) {
+      return new Promise((resolve) => {
+        execFile(built.argv[0], built.argv.slice(1),
+          { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
+            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'bubblewrap', ...cwdMeta };
+            audit('shell', command, `cwd=${cwd} sandbox=bubblewrap/${policy} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+            resolve(result);
+          });
+      });
+    }
+    console.warn(`[sandbox] Linux 未走 bubblewrap（${built.reason}），落到命令守卫`);
+  }
+
+  // ── Windows：受限专用用户（需一次性管理员设置；未就绪/失败则落到命令守卫）──
+  if (process.platform === 'win32' && policy !== 'full-access') {
+    return new Promise((resolve) => {
+      sandbox.windowsBackend.windowsSandboxReady().then(async (st) => {
+        if (st.ready) {
+          const r = await sandbox.windowsBackend.execAsSandboxUser(command, cwd);
+          if (r.ok) {
+            audit('shell', command, `sandbox=windows-restricted-user/${policy} resultUnknown=true`, neededApproval ? 'approved' : 'auto');
+            // P0 修复（2026-10-16）：原实现硬编码 exitCode:0 且 stdout 取 schtasks 自己的输出，
+            // 两者叠加 ⇒ Agent 以为所有命令都成功、却看不到任何输出。这是系统性欺骗，
+            // 且比"功能缺失"更危险——Agent 会基于假的成功继续下一步。
+            // 现如实上报「结果不可知」+ 可行动提示，绝不伪造成功。
+            resolve({
+              stdout: '',
+              stderr: '',
+              exitCode: null,
+              errorCode: 'result-unknown',
+              resultUnknown: true,
+              sandboxed: true,
+              sandboxBackend: 'windows-restricted-user',
+              sandbox: { policy, sandboxed: true, backend: 'windows-restricted-user' },
+              error: r.reason || '',
+              ...cwdMeta,
+              hint: 'Windows 沙箱执行：命令的真实退出码与输出暂不可见（schtasks 无法回传）。'
+                  + '请勿据此判断命令成功——若必须看到真实结果，可临时改用非沙箱模式（full-access）或在终端执行。',
+            });
+            return;
+          }
+          console.warn(`[sandbox] Windows 受限用户执行失败（${r.error}），落到命令守卫`);
+        } else {
+          console.warn(`[sandbox] Windows 沙箱未就绪（${st.reason}），落到命令守卫`);
+        }
+        runFallback(resolve).catch((e) => resolve({ stdout: '', stderr: `命令执行异常：${e?.message || e}`, exitCode: -1, error: String(e?.message || e), errorCode: 'exec-failed' }));
+      });
+    });
+  }
+
+  return new Promise((resolve) => runFallback(resolve).catch((e) => resolve({ stdout: '', stderr: `命令执行异常：${e?.message || e}`, exitCode: -1, error: String(e?.message || e), errorCode: 'exec-failed' })));
+}
+
+async function toolReadFile({ path: p, cwd, offset, limit }) {
+  // cwd 贯通：相对路径以项目目录为基准解析（此前按主进程 CWD 解析必然失败）
+  const target = resolveToolPath(p, cwd);
+  try {
+    const content = await fsp.readFile(target, 'utf8');
+    const lines = content.split('\n');
+    const body = (offset !== undefined && limit !== undefined)
+      ? lines.slice(offset, offset + limit).join('\n')
+      : content;
+    return { ok: true, path: target, content: body, totalLines: lines.length };
+  } catch (err) {
+    // 文件不存在是设计内的正常控制流（如 AGENTS.md 逐级向上探测），绝不 reject
+    if (err.code === 'ENOENT' || err.code === 'EISDIR') {
+      // 错误信息必须包含「解析后的绝对路径」与「当前项目目录」：
+      // 否则模型只知道「文件不存在」，无法判断是自己路径写错、
+      // 还是该文件属于项目外的其他工程（如应用自身源码），只会反复重试同样的错路径。
+      const base = cwd || process.cwd();
+      const where = path.isAbsolute(p)
+        ? `绝对路径不存在：${target}`
+        : `相对路径已按当前项目目录解析：${target}（项目目录：${base}）。`
+          + `若目标不在当前项目内，请改用绝对路径，或先用 list_dir 确认项目结构。`;
+      const error = err.code === 'EISDIR'
+        ? `${target} 是目录，不是文件。请改用 list_dir 浏览其内容。`
+        : where;
+      return { ok: false, notFound: true, path: target, cwd: base, error };
+    }
+    if (err.code === 'EACCES') return { ok: false, error: '没有读取权限' };
+    return { ok: false, error: err.message };
+  }
+}
+
+// 写操作统一走审批中心（L2）
+const WRITE_TOOLS = ['writeFile', 'editFile', 'applyPatch'];
+// P0-D：写工具实现提取为函数（IPC 与定时任务 Agent 通道共用）
+// P0-3：写路径白名单——写目标越出 {项目 cwd, userData, 系统临时目录} 时：
+//   · auto-safe / on-request：强制弹审批（不走 needsApproval，任何「始终允许」规则不可豁免）；
+//   · never 档（全不询问）或 requireApproval=false（无审批通道的调用方）：直接硬拒绝，fail-closed。
+//   白名单外的批准也不落地 conversation/always 规则，防止一次批准演变为永久绕过。
+function outsideWriteTarget(toolName, args) {
+  const roots = writeGuard.allowedWriteRoots({
+    cwd: args.cwd,
+    userDataDir: app.getPath('userData'),
+  });
+  if (toolName === 'applyPatch') {
+    return writeGuard.firstOutsideTarget(writeGuard.patchTargets(args.patch), roots, args.cwd || process.cwd());
+  }
+  if (!args.path) return null;
+  const target = resolveToolPath(args.path, args.cwd);
+  return writeGuard.firstOutsideTarget([target], roots, args.cwd || process.cwd());
+}
+
+async function runWriteTool(toolName, args) {
+  const { approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy, ...rest } = args;
+  const toolKey = { writeFile: 'write_file', editFile: 'edit_file', applyPatch: 'apply_patch' }[toolName];
+  let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
+
+  // ── 可写区内的只读 carve-out（对齐 Codex 当前沙箱架构）──
+  // `.git`（含 worktree/submodule 的 gitdir）与应用自身配置目录：即使在项目目录内也**禁止写入**。
+  // 与「白名单外写入」的关键区别：白名单外可由用户**单次批准**放行；此处不提供审批放行——
+  // 它的用途是切断「Agent 改写 .git/hooks/pre-commit → 用户下次手动 git commit 触发注入代码」
+  // 这条提权链，若可被一次批准打开，保护就等于默认不存在。
+  // 唯一例外：显式选择 full-access 档（产品语义即「不隔离」，用户已知情）时不走本闸。
+  const effectivePolicy = sandboxPolicy || (rest.cwd ? 'workspace-write' : 'read-only');
+  if (effectivePolicy !== 'full-access' && rest.cwd) {
+    const protectedPaths = writeGuard.protectedPathsFor(rest.cwd);
+    const targets = toolName === 'applyPatch'
+      ? writeGuard.patchTargets(rest.patch)
+      : (rest.path ? [rest.path] : []);
+    const hit = writeGuard.firstProtectedTarget(targets, protectedPaths, rest.cwd);
+    if (hit) {
+      audit(toolKey, rest.path || '(patch)', `受保护路径写入被拦截：${hit}`, 'blocked');
+      return {
+        ok: false, blocked: true, protectedPath: true, path: hit,
+        error: `写入目标位于受保护路径内：${hit}。该路径受保护是为了防止篡改 git hooks / 应用配置导致的提权，`
+          + '不接受审批放行。如确需修改，请由你本人手动操作；或显式切换到 full-access 档（该档不做隔离）。',
+      };
+    }
+  }
+
+  const outside = outsideWriteTarget(toolName, rest);
+  if (outside) {
+    if (!requireApproval || approvalMode === 'never') {
+      audit(toolKey, rest.path || '(patch)', `白名单外写入被拦截：${outside}`, 'blocked');
+      return { ok: false, blocked: true, outsideWhitelist: true, path: outside, error: `写入目标超出允许范围（仅限项目目录 / 应用数据 / 系统临时目录）：${outside}` };
+    }
+    const decision = await deps.requestApproval(toolKey, rest);
+    if (decision === 'deny') {
+      audit(toolKey, rest.path || '(patch)', `白名单外写入被拒绝：${outside}`, 'denied');
+      return { ok: false, error: '用户拒绝执行', denied: true };
+    }
+    // 决策仅本次有效（once），不调用 applyApprovalDecision——白名单外路径不允许沉淀「始终允许」
+  } else if (requireApproval) {
+    const verdict = approval.needsApproval({ tool: toolKey, args: rest, approvalMode, conversationId, alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules });
+    if (verdict.matched) ruleMatched = verdict.matched;
+    if (verdict.need) {
+      const decision = await deps.requestApproval(toolKey, rest);
+      if (decision === 'deny') {
+        audit(toolKey, rest.path || 'patch', '用户拒绝', 'denied');
+        return { ok: false, error: '用户拒绝执行', denied: true };
+      }
+      deps.applyApprovalDecision(decision, toolKey, rest, conversationId);
+    }
+  }
+  // 工具实现抛错绝不能冒泡成 IPC rejection：渲染层只能拿到一句 message，
+  // 模型无从判断是路径错、文件被改过还是权限问题，只会用同样的参数再试一次
+  // → 表现就是「明明改完了却一直循环不结束」。统一转成结构化失败，带上可行动上下文。
+  let result;
+  try {
+    result = await executeWriteTool(toolName, rest);
+  } catch (err) {
+    result = { ok: false, error: err?.message || String(err) };
+    if (targetMissing(err)) {
+      result.notFound = true;
+      result.error = `${result.error}（目标：${rest.path || '(空)'}；项目目录：${rest.cwd || process.cwd()}）`;
+    }
+  }
+  audit(toolKey, rest.path || '(patch)', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, 'recorded');
+  return result;
+}
+function targetMissing(err) { return err?.code === 'ENOENT' || err?.code === 'EISDIR'; }
+
+async function executeWriteTool(toolName, { path: p, content, search, replace, patch, cwd }) {
+  // 相对路径同样以项目 cwd 为基准（此前按主进程 CWD 解析，会写错位置或失败）
+  const target = p ? resolveToolPath(p, cwd) : p;
+  if (toolName === 'writeFile') {
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.writeFile(target, content, 'utf8');
+    return { ok: true, path: target };
+  }
+  if (toolName === 'editFile') {
+    // 空 search 必须先拦：'' 对 includes 恒真，会把 replace 插到文件最开头——静默破坏文件
+    if (typeof search !== 'string' || search.length === 0) {
+      return { ok: false, path: target, error: 'search 为空：空片段会匹配到文件开头并把内容插到最前面。请先用 read_file 读取当前内容，再给出精确的待替换片段。' };
+    }
+    if (typeof replace !== 'string') {
+      return { ok: false, path: target, error: 'replace 必须是字符串（当前为 ' + typeof replace + '）' };
+    }
+    let fileContent;
+    try {
+      fileContent = await fsp.readFile(target, 'utf8');
+    } catch (err) {
+      const base = cwd || process.cwd();
+      return {
+        ok: false, notFound: true, path: target, cwd: base,
+        error: err.code === 'EISDIR'
+          ? `${target} 是目录，不是文件。请改用 list_dir 浏览其内容。`
+          : `读取失败：${target} 不存在（项目目录：${base}）。若目标不在当前项目内请改用绝对路径。`,
+      };
+    }
+    if (!fileContent.includes(search)) {
+      // 未命中必须给出「为什么 + 现在是什么样」，否则模型只会重复同一片段 → 空转循环
+      const d = diagnoseEditMiss(fileContent, search);
+      const near = nearestContext(fileContent, search);
+      return {
+        ok: false, path: target, cwd: cwd || process.cwd(), editMiss: true,
+        error: `${d.reason}（文件：${target}；待替换片段 ${search.length} 字符，开头：${d.preview}）`,
+        hint: d.hints.join(' '),
+        ...(near ? {
+          nearest: `${near.matched ? `文件第 ${near.line} 行附近最接近（文件当前内容）` : '文件中没有相似行，这是文件开头'}：\n${near.snippet}`,
+        } : {}),
+      };
+    }
+    const occurrences = fileContent.split(search).length - 1;
+    // 函数形式替换：避免 replace 文本里的 $& / $1 / $` 被当成特殊替换模式展开（静默写坏内容）
+    const next = fileContent.replace(search, () => replace);
+    await fsp.writeFile(target, next, 'utf8');
+    return {
+      ok: true, path: target, replaced: 1, occurrences,
+      warn: occurrences > 1
+        ? `文件中有 ${occurrences} 处完全相同的片段，本次只替换了第 1 处；若需全部替换请逐次调用，或改用 write_file 重写全文。`
+        : null,
+    };
+  }
+  // apply_patch：stdin 送入 patch，在项目 cwd 执行
+  if (!patch || typeof patch !== 'string') throw new Error('patch 内容为空');
+  // 2026-10-15 加固（三类失败模式全部实测复现后修复）：
+  //   · --batch                 永不交互提问。此前 "Reversed (or previously applied)
+  //                             patch detected! Assume -R? [n]" 会等 stdin 回答，
+  //                             而 stdin 是补丁本身（写完即 end）→ EOF 异常或挂死
+  //   · --forward               已应用过的补丁跳过而非报错（重复调用幂等）
+  //   · --no-backup-if-mismatch 失败时不落 .orig / .ouD0ErF 备份
+  //   · -r /dev/null            失败不再写 app.js.rej —— 此前会在用户项目里留下
+  //                             拒绝文件，污染工作区、混进 git status 干扰后续提交
+  const runPatchProcess = (extraArgs) => new Promise((resolve) => {
+    const child = spawn('patch', ['-p1', '--batch', '--forward', '--no-backup-if-mismatch', '-r', '/dev/null', ...extraArgs], { cwd: cwd || process.cwd() });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve({ stdout: stdout.slice(0, 10000), stderr: 'patch 执行超时', error: 'timeout', exitCode: -1 });
+    }, 30000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      // 已应用过的补丁：--forward 会跳过（hunk ignored），语义上应视为幂等成功。
+      // 若当失败返回，模型会反复重试同一个补丁直到轮次耗尽（repeat 熔断）。
+      // 注意：GNU patch 的「Reversed / hunk ignored」提示走 **stdout** 而非 stderr（实测），
+      // 所以两个流都要查。
+      const out = `${stdout}\n${stderr}`;
+      if (/previously applied|hunk ignored/i.test(out)) {
+        resolve({ stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 5000), exitCode: 0, alreadyApplied: true, error: null });
+        return;
+      }
+      resolve({
+        stdout: stdout.slice(0, 10000),
+        stderr: stderr.slice(0, 5000),
+        exitCode: code ?? 0,
+        error: code ? `patch exit ${code}` : null,
+      });
+    });
+    child.stdin.write(patch);
+    child.stdin.end();
+  });
+
+  const result = await runPatchProcess([]);
+  if (result.exitCode && !result.alreadyApplied) {
+    // 二次机会：-l（忽略空白差异）。补丁失败的头号真实原因是空白对不上
+    //（缩进空格数/制表符/行尾空白），严格模式拒绝而宽松模式能命中。
+    const retry = await runPatchProcess(['-l']);
+    if (!retry.exitCode || retry.alreadyApplied) {
+      return { ...retry, lenientWhitespace: true, note: '严格模式应用失败后已按宽松空白匹配重试成功。' };
+    }
+    // 两次都失败：必须可行动（与 editFile 未命中诊断同一原则）——
+    // 回传目标绝对路径 + 当前内容（截断）+ 最近锚点行，模型据此改用
+    // edit_file 精确替换或重新生成补丁，而不是原样重试同一 patch。
+    const target = patchTargetPath(patch);
+    const abs = target ? resolveToolPath(target, cwd) : null;
+    let currentContent = null;
+    let nearest = null;
+    try {
+      if (abs && fs.existsSync(abs)) {
+        currentContent = fs.readFileSync(abs, 'utf8');
+        const anchor = patchAnchorLine(patch);
+        if (anchor) nearest = nearestContext(currentContent, anchor);
+      }
+    } catch (e) { /* 读不到就不附加，不掩盖原始错误 */ }
+    return {
+      ...retry,
+      error: `patch exit ${retry.exitCode}（补丁上下文与文件当前内容不一致，未做任何修改）`,
+      target: abs || target || undefined,
+      hint: '不要原样重试同一补丁。请先 read_file 确认现状（下方 currentContent），'
+        + '改用 edit_file 精确替换，或基于当前内容重新生成补丁。',
+      currentContent: currentContent ? currentContent.slice(0, 4000) : undefined,
+      nearest: nearest || undefined,
+    };
+  }
+  return result;
+}
+
+// 从补丁解析目标路径（+++ b/ 行）：-p1 语义去一层前缀、去时间戳
+function patchTargetPath(patch) {
+  const line = String(patch || '').split('\n').find((l) => l.startsWith('+++ '));
+  if (!line) return null;
+  let p = line.slice(4).trim();
+  const tab = p.indexOf('\t');
+  if (tab >= 0) p = p.slice(0, tab);
+  p = p.replace(/^[ab]\//, '');
+  return p || null;
+}
+
+// 首个 hunk 的锚点行：取第一条上下文/删除行的内容（文件中应存在），供 nearestContext 定位
+function patchAnchorLine(patch) {
+  const lines = String(patch || '').split('\n');
+  const hunkIdx = lines.findIndex((l) => l.startsWith('@@'));
+  if (hunkIdx < 0) return null;
+  for (let i = hunkIdx + 1; i < lines.length; i += 1) {
+    const l = lines[i];
+    if (l.startsWith('@@')) break;
+    if (l.startsWith(' ') || l.startsWith('-')) {
+      const t = l.slice(1).trim();
+      if (t) return t;
+    }
+  }
+  return null;
+}
+
+// editFile 未命中诊断（diagnoseEditMiss/nearestContext）已抽至 ./editMissDiagnostics.js
+// 工具路径解析（resolveToolPath）已抽至 ./execCwd.js
+// 文件预览（PREVIEW_*/previewKindOfMime/file:preview handler）已抽至 ./previewTool.js
+
+// P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
+async function toolListDir({ path: p, cwd } = {}) {
+  const target = resolveToolPath(p, cwd);
+  try {
+    const entries = await fsp.readdir(target, { withFileTypes: true });
+    return entries.map(e => ({ name: e.name, isDir: e.isDirectory(), type: e.isDirectory() ? 'dir' : 'file' }));
+  } catch (err) {
+    // 返回空列表而非 reject：渲染层按数组消费，rejection 会在主进程刷 Electron 错误栈
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR' && err.code !== 'EACCES') {
+      console.error(`[listDir] 读取目录失败：${target} — ${err.message}`);
+    }
+    return [];
+  }
+}
+
+// grep：execFile argv 化，杜绝 LLM 可控参数注入 shell
+async function toolGrep({ pattern, path: p, glob: include, cwd } = {}) {
+  if (!pattern) return { matches: '' };
+  const base = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
+  const args = ['-rn'];
+  if (include) args.push('--include', String(include));
+  args.push(String(pattern), p || '.');
+  return new Promise((resolve) => {
+    execFile('grep', args, { cwd: base, timeout: 15000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout) => {
+      resolve({ matches: (stdout || '').slice(0, 20000), cwd: base });
+    });
+  });
+}
+
+// glob：execFile argv 化
+async function toolGlob({ pattern, path: p, cwd } = {}) {
+  if (!pattern) return { files: [] };
+  const base = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
+  const args = [p || '.', '-name', String(pattern), '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*'];
+  return new Promise((resolve) => {
+    execFile('find', args, { cwd: base, timeout: 20000 }, (error, stdout) => {
+      resolve({ files: (stdout || '').trim().split('\n').filter(Boolean).slice(0, 100), cwd: base });
+    });
+  });
+}
+
+// N2：无 cwd 时的统一默认执行根由 ./execCwd.js 提供（宿主注入：最近项目目录或 HOME）
+// ── Git 工具（execFile argv 化 + cwd 贯通）──
+// git 提交/暂存属于 L2 写操作，走审批中心
+async function gitWithApproval(toolKey, args, gitArgs) {
+  const { approvalMode = 'on-request', conversationId, cwd, requireApproval = true } = args;
+  let neededApproval = false;
+  let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
+  if (requireApproval) {
+    const verdict = approval.needsApproval({ tool: toolKey, args, approvalMode, conversationId, alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules });
+    if (verdict.matched) ruleMatched = verdict.matched;
+    if (verdict.need) {
+      neededApproval = true;
+      const decision = await deps.requestApproval(toolKey, args);
+      if (decision === 'deny') {
+        audit(toolKey, args.message || args.files || '', '用户拒绝', 'denied');
+        return { stdout: '', stderr: '用户拒绝执行', error: 'Approval denied', denied: true };
+      }
+      deps.applyApprovalDecision(decision, toolKey, args, conversationId);
+    }
+  }
+  const result = await runGit(gitArgs, cwd);
+  audit(toolKey, args.message || args.files || '', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+  return result;
+}
+
+// P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
+const toolGitStatus = ({ cwd } = {}) => runGit(['status', '--short'], cwd);
+const toolGitDiff = ({ cwd, staged } = {}) => runGit(['diff', ...(staged ? ['--staged'] : [])], cwd);
+const toolGitLog = ({ cwd, count = 10 } = {}) => runGit(['log', '--oneline', `-${Math.min(Math.max(Number(count) || 10, 1), 100)}`], cwd);
+const toolGitBranch = ({ cwd } = {}) => runGit(['branch', '-a'], cwd);
+const toolGitCommit = (args = {}) => gitWithApproval('git_commit', args, ['commit', '-m', String(args.message || '')]);
+const toolGitAdd = (args = {}) => {
+  const list = Array.isArray(args.files) ? args.files.map(String) : String(args.files || '.').split(/\s+/).filter(Boolean);
+  return gitWithApproval('git_add', args, ['add', ...list]);
+};
+
+function runGit(args, cwd) {
+  const target = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd: target, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({ stdout: (stdout || '').slice(0, 30000), stderr: (stderr || '').slice(0, 5000), error: error?.message || null, cwd: target });
+    });
+  });
+}
+
+// ── IPC 注册（与 main.js 原注册一一对应，只搬移不改行为）──
+function registerIpc() {
+  ipcMain.handle('tool:shell', (_, payload) => toolShell(payload));
+  ipcMain.handle('tool:readFile', (_, payload) => toolReadFile(payload));
+  for (const toolName of WRITE_TOOLS) {
+    ipcMain.handle(`tool:${toolName}`, (_, args) => runWriteTool(toolName, args));
+  }
+
+  // 预览元信息 + 二进制内容（文本类只回元信息，正文由 tool:readFile 分页取）——实现见 ./previewTool.js
+  ipcMain.handle('file:preview', (_, payload) => preview.handleFilePreview(payload));
+
+  // 用系统默认应用打开文件或目录（目录 → Finder / 资源管理器）
+  ipcMain.handle('shell:openPath', async (_, { path: p, cwd } = {}) => {
+    const target = resolveToolPath(p, cwd);
+    try {
+      if (!fs.existsSync(target)) return { ok: false, error: `路径不存在：${target}` };
+      const err = await shell.openPath(target);
+      if (err) return { ok: false, error: err };
+      audit('open_path', target, '在系统中打开');
+      return { ok: true, path: target };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 打开外链：只允许 http/https（shell.openExternal 能拉起任意协议处理器，
+  // 传入 file:// 或自定义 scheme 等于把「打开任意本地程序」的能力暴露给渲染层）
+  ipcMain.handle('shell:openExternal', async (_, { url } = {}) => {
+    const raw = String(url || '').trim();
+    let parsed;
+    try { parsed = new URL(raw); } catch (e) { return { ok: false, error: '链接格式不正确' }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, error: `出于安全考虑，只允许打开 http/https 链接（当前：${parsed.protocol}）` };
+    }
+    try {
+      await shell.openExternal(raw);
+      return { ok: true, url: raw };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // Git 环境信息（设置页 Git 面板：署名与可用性探测，只读）
+  ipcMain.handle('tool:gitConfig', async (_, { cwd } = {}) => {
+    const run = (args) => new Promise((resolve) => {
+      execFile('git', args, { cwd: cwd || process.cwd(), timeout: 8000 }, (err, stdout) => {
+        resolve(err ? '' : String(stdout).trim());
+      });
+    });
+    try {
+      const [version, name, email, globalName, globalEmail] = await Promise.all([
+        run(['--version']),
+        run(['config', '--get', 'user.name']),
+        run(['config', '--get', 'user.email']),
+        run(['config', '--global', '--get', 'user.name']),
+        run(['config', '--global', '--get', 'user.email']),
+      ]);
+      return {
+        ok: true,
+        available: !!version,
+        version,
+        // 仓库级署名优先展示（未配置时回落全局），空字符串表示未配置
+        repoName: name, repoEmail: email,
+        globalName, globalEmail,
+        cwd: cwd || process.cwd(),
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 在文件管理器中定位（高亮选中该条目而非打开）
+  ipcMain.handle('shell:reveal', async (_, { path: p, cwd } = {}) => {
+    const target = resolveToolPath(p, cwd);
+    try {
+      if (!fs.existsSync(target)) return { ok: false, error: `路径不存在：${target}` };
+      shell.showItemInFolder(target);
+      return { ok: true, path: target };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('tool:listDir', (_, payload) => toolListDir(payload));
+  ipcMain.handle('tool:grep', (_, payload) => toolGrep(payload));
+  ipcMain.handle('tool:glob', (_, payload) => toolGlob(payload));
+
+  ipcMain.handle('tool:gitStatus', (_, p) => toolGitStatus(p));
+  ipcMain.handle('tool:gitDiff', (_, p) => toolGitDiff(p));
+  // hunk 级还原（对标 Codex 三级还原中的最小粒度）：反向应用指定代码块
+  ipcMain.handle('tool:gitApplyHunk', async (_, { cwd, patch }) => {
+    if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
+    return new Promise((resolve) => {
+      const child = spawn('git', ['apply', '--reverse', '--unidiff-zero', '-'], { cwd });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += d.toString(); });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve({ stdout, stderr: 'git apply 超时', error: 'timeout' });
+      }, 15000);
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ stdout, stderr, exitCode: code ?? 0, error: code ? `git apply 失败（退出码 ${code}）` : null });
+      });
+      child.stdin.write(patch);
+      child.stdin.end();
+    });
+  });
+  ipcMain.handle('tool:gitLog', (_, p) => toolGitLog(p));
+  ipcMain.handle('tool:gitBranch', (_, p) => toolGitBranch(p));
+  ipcMain.handle('tool:gitCommit', (_, p) => toolGitCommit(p));
+  ipcMain.handle('tool:gitAdd', (_, p) => toolGitAdd(p));
+  // DiffReviewPanel：接受（add）/ 拒绝（checkout -- / restore --staged）
+  ipcMain.handle('tool:gitCheckout', async (_, { cwd, files }) => {
+    const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
+    if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
+    return runGit(['checkout', '--', ...list], cwd);
+  });
+  ipcMain.handle('tool:gitRestoreStaged', async (_, { cwd, files }) => {
+    const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
+    if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
+    return runGit(['restore', '--staged', ...list], cwd);
+  });
+}
+
+module.exports = {
+  initToolExec,
+  toolShell,
+  toolReadFile,
+  runWriteTool,
+  toolListDir,
+  toolGrep,
+  toolGlob,
+  toolGitStatus,
+  toolGitDiff,
+  toolGitLog,
+  toolGitBranch,
+  toolGitCommit,
+  toolGitAdd,
+  resolveToolPath,
+  previewKindOfMime: preview.previewKindOfMime,
+  handleFilePreview: preview.handleFilePreview,
+  shellEnv,
+  SHELL_PATH,
+  runGit,
+};

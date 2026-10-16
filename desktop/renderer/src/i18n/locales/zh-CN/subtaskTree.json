@@ -1,0 +1,21 @@
+{
+  "phaseSpawn": "待运行",
+  "phaseRunning": "运行中",
+  "phaseDone": "完成",
+  "phaseFailed": "失败",
+  "clickToView": "点击查看结论",
+  "dependsOn": "依赖：",
+  "earlyStop": "提前停止：{reason}",
+  "stopTokens": "token 预算耗尽",
+  "stopRounds": "轮次耗尽",
+  "stopAborted": "被中止",
+  "subagent": "子代理",
+  "subagentTask": "子代理任务",
+  "singleAgent": "单代理 · {type}",
+  "general": "通用",
+  "empty": "暂无子任务",
+  "emptyHint": "编排任务或派发子代理后，运行状态会在这里实时展示",
+  "group": "编排组",
+  "doneRatio": "{done}/{total} 完成",
+  "failedCount": "{n} 失败"
+}

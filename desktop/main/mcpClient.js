@@ -51,7 +51,10 @@ function mcpRpc(server, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
       .catch((e) => {
         clearTimeout(timer);
         server.pending.delete(id);
-        reject(new Error(`MCP 请求发送失败：${e.message}`));
+        const err = new Error(`MCP 请求发送失败：${e.message}`);
+        // T7：needsAuth 标记必须穿过重包装，否则上层无法区分「要授权」与「网络故障」
+        if (e.mcpAuthRequired) err.mcpAuthRequired = true;
+        reject(err);
       });
   });
 }
@@ -101,24 +104,40 @@ function createStdioTransport({ name, command, args = [], env, onLog }) {
 }
 
 // ── Streamable HTTP 传输 ──
-function createHttpTransport({ name, url, headers = {}, onLog }) {
+// auth（T7 OAuth 引擎注入，均可缺省）：
+//   getHeader() -> 'Bearer xxx' | null  —— 每次发送前取有效令牌（静态 headers 已带 Authorization 时不覆盖）
+//   refresh()   -> 'Bearer xxx' | null  —— 401 时强制续期，成功重试一次，仍 401 抛 mcpAuthRequired
+function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
   const base = String(url || '').trim().replace(/\/+$/, '');
   if (!base) throw new Error('HTTP 传输需要服务地址（url）');
   let sessionId = '';
   const transport = {
     kind: 'http',
     async send(payload, requestId) {
-      const res = await fetch(base, {
+      const call = (bearer) => fetch(base, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
           ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
           ...headers,
+          ...(bearer ? { Authorization: bearer } : {}),
         },
         body: payload,
         signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
       });
+      let res = await call(auth && !headers.Authorization ? await auth.getHeader() : null);
+      if (res.status === 401 && auth) {
+        await res.text().catch(() => {});
+        const fresh = await auth.refresh().catch(() => null);
+        if (fresh) res = await call(fresh);
+        if (res.status === 401) {
+          await res.text().catch(() => {});
+          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
+          err.mcpAuthRequired = true;
+          throw err;
+        }
+      }
       // 会话建立：initialize 的响应头带 Mcp-Session-Id，后续请求必须回带
       const sid = res.headers.get('mcp-session-id');
       if (sid) sessionId = sid;
@@ -173,7 +192,7 @@ async function consumeSse(res, onData) {
 // transport: 'stdio'（默认，command/args/env）| 'http'（url/headers）
 async function connectMcpServer({
   name, transport = 'stdio', command, args = [], env = {}, url, headers = {},
-  onStatus, onLog,
+  auth, onStatus, onLog,
 }) {
   if (!name || typeof name !== 'string') return { ok: false, error: 'name 必填' };
   if (servers.has(name)) {
@@ -190,7 +209,7 @@ async function connectMcpServer({
   let transportObj;
   try {
     transportObj = transport === 'http'
-      ? createHttpTransport({ name, url, headers, onLog })
+      ? createHttpTransport({ name, url, headers, onLog, auth })
       : createStdioTransport({ name, command, args, env: env, onLog });
   } catch (e) {
     return { ok: false, error: e.message };
@@ -240,7 +259,7 @@ async function connectMcpServer({
   } catch (err) {
     transportObj.close();
     servers.delete(name);
-    return { ok: false, error: err.message, stderr: server.stderrTail };
+    return { ok: false, error: err.message, needsAuth: err.mcpAuthRequired === true, stderr: server.stderrTail };
   }
 }
 

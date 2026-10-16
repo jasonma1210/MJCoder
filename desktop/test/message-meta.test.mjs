@@ -4,6 +4,7 @@
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
 const require = createRequire(import.meta.url);
@@ -47,19 +48,42 @@ define('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 
 const { createRequire: makeRequire } = await import('node:module');
 const rendererRequire = makeRequire(path.join(DESKTOP, 'renderer/package.json'));
+// T3-2：i18n 语言包经 globalThis 注入（esbuild bundle 下 i18n 实例只此一份）；
+// 渲染须包 LanguageProvider（组件用 useI18n）——用临时 wrapper entry 把
+// ChatArea 具名导出与 Provider 编进同一 bundle，测试侧按原 API 调用。
+{
+  const packs = {};
+  for (const loc of ['zh-CN', 'en-US']) {
+    const dir = path.join(SRC, 'i18n', 'locales', loc);
+    const d = {};
+    if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) {
+      if (f.endsWith('.json')) d[f.replace(/\.json$/, '')] = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    }
+    packs[loc] = d;
+  }
+  globalThis.__MJ_I18N_PACKS__ = packs;
+}
+const probeFile = path.join(SRC, '__meta_probe.jsx');
+fs.writeFileSync(probeFile, [
+  "import { LanguageProvider } from './i18n';",
+  "import { renderMessages as _rm, RunFooter as _rf } from './components/ChatArea.jsx';",
+  'export function renderMessages(msgs) { return <LanguageProvider>{_rm(msgs)}</LanguageProvider>; }',
+  'export function RunFooter(props) { return <LanguageProvider><_rf {...props} /></LanguageProvider>; }',
+].join('\n'));
 const result = esbuild.buildSync({
-  entryPoints: [path.join(SRC, 'components/ChatArea.jsx')],
+  entryPoints: [probeFile],
   bundle: true,
   external: ['react', 'react-dom', 'react-dom/server', 'react/jsx-runtime'],
   define: { 'process.env.NODE_ENV': '"production"' },
   format: 'cjs', platform: 'browser', jsx: 'automatic',
-  loader: { '.jsx': 'jsx', '.js': 'jsx', '.mjs': 'jsx', '.png': 'dataurl', '.svg': 'dataurl', '.css': 'empty' },
+  loader: { '.jsx': 'jsx', '.tsx': 'tsx', '.js': 'jsx', '.mjs': 'jsx', '.png': 'dataurl', '.svg': 'dataurl', '.css': 'empty' },
   write: false, logLevel: 'silent',
 });
+fs.unlinkSync(probeFile);
 const moduleObj = { exports: {} };
 // eslint-disable-next-line no-new-func
 new Function('require', 'module', 'exports', '__filename', '__dirname', result.outputFiles[0].text)(
-  rendererRequire, moduleObj, moduleObj.exports, path.join(SRC, 'components/ChatArea.jsx'), SRC,
+  rendererRequire, moduleObj, moduleObj.exports, probeFile, SRC,
 );
 const { renderMessages, RunFooter } = moduleObj.exports;
 const React = rendererRequire('react');
@@ -117,6 +141,31 @@ check('RunFooter：预算暂停态提示断点可恢复', () => {
 check('RunFooter：summary 为空不渲染内容', () => {
   const html = htmlOf(React.createElement(RunFooter, { summary: null }));
   assert.ok(!html.includes('运行结束') && !html.includes('共消耗'), '空 summary 不应渲染任何内容');
+});
+
+check('RunFooter：live 运行中态展示 运行中/已耗时/本轮消耗/上下文（T1-5）', () => {
+  const html = htmlOf(React.createElement(RunFooter, {
+    summary: null,
+    live: {
+      startedAt: T - 66000,
+      tokensIn: 100, tokensOut: 50,
+      contextUsage: { used: 6400, total: 128000, ratio: 0.05 },
+      model: 'mimo-v2.6-flash',
+    },
+  }));
+  assert.ok(html.includes('运行中'), '缺运行中徽标');
+  assert.ok(html.includes('已耗时'), '缺实时耗时');
+  assert.ok(html.includes('本轮消耗 150 tokens'), `缺本轮消耗：${html.slice(0, 300)}`);
+  assert.ok(html.includes('上下文 5%'), '缺上下文用量');
+  assert.ok(html.includes('mimo-v2.6-flash'), '缺模型名');
+});
+
+check('RunFooter：live 模式优先于结束态（运行中不显示旧收尾条）', () => {
+  const html = htmlOf(React.createElement(RunFooter, {
+    summary: { status: 'done', durationMs: 1000, tokensIn: 1, tokensOut: 1, model: 'm', endedAt: T },
+    live: { startedAt: T - 1000, tokensIn: 0, tokensOut: 0 },
+  }));
+  assert.ok(html.includes('运行中') && !html.includes('运行结束'), 'live 期间不应渲染结束态');
 });
 
 console.log(`\nPASS：${pass}/${total} 项通过`);

@@ -5,6 +5,12 @@
 // 引擎在当前上下文直接运行，工具通道经 window.mjcode.* 注入（原行为，agent-engine.test.mjs 依赖）。
 // 真实引擎在 agent-core 包（headless 复用）。
 import { runAgent as coreRunAgent, BASE_TOOLS, BUILTIN_SKILL_IDS, decomposeTask, looksLargeTask, parsePlanResponse } from '../../../agent-core/index.js';
+// T0-2：IPC 边界契约（与主进程同源，shared-ipc/contract.mjs 为唯一事实来源）
+import { validateAgentEvent } from '../../../shared-ipc/contract.mjs';
+
+// i18n：本文件被纯 Node 测试静态导入，不能 import i18n/index.ts（TS+React）；
+// 经 globalThis.__MJ_T__ 运行时通道取翻译（i18n 模块加载时置位；未置位回落返回 key）
+const t = (key, params) => (typeof globalThis.__MJ_T__ === 'function' ? globalThis.__MJ_T__(key, params) : key);
 
 export { BASE_TOOLS, BUILTIN_SKILL_IDS, decomposeTask, looksLargeTask, parsePlanResponse };
 
@@ -42,11 +48,11 @@ let runSeq = 0;
 function runAgentViaMain(options) {
   // onMessage 解构弃用（_前缀 = 有意不转发）：中间消息已由主进程 agentRunner 落库，
   // 若留在 rest 里经 IPC 传函数会 structured-clone 失败；进程内回退模式仍走渲染层 onMessage
-  const { signal, onMessage: _onMessage, onStream, onToolCall, onDone, ...rest } = options;
+  const { signal, onMessage: _onMessage, onStream, onToolCall, onSubagentEvent, onDone, ...rest } = options;
   return new Promise((resolve, reject) => {
     const mj = globalThis.window?.mjcode;
     if (!mj?.agentRun || !mj?.onAgentEvent) {
-      reject(new Error('主进程 Agent 通道不可用'));
+      reject(new Error(t('runtime.agentChannelUnavailable')));
       return;
     }
     // 调用方可指定 runId（ChatArea 运行注册表用它索引流式归属与按 run 精确中止）；未指定时自行生成
@@ -60,7 +66,17 @@ function runAgentViaMain(options) {
       if (typeof off === 'function') off();
       fn?.(arg);
     };
-    off = mj.onAgentEvent((evt) => {
+    off = mj.onAgentEvent((raw) => {
+      // T0-2：接收前契约校验（渲染层是第二道防线——主进程 emitter 已先降级过一次，
+      // 这里兜住主进程侧代码漂移/旧 preload 的非法载荷）。非法事件绝不静默吞掉：
+      // 归属本 run 的直接以明确错误收尾（防「事件丢了导致运行永远挂起」）。
+      const cv = validateAgentEvent(raw);
+      if (!cv.ok) {
+        console.error('[agent] IPC contract rejected event:', cv.error, 'type=' + String(raw?.type));
+        if (!raw?.runId || raw.runId === runId) finish(reject, new Error(t('runtime.ipcContractFailed', { error: cv.error })));
+        return;
+      }
+      const evt = cv.data;
       if (!evt || evt.runId !== runId) return;
       try {
         switch (evt.type) {
@@ -68,19 +84,38 @@ function runAgentViaMain(options) {
           // 渲染层 onMessage 的落库职责仅保留给进程内回退模式（主进程模式收不到此回调）。
           case 'stream': onStream?.(evt.data); break; // 引擎轮次边界信号（清空上一轮流式文本）
           case 'tool_call': onToolCall?.(evt.data); break;
-          case 'done':
+          // T1-3：子代理事件（spawn_subagent / orchestrate_task 生命周期）→ 渲染层子任务树
+          case 'subagent': onSubagentEvent?.(evt.data); break;
+          case 'done': {
             finish(null);
-            // 第 4 参 meta.mainPersisted：最终消息已由主进程落库，渲染层不重复写（防双份）
-            onDone?.(evt.data.finalText, evt.data.usage, evt.data.aborted, { mainPersisted: !!evt.data.mainPersisted });
+            // 第 4 参 meta.mainPersisted / meta.persistState：最终消息在主进程的落库状态
+            // （durable=已落库 / pending=落库未刷盘 / failed=落库失败），
+            // 渲染层据此本地补显「未持久化」提示，且不重复落库（防双份）。
+            // V20：onDone 是 async 回调——不接住其返回 Promise 的话，内部异常会成为
+            // unhandled rejection 被静默吞掉（分步报告等收尾状态无声丢失）。
+            // 这里显式 catch：console.error 记录后仍 resolve（总结已产出，收尾装饰
+            // 失败不丢整轮结果；回调自身的用户可见提示由 useAgentRun finalizeRun 负责）。
+            Promise.resolve(onDone?.(
+              evt.data.finalText,
+              evt.data.usage,
+              evt.data.aborted,
+              {
+                mainPersisted: !!evt.data.mainPersisted,
+                persistState: evt.data.persistState,
+              },
+            )).catch((cbErr) => {
+              console.error('[agent] done callback failed:', cbErr);
+            });
             resolve(evt.data.finalText);
             break;
+          }
           case 'error':
             finish(reject, new Error(String(evt.data)));
             break;
           default: break; // delta/reasoning 流经 model:delta 独立通道直达窗口，不经此分发
         }
       } catch (e) {
-        console.warn('[agent] 事件回调异常:', e);
+        console.warn('[agent] event callback error:', e);
       }
     });
     if (signal) {
@@ -102,7 +137,7 @@ function runAgentViaMain(options) {
     }
     mj.agentRun({ ...rest, tokenBudget: resolveTokenBudget(options), runId })
       .then((res) => {
-        if (!res?.ok) finish(reject, new Error(res?.error || 'Agent 运行启动失败'));
+        if (!res?.ok) finish(reject, new Error(res?.error || t('runtime.agentStartFailed')));
       })
       .catch((e) => finish(reject, e instanceof Error ? e : new Error(String(e))));
   });
@@ -113,7 +148,7 @@ function runAgentInProcess(options) {
   const mj = () => globalThis.window?.mjcode;
   const requireChannel = (name) => (...args) => {
     const api = mj();
-    if (!api || typeof api[name] !== 'function') throw new Error(`工具通道不可用: ${name}`);
+    if (!api || typeof api[name] !== 'function') throw new Error(t('runtime.toolChannelUnavailable', { name }));
     return api[name](...args);
   };
   const toolHandlers = {
@@ -133,7 +168,7 @@ function runAgentInProcess(options) {
     gitAdd: (...args) => {
       const api = mj();
       if (api && typeof api.gitAdd === 'function') return api.gitAdd(...args);
-      return { stdout: '', stderr: '', exitCode: 0, error: '当前版本不支持 gitAdd 通道' };
+      return { stdout: '', stderr: '', exitCode: 0, error: t('runtime.gitAddUnsupported') };
     },
     mcpCallTool: requireChannel('mcpCallTool'),
   };

@@ -1,0 +1,13 @@
+{
+  "cmdKind": "命令",
+  "threadKind": "会话",
+  "fileKind": "文件",
+  "newThread": "新会话",
+  "searchPlaceholder": "搜索会话、文件，或执行命令…",
+  "escClose": "Esc 关闭",
+  "noResults": "未找到与「{q}」相关的结果",
+  "searchHint": "输入关键词开始搜索，或直接查看下方命令",
+  "hintNavigate": "上下键 选择",
+  "hintEnter": "Enter 执行",
+  "hintToggle": "⌘K 开关面板"
+}

@@ -6,17 +6,19 @@ import {
 import ContextMenu from './ContextMenu';
 import { toast } from './feedback';
 import { projectDisplayName } from '../lib/projectName';
+import { useI18n } from '../i18n';
 
 // 会话列表（对标 Codex 侧栏）：按项目分组，线程项带三色状态指示
 //   ● 已完成 / ◉ 待审批 / ↻ 运行中
 // S1：组内默认渲染 20 条 + 「加载更多」，避免会话量大时整棵渲染卡顿
 // S2：组内按时间分段（今天/昨天/本周/更早），不再纯平铺
 const GROUP_PAGE_SIZE = 20;
+// 顶层常量只存 i18n key，渲染时经 t() 求值（避免模块加载冻结译文）
 const STATUS_META = {
-  running: { label: '运行中', Icon: IconSpinner, dot: 'text-accent' },
-  awaiting_approval: { label: '待审批', Icon: IconDot, dot: 'text-success' },
-  done: { label: '已完成', Icon: IconDot, dot: 'text-info' },
-  idle: { label: '待继续', Icon: IconDot, dot: 'text-text2' },
+  running: { labelKey: 'threadList.statusRunning', Icon: IconSpinner, dot: 'text-accent' },
+  awaiting_approval: { labelKey: 'threadList.statusAwaiting', Icon: IconDot, dot: 'text-success' },
+  done: { labelKey: 'threadList.statusDone', Icon: IconDot, dot: 'text-info' },
+  idle: { labelKey: 'threadList.statusIdle', Icon: IconDot, dot: 'text-text2' },
 };
 
 export default function ThreadList({
@@ -34,6 +36,7 @@ export default function ThreadList({
   onRenameProject,
   onOpenProjectPicker,
 }) {
+  const { t } = useI18n();
   const [orphanVisible, setOrphanVisible] = useState(GROUP_PAGE_SIZE);
   // 按项目路径分组：先项目，再该项目的会话
   const groups = projects.map((p) => ({
@@ -63,7 +66,7 @@ export default function ThreadList({
 
       {orphans.length > 0 && (
         <div className="mb-2">
-          <SectionLabel label="未归属项目" />
+          <SectionLabel label={t('threadList.unassigned')} />
           {orphans.slice(0, orphanVisible).map((t) => (
             <ThreadRow
               key={t.id}
@@ -80,7 +83,7 @@ export default function ThreadList({
           {orphans.length > orphanVisible && (
             <button onClick={() => setOrphanVisible((v) => v + GROUP_PAGE_SIZE)}
               className="w-full text-left px-3 py-1.5 text-xs text-text2 hover:text-text">
-              加载更多（还有 {orphans.length - orphanVisible} 条）
+              {t('threadList.loadMore', { n: orphans.length - orphanVisible })}
             </button>
           )}
         </div>
@@ -89,7 +92,7 @@ export default function ThreadList({
       {projects.length === 0 && (
         <button onClick={onOpenProjectPicker}
           className="w-full text-left px-3 py-2 rounded-lg text-xs text-text2 hover:bg-hover border border-dashed border-border">
-          尚未打开项目，点击选择目录
+          {t('threadList.noProject')}
         </button>
       )}
     </div>
@@ -99,6 +102,7 @@ export default function ThreadList({
 function ProjectGroup({
   project, items, collapsed, activeThread, onSelectThread, onSelectProject, onDeleteThread, onRenameThread, onNewThread, onDeleteProject, onRenameProject,
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(!collapsed);
   const [visible, setVisible] = useState(GROUP_PAGE_SIZE);
   // 切换项目时自动展开对应分组（对标 Codex：选中项目即展开其会话）
@@ -118,12 +122,12 @@ function ProjectGroup({
   // 打开磁盘目录：目录可能已被用户在 Finder 里删掉，失败必须给出可读原因
   async function openFolder() {
     const r = await window.mjcode?.openPath?.({ path: project.path });
-    if (r && r.ok === false) toast({ message: r.error || '打开目录失败' });
+    if (r && r.ok === false) toast({ message: r.error || t('threadList.openFolderFailed') });
   }
 
   async function openInEditor() {
     const r = await window.mjcode?.openInIDE?.({ path: project.path });
-    if (r && r.ok === false) toast({ message: r.error || '打开失败' });
+    if (r && r.ok === false) toast({ message: r.error || t('threadList.openFailed') });
   }
 
   function commitRename() {
@@ -134,18 +138,18 @@ function ProjectGroup({
   }
 
   const menuItems = [
-    { id: 'open', label: '打开文件夹', icon: IconFolderOpen, onClick: openFolder },
-    { id: 'ide', label: '在编辑器中打开', icon: IconTerminal, onClick: openInEditor },
+    { id: 'open', label: t('threadList.menuOpenFolder'), icon: IconFolderOpen, onClick: openFolder },
+    { id: 'ide', label: t('threadList.menuOpenInEditor'), icon: IconTerminal, onClick: openInEditor },
     { separator: true },
-    { id: 'rename', label: '重命名', icon: IconEdit, onClick: () => { setDraft(display); setEditing(true); } },
-    ...(onDeleteProject ? [{ id: 'remove', label: '从列表中移除', icon: IconX, danger: true, title: '仅从列表移除，不影响磁盘文件', onClick: () => onDeleteProject(project) }] : []),
+    { id: 'rename', label: t('threadList.menuRename'), icon: IconEdit, onClick: () => { setDraft(display); setEditing(true); } },
+    ...(onDeleteProject ? [{ id: 'remove', label: t('threadList.menuRemove'), icon: IconX, danger: true, title: t('threadList.menuRemoveHint'), onClick: () => onDeleteProject(project) }] : []),
   ];
 
   return (
     <div className="mb-1">
       <div className="group flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-hover"
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}>
-        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-text2 shrink-0" title={open ? '折叠' : '展开'}>
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-text2 shrink-0" title={open ? t('threadList.collapse') : t('threadList.expand')}>
           {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         </button>
         {editing ? (
@@ -160,14 +164,14 @@ function ProjectGroup({
               if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
             }}
             // 重命名只改显示名，不动磁盘目录（会话归属与沙箱授权都按目录路径）
-            title="重命名只修改显示名，磁盘目录不变"
+            title={t('threadList.renameDisplayHint')}
             className="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-xs outline-none"
           />
         ) : (
           <button onClick={() => { onSelectProject(project); setOpen(true); }}
             onDoubleClick={() => { setDraft(display); setEditing(true); }}
             className="flex-1 min-w-0 text-left text-xs truncate flex items-center"
-            title={`${project.path || project.name}\n右键查看更多操作`}>
+            title={t('threadList.projectTitleHint', { path: project.path || project.name })}>
             <span className={activeThread && (project.path === activeThread.projectPath || project.path === activeThread.cwd) ? 'text-text truncate' : 'text-text2 truncate'}>
               {display}
             </span>
@@ -179,22 +183,22 @@ function ProjectGroup({
           <button
             onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('mjcode:focus-approval')); }}
             className="text-success text-[10px] shrink-0 px-1 rounded hover:bg-hover"
-            title={`${awaiting} 个会话等待审批，点击查看审批卡片`}
-            aria-label={`${awaiting} 个会话等待审批`}
+            title={t('threadList.awaitingTitle', { n: awaiting })}
+            aria-label={t('threadList.awaitingAria', { n: awaiting })}
           >
-            {awaiting} 待审批
+            {t('threadList.awaitingBadge', { n: awaiting })}
           </button>
         )}
-        {running > 0 && <span className="text-accent text-[10px] shrink-0">{running} 运行中</span>}
-        <button onClick={() => onNewThread(project)} title="在此项目中新建会话"
-          className="text-text2 opacity-0 group-hover:opacity-100 px-1" aria-label="在此项目中新建会话">
+        {running > 0 && <span className="text-accent text-[10px] shrink-0">{t('threadList.runningBadge', { n: running })}</span>}
+        <button onClick={() => onNewThread(project)} title={t('threadList.newThreadInProject')}
+          className="text-text2 opacity-0 group-hover:opacity-100 px-1" aria-label={t('threadList.newThreadInProject')}>
           <IconPlus size={13} />
         </button>
         {/* 项目删除入口（此前 onRemoveProject 已传入却无任何渲染，导致项目无法删除） */}
         {onDeleteProject && (
           <button onClick={(e) => { e.stopPropagation(); onDeleteProject(project); }}
             className="text-text2 opacity-0 group-hover:opacity-100 hover:text-danger px-1"
-            title="移除项目（不影响磁盘文件）" aria-label={`移除项目 ${project.name || project.path}`}>
+            title={t('threadList.removeProjectTitle')} aria-label={t('threadList.removeProjectAria', { name: project.name || project.path })}>
             <IconX size={13} />
           </button>
         )}
@@ -203,17 +207,17 @@ function ProjectGroup({
       {open && (
         <div className="pl-3">
           {items.length === 0 ? (
-            <p className="text-text2 text-xs px-2 py-1">暂无会话</p>
+            <p className="text-text2 text-xs px-2 py-1">{t('threadList.emptyThreads')}</p>
           ) : (
             <>
               {/* S2：先按 S1 截取可见条数，再按时间分段渲染 */}
               {(() => {
                 const visibleItems = items.slice(0, visible);
                 const buckets = new Map(TIME_BUCKETS.map((b) => [b, []]));
-                for (const t of visibleItems) (buckets.get(timeBucket(t)) || buckets.get('更早')).push(t);
+                for (const item of visibleItems) (buckets.get(timeBucket(item)) || buckets.get('earlier')).push(item);
                 return TIME_BUCKETS.filter((b) => buckets.get(b).length > 0).map((b) => (
                   <div key={b}>
-                    <SectionLabel label={b} />
+                    <SectionLabel label={t(BUCKET_LABEL_KEY[b])} />
                     {buckets.get(b).map((t) => (
                       <ThreadRow
                         key={t.id}
@@ -230,7 +234,7 @@ function ProjectGroup({
               {items.length > visible && (
                 <button onClick={() => setVisible((v) => v + GROUP_PAGE_SIZE)}
                   className="w-full text-left px-2 py-1.5 text-xs text-text2 hover:text-text">
-                  加载更多（还有 {items.length - visible} 条）
+                  {t('threadList.loadMore', { n: items.length - visible })}
                 </button>
               )}
             </>
@@ -251,6 +255,7 @@ function ProjectGroup({
 
 // A1：双击标题行内重命名（Enter 提交 / Esc 取消，对标 Codex）
 function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, onAssign }) {
+  const { t } = useI18n();
   const meta = STATUS_META[thread.status] || STATUS_META.idle;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -293,7 +298,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
       }`}
       onClick={() => onSelect(thread)}
       onDoubleClick={startEdit}
-      title={`${meta.label}｜${thread.model_name || ''}（双击重命名）`}
+      title={t('threadList.rowTitle', { status: t(meta.labelKey), model: thread.model_name || '' })}
     >
       <meta.Icon size={11} className={`${meta.dot} shrink-0`} />
       {editing ? (
@@ -310,25 +315,25 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
           }}
           className="flex-1 min-w-0 bg-bg border border-accent rounded px-1 py-0.5 text-xs outline-none"
           maxLength={100}
-          aria-label="会话标题"
+          aria-label={t('threadList.threadTitleAria')}
         />
       ) : (
-        <span className="text-xs truncate flex-1">{thread.title || '新会话'}</span>
+        <span className="text-xs truncate flex-1">{thread.title || t('threadList.newThreadDefault')}</span>
       )}
       {!editing && assignMenu && (
         <div ref={assignRef} className="relative shrink-0">
           <button
             onClick={(e) => { e.stopPropagation(); setAssignOpen((v) => !v); }}
             className="text-text2 opacity-0 group-hover:opacity-100"
-            title="归组到项目"
-            aria-label="归组到项目"
+            title={t('threadList.assignToProject')}
+            aria-label={t('threadList.assignToProject')}
           >
             <IconFolder size={11} />
           </button>
           {assignOpen && (
             <div className="absolute right-0 top-full mt-1 w-40 bg-raise border border-border rounded-lg shadow-[var(--shadow-menu)] z-palette py-1"
               onClick={(e) => e.stopPropagation()}>
-              <div className="px-3 py-1 text-[10px] text-text2">归组到…</div>
+              <div className="px-3 py-1 text-[10px] text-text2">{t('threadList.assignMenuLabel')}</div>
               {assignMenu.map((p) => (
                 <button key={p.path} onClick={() => { setAssignOpen(false); onAssign?.(thread, p.path); }}
                   className="w-full text-left px-3 py-1.5 text-xs hover:bg-hover truncate" title={p.path}>
@@ -343,8 +348,8 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
         <button
           onClick={(e) => { e.stopPropagation(); startEdit(); }}
           className="text-text2 opacity-0 group-hover:opacity-100 shrink-0"
-          title="重命名会话"
-          aria-label="重命名会话"
+          title={t('threadList.renameThread')}
+          aria-label={t('threadList.renameThread')}
         >
           <IconEdit size={11} />
         </button>
@@ -352,8 +357,8 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(thread); }}
         className="text-text2 opacity-0 group-hover:opacity-100 shrink-0"
-        title="删除会话"
-        aria-label="删除会话"
+        title={t('threadList.deleteThread')}
+        aria-label={t('threadList.deleteThread')}
       >
         <IconX size={11} />
       </button>
@@ -366,15 +371,22 @@ function SectionLabel({ label }) {
 }
 
 // S2：会话时间分段（基于 updatedAt/createdAt，缺失时归入「更早」）
+// 分段用英文 id 作内部标识，展示文案经 BUCKET_LABEL_KEY 在渲染时取 i18n
 function timeBucket(t) {
   const ts = new Date(t.updatedAt || t.updated_at || t.createdAt || t.created_at || 0).getTime();
-  if (!ts) return '更早';
+  if (!ts) return 'earlier';
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  if (ts >= startOfDay) return '今天';
-  if (ts >= startOfDay - 86400000) return '昨天';
-  if (ts >= startOfDay - 6 * 86400000) return '本周';
-  return '更早';
+  if (ts >= startOfDay) return 'today';
+  if (ts >= startOfDay - 86400000) return 'yesterday';
+  if (ts >= startOfDay - 6 * 86400000) return 'thisWeek';
+  return 'earlier';
 }
 
-const TIME_BUCKETS = ['今天', '昨天', '本周', '更早'];
+const TIME_BUCKETS = ['today', 'yesterday', 'thisWeek', 'earlier'];
+const BUCKET_LABEL_KEY = {
+  today: 'threadList.bucketToday',
+  yesterday: 'threadList.bucketYesterday',
+  thisWeek: 'threadList.bucketThisWeek',
+  earlier: 'threadList.bucketEarlier',
+};

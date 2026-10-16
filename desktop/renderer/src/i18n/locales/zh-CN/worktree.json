@@ -1,0 +1,19 @@
+{
+  "mergeBack": "合并回主目录",
+  "mergeBackMsg": "将隔离工作区的改动合并回主目录。主目录必须为干净状态（无未提交改动），否则会被拒绝。",
+  "promote": "提升为分支",
+  "promoteMsg": "将隔离副本提升为正式分支（{branch} → mj/ 前缀）并移除 worktree，改动保留在分支中，之后可自行合并或推送。",
+  "removeTitle": "清理工作区",
+  "removeMsg": "移除隔离工作区。未合并、未提升的改动将永久丢失。确定清理吗？",
+  "removeConfirm": "仍然清理",
+  "cleanedMsg": "已清理隔离工作区",
+  "promotedMsg": "已提升为分支 {branch}",
+  "mergedBackMsg": "已合并回主目录",
+  "opFailed": "操作失败",
+  "label": "隔离工作区：{name}",
+  "hint": "改动不影响主目录，任务完成后可收口：",
+  "mergeBackHint": "将隔离工作区的改动合并回主目录",
+  "promoteHint": "提升为正式分支（mj/ 前缀）并移除 worktree",
+  "removeHint": "移除隔离工作区（未合并改动将丢失）",
+  "cleanup": "清理"
+}

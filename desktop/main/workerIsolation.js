@@ -27,44 +27,68 @@ async function createIsolated({ cwd, groupId, taskId }) {
 /**
  * 把 worktree 内的全部改动合并回主目录。
  * 返回 { ok, applied, conflicts, patchFile } —— conflicts 时补丁已落盘待人工处理。
+ * V06（2026-10-16）：合并失败（冲突/apply 失败/异常）时 **不再清理 worktree**——
+ * 此前 finally 无条件 removeWorktree，merge 抛错时子任务的全部改动随 worktree 一起销毁，
+ * 且调用方仍把任务标成 done ⇒ 成果不可逆丢失。现在只有「已安全落地」（applied / 无改动）
+ * 才清理；失败现场保留（worktree + 补丁路径随返回值上交，由调用方写入 needs_review 状态）。
  */
 async function mergeBackIsolated({ cwd, iso }) {
   if (!iso?.worktreePath) return { ok: true, applied: false, skipped: '无隔离工作区' };
-  const out = { ok: false, applied: false, conflicts: false, patchFile: null };
+  const out = { ok: false, applied: false, conflicts: false, patchFile: null, worktreePath: iso.worktreePath, branch: iso.branch };
   try {
     // 1. 全量暂存（含新增/删除/二进制），生成相对 HEAD（=任务起点）的补丁
     await wt.git(iso.worktreePath, ['add', '-A'], 60000);
     const diff = await wt.git(iso.worktreePath, ['diff', '--cached', '--binary'], 60000);
     if (!diff.ok) throw new Error(`生成补丁失败：${diff.stderr || diff.error}`);
-    if (!diff.stdout.trim()) { out.ok = true; return out; } // 无改动，直接清理
+    if (!diff.stdout.trim()) {
+      out.ok = true;
+      // 无改动：安全落地（无产物），清理隔离副本
+      await cleanupWorktree(iso);
+      return out;
+    }
 
-    // 2. 主目录预检（apply --check 不落盘）；冲突 → 补丁落盘待人工
+    // 2. 主目录预检（apply --check 不落盘）；冲突 → 补丁落盘待人工，**保留 worktree**
     const applyCheck = await wt.git(cwd, ['apply', '--check', '--binary', '-'], 30000, diff.stdout);
     if (!applyCheck.ok) {
-      const dir = path.join(require('os').homedir(), '.mjcode', 'worktree-conflicts');
-      fs.mkdirSync(dir, { recursive: true });
-      out.patchFile = path.join(dir, `${path.basename(iso.worktreePath)}.patch`);
-      fs.writeFileSync(out.patchFile, diff.stdout);
+      out.patchFile = saveConflictPatch(iso, diff.stdout);
       out.conflicts = true;
-      out.error = `补丁与主目录当前内容冲突，已保存到 ${out.patchFile}`;
+      out.error = `补丁与主目录当前内容冲突，已保存到 ${out.patchFile}（worktree 已保留：${iso.worktreePath}）`;
       return out;
     }
     const apply = await wt.git(cwd, ['apply', '--binary', '-'], 60000, diff.stdout);
     if (!apply.ok) throw new Error(`补丁应用失败：${apply.stderr || apply.error}`);
     out.ok = true;
     out.applied = true;
+    // 合并成功：安全落地，清理隔离副本
+    await cleanupWorktree(iso);
     return out;
   } catch (e) {
-    out.error = e.message;
+    out.error = `${e.message}（worktree 已保留：${iso.worktreePath}，改动未丢失）`;
     return out;
-  } finally {
-    // 3. 清理 worktree 与分支（无论合并成败——改动已体现在补丁/主目录中）
-    try { await wt.removeWorktree(iso.worktreePath, true); } catch { /* 清理尽力而为 */ }
-    try { await wt.git(iso.repoRoot || cwd, ['branch', '-D', iso.branch]); } catch { /* 分支清理尽力而为 */ }
   }
 }
 
-/** 失败/中止路径：丢弃 worktree（不合并），返回清理结果 */
+/** 失败/中止路径：归档隔离副本——有改动则生成补丁并保留 worktree，无改动才清理。返回 { empty, patchFile, worktreePath } */
+async function archiveIsolated({ iso }) {
+  if (!iso?.worktreePath) return { empty: true };
+  try {
+    await wt.git(iso.worktreePath, ['add', '-A'], 60000);
+    const diff = await wt.git(iso.worktreePath, ['diff', '--cached', '--binary'], 60000);
+    if (!diff.ok || !diff.stdout.trim()) {
+      // 无可保留产物：清理
+      await cleanupWorktree(iso);
+      return { empty: true };
+    }
+    const patchFile = saveConflictPatch(iso, diff.stdout);
+    return { empty: false, patchFile, worktreePath: iso.worktreePath, branch: iso.branch };
+  } catch (e) {
+    // 归档探测失败：宁可保留现场也不清理（V06：成果不可丢）
+    console.warn(`[workerIso] 归档隔离副本失败（保留 worktree 现场）: ${e.message}`);
+    return { empty: false, worktreePath: iso.worktreePath, branch: iso.branch, error: e.message };
+  }
+}
+
+/** 失败/中止路径：显式丢弃 worktree（调用方确认无产物时使用） */
 async function discardIsolated({ iso }) {
   if (!iso?.worktreePath) return false;
   try { await wt.removeWorktree(iso.worktreePath, true); } catch { return false; }
@@ -72,4 +96,19 @@ async function discardIsolated({ iso }) {
   return true;
 }
 
-module.exports = { createIsolated, mergeBackIsolated, discardIsolated };
+// 冲突/归档补丁落盘目录（~/.mjcode/worktree-conflicts/，人工可取回）
+function saveConflictPatch(iso, patchText) {
+  const dir = path.join(require('os').homedir(), '.mjcode', 'worktree-conflicts');
+  fs.mkdirSync(dir, { recursive: true });
+  const patchFile = path.join(dir, `${path.basename(iso.worktreePath)}.patch`);
+  fs.writeFileSync(patchFile, patchText);
+  return patchFile;
+}
+
+// 成功落地后的清理（worktree + 分支，尽力而为）
+async function cleanupWorktree(iso) {
+  try { await wt.removeWorktree(iso.worktreePath, true); } catch { /* 清理尽力而为 */ }
+  try { await wt.git(iso.repoRoot, ['branch', '-D', iso.branch]); } catch { /* 分支清理尽力而为 */ }
+}
+
+module.exports = { createIsolated, mergeBackIsolated, archiveIsolated, discardIsolated };

@@ -42,30 +42,36 @@ desktop/eval/results/
 # ══════════ GitHub 发布排除项 ══════════
 
 # 所有 Markdown 文档（仅保留根目录中英 README，/ 开头限定根目录）
+# README.md = 英文（默认，GitHub 首屏）；README.zh-CN.md = 中文，供中文用户点击切换
 *.md
 !/README.md
-!/README.en.md
+!/README.zh-CN.md
 
-# AI 平台生成的隐藏文档 / 会话数据
+# AI 平台生成的隐藏文档 / 会话数据（本地配置与凭证，禁止入库）
 .workbuddy/
+.codebuddy/
 .claude/
 .cursor/
 .codex/
+.qoder/
+.trae/
+.specstory/
+.windsurf/
+.zed/
 .aider*
 .opencode/
 .continue/
 .qwen/
+.mcp.json
+.mcp.local.json
 
 # 注：.github/ 已不再排除（见上方 P0-0 说明）——CI 必须随仓库分发才能被 GitHub 触发。
 
-# 备份文件（*.deprecated.bak 等）：本地冗余，勿入库
-# 注意：desktop/main.js.deprecated.bak 与 desktop/renderer/src/components/
-# ApprovalDialog.jsx.deprecated.bak 在加入本规则之前已被 git 跟踪，
-# 本规则只阻止新增；要真正移出版本库需执行（需人工确认）：
-#   git rm --cached desktop/main.js.deprecated.bak \
-#            desktop/renderer/src/components/ApprovalDialog.jsx.deprecated.bak
+# 备份/废弃文件（T2-4 门禁）：一律不入库，历史恢复走 git 而非库内备份文件。
+# 曾经被跟踪的两个 .deprecated.bak（main.js / ApprovalDialog）已于 2026-10-15 删除；
+# CI verify 首步会拒绝任何 .bak / .deprecated 文件重新入库。
 *.bak
-*.deprecated.bak
+*.deprecated*
 
 # ─────────────────────────────────────────────────────────────
 # 与项目无关的个人文件/本地产物（2026-10-14 推送前发现）
@@ -77,9 +83,6 @@ desktop/eval/results/
 .backup-*/
 com.user.ai-news.plist
 fetch_ai_news.sh
-
-# 已废弃的历史文件本地留档：保留在磁盘供对照，但不进版本库（避免污染发布包与包体积）
-*.deprecated.bak
 
 # 审计/并行子代理临时产出目录（一次性中间产物，不进版本库）
 .audit-tmp/

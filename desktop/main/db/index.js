@@ -107,6 +107,50 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    // V04（2026-10-16）：治理快照固化到组——子任务权限继承「建组时刻」的父上下文快照，
+    // 不再读取全局最近一次会话设置（父子任务权限只可收紧，且建组后不受后续会话变更影响）。
+    version: 4,
+    name: 'task-group-policy-snapshot',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE task_groups ADD COLUMN approval_mode TEXT;
+        ALTER TABLE task_groups ADD COLUMN sandbox_policy TEXT;
+      `);
+    },
+  },
+  {
+    // N5（2026-10-16）：副作用账本——V14「重启不自动重放」的可审计地基。
+    // Worker 领取任务即记 uncertain（该任务可能产生副作用），终态时 resolved；
+    // 重启恢复时 uncertain 记录原样保留 = 「副作用无法确认」的清单，随 needsReview 供人工核对。
+    // 一组一任务一行（upsert），重试重新领取会回到 uncertain。
+    version: 5,
+    name: 'side-effects-ledger',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS side_effects (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          group_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'uncertain',
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          UNIQUE(group_id, task_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_side_effects_state ON side_effects(state);
+      `);
+    },
+  },
+  {
+    // R6（2026-10-16，用户实测反馈）：任务组绑定创建它的会话——
+    // 此前组在所有工作区/会话的任务面板都显示（默认工作区也能看到别的仓库的组）。
+    // thread_id = 创建组的会话 id；历史组无该列 → 渲染层按 cwd 归属显示。
+    version: 6,
+    name: 'task-group-thread-binding',
+    up: (db) => {
+      db.exec('ALTER TABLE task_groups ADD COLUMN thread_id TEXT;');
+    },
+  },
 ];
 
 function openDb(dataDir) {
@@ -178,10 +222,12 @@ function probeBetterSqlite3(timeoutMs = 10000) {
   });
 }
 
-async function openDbAsync(dataDir, { isPackaged = false } = {}) {
+async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride } = {}) {
   const file = path.join(dataDir, 'mjcode-tasks.db');
   fs.mkdirSync(dataDir, { recursive: true });
-  const driver = (process.env.MJ_DB_DRIVER || 'auto').toLowerCase();
+  // driverOverride 显式指定驱动（测试用 'sqljs' 强制零原生，绕过 better-sqlite3 ABI/编译依赖）；
+  // 未指定则按环境变量 MJ_DB_DRIVER 走，缺省 auto。
+  const driver = String(driverOverride || process.env.MJ_DB_DRIVER || 'auto').toLowerCase();
 
   if (driver === 'sqljs') {
     const db = await openSqliteJsDb(file);

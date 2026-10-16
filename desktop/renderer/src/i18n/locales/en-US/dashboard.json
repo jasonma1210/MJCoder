@@ -1,0 +1,18 @@
+{
+  "loadFailed": "Failed to load data, please try again later",
+  "title": "Overview",
+  "loading": "Loading...",
+  "totalTokens": "{n} tokens used in total",
+  "chats": "Chats",
+  "messages": "Messages",
+  "inputTokens": "Input Tokens",
+  "outputTokens": "Output Tokens",
+  "modelDistribution": "Model Usage",
+  "noData": "No data yet",
+  "modelRow": "{n} messages · {tokens} tokens",
+  "recentActivity": "Messages in the Last 7 Days",
+  "noRecentMessages": "No messages in the last 7 days",
+  "weeklyThreads": "New Chats in the Last 8 Weeks",
+  "weeklyTitle": "{week}: {count} chats",
+  "localScopeNote": "Local statistics cover thread count, message count and token usage only. Model distribution and activity trends require server data and are not computed locally, so those cards stay empty — this does not mean there was no activity."
+}

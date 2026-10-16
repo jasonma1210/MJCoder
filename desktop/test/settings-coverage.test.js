@@ -13,6 +13,30 @@ const path = require('path');
 const SRC = path.join(__dirname, '..', 'renderer', 'src');
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(SRC, 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
+
 let pass = 0;
 let total = 0;
 function check(name, fn) {
@@ -64,7 +88,8 @@ check('浏览器 / Git 设置页有真实内容（不再回落「即将上线」
 
 check('设置页顶部避开 macOS 交通灯（hiddenInset 窗口）', () => {
   // 主窗口是 titleBarStyle: 'hiddenInset'，交通灯悬浮在窗口左上角且永远在最上层
-  const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'main.js'), 'utf8');
+  // T2-1：createWindow 已拆出 main/lifecycle/window.js，断言随实现走
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'lifecycle', 'window.js'), 'utf8');
   assert.match(main, /titleBarStyle: 'hiddenInset'/,
     '窗口标题栏样式已变，请同步核对交通灯安全区');
   // 2026-10-15 浮窗化：设置页从「铺满整窗」改为居中浮窗（bg-overlay 背景 + rounded-2xl 面板），
@@ -78,7 +103,8 @@ check('设置页顶部避开 macOS 交通灯（hiddenInset 窗口）', () => {
   // 只禁「渲染出来的按钮」，注释里记录这段历史是允许的
   assert.ok(!/>\s*← 返回应用\s*</.test(settings),
     '左上角仍渲染返回按钮：该位置被交通灯覆盖，既看不清也点不到');
-  assert.match(settings, /aria-label="关闭设置"/, '设置页缺少明确关闭出口');
+  // T3-2 i18n：aria-label 文案已抽取到 zh-CN/settings.json（closeSettings），改为两段式验证
+  assertI18nCopy(settings, 'settings', '关闭设置', '设置页缺少明确关闭出口');
 });
 
 check('设置页关闭按钮按平台环境定义', () => {
@@ -114,7 +140,9 @@ check('链接打开方式设置真正生效（有消费方）', () => {
 });
 
 check('新建任务不显示工作区 chip（空态不得伪装成已选）', () => {
-  const chat = read('components/ChatArea.jsx');
+  // T2-2：workspaceBound 门控随 Composer 拆出 components/Composer.tsx；
+  // 调用点接线（workspaceBound={!!thread}）在 ChatArea.jsx，欢迎页副标题在 WelcomePage.tsx
+  const chat = read('components/Composer.tsx');
   // 项目 / 分支 / 上下文环三段必须在 workspaceBound 门控之内
   const gate = chat.match(/\{workspaceBound && \(([\s\S]*?)\n      \)\}/);
   assert.ok(gate, '未找到 workspaceBound 门控块');
@@ -122,22 +150,27 @@ check('新建任务不显示工作区 chip（空态不得伪装成已选）', ()
     assert.ok(gate[1].includes(marker),
       `${marker} 不在 workspaceBound 门控内：新建任务页仍会显示工作区信息`);
   }
-  assert.match(chat, /workspaceBound=\{!!thread\}/,
+  assert.match(read('components/ChatArea.jsx'), /workspaceBound=\{!!thread\}/,
     'Composer 未按「是否已进入会话」传入 workspaceBound');
   // 欢迎页副标题同样受「主动选择」门控：残留的上次项目不得当默认事实展示
-  const hero = chat.match(/我们要构建什么？[\s\S]*?<\/p>/);
+  // T3-2 i18n：标题文案已抽取到 zh-CN/welcome.json（heading），锚点改为 key 引用 + 两段式验证
+  const welcomeSrc = read('components/WelcomePage.tsx');
+  assertI18nCopy(welcomeSrc, 'welcome', '我们要构建什么？', '欢迎页标题文案缺失');
+  const hero = welcomeSrc.match(/welcome\.heading[\s\S]*?<\/p>/);
   assert.ok(hero, '未找到欢迎页副标题区');
   assert.match(hero[0], /projectPicked/,
     '欢迎页副标题未按 projectPicked 门控：重启后仍会说「在上次项目中」');
   // ambient 个性化建议同样只在主动选择的项目上生成
-  const ambient = chat.match(/ambient 建议[\s\S]*?\}\);/);
+  const ambient = read('components/ChatArea.jsx').match(/ambient 建议[\s\S]*?\}\);/);
   assert.ok(ambient && /projectPicked/.test(ambient[0]),
     'ambient 建议未按 projectPicked 门控：欢迎页仍会围绕上次项目出建议卡片');
 });
 
 check('新建任务页有「打开/创建项目」入口（此前只有 ⌘O 隐式入口）', () => {
-  const chat = read('components/ChatArea.jsx');
-  assert.ok(chat.includes('打开或创建项目'),
+  // T2-2：欢迎页已拆出 components/WelcomePage.tsx
+  const chat = read('components/WelcomePage.tsx');
+  // T3-2 i18n：入口文案已抽取到 zh-CN/welcome.json（openOrCreateProject），改为两段式验证
+  assertI18nCopy(chat, 'welcome', '打开或创建项目',
     '欢迎页缺少「打开或创建项目」入口（ProjectPicker 无法从新建任务页到达）');
   assert.match(chat, /onClick=\{onOpenProjectPicker\}/,
     '欢迎页入口未接线到 onOpenProjectPicker');
@@ -165,19 +198,23 @@ check('文件预览覆盖代码 / Markdown / 图片 / PDF', () => {
   assert.match(preview, /highlightLine/, '代码未接语法高亮');
   assert.match(preview, /meta\.kind === 'binary'|looksBinary/, '缺少不可预览文件的诚实降级');
   // 二进制白名单与体积上限在主进程把守
-  const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'main.js'), 'utf8');
-  assert.match(main, /PREVIEW_MAX_BYTES/, '主进程缺少预览体积上限');
+  // T2-1→2026-10-16：file:preview 实现再拆至 previewTool.js（exec.js 回归 800 行门禁）
+  const previewSrc = fs.readFileSync(path.join(__dirname, '..', 'main', 'tools', 'previewTool.js'), 'utf8');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'tools', 'exec.js'), 'utf8');
+  assert.match(previewSrc, /PREVIEW_MAX_BYTES/, '主进程缺少预览体积上限');
   assert.match(main, /ipcMain\.handle\('file:preview'/, '缺少 file:preview IPC');
   const rightPane = read('components/RightPane.jsx');
   assert.match(rightPane, /id: 'preview'/, '右侧面板缺少预览标签');
 });
 
 check('拖拽入参覆盖整个对话区（不只输入框那一小块）', () => {
-  const chat = read('components/ChatArea.jsx');
+  // T2-2：窗口级拖拽监听随 Composer 拆出 components/Composer.tsx
+  const chat = read('components/Composer.tsx');
   assert.match(chat, /window\.addEventListener\('dragover'/, '缺少窗口级 dragover 监听');
   assert.match(chat, /alreadyHandled = e\.defaultPrevented/,
     '未区分「输入框已处理」与「窗口兜底」，会导致重复入参');
-  assert.match(chat, /松开以把文件加入对话/, '缺少拖拽视觉反馈');
+  // T3-2 i18n：拖拽提示文案已抽取到 zh-CN/composer.json（dropWindow），改为两段式验证
+  assertI18nCopy(chat, 'composer', '松开以把文件加入对话', '缺少拖拽视觉反馈');
 });
 
 console.log(`\nPASS：${pass}/${total} 项通过`);

@@ -53,7 +53,9 @@ async function runParent(spawnArgs, subScript) {
   let subResult = null;
   await runAgent({
     messages: [{ role: 'user', content: '派个子代理' }],
-    model, cwd: '/tmp', tools: [], maxRounds: 4,
+    model, cwd: '/tmp', maxRounds: 4,
+    // V02 运行时白名单守卫（2026-10-16）：父代理须显式通告 spawn_subagent（原 tools:[] 旧语义已废除）
+    tools: [{ type: 'function', function: { name: 'spawn_subagent', description: '派发只读子代理', parameters: { type: 'object', properties: {} } } }],
     toolHandlers: makeToolHandlers(),
     onMessage: () => {},
     onToolCall: (tc) => { if (tc.name === 'spawn_subagent') subResult = tc.result; },

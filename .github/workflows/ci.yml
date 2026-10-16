@@ -28,6 +28,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── T2-4 防再入门禁：git 跟踪的文件里不允许出现 .bak / .deprecated ──
+      # 用 git ls-files（而非 find）：只看入库文件，不受 node_modules 等忽略目录干扰；
+      # 即便有人 git add -f 绕过 .gitignore，这里也会红。
+      - name: No .bak / .deprecated in repo (T2-4)
+        run: |
+          BAD=$(git ls-files | grep -E '\.bak$|\.deprecated' || true)
+          if [ -n "$BAD" ]; then
+            echo "禁止提交备份/废弃文件（历史恢复走 git，库内不留 .bak）："
+            echo "$BAD"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

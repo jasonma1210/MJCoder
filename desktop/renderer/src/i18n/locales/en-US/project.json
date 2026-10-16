@@ -1,0 +1,18 @@
+{
+  "title": "Open / Create Project",
+  "close": "Close",
+  "recent": "Recent Projects",
+  "newSection": "New Project",
+  "createFailed": "Creation failed",
+  "createDirFailed": "Failed to create project directory: {error}",
+  "nameLabel": "Project name",
+  "namePlaceholder": "Enter a project name",
+  "newAt": "Will be created under {root}. Leave the name empty to auto-name with date + random digits.",
+  "newAtDefault": "Will be created under the hidden .MJCoder folder in your Documents. Leave the name empty to auto-name with date + random digits.",
+  "workspaceCreated": "Created the .MJCoder workspace directory on this machine",
+  "localDirLabel": "Local working directory on this device",
+  "addFolder": "Add a local folder",
+  "cancel": "Cancel",
+  "creating": "Creating...",
+  "createBtn": "Create Project"
+}

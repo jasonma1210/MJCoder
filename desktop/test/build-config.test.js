@@ -69,6 +69,13 @@ check('ecosystem 目录随包分发（连接器/数字员工目录依赖）',
   Array.isArray(pkg.build?.extraResources) && pkg.build.extraResources.some((r) => /ecosystem/.test(r.from || '')));
 check('files 白名单含 main/agent-core/renderer.dist（三者缺一即白屏或无引擎）',
   ['main/**/*', 'agent-core/**/*', 'renderer/dist/**/*'].every((f) => pkg.build.files.includes(f)));
+// A1/B1 门禁：shared/ 是跨宿主共享逻辑（不可信内容管道、沙箱说明）；shared-ipc/ 是 IPC 契约。
+// 二者任一缺失都会让打包版**静默**失去安全能力（检测规则加载失败 → 拒绝启动运行），
+// 因此在打包配置层钉住，避免「改 files 白名单时顺手删掉」。
+check('files 白名单含 shared/（不可信内容管道与沙箱说明依赖，缺失会导致运行时拒绝启动）',
+  pkg.build.files.includes('shared/**/*'));
+check('files 白名单含 shared-ipc/（IPC 契约依赖）',
+  pkg.build.files.includes('shared-ipc/**/*'));
 
 // ── 6. 打包期不静默破坏测试链：测试脚本不得依赖打包产物 ──
 check('npm test 不依赖 release/ 产物（保证本地任意顺序下测试基线一致）',

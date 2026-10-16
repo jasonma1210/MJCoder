@@ -1,0 +1,12 @@
+{
+  "readFailed": "文件读取失败",
+  "openedInEditor": "已在编辑器打开（{cmd}）",
+  "openedWithSystem": "已用系统默认程序打开",
+  "openFailed": "打开失败",
+  "lineCount": "{n} 行",
+  "openInIde": "在 IDE 中打开",
+  "copied": "已复制",
+  "copyContent": "复制内容",
+  "loading": "加载中...",
+  "truncated": "仅显示前 {max} 行（共 {total} 行），完整内容请在 IDE 中查看。"
+}

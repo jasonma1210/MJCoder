@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { IconFile, IconFolder } from './icons';
+import { useI18n } from '../i18n';
 
 const IGNORED = new Set(['node_modules', '.git', 'dist', '.vite', 'release']);
 
@@ -20,6 +21,7 @@ function parseGitignore(content) {
 
 // 受控文件树：root 由外部项目状态驱动；文件点击回调 onOpenFile（缺省回落为插入路径引用）
 export default function FileTree({ root, onOpenFile }) {
+  const { t } = useI18n();
   const [tree, setTree] = useState({});
   const [selected, setSelected] = useState(null);
   const [ignoredNames, setIgnoredNames] = useState(() => new Set(IGNORED));
@@ -29,7 +31,7 @@ export default function FileTree({ root, onOpenFile }) {
       const entries = await window.mjcode.listDir({ path: p });
       setTree((prev) => ({ ...prev, [p]: entries }));
     } catch (err) {
-      console.warn('[fileTree] 目录读取失败:', p, err);
+      console.warn('[fileTree] list dir failed:', p, err);
     }
   }
 
@@ -59,7 +61,7 @@ export default function FileTree({ root, onOpenFile }) {
         <button
           onClick={() => window.dispatchEvent(new CustomEvent('mjcode:insert-path', { detail: selected }))}
           className="w-full text-left px-1 py-1 text-accent truncate hover:underline flex items-center gap-1"
-          title="点击插入到输入框"
+          title={t('fileTree.insertHint')}
         >
           <IconFile size={12} /> {selected.split('/').pop()}
         </button>

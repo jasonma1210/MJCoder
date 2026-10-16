@@ -1,0 +1,14 @@
+{
+  "offlineTitle": "服务端不可达：会话与消息保存在本机；模型调用仍需联网（如需完全本机推理，可在模型设置中接入 Ollama）",
+  "connectedTitle": "已连接本地服务端",
+  "offlineMode": "离线模式 · 数据仅在本机（模型调用仍需联网）",
+  "connected": "已连接本地服务端",
+  "model": "模型：{name}",
+  "dataTitle": "会话与消息保存在本机，模型密钥不离开本机",
+  "threadCount": "{n} 个会话",
+  "dataPathTitle": "数据保存在本机用户目录",
+  "dataPath": "本机数据：{path}",
+  "dataLocal": "数据保存在本机",
+  "keyTitle": "模型 API Key 仅保存在本机（离线模式经系统密钥链加密），不会上传到任何服务器",
+  "keyBadge": "密钥不出本机"
+}

@@ -107,6 +107,44 @@ function main() {
   check('slug 规范化正常', eco.slug('Hello World! 123') === 'hello-world-123', `got=${eco.slug('Hello World! 123')}`);
   check('slug 去除首尾连字符', eco.slug('---abc---') === 'abc', `got=${eco.slug('---abc---')}`);
 
+  // ── T4-3：角色模板运行时预设（抽象名映射 / 未知丢弃 / fail-closed 默认）──
+  const preset = eco.buildEmployeeRuntimePreset({
+    tools: ['read', 'write', 'edit', 'bash', 'grep', 'glob', 'web', 'browser', 'teleport'],
+    system_prompt: '你是一名可视化工程师。',
+    approval_policy: 'on-request',
+    sandbox_policy: 'workspace-write',
+  });
+  check('抽象名映射 read→read_file+list_dir', preset.toolNames.includes('read_file') && preset.toolNames.includes('list_dir'));
+  check('抽象名映射 bash→shell / web→web_search+web_fetch',
+    preset.toolNames.includes('shell') && preset.toolNames.includes('web_search') && preset.toolNames.includes('web_fetch'));
+  check('browser 只映射只读三件套（click/fill/select 不默认授予）',
+    preset.toolNames.includes('browser_navigate') && !preset.toolNames.includes('browser_click'));
+  check('未知抽象名被丢弃（不发明工具）', !preset.toolNames.includes('teleport') && !preset.toolNames.includes('未知'));
+  check('预设携带角色 system_prompt 与审批档', preset.systemPrompt.startsWith('你是一名可视化工程师') && preset.approvalMode === 'on-request');
+  const trustedPreset = eco.buildEmployeeRuntimePreset({ tools: [], approval_policy: 'trusted' });
+  check('trusted 审批策略映射为引擎 never 档', trustedPreset.approvalMode === 'never');
+  const safeAutoPreset = eco.buildEmployeeRuntimePreset({ tools: [], approval_policy: 'safe-auto' });
+  check('safe-auto 归一为 auto-safe', safeAutoPreset.approvalMode === 'auto-safe');
+  const emptyPreset = eco.buildEmployeeRuntimePreset({});
+  check('空员工预设 fail-closed（on-request + workspace-write + 空工具）',
+    emptyPreset.approvalMode === 'on-request' && emptyPreset.sandboxPolicy === 'workspace-write' && emptyPreset.toolNames.length === 0);
+
+  // 真实生态数据：de-visualize 专职可视化员工存在且产出要求完备
+  const realDir = path.join(__dirname, '..', '..', 'ecosystem');
+  const realEmployees = eco.loadDigitalEmployees(realDir);
+  const viz = realEmployees.find((e) => e.id === 'de-visualize');
+  check('真实数据含 de-visualize 可视化工程师', !!viz, `共 ${realEmployees.length} 员工`);
+  if (viz) {
+    const vizPreset = eco.buildEmployeeRuntimePreset(viz);
+    check('de-visualize 预设要求自包含交互式 HTML（禁外部 CDN）',
+      vizPreset.systemPrompt.includes('交互式') && vizPreset.systemPrompt.includes('内联') && vizPreset.systemPrompt.includes('CDN'));
+    check('de-visualize 工具子集含 write_file 与 web_search、不含 shell',
+      vizPreset.toolNames.includes('write_file') && vizPreset.toolNames.includes('web_search') && !vizPreset.toolNames.includes('shell'),
+      vizPreset.toolNames.join(','));
+    check('de-visualize 审批档 on-request / 沙箱 workspace-write',
+      vizPreset.approvalMode === 'on-request' && vizPreset.sandboxPolicy === 'workspace-write');
+  }
+
   const failed = results.filter((x) => !x.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   if (failed.length) { console.error('存在失败用例'); process.exit(1); }

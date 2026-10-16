@@ -52,7 +52,7 @@ function linuxSandboxAvailable() {
  * @param {string|null} bwrapPath  显式指定 bwrap 路径（测试注入用；null 则自动探测）
  * @returns {{argv: string[], backend: string, reason: string}}
  */
-function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null) {
+function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null, protectedPaths = []) {
   if (policy === 'full-access') {
     return { argv: [], backend: 'bubblewrap', reason: 'full-access 不沙箱' };
   }
@@ -81,8 +81,13 @@ function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null) {
     // 生命周期与信号组
     '--die-with-parent',
     '--new-session',
-    // seccomp：bwrap 默认启用系统调用过滤，阻断高风险 syscall
-    '--seccomp', '9',
+    // P0 修复（2026-10-16）：删除 '--seccomp', '9'。
+    // 事故：libuv 在 exec 前关闭所有非 stdio fd，子进程只有 fd 0/1/2 ⇒ fd 9 根本不存在，
+    // bwrap 启动即失败。而 exec.js 用 execFile 执行（不声明 stdio），也无法补上该 fd。
+    // 已实测：对 'a' 之外的写-only 模式 fd 调 readSync 抛 EBADF；唯一可行路径是
+    // spawn + 显式 stdio[9]=fd，但那条改动影响面大且需真机验证。
+    // 现依赖 bwrap 的 --unshare-all + 只读 bind 已提供的命名空间级隔离；
+    // seccomp 系统调用过滤作为**后续增量**，待 fd 传递打通后再加（届时必须走 spawn）。
     // 不继承宿主环境里的敏感变量由调用方处理（shellEnv）
   ];
 
@@ -93,6 +98,15 @@ function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null) {
     }
     // 唯一可写区：项目目录（读写 bind 覆盖上面的只读挂载）
     args.push('--bind', safeCwd, safeCwd);
+    // 可写区内的只读 carve-out（对齐 Codex 当前 Linux 沙箱架构）：
+    // 项目目录整体可写会连带把 `.git` 变成可写——改写 .git/hooks/pre-commit 后，
+    // 用户下次手动 git commit 即执行注入代码（沙箱只约束 Agent 进程，约束不了用户后续的手动命令）。
+    // bwrap 后挂载覆盖先挂载，因此在 `--bind` 之后对这些路径再 `--ro-bind` 一次即为只读。
+    for (const p of protectedPaths) {
+      const sp = String(p || '');
+      if (!sp) continue;
+      args.push('--ro-bind', sp, sp);
+    }
     // 家目录只读：允许读 ~/.gitconfig 等配置，但禁止写（防凭证被改/被写）
     const home = String(process.env.HOME || '');
     if (home && home !== '/' && !home.startsWith(safeCwd)) {
@@ -108,8 +122,8 @@ function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null) {
 /**
  * 便捷函数：直接生成可执行 argv（把 command 放进 shell -c）。
  */
-function buildBwrapExec(policy, cwd, command, shell = '/bin/sh', bwrapPath = null) {
-  const built = buildBwrapArgv(policy, cwd, shell, bwrapPath);
+function buildBwrapExec(policy, cwd, command, shell = '/bin/sh', bwrapPath = null, protectedPaths = []) {
+  const built = buildBwrapArgv(policy, cwd, shell, bwrapPath, protectedPaths);
   if (!built.argv.length) return built;
   const argv = built.argv.slice();
   argv[argv.length - 1] = String(command || '');

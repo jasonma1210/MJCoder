@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { IconCheck, IconSpinner } from './icons';
+import { useI18n } from '../i18n';
 
 // 全部取色走项目既有 Design Token（theme.css），零硬编码色值 —— 满足 ui-conventions 门禁。
 const T = (v) => `var(${v})`;
@@ -20,6 +21,8 @@ const STATUS_COLOR = {
 };
 
 export default function TodoPanel({ runId, compact = false }) {
+  // 下方 todos.map 回调参数名为 t（清单项），解构改名 tr 避免遮蔽
+  const { t: tr } = useI18n();
   const [state, setState] = useState(null); // { todos, doneCount, total }
 
   useEffect(() => {
@@ -46,7 +49,7 @@ export default function TodoPanel({ runId, compact = false }) {
 
   return (
     <section
-      aria-label="任务清单"
+      aria-label={tr('todoPanel.listLabel')}
       style={{
         margin: '8px 0',
         padding: compact ? '8px 10px' : '12px 14px',
@@ -56,7 +59,7 @@ export default function TodoPanel({ runId, compact = false }) {
       }}
     >
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, color: T('--theme-text-secondary') }}>任务进度</span>
+        <span style={{ fontSize: 12, color: T('--theme-text-secondary') }}>{tr('todoPanel.progress')}</span>
         <div
           aria-hidden="true"
           style={{ flex: 1, height: 4, borderRadius: 2, background: T('--theme-border'), overflow: 'hidden' }}

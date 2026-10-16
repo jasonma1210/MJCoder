@@ -10,6 +10,7 @@
 const path = require('path');
 const fs = require('fs');
 const { app, ipcMain } = require('electron');
+const { writeFileDurable } = require('./data/durableWrite');
 
 const STORE_FILE = () => path.join(app.getPath('userData'), 'scheduled-tasks.json');
 const MAX_RUNS = 200;          // 全局运行历史上限
@@ -26,22 +27,44 @@ const lastFired = new Map(); // taskId -> 'YYYY-M-D H:m'（同分钟幂等）
 const running = new Set();   // 执行中的 taskId
 
 // ── 持久化 ──
+// P0-持久化（2026-10-16）修复两处：
+//   ① persist() 此前是裸 writeFileSync（无 tmp+rename、无 fsync）。崩溃时序不正会让
+//      文件半写，下次启动 JSON.parse 失败 → 用户全部定时任务无声消失。
+//   ② loadStore() 此前把「文件损坏」与「首次启动」当同一回事，catch 里一律
+//      store = { tasks: [], runs: [] } 且不留任何痕迹——用户永远不知道自己丢了定时任务。
+//      现区分 ENOENT（正常首次）与解析失败（损坏），损坏时保留副本 + 明示。
 function loadStore() {
+  const file = STORE_FILE();
+  if (!fs.existsSync(file)) {
+    store = { tasks: [], runs: [] }; // 正常首次启动，无历史
+    return;
+  }
   try {
-    const j = JSON.parse(fs.readFileSync(STORE_FILE(), 'utf8'));
-    if (j && Array.isArray(j.tasks)) {
-      store = { tasks: j.tasks, runs: Array.isArray(j.runs) ? j.runs : [] };
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!j || !Array.isArray(j.tasks)) {
+      throw new Error('结构非法：缺少 tasks 数组');
     }
+    store = { tasks: j.tasks, runs: Array.isArray(j.runs) ? j.runs : [] };
   } catch (e) {
-    store = { tasks: [], runs: [] }; // 首次启动 / 文件损坏兜底
+    // 损坏：保留副本供人工抢救（这是唯一能找回用户数据的东西），并显著告警
+    const kept = `${file}.corrupt-${Date.now()}`;
+    try { fs.copyFileSync(file, kept); } catch { /* 保留失败不阻断，但下面会说明 */ }
+    console.error(`[scheduled] 定时任务文件损坏：${e.message}；已保留副本 ${kept}，本次启动定时任务为空`);
+    store = { tasks: [], runs: [] };
   }
 }
 
 function persist() {
+  const file = STORE_FILE();
   try {
-    fs.writeFileSync(STORE_FILE(), JSON.stringify(store, null, 2));
+    // 留一份 .bak 作为上一完好版本，崩溃写坏后可回退
+    if (fs.existsSync(file)) {
+      try { fs.copyFileSync(file, `${file}.bak`); } catch { /* 备份失败不阻断主写入 */ }
+    }
+    const res = writeFileDurable(file, JSON.stringify(store, null, 2));
+    if (!res.ok) console.error('[scheduled] 持久化失败:', res.error);
   } catch (e) {
-    console.error('[scheduled] 持久化失败:', e.message);
+    console.error('[scheduled] 持久化异常:', e.message);
   }
 }
 
@@ -264,5 +287,5 @@ function registerIpc() {
 
 module.exports = {
   startScheduler, stopScheduler, registerIpc, getModel, setModel,
-  cronValid, cronMatches, runTask,
+  cronValid, cronMatches, runTask, persist,
 };

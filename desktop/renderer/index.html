@@ -16,13 +16,17 @@
       （用于消除启动 dark→light 闪变），而放通 'unsafe-inline' 等于 CSP 对 XSS 形同虚设。
     · style-src 保留 'unsafe-inline'：Tailwind 与 React 内联样式需要它。
     · img/font/connect 覆盖本地协议与 data:，不放开任意外域。
+    · T3-1：mjpreview: 为自定义流式预览协议（一次性 token 映射主进程已校验路径），
+      大文件字节不再 base64 过 IPC；img/media/frame 三处放行该 scheme。
     · Vite dev 走同一文件，dev server 的 ws: 已显式放开，避免影响本地开发。
   -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self' 'sha256-r6bCK3RgwZdHDrPh/Cb1F7M53SCupiMCFVVCUzxTRB0=';
     style-src 'self' 'unsafe-inline';
-    img-src 'self' data: blob:;
+    img-src 'self' data: blob: mjpreview:;
+    media-src 'self' data: blob: mjpreview:;
+    frame-src 'self' data: blob: mjpreview:;
     font-src 'self' data:;
     connect-src 'self' data: blob: ws://localhost:5173 ws://127.0.0.1:5173;
     object-src 'none';

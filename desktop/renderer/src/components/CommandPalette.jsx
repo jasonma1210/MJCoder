@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconEdit, IconFile, IconFolder, IconMessage, IconSearch, IconSettings } from './icons';
+import { useI18n } from '../i18n';
 
 // 全局命令面板（⌘K / Ctrl+K）：会话 / 文件 / 命令 / 设置 四类统一入口
 // 目的：组件已达 18+，无统一入口即导航崩塌；键盘可达性是桌面端留存的硬指标
 export default function CommandPalette({ open, onClose, threads, onSelectThread, projectPath, commands = [], onOpenFile }) {
+  // 本文件 filter/map 回调参数名为 t（会话项），解构改名 tr 避免遮蔽
+  const { t: tr } = useI18n();
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const [files, setFiles] = useState([]);
@@ -35,23 +38,23 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
     const kw = q.trim().toLowerCase();
     const cmds = commands
       .filter((c) => !kw || c.label.toLowerCase().includes(kw))
-      .map((c) => ({ kind: '命令', icon: <IconSettings size={14} />, label: c.label, hint: c.hint || '', run: c.run }));
+      .map((c) => ({ kind: tr('palette.cmdKind'), icon: <IconSettings size={14} />, label: c.label, hint: c.hint || '', run: c.run }));
     const ths = threads
-      .filter((t) => !kw || (t.title || '新会话').toLowerCase().includes(kw))
+      .filter((t) => !kw || (t.title || tr('palette.newThread')).toLowerCase().includes(kw))
       .slice(0, 15)
-      .map((t) => ({ kind: '会话', icon: <IconMessage size={14} />, label: t.title || '新会话', hint: t.model_name || '', run: () => onSelectThread?.(t) }));
+      .map((t) => ({ kind: tr('palette.threadKind'), icon: <IconMessage size={14} />, label: t.title || tr('palette.newThread'), hint: t.model_name || '', run: () => onSelectThread?.(t) }));
     const fls = files.slice(0, 15).map((f) => {
       const name = String(f).split('/').pop();
       // O4：glob 结果可能是绝对路径，直接使用；相对路径才与项目根拼接
       const fullPath = String(f).startsWith('/') ? String(f) : [projectPath, f].filter(Boolean).join('/').replace(/\/+/g, '/');
-      return { kind: '文件', icon: <IconFile size={14} />, label: name, hint: fullPath, run: () => onOpenFile?.(fullPath) };
+      return { kind: tr('palette.fileKind'), icon: <IconFile size={14} />, label: name, hint: fullPath, run: () => onOpenFile?.(fullPath) };
     });
     const out = [];
-    if (cmds.length) out.push({ kind: '命令', items: cmds });
-    if (ths.length) out.push({ kind: '会话', items: ths });
-    if (fls.length) out.push({ kind: '文件', items: fls });
+    if (cmds.length) out.push({ kind: tr('palette.cmdKind'), items: cmds });
+    if (ths.length) out.push({ kind: tr('palette.threadKind'), items: ths });
+    if (fls.length) out.push({ kind: tr('palette.fileKind'), items: fls });
     return out;
-  }, [q, commands, threads, files, onSelectThread, onOpenFile, projectPath]);
+  }, [q, commands, threads, files, onSelectThread, onOpenFile, projectPath, tr]);
 
   const flatItems = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
@@ -82,16 +85,16 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
               else if (e.key === 'Enter') { e.preventDefault(); exec(flatItems[active]); }
               else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
             }}
-            placeholder="搜索会话、文件，或执行命令…"
+            placeholder={tr('palette.searchPlaceholder')}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-text2"
           />
-          <span className="text-[11px] text-text2">Esc 关闭</span>
+          <span className="text-[11px] text-text2">{tr('palette.escClose')}</span>
         </div>
 
         <div className="max-h-[52vh] overflow-y-auto py-1">
           {flatItems.length === 0 ? (
             <p className="px-4 py-6 text-sm text-text2">
-              {q.trim() ? `未找到与「${q.trim()}」相关的结果` : '输入关键词开始搜索，或直接查看下方命令'}
+              {q.trim() ? tr('palette.noResults', { q: q.trim() }) : tr('palette.searchHint')}
             </p>
           ) : (() => {
             let idx = -1; // O5：分组渲染，扁平序号驱动键盘上下选择
@@ -120,7 +123,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
         </div>
 
         <div className="flex items-center gap-3 px-4 h-9 border-t border-border text-[11px] text-text2">
-          <span>上下键 选择</span><span>Enter 执行</span><span>⌘K 开关面板</span>
+          <span>{tr('palette.hintNavigate')}</span><span>{tr('palette.hintEnter')}</span><span>{tr('palette.hintToggle')}</span>
         </div>
       </div>
     </div>

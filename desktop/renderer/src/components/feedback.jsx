@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconAlert, IconX } from './icons';
+import { useI18n } from '../i18n';
 
 // ── 命令式确认框 + Toast（A2 统一规格）──
 // 用法（无需在各组件挂 state/JSX）：
@@ -14,7 +15,7 @@ let confirmSeq = 0;
 
 export function confirm(opts = {}) {
   if (!confirmListener) {
-    console.warn('[feedback] FeedbackHost 未挂载，confirm 已按取消处理');
+    console.warn('[feedback] FeedbackHost not mounted; confirm resolved as cancel');
     return Promise.resolve(false);
   }
   return new Promise((resolve) => {
@@ -29,13 +30,15 @@ export function countConfirm(opts = {}) {
 
 export function toast({ message, actionLabel, onAction, duration = 5000 }) {
   if (!toastListener) {
-    console.warn('[feedback] FeedbackHost 未挂载，toast 被丢弃:', message);
+    console.warn('[feedback] FeedbackHost not mounted; toast dropped:', message);
     return;
   }
   toastListener({ id: ++confirmSeq, message, actionLabel, onAction, duration });
 }
 
 export default function FeedbackHost() {
+  // 本文件 toast 回调参数名为 t（提示项），解构改名 tr 避免遮蔽
+  const { t: tr } = useI18n();
   const [dialog, setDialog] = useState(null);   // { title, message, danger, count, resolve }
   const [countInput, setCountInput] = useState('');
   const [toasts, setToasts] = useState([]);
@@ -86,14 +89,14 @@ export default function FeedbackHost() {
             onMouseDown={(e) => e.stopPropagation()}
             role="alertdialog"
             aria-modal="true"
-            aria-label={dialog.title || '确认操作'}
+            aria-label={dialog.title || tr('feedback.confirmFallback')}
           >
             <div className="flex items-start gap-3">
               {dialog.danger && (
                 <span className="text-danger shrink-0 mt-0.5"><IconAlert size={18} /></span>
               )}
               <div className="flex-1">
-                <div className="text-sm font-semibold">{dialog.title || '确认操作'}</div>
+                <div className="text-sm font-semibold">{dialog.title || tr('feedback.confirmFallback')}</div>
                 <div className="text-xs text-text2 mt-1.5 leading-relaxed whitespace-pre-line">{dialog.message}</div>
                 {dialog.count != null && (
                   <div className="mt-3">
@@ -101,7 +104,7 @@ export default function FeedbackHost() {
                       autoFocus
                       value={countInput}
                       onChange={(e) => setCountInput(e.target.value.replace(/\D/g, ''))}
-                      placeholder={`输入 ${dialog.count} 以确认`}
+                      placeholder={tr('feedback.countConfirmPlaceholder', { count: dialog.count })}
                       className="w-40 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm outline-none focus:border-accent"
                       onKeyDown={(e) => { if (e.key === 'Enter' && Number(countInput) === dialog.count) finish(true); }}
                     />
@@ -111,13 +114,13 @@ export default function FeedbackHost() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => finish(false)}
-                className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">取消</button>
+                className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">{tr('feedback.cancel')}</button>
               <button
                 onClick={() => finish(true)}
                 disabled={dialog.count != null && Number(countInput) !== dialog.count}
                 className={`text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger text-white hover:opacity-90' : 'bg-accent text-white hover:opacity-90'}`}
               >
-                {dialog.confirmLabel || (dialog.danger ? '确认删除' : '确认')}
+                {dialog.confirmLabel || (dialog.danger ? tr('feedback.confirmDanger') : tr('feedback.confirm'))}
               </button>
             </div>
           </div>
@@ -136,7 +139,7 @@ export default function FeedbackHost() {
                 {t.actionLabel}
               </button>
             )}
-            <button onClick={() => dismissToast(t.id)} className="text-text2 hover:text-text shrink-0" aria-label="关闭提示">
+            <button onClick={() => dismissToast(t.id)} className="text-text2 hover:text-text shrink-0" aria-label={tr('feedback.closeToast')}>
               <IconX size={12} />
             </button>
           </div>

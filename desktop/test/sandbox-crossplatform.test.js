@@ -51,7 +51,14 @@ check('bwrap 首个元素是 bwrap 自身', wwArgv[0] === FAKE_BWRAP);
 check('全盘只读挂载在最前', wwArgv[1] === '--ro-bind' && wwArgv[2] === '/' && wwArgv[3] === '/');
 check('unshare-all 生效（含 net/pid/ipc/uts/cgroup）',
   wwArgv.includes('--unshare-all') && wwArgv.includes('--unshare-net') && wwArgv.includes('--unshare-pid'));
-check('启用 seccomp 过滤', wwArgv.includes('--seccomp'));
+// P0 修复（2026-10-16）：原断言是 `wwArgv.includes('--seccomp')`——
+// 只证明「参数里出现了这个字符串」，不证明沙箱真的过滤了系统调用。
+// 而该参数此前是错的（fd 9 根本不存在，bwrap 启动即失败），字符串断言照样 PASS。
+// 现改为断言「命名空间隔离确实在」+「不存在未打通的 fd 传递参数」。
+check('bwrap 启用命名空间隔离（--unshare-all）', wwArgv.includes('--unshare-all'));
+check('bwrap 断网（--unshare-net 由 --unshare-all 覆盖，显式声明不重复）', wwArgv.includes('--unshare-net'));
+check('bwrap 未使用未打通的 seccomp fd 传递（fd 9 不存在，bwrap 会启动失败）',
+  wwArgv.indexOf('--seccomp') === -1);
 check('--die-with-parent 防止子进程逃逸为孤儿', wwArgv.includes('--die-with-parent'));
 check('--new-session 脱离终端信号组', wwArgv.includes('--new-session'));
 check('/tmp 独立 tmpfs（工具要临时文件但不污染宿主）', wwArgv.includes('--tmpfs') && wwArgv.includes('/tmp'));
@@ -69,6 +76,25 @@ const ro = linux.buildBwrapExec('read-only', CWD, 'ls -la', '/bin/sh', FAKE_BWRA
 check('bwrap read-only 无任何 bind 可写区', !ro.argv.includes('--bind'));
 check('bwrap read-only 仍断网', ro.argv.includes('--unshare-net'));
 check('bwrap read-only 仍全盘只读', ro.argv.includes('--ro-bind'));
+
+// ── 2b. 可写区内的只读 carve-out（对齐 Codex 沙箱架构）──
+// 项目目录整体可写会把 `.git` 变可写；改写 .git/hooks/pre-commit 后用户下次手动 commit
+// 即执行注入代码。因此受保护路径必须在 `--bind` **之后**再 `--ro-bind` 一次（后挂载覆盖先挂载）。
+const GITP = path.join(CWD, '.git');
+const protArgv = linux.buildBwrapExec('workspace-write', CWD, 'npm test', '/bin/sh', FAKE_BWRAP, [GITP]).argv;
+{
+  const bindIdx = protArgv.indexOf('--bind');
+  const protIdx = protArgv.indexOf(GITP);
+  check('bwrap: 受保护路径以 --ro-bind 覆盖在项目目录 --bind 之后',
+    protIdx > bindIdx && protArgv[protIdx - 1] === '--ro-bind' && protArgv[protIdx + 1] === GITP,
+    `bind@${bindIdx} prot@${protIdx}`);
+  check('bwrap: 保护项不引入额外可写 bind（可写区仍只有项目目录）',
+    protArgv.filter((a) => a === '--bind').length === 1);
+  check('bwrap: 未传保护项时不产生额外挂载（向后兼容）',
+    !wwArgv.slice(0, wwArgv.indexOf('--')).includes(GITP));
+  check('bwrap: read-only 档不因保护项新增 bind（无可写区可保护）',
+    linux.buildBwrapExec('read-only', CWD, 'ls', '/bin/sh', FAKE_BWRAP, [GITP]).argv.filter((a) => a === '--bind').length === 0);
+}
 
 // 降级与安全边界
 check('bwrap 未安装时不生成 argv（落到命令守卫）',
@@ -164,6 +190,18 @@ check('profile 仍禁网', roProfile.includes('(deny network*)'));
 check('workspace-write profile 仍限写项目目录',
   sandbox.buildSeatbeltProfile('workspace-write', CWD).includes(`(subpath "${CWD}")`));
 
+// 可写区内的只读 carve-out（macOS 侧，与 Linux 同一动机）：Seatbelt 后匹配规则优先，
+// 故对受保护路径追加 deny file-write* 即可压住前面的 allow。
+{
+  const prof = sandbox.buildSeatbeltProfile('workspace-write', CWD, [GITP]);
+  check('Seatbelt: 对受保护路径追加 deny file-write*',
+    new RegExp(`\\(deny file-write\\* \\(subpath "${GITP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\\)\\)`).test(prof));
+  check('Seatbelt: deny 出现在 allow file-write* 之后（后匹配优先，保护才生效）',
+    prof.indexOf('(allow file-write*') < prof.lastIndexOf('(deny file-write*'));
+  check('Seatbelt: 未传保护项时不产生多余 deny（向后兼容）',
+    !sandbox.buildSeatbeltProfile('workspace-write', CWD).includes(`${CWD}/.git`));
+}
+
 // ── 6. 真机（Linux）：bwrap 实际存在于环境时做一次写入边界验证 ──
 if (process.platform === 'linux' && linux.findBwrap()) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-bwrap-'));
@@ -179,12 +217,22 @@ if (process.platform === 'linux' && linux.findBwrap()) {
     check('bwrap 拒绝项目目录外写入', blocked);
     if (fs.existsSync('/tmp/mjcode-bwrap-escape')) fs.rmSync('/tmp/mjcode-bwrap-escape');
   } catch (err) {
-    console.log(`⚠ bwrap 真机探测跳过（环境限制）: ${err.message}`);
+    // P0 修复（2026-10-16）：此前此处是宽泛 catch，把「bwrap 真的失败」与「环境没有 bwrap」
+    // 混为一谈，打印「环境限制」后让整套件仍报 PASS —— 这正是 Linux 沙箱缺陷长期隐身的元凶。
+    // 现只有「二进制不存在」才允许跳过；其余任何失败一律计入失败，不再被吞掉。
+    const msg = String((err && err.message) || err);
+    if (err && err.code === 'ENOENT') {
+      console.log(`⚠ bwrap 真机探测跳过（二进制不可用，非缺陷）: ${msg}`);
+    } else {
+      fail++;
+      console.error(`✗ bwrap 真机探测失败（不再按环境问题跳过）: ${msg}`);
+    }
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
 } else {
-  console.log(`⚠ 非 Linux 或 bwrap 未安装，跳过 bwrap 真实写入边界探测（本机=${process.platform}）`);
+  console.log(`⚠ 本节未执行（非 Linux 或 bwrap 未安装，本机=${process.platform}）——`
+    + '本套件的 PASS 不代表 Linux 沙箱已验证，Linux 真机验证需在 CI 的 ubuntu runner 上跑');
 }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);

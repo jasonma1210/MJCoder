@@ -1,0 +1,11 @@
+{
+  "title": "本地技能",
+  "count": "{enabled}/{total} 已启用",
+  "builtinTitle": "内置技能",
+  "fileTitle": "文件技能",
+  "noFiles": "暂无文件技能。可在 ~/.mjcode/skills/<name>/SKILL.md 放置技能文件，或从文件夹导入。",
+  "importFromFolder": "从文件夹导入",
+  "importSummary": "发现 {found} 个，导入 {installed} 个",
+  "importFailedSuffix": "，失败 {failed} 个",
+  "importFailed": "导入失败"
+}

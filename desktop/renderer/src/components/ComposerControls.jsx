@@ -1,76 +1,92 @@
 import ModelSelector from './ModelSelector';
-import { IconAlert, IconBranch, IconCpu, IconShield } from './icons';
+import { IconAlert, IconBranch, IconFolder, IconShield } from './icons';
 import { APPROVAL_MODES, SANDBOX_MODES, migrateApprovalMode, isRiskyApproval } from '../constants/approval';
+import { useI18n, tGlobal } from '../i18n';
 
 // Composer 任务控制台（对标 Codex 输入框周围区域）
 // 模型 / 权限档位 / 运行模式三项常驻，其余能力在 D 批补齐
 // A10：档位值域统一到 constants/approval.js（此前与设置页两处值域冲突，设置实际失效）
-export const PERMISSION_OPTIONS = APPROVAL_MODES.map((m) => ({ value: m.id, label: m.name }));
+// i18n：顶层常量会冻结求值结果（切语言不更新），与 getModeOptions 同款改为渲染期函数
+export function getPermissionOptions() {
+  return APPROVAL_MODES.map((m) => ({ value: m.id, label: tGlobal(m.nameKey) }));
+}
 
-export const SANDBOX_OPTIONS = SANDBOX_MODES.map((m) => ({ value: m.id, label: m.name }));
+export function getSandboxOptions() {
+  return SANDBOX_MODES.map((m) => ({ value: m.id, label: tGlobal(m.nameKey) }));
+}
 
-export const MODE_OPTIONS = [
-  { value: 'local', label: '本地模式', hint: '直接在项目目录修改' },
-  { value: 'worktree', label: '隔离工作区', hint: '在 Git worktree 副本中修改，不影响主目录' },
-];
+// i18n：顶层常量不能冻结求值结果，改为函数在渲染时调用，切换语言即时生效
+export function getModeOptions() {
+  return [
+    { value: 'local', label: tGlobal('composer.mode.local'), hint: tGlobal('composer.mode.localHint') },
+    { value: 'worktree', label: tGlobal('composer.mode.worktree'), hint: tGlobal('composer.mode.worktreeHint') },
+  ];
+}
+
+// 统一 chip 设计语言：与输入框内所有下拉控件同高（h-7）、同圆角（rounded-lg）、
+// 同字号（text-[11px]），透明底 + 描边，悬停才出现底色——一排控件视觉重量一致，
+// 不再有的贴底有的浮高（真机反馈：原 py-1 + bg-surface 与卡片同色，控件高低参差）。
+// 注意：CHIP 刻意不含边框色——状态色（accent/warn）与默认 border-border 同权重，
+// 拼在一起靠样式表顺序决胜不可靠，故由使用处互斥拼接，任何时刻只出现一个边框色类。
+const CHIP = 'h-7 inline-flex items-center gap-1.5 rounded-lg border px-2 text-[11px] text-text bg-transparent hover:bg-hover cursor-pointer transition-colors';
+const CHIP_SELECT = 'bg-transparent outline-none cursor-pointer max-w-[140px] truncate';
 
 export default function ComposerControls({ providers, selectedModel, onSelectModel, approval, onApprovalChange, project, mode, onModeChange, worktreeInfo }) {
+  const { t } = useI18n();
+  const modeOptions = getModeOptions();
+  const permissionOptions = getPermissionOptions();
+  const sandboxOptions = getSandboxOptions();
   // 遗留值迁移：旧 auto / always-ask 读取时映射到新档位
   const approvalMode = migrateApprovalMode(approval?.approval_mode);
   const risky = isRiskyApproval(approval);
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {/* 运行模式：本地 / 隔离工作区 */}
+    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+      {/* 运行模式：本地 / 隔离工作区（worktree 态转 accent 色，隔离执行必须可见） */}
       <label
-        className={`text-[11px] px-2 py-1 rounded-md border flex items-center gap-1 ${mode === 'worktree' ? 'bg-accent-soft border-accent text-accent' : 'bg-surface border-border'}`}
-        title={MODE_OPTIONS.find((o) => o.value === mode)?.hint}
+        className={`${CHIP} ${mode === 'worktree' ? 'border-accent bg-accent-soft text-accent' : 'border-border'}`}
+        title={modeOptions.find((o) => o.value === mode)?.hint}
       >
-        <IconBranch size={12} />
+        <IconBranch size={12} className="shrink-0" />
         <select
           value={mode}
           onChange={(e) => onModeChange?.(e.target.value)}
-          className="bg-transparent outline-none"
+          className={CHIP_SELECT}
         >
-          {MODE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {modeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </label>
       {mode === 'worktree' && worktreeInfo?.branch && (
-        <span className="text-[11px] text-text2 truncate max-w-[160px]" title={`隔离分支：${worktreeInfo.branch}`}>
+        <span className="text-[11px] text-text2 truncate max-w-[160px]" title={t('composer.isolatedBranch', { branch: worktreeInfo.branch })}>
           {worktreeInfo.branch}
         </span>
       )}
 
       {/* 权限档位（风险态强化：自动执行 / 完全访问时转警示色 —— 权限档位必须可见） */}
-      <label className={`text-[11px] px-2 py-1 rounded-md border flex items-center gap-1 ${risky ? 'bg-warn-bg border-warn text-warn' : 'bg-surface border-border hover:bg-hover'}`}>
-        {risky ? <IconAlert size={12} /> : <IconShield size={12} className="text-text2" />}
+      <label className={`${CHIP} ${risky ? 'border-warn bg-warn-bg text-warn' : 'border-border'}`} title={risky ? t('composer.riskyApprovalTip') : t('composer.approvalTierTip')}>
+        {risky ? <IconAlert size={12} className="shrink-0" /> : <IconShield size={12} className="shrink-0 text-text2" />}
         <select
           value={approvalMode}
           onChange={(e) => onApprovalChange?.({ approval_mode: e.target.value })}
-          className={`bg-transparent outline-none ${risky ? 'text-warn' : 'text-text'}`}
-          title={risky ? '高风险：当前档位下工具将自动执行，请确认你了解风险' : '审批档位：决定哪些操作需要你确认'}
+          className={`${CHIP_SELECT} ${risky ? 'text-warn' : ''}`}
         >
-          {PERMISSION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {permissionOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </label>
 
-      {/* 沙箱策略 */}
-      <label className="text-[11px] px-2 py-1 rounded-md bg-surface border border-border flex items-center gap-1 hover:bg-hover">
-        <IconBranch size={12} className="text-text2" />
+      {/* 沙箱策略（图标改 IconFolder：原 IconBranch 与运行模式重复，语义错位） */}
+      <label className={`${CHIP} border-border`} title={t('composer.sandboxPolicyTip')}>
+        <IconFolder size={12} className="shrink-0 text-text2" />
         <select
           value={approval?.sandbox_policy || 'workspace-write'}
           onChange={(e) => onApprovalChange?.({ sandbox_policy: e.target.value })}
-          className="bg-transparent outline-none text-text"
-          title="沙箱策略：限制 Agent 能触碰的文件范围"
+          className={CHIP_SELECT}
         >
-          {SANDBOX_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {sandboxOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </label>
 
-      {/* 模型 */}
-      <span className="flex items-center gap-1">
-        <IconCpu size={12} className="text-text2" />
-        <ModelSelector providers={providers} selected={selectedModel} onSelect={onSelectModel} />
-      </span>
+      {/* 模型（触发器即 chip，IconCpu 已内联进 ModelSelector 按钮） */}
+      <ModelSelector providers={providers} selected={selectedModel} onSelect={onSelectModel} />
     </div>
   );
 }

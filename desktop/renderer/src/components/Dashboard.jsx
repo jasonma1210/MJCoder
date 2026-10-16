@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 import { IconDownload, IconMail, IconMessage, IconUpload } from './icons';
+import { useI18n } from '../i18n';
 
 export default function Dashboard() {
+  const { t } = useI18n();
   const [stats, setStats] = useState(null);
   const [error, setError] = useState('');
 
@@ -10,15 +12,15 @@ export default function Dashboard() {
     api.dashboard()
       .then(setStats)
       .catch((err) => {
-        console.warn('[dashboard] 加载失败:', err);
-        setError('数据加载失败，请稍后重试');
+        console.warn('[dashboard] load failed:', err);
+        setError(t('dashboard.loadFailed'));
       });
-  }, []);
+  }, [t]);
 
   if (error) {
     return (
       <div className="p-6">
-        <h2 className="text-lg font-semibold mb-4">数据概览</h2>
+        <h2 className="text-lg font-semibold mb-4">{t('dashboard.title')}</h2>
         <p className="text-text2 text-sm">{error}</p>
       </div>
     );
@@ -27,7 +29,7 @@ export default function Dashboard() {
   if (!stats) {
     return (
       <div className="p-6">
-        <h2 className="text-lg font-semibold mb-4">数据概览</h2>
+        <h2 className="text-lg font-semibold mb-4">{t('dashboard.title')}</h2>
         <div className="grid grid-cols-4 gap-4 mb-6">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-surface rounded-lg border border-border p-4 animate-pulse">
@@ -36,7 +38,7 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
-        <p className="text-text2 text-sm">加载中...</p>
+        <p className="text-text2 text-sm">{t('dashboard.loading')}</p>
       </div>
     );
   }
@@ -58,28 +60,34 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 overflow-y-auto">
-      <h2 className="text-lg font-semibold mb-1">数据概览</h2>
-      <p className="text-text2 text-xs mb-4">累计消耗 {fmt(totalTokens)} tokens</p>
+      <h2 className="text-lg font-semibold mb-1">{t('dashboard.title')}</h2>
+      <p className="text-text2 text-xs mb-4">{t('dashboard.totalTokens', { n: fmt(totalTokens) })}</p>
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="对话数" value={fmt(stats.threads || 0)} icon={<IconMessage size={20} />} />
-        <StatCard label="消息数" value={fmt(stats.messages || 0)} icon={<IconMail size={20} />} />
-        <StatCard label="输入 Tokens" value={fmt(stats.tokens_input || 0)} icon={<IconDownload size={20} />} />
-        <StatCard label="输出 Tokens" value={fmt(stats.tokens_output || 0)} icon={<IconUpload size={20} />} />
+        <StatCard label={t('dashboard.chats')} value={fmt(stats.threads || 0)} icon={<IconMessage size={20} />} />
+        <StatCard label={t('dashboard.messages')} value={fmt(stats.messages || 0)} icon={<IconMail size={20} />} />
+        <StatCard label={t('dashboard.inputTokens')} value={fmt(stats.tokens_input || 0)} icon={<IconDownload size={20} />} />
+        <StatCard label={t('dashboard.outputTokens')} value={fmt(stats.tokens_output || 0)} icon={<IconUpload size={20} />} />
       </div>
+
+      {/* B3：本地口径说明——模型分布/活跃趋势需服务端数据，本地模式不计算，
+          必须显式说明，避免用户把「本地未计算」误读为「没有任何活动」。 */}
+      {stats.data_scope === 'local' && (
+        <p className="text-text2 text-xs mb-4">{t('dashboard.localScopeNote')}</p>
+      )}
 
       {/* 模型使用分布 */}
       <div className="bg-surface rounded-lg border border-border p-4 mb-4">
-        <h3 className="text-sm font-medium mb-3">模型使用分布</h3>
+        <h3 className="text-sm font-medium mb-3">{t('dashboard.modelDistribution')}</h3>
         {dist.length === 0 ? (
-          <p className="text-text2 text-sm">暂无数据</p>
+          <p className="text-text2 text-sm">{t('dashboard.noData')}</p>
         ) : (
           dist.map((d, i) => (
             <div key={i} className="mb-2">
               <div className="flex justify-between text-xs mb-1">
                 <span>{d.model}</span>
-                <span className="text-text2">{d.messages} 条 · {fmt(d.tokens)} tokens</span>
+                <span className="text-text2">{t('dashboard.modelRow', { n: d.messages, tokens: fmt(d.tokens) })}</span>
               </div>
               <div className="h-2 bg-bg rounded-full overflow-hidden">
                 <div className="h-full bg-accent rounded-full" style={{ width: `${((d.tokens || 0) / maxTokens) * 100}%` }} />
@@ -91,9 +99,9 @@ export default function Dashboard() {
 
       {/* 最近 7 天活跃 */}
       <div className="bg-surface rounded-lg border border-border p-4 mb-4">
-        <h3 className="text-sm font-medium mb-3">最近 7 天消息量</h3>
+        <h3 className="text-sm font-medium mb-3">{t('dashboard.recentActivity')}</h3>
         {activity.length === 0 ? (
-          <p className="text-text2 text-sm">近 7 天暂无消息</p>
+          <p className="text-text2 text-sm">{t('dashboard.noRecentMessages')}</p>
         ) : (
           <div className="flex items-end gap-2 h-24">
             {last7Days.map((d) => (
@@ -109,12 +117,12 @@ export default function Dashboard() {
       {/* 近 8 周对话趋势 —— D1：数据源为空时整卡隐藏（本地模式此前永远「暂无数据」，属假功能） */}
       {weekly.length > 0 && (
         <div className="bg-surface rounded-lg border border-border p-4">
-          <h3 className="text-sm font-medium mb-3">近 8 周新增对话</h3>
+          <h3 className="text-sm font-medium mb-3">{t('dashboard.weeklyThreads')}</h3>
           <div className="flex items-end gap-2 h-20">
             {weekly.slice().reverse().map((w, i) => {
               const max = Math.max(...weekly.map(x => x.count || 0), 1);
               return (
-                <div key={i} className="flex-1 flex flex-col items-center" title={`${w.week}：${w.count} 个对话`}>
+                <div key={i} className="flex-1 flex flex-col items-center" title={t('dashboard.weeklyTitle', { week: w.week, count: w.count })}>
                   <div className="w-full bg-accent/70 rounded-t" style={{ height: `${((w.count || 0) / max) * 64}px` }} />
                   <span className="text-xs text-text2 mt-1">{w.week.slice(5)}</span>
                 </div>

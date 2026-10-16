@@ -161,9 +161,23 @@ function buildWindowsExec(policy, cwd, command, user = SANDBOX_USER_OFFLINE) {
 }
 
 /**
- * 便捷：以专用用户身份直接执行（创建任务→运行→取输出→删除任务）。
- * 注意：schtasks 的 stdout 不易捕获，故仅用于「设置后验证连通性」，
- * 真正的命令输出回传由 main.js 的 shell 执行层负责。
+ * 便捷：以专用用户身份执行（创建任务→运行→等待结束→删除任务）。
+ *
+ * P0 修复（2026-10-16）——原实现有三处导致「Agent 被系统性欺骗」：
+ *   ① /Run 是**异步**的，返回时任务通常还在跑；原代码立即 /Delete，
+ *      存在把正在运行的任务删掉的竞态。现改为轮询任务状态直到不再 Running 再清理。
+ *   ② 原实现把 `schtasks` **自己的 stdout** 当作被沙箱命令的输出返回。
+ *      schtasks 只回报「任务已触发」，不含被执行命令的任何输出。
+ *   ③ 原实现不返回 exitCode，调用方（exec.js）遂硬编码 exitCode:0
+ *      ⇒ 三者叠加的结果是：Agent 以为所有命令都成功，且看不到任何输出。
+ *
+ * 现改为**如实上报「结果不可知」**，绝不伪造成功。真正的输出捕获需要在 /TR 载荷里
+ * 做重定向并回读，而受限用户对临时目录的 ACL 需Windows 真机验证——在该验证完成前，
+ * 宁可让调用方知道"不知道"，也不让它误以为成功。
+ *
+ * @returns {{ok: boolean, taskFinished?: boolean, stdout: string, stderr: string,
+ *            exitCode: null|number, resultUnknown?: boolean, reason?: string,
+ *            schtasksStdout?: string, schtasksStderr?: string}}
  */
 async function execAsSandboxUser(command, cwd, user = SANDBOX_USER_OFFLINE) {
   if (process.platform !== 'win32') return { ok: false, error: '非 Windows 平台' };
@@ -171,10 +185,30 @@ async function execAsSandboxUser(command, cwd, user = SANDBOX_USER_OFFLINE) {
   if (!built.argv.length) return { ok: false, error: built.reason };
   const create = await run(built.argv[0], built.argv.slice(1));
   if (!create.ok) return { ok: false, error: `创建计划任务失败：${create.stderr || create.stdout}` };
+
   const runRes = await run('schtasks', ['/Run', '/TN', built.taskName]);
-  // 立即清理，避免残留计划任务成为持久化入口（EDR 常见告警项）
+
+  // 等任务真正结束再删：/Run 返回 ≠ 命令已执行完
+  let finished = false;
+  for (let i = 0; i < 80; i++) {
+    const q = await run('schtasks', ['/Query', '/TN', built.taskName, '/FO', 'CSV']);
+    if (!/\bRunning\b/i.test(q.stdout || '')) { finished = true; break; }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
   await run('schtasks', ['/Delete', '/TN', built.taskName, '/F']);
-  return { ok: runRes.ok, stdout: runRes.stdout, stderr: runRes.stderr };
+
+  return {
+    ok: runRes.ok && finished,
+    taskFinished: finished,
+    schtasksStdout: runRes.stdout,
+    schtasksStderr: runRes.stderr,
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    resultUnknown: true,
+    reason: 'Windows 受限用户执行：schtasks 无法回传被沙箱命令的 stdout/exitCode',
+  };
 }
 
 module.exports = {

@@ -216,6 +216,60 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
   // ── 测试 8：导出完整性 ──
   check('BASE_TOOLS 导出且含 shell/read_file', Array.isArray(BASE_TOOLS) && BASE_TOOLS.some((t) => t.function?.name === 'shell') && BASE_TOOLS.some((t) => t.function?.name === 'read_file'));
   check('BUILTIN_SKILL_IDS 导出', Array.isArray(BUILTIN_SKILL_IDS) && BUILTIN_SKILL_IDS.includes('code_review'));
+  check('BUILTIN_SKILL_IDS 含 deep_research（T4-4）', BUILTIN_SKILL_IDS.includes('deep_research'));
+  check('BUILTIN_SKILL_IDS 含 latex_compile/latex_doctor（T4-5）',
+    BUILTIN_SKILL_IDS.includes('latex_compile') && BUILTIN_SKILL_IDS.includes('latex_doctor'));
+
+  // ── 测试 8b：deep_research 技能提示注入（T4-4）──
+  reset();
+  chatScript = [{ content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } }];
+  await runAgent({
+    messages: [{ role: 'user', content: '调研一下主流桌面 Agent 产品' }],
+    model,
+    cwd: '/tmp/project',
+    enabledSkills: ['deep_research'],
+    toolHandlers: makeToolHandlers(),
+    onMessage: () => {},
+    onDone: () => {},
+  });
+  const sysDr = String(chatCalls[0]?.messages?.[0]?.content || '');
+  check('deep_research 启用后 system 含五阶段工作流提示',
+    sysDr.includes('深度研究技能') && sysDr.includes('澄清') && sysDr.includes('调和与产出'));
+  check('deep_research 提示引用 orchestrate_task 与 todo_write 真实工具名',
+    sysDr.includes('orchestrate_task') && sysDr.includes('todo_write'));
+  check('deep_research 提示要求报告含引用列表', sysDr.includes('引用列表'));
+  // 未启用时不注入（既往行为不变）
+  reset();
+  chatScript = [{ content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } }];
+  await runAgent({
+    messages: [{ role: 'user', content: 'hi' }],
+    model,
+    cwd: '/tmp/project',
+    toolHandlers: makeToolHandlers(),
+    onMessage: () => {},
+    onDone: () => {},
+  });
+  check('未启用 deep_research 时不注入该提示', !String(chatCalls[0]?.messages?.[0]?.content || '').includes('深度研究技能'));
+
+  // ── 测试 8c：latex 技能提示注入（T4-5）──
+  reset();
+  chatScript = [{ content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } }];
+  await runAgent({
+    messages: [{ role: 'user', content: '把这个论文项目编译成 PDF' }],
+    model,
+    cwd: '/tmp/project',
+    enabledSkills: ['latex_compile', 'latex_doctor'],
+    toolHandlers: makeToolHandlers(),
+    onMessage: () => {},
+    onDone: () => {},
+  });
+  const sysLatex = String(chatCalls[0]?.messages?.[0]?.content || '');
+  check('latex 技能启用后 system 含编译与诊断两段提示',
+    sysLatex.includes('LaTeX 编译技能') && sysLatex.includes('LaTeX 工具链诊断技能'));
+  check('latex 提示含 Tectonic/TeX Live 探测与安装指引',
+    sysLatex.includes('command -v tectonic') && sysLatex.includes('latexmk') && sysLatex.includes('MacTeX'));
+  check('latex 提示保留 \\documentclass 反斜杠（模板字符串转义正确）', sysLatex.includes('\\documentclass'));
+  check('latex 提示要求产物确认后才宣称完成', sysLatex.includes('禁止没看到编译成功输出和 PDF 存在就宣称完成'));
 
   // ── 测试 9：CLI 冒烟 ──
   const cliPath = path.resolve(import.meta.dirname, '../agent-core/cli.js');

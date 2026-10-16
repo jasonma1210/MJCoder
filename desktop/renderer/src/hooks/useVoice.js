@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { tGlobal } from '../i18n';
 
 // A5：语音录入状态机（报告第 7 节）
 // idle --start--> recording --stop--> transcribing --完成--> 文本回调 / --失败--> 错误
@@ -76,9 +77,9 @@ export function useVoice({ onText } = {}) {
       });
     } catch (err) {
       setError({
-        message: '无法访问麦克风',
+        message: tGlobal('runtime.micDenied'),
         hint: err?.name === 'NotAllowedError'
-          ? '麦克风权限被拒绝，请在系统设置 → 隐私与安全性 → 麦克风中允许本应用'
+          ? tGlobal('runtime.micDeniedHint')
           : err?.message,
       });
       return;
@@ -136,7 +137,7 @@ export function useVoice({ onText } = {}) {
       }
       if (resampled.length < TARGET_RATE * 0.3) {
         setState('idle');
-        setError({ message: '录音太短', hint: '请按住说话至少 0.5 秒' });
+        setError({ message: tGlobal('runtime.recordingTooShort'), hint: tGlobal('runtime.recordingTooShortHint') });
         return;
       }
       const wavBase64 = floatToWavBase64(resampled, TARGET_RATE);
@@ -146,11 +147,11 @@ export function useVoice({ onText } = {}) {
         onTextRef.current?.(r.text || '');
       } else {
         setState('idle');
-        setError({ message: r?.error || '转写失败', hint: r?.hint });
+        setError({ message: r?.error || tGlobal('runtime.transcribeFailed'), hint: r?.hint });
       }
     } catch (err) {
       setState('idle');
-      setError({ message: '转写失败', hint: err?.message });
+      setError({ message: tGlobal('runtime.transcribeFailed'), hint: err?.message });
     }
   }, [state, cleanup]);
 

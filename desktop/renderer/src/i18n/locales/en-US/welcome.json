@@ -1,0 +1,18 @@
+{
+  "heading": "What are we building?",
+  "inProject": "In {name}",
+  "tellUs": "Tell MJ Coder what you want to build",
+  "switchProject": "Switch project",
+  "openOrCreateProject": "Open or create a project",
+  "quickExploreTitle": "Explore & understand code",
+  "quickExplorePrompt": "Help me analyze this project's structure and code",
+  "quickBuildTitle": "Build a new feature, app, or tool",
+  "quickBuildPrompt": "Help me build a new feature",
+  "quickReviewTitle": "Review code & suggest improvements",
+  "quickReviewPrompt": "Review my code, find issues, and suggest improvements",
+  "quickFixTitle": "Fix issues & errors",
+  "quickFixPrompt": "Help me fix a bug",
+  "defaultTip1": "Summarize this project's overall architecture and key modules",
+  "defaultTip2": "Find potential performance and security issues in the code",
+  "modelWarning": "No model selected yet. Pick one in the model selector below the input box, or add one under Settings → Models."
+}

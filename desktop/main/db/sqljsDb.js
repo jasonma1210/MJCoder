@@ -9,6 +9,7 @@
 //   db.flush() / db.close()             持久化：写入防抖 150ms 导出落盘 + 退出强刷
 const fs = require('fs');
 const path = require('path');
+const { writeFileDurable } = require('../data/durableWrite');
 
 const PERSIST_DEBOUNCE_MS = 150;
 
@@ -36,14 +37,18 @@ async function openSqliteJsDb(filePath) {
   function flush() {
     if (!dirty) return;
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const data = Buffer.from(sqldb.export());
-      const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, data);
-      fs.renameSync(tmp, filePath); // 原子替换，避免半写损坏
+      // P0-持久化（2026-10-16）：原实现 writeFileSync(tmp)+renameSync 无 fsync，
+      // 数据可能停留在 page cache。改走 writeFileDurable（fsync 文件 + fsync 目录）。
+      const res = writeFileDurable(filePath, data);
+      if (!res.ok) {
+        // dirty 保持 true：下次 flush 会重试。若在此清 dirty，这次变更就永久丢了。
+        console.error('[db] sql.js 落盘失败:', res.error);
+        return;
+      }
       dirty = false;
     } catch (e) {
-      console.error('[db] sql.js 落盘失败:', e.message);
+      console.error('[db] sql.js 落盘异常:', e.message);
     }
   }
 

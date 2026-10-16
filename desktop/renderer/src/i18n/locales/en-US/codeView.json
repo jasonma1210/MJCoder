@@ -1,0 +1,12 @@
+{
+  "readFailed": "Failed to read file",
+  "openedInEditor": "Opened in editor ({cmd})",
+  "openedWithSystem": "Opened with the default system app",
+  "openFailed": "Failed to open",
+  "lineCount": "{n} lines",
+  "openInIde": "Open in IDE",
+  "copied": "Copied",
+  "copyContent": "Copy Content",
+  "loading": "Loading...",
+  "truncated": "Showing only the first {max} lines ({total} total). Open in an IDE to see the full content."
+}

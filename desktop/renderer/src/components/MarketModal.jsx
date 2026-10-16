@@ -5,21 +5,24 @@ import { market, TYPE_LABELS, PERMISSION_LABELS, signatureLabel } from '../lib/m
 import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
 import { IconAlert, IconDownload, IconPuzzle, IconRefresh, IconSearch, IconX } from './icons';
+import { useI18n } from '../i18n';
 
+// labelKey 而非 label：顶层常量不持有求值结果，渲染时经 t() 取文案（切语言即时生效）
 const TYPE_FILTERS = [
-  { id: '', label: '全部' },
-  { id: 'mcp', label: 'MCP 服务' },
-  { id: 'skill', label: '技能包' },
-  { id: 'prompt', label: '提示词模板' },
+  { id: '', labelKey: 'market.filters.all' },
+  { id: 'mcp', labelKey: 'market.filters.mcp' },
+  { id: 'skill', labelKey: 'market.filters.skill' },
+  { id: 'prompt', labelKey: 'market.filters.prompt' },
 ];
 
 const SORTS = [
-  { id: 'downloads', label: '按热度' },
-  { id: 'newest', label: '按更新' },
-  { id: 'name', label: '按名称' },
+  { id: 'downloads', labelKey: 'market.sorts.downloads' },
+  { id: 'newest', labelKey: 'market.sorts.newest' },
+  { id: 'name', labelKey: 'market.sorts.name' },
 ];
 
 export default function MarketModal({ onClose, onInstalled, embedded = false }) {
+  const { t } = useI18n();
   // ST3：embedded=true 时由设置页内嵌渲染（仅内容区，无全屏遮罩）
   const [tab, setTab] = useState('browse'); // browse | installed
   const [plugins, setPlugins] = useState([]);
@@ -35,16 +38,16 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
   async function loadBrowse() {
     const res = await market.refreshIndex();
-    if (!res.ok) setError(res.error || '市场索引拉取失败');
+    if (!res.ok) setError(res.error || t('market.indexFetchFailed'));
     const s = await market.search({ q: keyword, type, sort });
     if (s.ok) setPlugins(s.plugins || []);
-    else setError(s.error || '插件列表加载失败');
+    else setError(s.error || t('market.listLoadFailed'));
   }
 
   async function loadInstalled() {
     const res = await market.listInstalled();
     if (res.ok) setInstalled(res.plugins || []);
-    else setError(res.error || '已安装插件加载失败');
+    else setError(res.error || t('market.installedLoadFailed'));
   }
 
   // 刻意「挂载时加载一次」：loadBrowse 读 keyword/type/sort 等筛选 state，列入依赖会让
@@ -63,15 +66,15 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
   const filteredHint = useMemo(() => {
     const total = plugins.length;
-    if (!keyword && !type) return `共 ${total} 个插件`;
-    return `筛选出 ${total} 个插件`;
-  }, [plugins, keyword, type]);
+    if (!keyword && !type) return t('market.totalPlugins', { n: total });
+    return t('market.filteredPlugins', { n: total });
+  }, [plugins, keyword, type, t]);
 
   async function openDetail(plugin) {
     if (detail && detail.name === plugin.name) { setDetail(null); return; }
     const res = await market.inspect(plugin.name);
     if (res.ok) setDetail(res.plugin);
-    else setError(res.error || '插件详情读取失败');
+    else setError(res.error || t('market.detailLoadFailed'));
   }
 
   // 安装：市场条目一键装 / git 地址手动装（两种入口共用同一安装通道）
@@ -81,41 +84,41 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
     setNotice('');
     const res = await market.installFromGit({ url: source, name });
     if (res.ok) {
-      setNotice(`已安装 ${res.plugin?.name || name}，权限见下方预扣清单`);
+      setNotice(t('market.installedNotice', { name: res.plugin?.name || name }));
       setDetail(res.plugin);
       setGitUrl('');
       await Promise.all([loadInstalled(), tab === 'browse' ? loadBrowse() : Promise.resolve()]);
       if (typeof onInstalled === 'function') onInstalled(res.plugin);
     } else {
-      setError(`安装失败：${(res.errors || [res.error]).filter(Boolean).join('；')}`);
+      setError(t('market.installFailed', { errors: (res.errors || [res.error]).filter(Boolean).join(t('market.errSep')) }));
     }
     setBusy('');
   }
 
   async function installFromGitForm() {
     const url = gitUrl.trim();
-    if (!url) { setError('请填写 git 仓库地址'); return; }
+    if (!url) { setError(t('market.gitUrlRequired')); return; }
     await install(url, url.split('/').pop().replace(/\.git$/, ''));
   }
 
   async function toggleEnabled(plugin) {
     const res = await market.setEnabled({ name: plugin.name, enabled: !plugin.enabled });
     if (res.ok) await loadInstalled();
-    else setError(res.error || '操作失败');
+    else setError(res.error || t('market.opFailed'));
   }
 
   async function remove(plugin) {
     // A2：卸载需确认
     const ok = await confirm({
-      title: '卸载插件',
-      message: `确定卸载「${plugin.name}」吗？其本地文件将被删除，相关功能随即失效。`,
+      title: t('market.uninstallTitle'),
+      message: t('market.uninstallMessage', { name: plugin.name }),
       danger: true,
-      confirmLabel: '卸载',
+      confirmLabel: t('market.uninstall'),
     });
     if (!ok) return;
     const res = await market.uninstall({ name: plugin.name });
-    if (res.ok) { setNotice(`已卸载 ${plugin.name}`); await loadInstalled(); }
-    else setError(res.error || '卸载失败');
+    if (res.ok) { setNotice(t('market.uninstalledNotice', { name: plugin.name })); await loadInstalled(); }
+    else setError(res.error || t('market.uninstallFailed'));
   }
 
   const installedNames = new Set(installed.map((p) => p.name));
@@ -126,7 +129,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
         <h3 className="text-base font-semibold flex items-center gap-2">
           <IconPuzzle size={16} className="text-accent" />
-          插件市场
+          {t('market.title')}
         </h3>
         {!embedded && (
           <button onClick={onClose} className="text-text2 hover:text-text"><IconX size={16} /></button>
@@ -135,14 +138,14 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
         {/* 页签 */}
         <div className="flex gap-1 px-5 pt-3">
-          {[['browse', '浏览市场'], ['installed', '已安装']].map(([id, label]) => (
+          {[['browse', t('market.tabBrowse')], ['installed', t('market.tabInstalled')]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
               className={`h-9 inline-flex items-center px-3.5 rounded-lg text-sm ${tab === id ? 'bg-accent text-white' : 'text-text2 hover:bg-hover'}`}>
               {label}
             </button>
           ))}
           {tab === 'browse' && (
-            <button onClick={loadBrowse} className="ml-auto h-8 w-8 inline-flex items-center justify-center text-text2 hover:text-text rounded-lg" title="刷新索引">
+            <button onClick={loadBrowse} className="ml-auto h-8 w-8 inline-flex items-center justify-center text-text2 hover:text-text rounded-lg" title={t('market.refreshIndex')}>
               <IconRefresh size={14} />
             </button>
           )}
@@ -159,19 +162,19 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                 <div className="flex-1 h-8 flex items-center gap-2 bg-bg border border-border rounded-lg px-3">
                   <IconSearch size={14} className="text-text2" />
                   <input value={keyword} onChange={(e) => setKeyword(e.target.value)}
-                    placeholder="搜索插件名称、描述或标签"
+                    placeholder={t('market.searchPlaceholder')}
                     className="flex-1 bg-transparent outline-none text-sm" />
                 </div>
                 <select value={sort} onChange={(e) => setSort(e.target.value)}
                   className="h-8 bg-bg border border-border rounded-lg px-2 text-sm">
-                  {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  {SORTS.map((s) => <option key={s.id} value={s.id}>{t(s.labelKey)}</option>)}
                 </select>
               </div>
               <div className="flex items-center gap-1 mb-4">
                 {TYPE_FILTERS.map((f) => (
                   <button key={f.id} onClick={() => setType(f.id)}
                     className={`h-8 inline-flex items-center px-3 rounded-lg text-xs ${type === f.id ? 'bg-accent text-white' : 'text-text2 hover:bg-hover'}`}>
-                    {f.label}
+                    {t(f.labelKey)}
                   </button>
                 ))}
                 <span className="ml-auto text-xs text-text2">{filteredHint}</span>
@@ -179,7 +182,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
               {/* git 手动装 */}
               <div className="bg-bg border border-border rounded-2xl px-4 py-3 mb-4">
-                <div className="text-xs text-text2 mb-2">从 git 仓库安装（未签名包将被拒绝）</div>
+                <div className="text-xs text-text2 mb-2">{t('market.gitInstallHint')}</div>
                 <div className="flex gap-2">
                   <input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && installFromGitForm()}
@@ -187,14 +190,14 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                     className="flex-1 h-8 bg-transparent border border-border rounded-lg px-3 text-sm outline-none" />
                   <button onClick={installFromGitForm} disabled={busy === gitUrl.trim() || !gitUrl.trim()}
                     className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm bg-accent text-white hover:opacity-90 disabled:opacity-40">
-                    {busy ? '安装中' : '安装'}
+                    {busy ? t('market.installing') : t('market.install')}
                   </button>
                 </div>
               </div>
 
               {/* 插件卡片 */}
               {plugins.length === 0 ? (
-                <p className="text-sm text-text2 py-8 text-center">暂无匹配插件</p>
+                <p className="text-sm text-text2 py-8 text-center">{t('market.emptyBrowse')}</p>
               ) : plugins.map((p) => {
                 const sig = signatureLabel(p);
                 const expanded = detail && detail.name === p.name;
@@ -205,24 +208,24 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.name}</span>
                           <span className="text-xs text-text2">v{p.version}</span>
-                          <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] || p.type}</span>
+                          <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
                         </div>
-                        <p className="text-xs text-text2 mt-1 line-clamp-2">{p.description || '（无描述）'}</p>
+                        <p className="text-xs text-text2 mt-1 line-clamp-2">{p.description || t('market.noDescription')}</p>
                         <div className="flex items-center gap-3 mt-1.5">
-                          <span className={`text-xs ${sig.cls}`}>{sig.text}</span>
-                          <span className="text-xs text-text2">下载 {p.downloads || 0}</span>
+                          <span className={`text-xs ${sig.cls}`}>{t(sig.textKey, sig.vars)}</span>
+                          <span className="text-xs text-text2">{t('market.downloadsCount', { n: p.downloads || 0 })}</span>
                           {p.author && <span className="text-xs text-text2">{p.author}</span>}
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button onClick={() => openDetail(p)} className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm border border-border hover:bg-hover">
-                          权限
+                          {t('market.permissions')}
                         </button>
                         <button onClick={() => install(p.source, p.name)}
                           disabled={busy === p.name || installedNames.has(p.name)}
                           className="h-8 inline-flex items-center justify-center gap-1 px-3 rounded-lg text-sm bg-accent text-white hover:opacity-90 disabled:opacity-40">
                           <IconDownload size={14} />
-                          {installedNames.has(p.name) ? '已安装' : (busy === p.name ? '安装中' : '安装')}
+                          {installedNames.has(p.name) ? t('market.installed') : (busy === p.name ? t('market.installing') : t('market.install'))}
                         </button>
                       </div>
                     </div>
@@ -235,7 +238,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
           {tab === 'installed' && (
             installed.length === 0 ? (
-              <p className="text-sm text-text2 py-8 text-center">尚未安装任何插件</p>
+              <p className="text-sm text-text2 py-8 text-center">{t('market.emptyInstalled')}</p>
             ) : installed.map((p) => (
               <div key={p.name} className="bg-bg border border-border rounded-2xl px-4 py-3 mb-2">
                 <div className="flex items-start justify-between gap-3">
@@ -243,21 +246,21 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{p.name}</span>
                       <span className="text-xs text-text2">v{p.version}</span>
-                      <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] || p.type}</span>
-                      <span className={`text-xs ${p.enabled ? 'text-success' : 'text-text2'}`}>{p.enabled ? '已启用' : '已停用'}</span>
+                      <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
+                      <span className={`text-xs ${p.enabled ? 'text-success' : 'text-text2'}`}>{p.enabled ? t('market.enabled') : t('market.disabled')}</span>
                     </div>
-                    <p className="text-xs text-text2 mt-1">{p.description || '（无描述）'}</p>
-                    <p className="text-xs text-text2 mt-1 font-mono break-all">来源：{p.source || '（本地）'}</p>
+                    <p className="text-xs text-text2 mt-1">{p.description || t('market.noDescription')}</p>
+                    <p className="text-xs text-text2 mt-1 font-mono break-all">{t('market.sourceLabel', { source: p.source || t('market.localSource') })}</p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button onClick={() => openDetail(p)} className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm border border-border hover:bg-hover">
-                      权限
+                      {t('market.permissions')}
                     </button>
                     <button onClick={() => toggleEnabled(p)} className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm border border-border hover:bg-hover">
-                      {p.enabled ? '停用' : '启用'}
+                      {p.enabled ? t('market.disable') : t('market.enable')}
                     </button>
                     <button onClick={() => remove(p)} className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm border border-border hover:bg-hover text-danger">
-                      卸载
+                      {t('market.uninstall')}
                     </button>
                   </div>
                 </div>
@@ -280,24 +283,25 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
 
 // 权限面板：安装预扣清单。运行期每次触发对应级别操作仍会走审批矩阵（实扣）
 function PermissionPanel({ plugin }) {
+  const { t } = useI18n();
   const perms = Array.isArray(plugin.permissions) ? plugin.permissions : [];
   return (
     <div className="mt-3 pt-3 border-t border-border">
       <div className="flex items-center gap-1.5 text-xs text-text2 mb-2">
         <IconAlert size={13} />
-        安装授权为预扣：以下范围在你确认安装后生效；运行期每次调用仍会走审批矩阵
+        {t('market.preinstallNote')}
       </div>
       {perms.length === 0 ? (
-        <p className="text-xs text-warn">该插件未声明任何权限：所有受限操作在运行期默认拒绝</p>
+        <p className="text-xs text-warn">{t('market.noPermsWarning')}</p>
       ) : (
         <ul className="space-y-1">
           {perms.map((p, i) => {
             const scope = Array.isArray(p.scope) ? p.scope : (p.scope == null ? ['*'] : [p.scope]);
             return (
               <li key={`${p.level}-${i}`} className="text-xs flex items-start gap-2">
-                <span className="text-accent">{PERMISSION_LABELS[p.level] || p.level}</span>
+                <span className="text-accent">{PERMISSION_LABELS[p.level] ? t(PERMISSION_LABELS[p.level]) : p.level}</span>
                 <span className="text-text2 break-all">
-                  {scope.includes('*') ? '全部' : scope.join('、')}
+                  {scope.includes('*') ? t('market.filters.all') : scope.join(t('market.listSep'))}
                 </span>
               </li>
             );

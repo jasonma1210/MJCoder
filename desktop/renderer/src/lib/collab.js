@@ -3,29 +3,30 @@
 // 本地优先：所有读操作直接读本地 Y.Doc，不依赖网络；写操作先落本地再尝试联网。
 // 合并策略与 server/src/collab/crdt.js 保持一致（业务层 LWW / 审批幂等 / tombstone）。
 import * as Y from 'yjs';
+import { tGlobal } from '../i18n';
 
 const API = 'http://localhost:3001/api';
 
 export const DOC_TYPES = { THREAD: 'thread', BOARD: 'board', APPROVAL: 'approval' };
 
 export const BOARD_COLUMNS = [
-  { key: 'backlog', label: '待办' },
-  { key: 'doing', label: '进行中' },
-  { key: 'review', label: '待审' },
-  { key: 'done', label: '已完成' },
+  { key: 'backlog', labelKey: 'teamSpace.colBacklog' },
+  { key: 'doing', labelKey: 'teamSpace.colDoing' },
+  { key: 'review', labelKey: 'teamSpace.colReview' },
+  { key: 'done', labelKey: 'teamSpace.colDone' },
 ];
 
 export function makeDocId(type, entityId) {
   const t = String(type || '').trim().toLowerCase();
-  if (!Object.values(DOC_TYPES).includes(t)) throw new Error(`未知的协同文档类型：${type}`);
+  if (!Object.values(DOC_TYPES).includes(t)) throw new Error(`unknown collab doc type: ${type}`);
   const id = String(entityId || '').trim();
-  if (!id) throw new Error('协同文档实体 ID 不能为空');
+  if (!id) throw new Error('collab doc entity ID is empty');
   return `${t}:${id}`;
 }
 
 export function parseDocId(docId) {
   const idx = String(docId).indexOf(':');
-  if (idx <= 0) throw new Error(`协同文档 ID 格式非法：${docId}`);
+  if (idx <= 0) throw new Error(`invalid collab doc ID format: ${docId}`);
   return { type: String(docId).slice(0, idx), entityId: String(docId).slice(idx + 1) };
 }
 
@@ -81,12 +82,12 @@ export function isDirty(docId) {
 export function appendMessage(docId, { id, role, text, actor }) {
   const { doc } = getLocal(docId);
   const messages = doc.getMap('messages');
-  if (messages.has(id)) throw new Error(`消息已存在：${id}`);
+  if (messages.has(id)) throw new Error(`message already exists: ${id}`);
   const body = new Y.Text();
   const msg = new Y.Map();
   msg.set('id', id);
   msg.set('role', role || 'assistant');
-  msg.set('actor', actor || '我');
+  msg.set('actor', actor || tGlobal('teamSpace.me'));
   msg.set('ts', Date.now());
   msg.set('deleted', false);
   msg.set('text', body);
@@ -100,14 +101,14 @@ export function appendMessage(docId, { id, role, text, actor }) {
 export function deleteMessage(docId, id, reason) {
   const { doc } = getLocal(docId);
   const msg = doc.getMap('messages').get(id);
-  if (!msg) throw new Error(`消息不存在：${id}`);
+  if (!msg) throw new Error(`message not found: ${id}`);
   const store = doc.getMap('tombstones');
   const key = `message:${id}`;
-  if (store.has(key)) return { ok: false, error: `墓碑已存在：${key}` };
+  if (store.has(key)) return { ok: false, error: `tombstone already exists: ${key}` };
   const rec = new Y.Map();
   rec.set('kind', 'message');
   rec.set('entityId', id);
-  rec.set('actor', '我');
+  rec.set('actor', tGlobal('teamSpace.me'));
   rec.set('ts', Date.now());
   rec.set('reason', reason || '');
   store.set(key, rec);
@@ -159,14 +160,14 @@ export function newCardId() {
 // W4：看板卡片删除走墓碑（与 deleteMessage 同语义），listCards 已按墓碑过滤
 export function deleteCard(docId, cardId, reason) {
   const { doc } = getLocal(docId);
-  if (!doc.getMap('cards').has(cardId)) return { ok: false, error: `卡片不存在：${cardId}` };
+  if (!doc.getMap('cards').has(cardId)) return { ok: false, error: `card not found: ${cardId}` };
   const store = doc.getMap('tombstones');
   const key = `card:${cardId}`;
-  if (store.has(key)) return { ok: false, error: `墓碑已存在：${key}` };
+  if (store.has(key)) return { ok: false, error: `tombstone already exists: ${key}` };
   const rec = new Y.Map();
   rec.set('kind', 'card');
   rec.set('entityId', cardId);
-  rec.set('actor', '我');
+  rec.set('actor', tGlobal('teamSpace.me'));
   rec.set('ts', Date.now());
   rec.set('reason', reason || '');
   store.set(key, rec);
@@ -187,7 +188,7 @@ export function moveCard(docId, cardId, { column, position, actor }) {
   const entry = new Y.Map();
   entry.set('key', `card:${cardId}`);
   entry.set('value', { column, position: Number(position) || 0 });
-  entry.set('actor', actor || '我');
+  entry.set('actor', actor || tGlobal('teamSpace.me'));
   entry.set('ts', Date.now());
   doc.getArray('stateLog').push([entry]);
   markDirty(docId);
@@ -229,7 +230,7 @@ function resolveState(doc) {
 // ── 共享审批：按 approvalId#decision 幂等 ───────────────────
 export function recordApproval(docId, { approvalId, decision, note, actor, instanceId }) {
   if (!['approve', 'deny', 'note'].includes(String(decision))) {
-    throw new Error(`审批动作非法：${decision}（允许 approve / deny / note）`);
+    throw new Error(`invalid approval decision: ${decision} (allowed: approve / deny / note)`);
   }
   const { doc } = getLocal(docId);
   const key = `${approvalId}#${decision}`;
@@ -241,7 +242,7 @@ export function recordApproval(docId, { approvalId, decision, note, actor, insta
     instanceId: String(instanceId || ''),
     decision: String(decision),
     note: String(note || ''),
-    actor: actor || '我',
+    actor: actor || tGlobal('teamSpace.me'),
     ts: Date.now(),
   };
   const build = () => {
@@ -305,10 +306,10 @@ export async function syncDoc(docId, actor) {
     body: JSON.stringify({
       updates: [toBase64(update)],
       state_vector: toBase64(Y.encodeStateVector(doc)),
-      actor: actor || '我',
+      actor: actor || tGlobal('teamSpace.me'),
     }),
   });
-  if (!res.ok) throw new Error(`协同同步失败（${res.status}）`);
+  if (!res.ok) throw new Error(`collab sync failed (${res.status})`);
   const json = await res.json();
   if (json.update) Y.applyUpdate(doc, fromBase64(json.update));
   // 光标前移到服务端确认持有的状态，下次只推增量
@@ -323,7 +324,7 @@ export async function fetchMembers(spaceId) {
   const res = await fetch(`${API}/collab/spaces/${encodeURIComponent(spaceId)}/members`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
-  if (!res.ok) throw new Error(`成员列表加载失败（${res.status}）`);
+  if (!res.ok) throw new Error(`failed to load members (${res.status})`);
   return res.json();
 }
 
@@ -334,6 +335,6 @@ export async function touchPresence(spaceId, displayName) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
     body: JSON.stringify({ display_name: displayName }),
   });
-  if (!res.ok) throw new Error(`在线状态上报失败（${res.status}）`);
+  if (!res.ok) throw new Error(`failed to report presence (${res.status})`);
   return res.json();
 }

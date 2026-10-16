@@ -1,40 +1,54 @@
-// 生态中心（M7）：50 数字员工 / 100 MCP 连接器 / 100 Skill 目录 —— 下载模型
-// 目录只负责「下载」：技能经主进程 skills:installEcosystem 物化到 ~/.mjcode/skills；
-// 数字员工 / 连接器进入本地下载清单（lib/ecosystemLocal.js，后期统一迁自有后端）。
-// 会话输入框「+」菜单只展示已下载或内置的资产，目录本身不再直接「在当前会话启用」。
+// 生态中心（统一入口重构 T2）：数字员工 / MCP 连接器 / Skill 目录 —— 启用模型
+// 目录数据随应用本地分发，不再有「下载」动作：
+//   连接器：启用开关（lib/ecosystemEnabled.ts）控制「+」菜单可见性；启用≠连接，
+//   点击「配置」弹 ConnectorConfigDialog 就地完成变量/令牌/授权，连接成功后
+//   主进程 fail-closed 持久化 mcp-servers.json；顶部「本机服务」区管理已连服务器。
+//   技能（T3 改造）：启用开关——开启时若未物化则经主进程 skills:installEcosystem
+//   安装 SKILL.md 到 ~/.mjcode/skills 并并入 App 的 enabledSkills；关闭仅摘除启用态、
+//   保留磁盘文件（非破坏可逆）。顶部「本地技能」区管理内置/文件技能开关。
+//   数字员工：卡片「招募」——经 ecosystem:employeeRuntime 取回角色模板
+//   （系统提示+工具子集+审批档+沙箱），由 App 开新会话并注入为该会话 agent。
 // 数据经主进程 ecosystem:* IPC 读取本地 ecosystem 资产；TODO(backend)：切换为后端接口。
-import { useState, useEffect } from 'react';
-import { IconAlert, IconCheck, IconDownload, IconGlobe, IconPuzzle, IconRefresh, IconSearch, IconUser, IconX, IconPlug } from './icons';
+import { useState, useEffect, useRef } from 'react';
+import { IconAlert, IconEdit, IconGlobe, IconPuzzle, IconRefresh, IconSearch, IconUser, IconX, IconPlug } from './icons';
 import {
-  isEmployeeDownloaded, downloadEmployee,
-  isConnectorDownloaded, downloadConnector,
-} from '../lib/ecosystemLocal';
+  loadEnabledFromLocal, setConnectorEnabledLocal,
+} from '../lib/ecosystemEnabled';
+import { skillKeyIn } from '../lib/skillKey';
+import { searchTokens, entryMatches } from '../lib/ecosystemSearch';
 import { fetchEcosystemRemote, getEcosystemApiBase, setEcosystemApiBase } from '../lib/ecosystemApi';
+import ConnectorConfigDialog from './ConnectorConfigDialog';
+import LocalMcpSection from './LocalMcpSection';
+import LocalSkillsSection from './LocalSkillsSection';
+import CustomConnectorForm from './CustomConnectorForm';
+import { useI18n } from '../i18n';
 
-// 数字员工默认审批策略文案（与主进程 approval_policy 对齐）
+// 数字员工默认审批策略（与主进程 approval_policy 对齐）→ i18n key（渲染时经 t() 求值，切语言即时生效）
 const APPROVAL_LABELS = {
-  'on-request': '按需审批',
-  'auto-safe': '安全自动',
-  'safe-auto': '安全自动',
-  trusted: '完全信任',
-  always: '始终允许',
+  'on-request': 'ecosystem.approvalOnRequest',
+  'auto-safe': 'ecosystem.approvalAutoSafe',
+  'safe-auto': 'ecosystem.approvalAutoSafe',
+  trusted: 'ecosystem.approvalTrusted',
+  always: 'ecosystem.approvalAlways',
 };
 
-// MCP 权限级别中文
+// MCP 权限级别 → i18n key
 const PERMISSION_LABELS = {
-  filesystem: '文件系统',
-  network: '网络',
-  shell: '系统命令',
+  filesystem: 'ecosystem.permFilesystem',
+  network: 'ecosystem.permNetwork',
+  shell: 'ecosystem.permShell',
 };
 
-// E1：目录分页（此前 100 员工/100 连接器/100 技能全量 grid 渲染，数据量大即卡顿）
-const PAGE_SIZE = 12;
+// 懒加载分页（T2：slice 翻页改 IntersectionObserver 无限下拉，每批 20 条；
+// 此前 100+ 条目全量 grid 渲染卡顿，翻页器交互又打断浏览）
+const LAZY_PAGE = 20;
 
 function bridge() {
   return (typeof window !== 'undefined' && window.mjcode) || null;
 }
 
-export default function EcosystemModal({ onClose, embedded = false }) {
+export default function EcosystemModal({ onClose, embedded = false, enabledSkills = [], onSkillsChange }) {
+  const { t } = useI18n();
   // ST3：embedded=true 时由设置页内嵌渲染（仅内容区，无全屏遮罩）
   const [tab, setTab] = useState('employees'); // employees | connectors | skills
   const [employees, setEmployees] = useState([]);
@@ -47,16 +61,23 @@ export default function EcosystemModal({ onClose, embedded = false }) {
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState(null); // C2：详情展开
   const [notice, setNotice] = useState('');
-  const [page, setPage] = useState(1);
+  const [visibleCount, setVisibleCount] = useState(LAZY_PAGE); // 懒加载：当前渲染条数
   const [busyId, setBusyId] = useState('');
-  const [dlVer, setDlVer] = useState(0); // 下载清单版本：下载后 bump 触发按钮态刷新
+  // T2 启用模型：连接器启用清单（含 recommended 默认集 + 旧下载清单迁移）
+  const [enabled, setEnabled] = useState(() => ({ connectors: [], skills: [] }));
+  const [cfgConnector, setCfgConnector] = useState(null); // 打开配置/授权弹窗的连接器
+  const [mcpRefresh, setMcpRefresh] = useState(0); // 弹窗连接成功 → bump 刷新本机服务区
+  // 自定义连接器页：null=不显示；对象=打开并携带查重名单与配置文件路径
+  const [custom, setCustom] = useState(null);
+  const sentinelRef = useRef(null); // 列表底部哨兵：进入视口即追加下一批
+  const scrollRef = useRef(null); // 内容滚动容器（IntersectionObserver root）
   // 云端数据源（用户自有后端）：本地资产先兜底加载，云端命中字段即覆盖
   const [source, setSource] = useState('local'); // local | cloud | mixed
   const [srcOpen, setSrcOpen] = useState(false);
   const [apiBase, setApiBase] = useState(() => getEcosystemApiBase());
 
-  // 关键词/分类/页签变化时回到第 1 页（避免停留在超出范围的页码）
-  useEffect(() => { setPage(1); setExpandedId(null); }, [tab, keyword, category]);
+  // 关键词/分类/页签变化时重置懒加载窗口（从头追加渲染）
+  useEffect(() => { setVisibleCount(LAZY_PAGE); setExpandedId(null); }, [tab, keyword, category]);
 
   // 磁盘技能清单（用于技能「已下载」判定）
   async function refreshInstalledSkills() {
@@ -65,14 +86,15 @@ export default function EcosystemModal({ onClose, embedded = false }) {
     try {
       const r = await api.listSkills();
       if (r?.ok) setInstalledSkillIds(new Set((r.skills || []).flatMap((d) => [d.dir, d.name].filter(Boolean))));
-    } catch (e) { console.warn('[ecosystem] 磁盘技能加载失败:', e); }
+    } catch (e) { console.warn('[ecosystem] failed to load disk skills:', e); }
   }
 
   async function loadAll() {
     // ① 本地 ecosystem 资产兜底加载（ecosystem:* IPC）
+    let finalConn = [];
     const api = bridge();
     if (!api) {
-      setError('主进程桥接未就绪');
+      setError(t('ecosystem.bridgeNotReady'));
     } else {
       try {
         const [emp, con, sk, sum] = await Promise.all([
@@ -81,12 +103,12 @@ export default function EcosystemModal({ onClose, embedded = false }) {
           api.ecosystemSkills(),
           api.ecosystemSummary(),
         ]);
-        if (emp && emp.ok) setEmployees(emp.employees || []); else setError((emp && emp.error) || '数字员工加载失败');
-        if (con && con.ok) setConnectors(con.connectors || []); else setError((con && con.error) || '连接器加载失败');
-        if (sk && sk.ok) setSkills(sk.skills || []); else setError((sk && sk.error) || '技能加载失败');
+        if (emp && emp.ok) setEmployees(emp.employees || []); else setError((emp && emp.error) || t('ecosystem.employeesLoadFailed'));
+        if (con && con.ok) { finalConn = con.connectors || []; setConnectors(finalConn); } else setError((con && con.error) || t('ecosystem.connectorsLoadFailed'));
+        if (sk && sk.ok) setSkills(sk.skills || []); else setError((sk && sk.error) || t('ecosystem.skillsLoadFailed'));
         if (sum && sum.ok) setStats(sum.stats);
       } catch (e) {
-        setError(e.message || '生态数据加载失败');
+        setError(e.message || t('ecosystem.dataLoadFailed'));
       }
     }
 
@@ -95,13 +117,17 @@ export default function EcosystemModal({ onClose, embedded = false }) {
     const remote = await fetchEcosystemRemote();
     if (remote) {
       if (remote.employees) { setEmployees(remote.employees); cloudHit += 1; }
-      if (remote.connectors) { setConnectors(remote.connectors); cloudHit += 1; }
+      if (remote.connectors) { finalConn = remote.connectors; setConnectors(finalConn); cloudHit += 1; }
       if (remote.skills) { setSkills(remote.skills); cloudHit += 1; }
       if (remote.stats) { setStats(remote.stats); cloudHit += 1; }
       // 云端命中后，本地资产加载阶段的错误不再阻塞展示
       if (cloudHit > 0) setError('');
     }
     setSource(cloudHit === 4 ? 'cloud' : cloudHit > 0 ? 'mixed' : 'local');
+
+    // ③ 启用清单初始化：recommended 默认集 + 旧下载清单一次性迁移（幂等，
+    // 已有用户记录时零副作用）——必须在最终连接器集上执行
+    setEnabled(loadEnabledFromLocal(finalConn));
 
     refreshInstalledSkills();
   }
@@ -113,73 +139,141 @@ export default function EcosystemModal({ onClose, embedded = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── 下载动作（目录页唯一入口；下载后在会话「+」菜单中选择） ──
-
-  function handleDownloadEmployee(e) {
-    downloadEmployee(e);
-    setDlVer((v) => v + 1);
-    setNotice(`已下载「${e.title_cn || e.name}」到本机。在会话输入框点「+」→ 数字员工 中选择使用。`);
+  // 打开「自定义连接器」页：先取已保存服务的名称（查重，避免同名覆盖旧配置）与配置文件路径
+  async function openCustom() {
+    let names = [];
+    let configPath = '';
+    try {
+      const cfg = await window.mjcode?.mcpGetConfig?.();
+      if (cfg?.servers) names = cfg.servers.map((s) => String(s.name || '')).filter(Boolean);
+      if (cfg?.path) configPath = String(cfg.path);
+    } catch (e) { /* 取不到就用目录名兜底查重，不阻断打开表单 */ }
+    const catalogNames = connectors.map((c) => String(c.name || '')).filter(Boolean);
+    setCustom({ existingNames: [...new Set([...names, ...catalogNames])], configPath });
   }
 
-  function handleDownloadConnector(c) {
-    downloadConnector(c);
-    setDlVer((v) => v + 1);
+  // 招募数字员工：取回运行时预设（系统提示+工具子集+审批档+沙箱），
+  // 经 mjcode:recruit-expert 事件交 App 开新会话并注入角色（ChatArea 监听
+  // mjcode:enable-expert 写入 sessionExtras.expert），后续每轮 agent:run 携带
+  // rolePreset；审批/沙箱由主进程取「角色与用户设置更严格者」。
+  // 目录数据本就随应用分发，无需任何本地登记（T5 删除下载清单后招募链路不变）。
+  async function handleRecruit(e) {
+    const api = bridge();
+    if (!api?.ecosystemEmployeeRuntime) {
+      setError(t('ecosystem.bridgeNotReady'));
+      return;
+    }
+    setBusyId(e.id);
+    try {
+      const r = await api.ecosystemEmployeeRuntime({ id: e.id });
+      if (!r?.ok || !r.rolePreset) {
+        setError(t('ecosystem.recruitFailed', { msg: r?.error || t('ecosystem.unknownError') }));
+        return;
+      }
+      window.dispatchEvent(new CustomEvent('mjcode:recruit-expert', { detail: { ...e, runtime: r.rolePreset } }));
+    } catch (err) {
+      setError(t('ecosystem.recruitFailed', { msg: err.message || t('ecosystem.unknownError') }));
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  // 启用开关：只控制「+」菜单可见性（启用≠连接，D6）；开启时如实提示还差什么
+  function toggleConnector(c, on) {
+    setEnabled((cur) => setConnectorEnabledLocal(cur, c.id, on));
+    if (!on) {
+      setNotice(t('ecosystem.disabledConnector', { name: c.display_name || c.name }));
+      return;
+    }
     // 必填环境变量必须在使用前如实告知：否则用户连上后每个工具调用都报
-    // 「missing API key」，表现为「装好了但完全不能用」——这是「能力已建」与
-    // 「开箱可用」之间最典型的一道沟（2026-10-15 审查项）
+    // 「missing API key」，表现为「装好了但完全不能用」（2026-10-15 审查项）
     const required = (Array.isArray(c.env_vars) ? c.env_vars : []).filter((v) => v && v.required);
     const envHint = required.length
-      ? `连接前需在 设置 → MCP 服务 中配置环境变量：${required.map((v) => v.name).join('、')}（点击连接器卡片可查看说明与申请入口）。`
-      : '无需额外密钥，在 设置 → MCP 服务 中即可连接。';
-    setNotice(`已下载「${c.display_name || c.name}」到本机。${envHint}`);
+      ? t('ecosystem.envRequiredHint', { vars: required.map((v) => v.name).join(t('ecosystem.listSep')) })
+      : t('ecosystem.envNoneHint');
+    setNotice(t('ecosystem.enabledConnector', { name: c.display_name || c.name, env: envHint }));
   }
 
-  async function handleDownloadSkill(s) {
-    setBusyId(s.id);
-    try {
-      await window.mjcode.installEcosystemSkill({ id: s.id });
-      await refreshInstalledSkills();
-      setDlVer((v) => v + 1);
-      setNotice(`已下载技能「${s.display_name || s.name}」到本机。在会话输入框点「+」→ 技能 中启用。`);
-    } catch (err) {
-      setError(`技能下载失败：${err.message || '未知错误'}`);
+  // 技能启用开关（D4）：开 = 未物化则安装 SKILL.md 后并入 enabledSkills；
+  // 关 = 仅摘除启用态、保留磁盘文件——非破坏可逆，重启用零成本
+  async function toggleSkillCatalog(s, on) {
+    const id = String(s.id || s.name || '');
+    if (!on) {
+      onSkillsChange?.(enabledSkills.filter((x) => x !== id));
+      return;
     }
-    setBusyId('');
+    setBusyId(id);
+    try {
+      if (!installedSkillIds.has(s.id) && !installedSkillIds.has(s.name)) {
+        const r = await window.mjcode?.installEcosystemSkill?.({ id: s.id });
+        if (!r?.ok) {
+          setError(t('ecosystem.skillInstallFailed', { msg: r?.error || t('ecosystem.unknownError') }));
+          return;
+        }
+        await refreshInstalledSkills();
+      }
+      onSkillsChange?.([...new Set([...enabledSkills, id])]);
+    } catch (err) {
+      setError(t('ecosystem.skillInstallFailed', { msg: err.message || t('ecosystem.unknownError') }));
+    } finally {
+      setBusyId('');
+    }
   }
 
-  const match = (text) => String(text || '').toLowerCase().includes(keyword.trim().toLowerCase());
+  // 审批策略 / 权限级别 → 展示文案（key 缺失时回退原始值）
+  const approvalText = (policy, fallback) => {
+    const k = APPROVAL_LABELS[policy];
+    return k ? t(k) : (policy || fallback || '');
+  };
+  const permissionText = (level) => {
+    const k = PERMISSION_LABELS[level];
+    return k ? t(k) : level;
+  };
 
+  // 搜索匹配（2026-10-16 修复「搜不到」）：规则已抽到 lib/ecosystemSearch.ts（纯函数 + 单测）——
+  // 按空白分词、逐词 AND、范围覆盖各条目全部可读字段。此前只匹配 4 个字段，
+  // 「软件」「知识库」这类只出现在 description / capabilities 里的词恒为空，用户感知为搜索不可用。
+  const tokens = searchTokens(keyword);
   const empFiltered = employees.filter((e) =>
-    (!category || e.category === category) &&
-    (!keyword || match(e.title_cn) || match(e.name) || match(e.category) || (e.industry || []).some(match))
+    (!category || e.category === category) && entryMatches('employee', e, tokens)
   );
   const conFiltered = connectors.filter((c) =>
-    (!category || c.category === category) &&
-    (!keyword || match(c.name) || match(c.display_name) || match(c.vendor) || match(c.category))
+    (!category || c.category === category) && entryMatches('connector', c, tokens)
   );
-  const skFiltered = skills.filter((s) =>
-    (!keyword || match(s.display_name) || match(s.name) || match(s.category))
-  );
+  const skFiltered = skills.filter((s) => entryMatches('skill', s, tokens));
 
   const empCategories = [...new Set(employees.map((e) => e.category).filter(Boolean))];
   const conCategories = [...new Set(connectors.map((c) => c.category).filter(Boolean))];
 
-  // E1：当前页切片 + 分页信息（按当前 tab 取对应列表）
+  // 连接器启用集（目录 id）：开关判定与「+」菜单可见性同源
+  const enabledConnSet = new Set(enabled.connectors.map(String));
+
+  // 懒加载：渲染前 visibleCount 条；底部哨兵进入视口即追加下一批
   const activeList = tab === 'employees' ? empFiltered : tab === 'connectors' ? conFiltered : skFiltered;
-  const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE));
-  const curPage = Math.min(page, totalPages);
-  const pageItems = activeList.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
+  const pageItems = activeList.slice(0, visibleCount);
+  const hasMore = activeList.length > pageItems.length;
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!el || !root) return undefined;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((en) => en.isIntersecting)) setVisibleCount((v) => v + LAZY_PAGE);
+    }, { root, rootMargin: '240px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, activeList.length, tab]);
 
   const content = (
     <div className={embedded ? 'bg-surface border border-border rounded-2xl flex flex-col max-h-[72vh]' : 'w-full max-w-4xl max-h-[85vh] rounded-2xl bg-bg border border-border flex flex-col overflow-hidden'}>
-        {/* 顶栏 */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        {/* 顶栏（shrink-0：embedded 容器 max-h 下内容超高时头部各行不被 flex 压扁裁切） */}
+        <div className="shrink-0 flex items-center justify-between px-6 py-5 border-b border-border">
           <div className="flex items-center gap-4">
             <div>
-              <h2 className="text-base font-semibold">生态中心</h2>
+              <h2 className="text-base font-semibold">{t('ecosystem.title')}</h2>
               <p className="text-xs text-text2 mt-0.5">
-                数字员工、连接器与技能目录，下载到本机后使用
-                {stats && `（${stats.employees || 0} 员工 / ${stats.connectors || 0} 连接器 / ${stats.skills || 0} 技能）`}
+                {t('ecosystem.subtitle')}
+                {stats && t('ecosystem.statsLine', { employees: stats.employees || 0, connectors: stats.connectors || 0, skills: stats.skills || 0 })}
               </p>
             </div>
           </div>
@@ -189,15 +283,15 @@ export default function EcosystemModal({ onClose, embedded = false }) {
               <button onClick={() => setSrcOpen((v) => !v)}
                 className={`h-7 inline-flex items-center gap-1 text-xs px-2.5 rounded-full border shrink-0 ${source === 'local' ? 'border-border text-text2 hover:text-text' : 'border-accent text-accent'}`}>
                 <IconGlobe size={12} />
-                {source === 'cloud' ? '云端' : source === 'mixed' ? '云端+本地' : '本地'}
+                {source === 'cloud' ? t('ecosystem.sourceCloud') : source === 'mixed' ? t('ecosystem.sourceMixed') : t('ecosystem.sourceLocal')}
               </button>
               {srcOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setSrcOpen(false)} />
                   <div className="absolute right-0 top-8 z-20 w-72 p-3 rounded-xl bg-surface border border-border shadow-[var(--shadow-pop)]">
-                    <div className="text-xs font-medium mb-1">生态数据源</div>
+                    <div className="text-xs font-medium mb-1">{t('ecosystem.sourceTitle')}</div>
                     <p className="text-[11px] text-text2 leading-relaxed mb-2">
-                      填入你的后端地址后，员工/连接器/技能/统计将优先从云端拉取（可随时在服务端更新），未配置或不可达时回退本地资产。
+                      {t('ecosystem.sourceDesc')}
                     </p>
                     <input
                       value={apiBase}
@@ -207,9 +301,9 @@ export default function EcosystemModal({ onClose, embedded = false }) {
                     />
                     <div className="flex items-center justify-between mt-2">
                       <button onClick={() => { setEcosystemApiBase(''); setApiBase(''); loadAll(); }}
-                        className="text-xs text-text2 hover:text-text">清除</button>
+                        className="text-xs text-text2 hover:text-text">{t('ecosystem.clear')}</button>
                       <button onClick={() => { setEcosystemApiBase(apiBase); loadAll(); }}
-                        className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">保存并重新加载</button>
+                        className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">{t('ecosystem.saveReload')}</button>
                     </div>
                   </div>
                 </>
@@ -222,44 +316,51 @@ export default function EcosystemModal({ onClose, embedded = false }) {
         </div>
 
         {/* 分页签 */}
-        <div className="flex items-center gap-1 px-5 pt-3">
+        <div className="shrink-0 flex items-center gap-1.5 px-6 pt-4">
           {[
-            { id: 'employees', label: '数字员工', icon: <IconUser size={14} /> },
-            { id: 'connectors', label: '连接器', icon: <IconPlug size={14} /> },
-            { id: 'skills', label: '技能', icon: <IconPuzzle size={14} /> },
-          ].map((t) => (
+            { id: 'employees', label: t('ecosystem.tabEmployees'), icon: <IconUser size={14} /> },
+            { id: 'connectors', label: t('ecosystem.tabConnectors'), icon: <IconPlug size={14} /> },
+            { id: 'skills', label: t('ecosystem.tabSkills'), icon: <IconPuzzle size={14} /> },
+          ].map((tb) => (
             <button
-              key={t.id}
-              onClick={() => { setTab(t.id); setCategory(''); }}
-              className={`h-9 inline-flex items-center gap-1.5 px-3.5 rounded-t-lg text-sm ${tab === t.id ? 'bg-surface text-text border border-border border-b-transparent' : 'text-text2 hover:text-text'}`}
+              key={tb.id}
+              onClick={() => { setTab(tb.id); setCategory(''); }}
+              className={`h-9 inline-flex items-center gap-1.5 px-3.5 rounded-t-lg text-sm ${tab === tb.id ? 'bg-surface text-text border border-border border-b-transparent' : 'text-text2 hover:text-text'}`}
             >
-              {t.icon}{t.label}
+              {tb.icon}{tb.label}
             </button>
           ))}
         </div>
 
         {/* 搜索 + 分类 */}
-        <div className="px-5 py-3 border-b border-border flex items-center gap-2">
+        <div className="shrink-0 px-6 py-4 border-b border-border flex items-center gap-3">
           <div className="flex-1 h-8 flex items-center gap-2 px-3 rounded-lg border border-border">
             <IconSearch size={14} className="text-text2" />
             <input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder={tab === 'employees' ? '搜索岗位、行业、技能' : tab === 'connectors' ? '搜索连接器、厂商' : '搜索技能'}
+              placeholder={tab === 'employees' ? t('ecosystem.searchEmployeesPlaceholder') : tab === 'connectors' ? t('ecosystem.searchConnectorsPlaceholder') : t('ecosystem.searchSkillsPlaceholder')}
               className="flex-1 bg-transparent text-sm outline-none"
             />
           </div>
           <button onClick={loadAll} className="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-border hover:bg-hover"><IconRefresh size={13} /></button>
+          {/* 自定义连接器：目录只保留主流/加得上的服务，其余交给用户自己添加（页面级视图，非弹窗） */}
+          {tab === 'connectors' && !custom && (
+            <button onClick={openCustom}
+              className="h-8 shrink-0 inline-flex items-center gap-1.5 px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90 whitespace-nowrap">
+              <IconEdit size={13} /> {t('ecosystem.custom.button')}
+            </button>
+          )}
         </div>
 
         {/* 分类筛选 */}
         {(tab === 'employees' || tab === 'connectors') && (
-          <div className="px-5 py-2.5 border-b border-border flex flex-nowrap gap-1.5 overflow-x-auto">
+          <div className="shrink-0 px-6 py-3 border-b border-border flex flex-nowrap gap-2 overflow-x-auto">
             <button
               onClick={() => setCategory('')}
               className={`h-8 inline-flex items-center text-xs px-3 rounded-full border shrink-0 whitespace-nowrap ${!category ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}
             >
-              全部
+              {t('ecosystem.all')}
             </button>
             {(tab === 'employees' ? empCategories : conCategories).map((c) => (
               <button
@@ -273,8 +374,8 @@ export default function EcosystemModal({ onClose, embedded = false }) {
           </div>
         )}
 
-        {/* 内容区 */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+        {/* 内容区（scrollRef：懒加载 IntersectionObserver 的滚动 root） */}
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
           {error && (
             <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-[var(--sem-danger-bg)] border border-danger text-xs text-danger">
               <IconAlert size={14} className="mt-0.5 shrink-0" />{error}
@@ -288,150 +389,174 @@ export default function EcosystemModal({ onClose, embedded = false }) {
 
           {/* 数字员工 */}
           {tab === 'employees' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {pageItems.map((e) => (
-                <div key={e.id} className="p-3 rounded-xl bg-surface border border-border flex flex-col">
-                  <div className="flex items-start justify-between">
+                <div key={e.id} className="p-5 rounded-xl bg-surface border border-border flex flex-col">
+                  <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{e.title_cn || e.name}</div>
-                      <div className="text-xs text-text2 mt-0.5">{e.category} · {e.mission || '待补充使命'}</div>
+                      <div className="text-xs text-text2 mt-1.5 leading-relaxed line-clamp-2">{e.category} · {e.mission || t('ecosystem.defaultMission')}</div>
                     </div>
-                    <span className="shrink-0 ml-2 text-[10px] px-1.5 py-[3px] leading-none rounded bg-accent/15 text-accent">
-                      {APPROVAL_LABELS[e.approval_policy] || e.approval_policy}
+                    <span className="shrink-0 text-[10px] px-2 py-1 leading-none rounded bg-accent/15 text-accent whitespace-nowrap">
+                      {approvalText(e.approval_policy)}
                     </span>
                   </div>
-                  <div className="flex flex-wrap gap-1 mt-2">
+                  <div className="flex flex-wrap gap-1.5 mt-3">
                     {(e.industry || []).map((ind) => (
-                      <span key={ind} className="text-[10px] px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{ind}</span>
+                      <span key={ind} className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{ind}</span>
                     ))}
                   </div>
                   {/* C2：详情展开 */}
                   {expandedId === `emp-${e.id}` && (
-                    <div className="mt-2 pt-2 border-t border-border text-[11px] text-text2 leading-relaxed">
-                      <p><span className="text-text">使命：</span>{e.mission || '待补充'}</p>
-                      {e.market_signal && <p className="mt-1"><span className="text-text">市场信号：</span>{e.market_signal}</p>}
-                      <p className="mt-1"><span className="text-text">审批策略：</span>{APPROVAL_LABELS[e.approval_policy] || e.approval_policy || '按需审批'}</p>
-                      {(e.skills || []).length > 0 && <p className="mt-1"><span className="text-text">技能：</span>{e.skills.join('、')}</p>}
+                    <div className="mt-3 pt-3 border-t border-border text-[11px] text-text2 leading-relaxed">
+                      <p><span className="text-text">{t('ecosystem.missionLabel')}</span>{e.mission || t('ecosystem.toBeAdded')}</p>
+                      {e.market_signal && <p className="mt-1"><span className="text-text">{t('ecosystem.marketSignalLabel')}</span>{e.market_signal}</p>}
+                      <p className="mt-1"><span className="text-text">{t('ecosystem.approvalPolicyLabel')}</span>{approvalText(e.approval_policy, t('ecosystem.approvalOnRequest'))}</p>
+                      {(e.skills || []).length > 0 && <p className="mt-1"><span className="text-text">{t('ecosystem.skillsLabel')}</span>{e.skills.join(t('ecosystem.listSep'))}</p>}
                     </div>
                   )}
-                  <div className="flex items-center gap-2 mt-auto pt-3">
+                  <div className="flex items-center gap-2.5 mt-auto pt-4">
                     <button onClick={() => setExpandedId(expandedId === `emp-${e.id}` ? null : `emp-${e.id}`)}
-                      className="h-8 inline-flex items-center justify-center text-xs px-3 rounded-lg border border-border hover:bg-hover text-text2">
-                      {expandedId === `emp-${e.id}` ? '收起' : '查看详情'}
+                      className="h-8 shrink-0 inline-flex items-center justify-center whitespace-nowrap text-xs px-3 rounded-lg border border-border hover:bg-hover text-text2">
+                      {expandedId === `emp-${e.id}` ? t('ecosystem.collapse') : t('ecosystem.viewDetails')}
                     </button>
-                    {isEmployeeDownloaded(e.id) ? (
-                      <span className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-success-bg text-success">
-                        <IconCheck size={13} /> 已下载
-                      </span>
-                    ) : (
-                      <button onClick={() => handleDownloadEmployee(e)}
-                        className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-accent text-white hover:opacity-90">
-                        <IconDownload size={13} /> 下载
-                      </button>
-                    )}
+                    {/* 招募：开新会话并把该角色设为当前会话 agent（实心主按钮，对标招聘类目录卡片） */}
+                    <button onClick={() => handleRecruit(e)} disabled={busyId === e.id}
+                      className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 whitespace-nowrap text-xs px-4 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50">
+                      <IconUser size={13} /> {t('ecosystem.recruit')}
+                    </button>
                   </div>
                 </div>
               ))}
               {empFiltered.length === 0 && !error && (
-                <p className="col-span-full text-center text-text2 text-sm py-8">暂无匹配的数字员工</p>
+                <p className="col-span-full text-center text-text2 text-sm py-8">{t('ecosystem.emptyEmployees')}</p>
               )}
             </div>
           )}
 
-          {/* 连接器 */}
+          {/* 连接器：本机服务区 + 启用开关目录卡片 */}
           {tab === 'connectors' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {pageItems.map((c) => (
-                <div key={c.id} className="p-3 rounded-xl bg-surface border border-border flex flex-col">
-                  <div className="flex items-start justify-between">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate flex items-center gap-1.5">
-                        {c.display_name || c.name}
-                        {c.official && <span className="text-[9px] px-1 py-[2px] leading-none rounded bg-[var(--sem-success-bg)] text-success shrink-0">官方</span>}
+            <div className="space-y-4">
+              {custom ? (
+                /* 自定义连接器页：整块替换列表（页面级切换，避免嵌套浮层的层叠/点击问题） */
+                <CustomConnectorForm
+                  existingNames={custom.existingNames}
+                  configPath={custom.configPath}
+                  onCancel={() => setCustom(null)}
+                  onSaved={(name) => {
+                    setCustom(null);
+                    setMcpRefresh((v) => v + 1); // 刷新「本机服务」区，新服务立即可见
+                    setNotice(t('ecosystem.custom.savedNotice', { name }));
+                  }}
+                />
+              ) : (
+                <>
+              <LocalMcpSection refreshSignal={mcpRefresh} />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {pageItems.map((c) => {
+                  const on = enabledConnSet.has(String(c.id));
+                  return (
+                    <div key={c.id} className="p-5 rounded-xl bg-surface border border-border flex flex-col">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                            {c.display_name || c.name}
+                            {c.official && <span className="text-[9px] px-1 py-[2px] leading-none rounded bg-[var(--sem-success-bg)] text-success shrink-0">{t('ecosystem.official')}</span>}
+                          </div>
+                          <div className="text-xs text-text2 mt-1.5">{c.vendor} · {c.category}</div>
+                        </div>
                       </div>
-                      <div className="text-xs text-text2 mt-0.5">{c.vendor} · {c.category}</div>
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-text2 mt-1.5">{c.description}</div>
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {(c.permissions || []).map((p, i) => (
-                      <span key={i} className="text-[10px] px-1.5 py-[3px] leading-none rounded bg-[var(--sem-warn-bg)] text-warn">
-                        {PERMISSION_LABELS[p.level] || p.level}{p.scope && p.scope !== '*' ? `：${p.scope}` : ''}
-                      </span>
-                    ))}
-                    {(c.permissions || []).length === 0 && (
-                      <span className="text-[10px] px-1.5 py-[3px] leading-none rounded bg-hover text-text2">无额外权限</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-auto pt-3">
-                    {isConnectorDownloaded(c.id) ? (
-                      <span className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-success-bg text-success">
-                        <IconCheck size={13} /> 已下载
-                      </span>
-                    ) : (
-                      <button onClick={() => handleDownloadConnector(c)}
-                        className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-accent text-white hover:opacity-90">
-                        <IconDownload size={13} /> 下载
-                      </button>
-                    )}
-                    <span className="text-[10px] text-text2">下载后在「+」→ 连接器 中查看</span>
-                  </div>
-                </div>
-              ))}
-              {conFiltered.length === 0 && !error && (
-                <p className="col-span-full text-center text-text2 text-sm py-8">暂无匹配的连接器</p>
-              )}
-            </div>
-          )}
-
-          {/* 技能 */}
-          {tab === 'skills' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {pageItems.map((s) => {
-                // dlVer 参与判定读取以保持按钮态与下载动作同步刷新
-                const installed = dlVer >= 0 && (installedSkillIds.has(s.id) || installedSkillIds.has(s.name));
-                return (
-                  <div key={s.id} className="p-3 rounded-xl bg-surface border border-border flex flex-col">
-                    <div className="text-sm font-medium truncate">{s.display_name || s.name}</div>
-                    <div className="text-xs text-text2 mt-0.5">{s.category}</div>
-                    <div className="text-[11px] text-text2 mt-1.5 leading-relaxed">{s.description}</div>
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {(s.tools_required || []).map((t) => (
-                        <span key={t} className="text-[10px] px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{t}</span>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-2 mt-auto pt-3">
-                      {installed ? (
-                        <span className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-success-bg text-success">
-                          <IconCheck size={13} /> 已下载
-                        </span>
-                      ) : (
-                        <button onClick={() => handleDownloadSkill(s)} disabled={busyId === s.id}
-                          className="h-8 inline-flex items-center justify-center gap-1 text-xs px-3 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50">
-                          <IconDownload size={13} /> {busyId === s.id ? '下载中…' : '下载'}
+                      <div className="text-[11px] text-text2 mt-2.5 leading-relaxed line-clamp-2">{c.description}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {(c.permissions || []).map((p, i) => (
+                          <span key={i} className="text-[10px] px-2 py-1 leading-none rounded bg-[var(--sem-warn-bg)] text-warn">
+                            {permissionText(p.level)}{p.scope && p.scope !== '*' ? `${t('ecosystem.scopeSep')}${p.scope}` : ''}
+                          </span>
+                        ))}
+                        {(c.permissions || []).length === 0 && (
+                          <span className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{t('ecosystem.noPermissions')}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2.5 mt-auto pt-4">
+                        {/* 启用开关：只管「+」菜单可见性（启用≠连接） */}
+                        <button onClick={() => toggleConnector(c, !on)} role="switch" aria-checked={on}
+                          className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
+                          <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
                         </button>
-                      )}
+                        <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
+                          {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}
+                        </span>
+                        <span className="flex-1" />
+                        {/* 配置/授权：按 auth_mode 与启动计划就地分流（ConnectorConfigDialog） */}
+                        <button onClick={() => setCfgConnector(c)}
+                          className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 whitespace-nowrap text-xs px-3 rounded-lg border border-border hover:bg-hover text-text2">
+                          <IconPlug size={13} /> {t('ecosystem.configure')}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-              {skFiltered.length === 0 && !error && (
-                <p className="col-span-full text-center text-text2 text-sm py-8">暂无匹配的技能</p>
+                  );
+                })}
+                {conFiltered.length === 0 && !error && (
+                  <p className="col-span-full text-center text-text2 text-sm py-8">{t('ecosystem.emptyConnectors')}</p>
+                )}
+              </div>
+                </>
               )}
             </div>
           )}
 
-          {/* E1：分页器（列表超 PAGE_SIZE 时出现） */}
-          {activeList.length > PAGE_SIZE && (
-            <div className="flex items-center justify-center gap-3 pt-4 text-xs text-text2">
-              <button onClick={() => setPage(curPage - 1)} disabled={curPage <= 1}
-                className="h-8 inline-flex items-center justify-center px-3 rounded-lg border border-border hover:bg-hover disabled:opacity-40">上一页</button>
-              <span>第 {curPage} / {totalPages} 页 · 共 {activeList.length} 条</span>
-              <button onClick={() => setPage(curPage + 1)} disabled={curPage >= totalPages}
-                className="h-8 inline-flex items-center justify-center px-3 rounded-lg border border-border hover:bg-hover disabled:opacity-40">下一页</button>
+          {/* 技能：本地技能区（内置/文件开关）+ 目录启用开关卡片 */}
+          {tab === 'skills' && (
+            <div className="space-y-4">
+              <LocalSkillsSection enabledSkills={enabledSkills} onSkillsChange={onSkillsChange} />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {pageItems.map((s) => {
+                  // 2026-10-16：归一化匹配——目录 id 与磁盘 dir/内置 id 混存的启用集，形态不再互斥
+                  const on = skillKeyIn(String(s.id || s.name || ''), enabledSkills)
+                    || skillKeyIn(String(s.name || ''), enabledSkills);
+                  return (
+                    <div key={s.id} className="p-5 rounded-xl bg-surface border border-border flex flex-col">
+                      <div className="text-sm font-medium truncate">{s.display_name || s.name}</div>
+                      <div className="text-xs text-text2 mt-1.5">{s.category}</div>
+                      <div className="text-[11px] text-text2 mt-2.5 leading-relaxed line-clamp-2">{s.description}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {(s.tools_required || []).map((tool) => (
+                          <span key={tool} className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{tool}</span>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2.5 mt-auto pt-4">
+                        {/* 启用开关：开=物化 SKILL.md 并加入启用列表；关=仅摘启用态（D4） */}
+                        <button onClick={() => toggleSkillCatalog(s, !on)} disabled={busyId === String(s.id || s.name)}
+                          role="switch" aria-checked={on}
+                          className={`w-11 h-6 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
+                          <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+                        </button>
+                        <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
+                          {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+                {skFiltered.length === 0 && !error && (
+                  <p className="col-span-full text-center text-text2 text-sm py-8">{t('ecosystem.emptySkills')}</p>
+                )}
+              </div>
             </div>
           )}
+
+          {/* 懒加载哨兵：进入视口自动追加下一批（替代旧翻页器） */}
+          {hasMore && <div ref={sentinelRef} className="h-10" />}
         </div>
+
+        {/* 连接器就地配置/授权弹窗（paste_key 轨 + oauth 状态披露） */}
+        {cfgConnector && (
+          <ConnectorConfigDialog
+            connector={cfgConnector}
+            onClose={() => setCfgConnector(null)}
+            onConnected={() => setMcpRefresh((v) => v + 1)}
+          />
+        )}
     </div>
   );
 

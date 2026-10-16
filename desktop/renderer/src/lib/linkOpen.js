@@ -11,7 +11,7 @@ export function getLinkOpenMode() {
     const v = localStorage.getItem(KEY);
     return v === 'system' || v === 'copy' ? v : 'smart';
   } catch (e) {
-    console.warn('[linkOpen] 读取链接打开方式失败:', e);
+    console.warn('[linkOpen] failed to read link-open preference:', e);
     return 'smart';
   }
 }
@@ -21,7 +21,7 @@ export function setLinkOpenMode(mode) {
     localStorage.setItem(KEY, mode === 'system' || mode === 'copy' ? mode : 'smart');
     return true;
   } catch (e) {
-    console.warn('[linkOpen] 保存链接打开方式失败:', e);
+    console.warn('[linkOpen] failed to save link-open preference:', e);
     return false;
   }
 }
@@ -48,7 +48,7 @@ export async function openLinkByMode(href) {
       await navigator.clipboard?.writeText?.(url);
       return 'copied';
     } catch (e) {
-      console.warn('[linkOpen] 复制链接失败:', e);
+      console.warn('[linkOpen] copy link failed:', e);
       return 'passthrough';
     }
   }

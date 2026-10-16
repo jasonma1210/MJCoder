@@ -1,0 +1,17 @@
+{
+  "title": "已归档会话",
+  "subtitle": "删除会话会先进入此处，可恢复或彻底删除",
+  "close": "关闭",
+  "loading": "加载中…",
+  "empty": "暂无归档会话",
+  "newSession": "新会话",
+  "restore": "恢复",
+  "purge": "彻底删除",
+  "purgeTitle": "彻底删除会话",
+  "purgeMessage": "「{title}」及其全部消息将被永久删除，无法恢复。",
+  "purgeConfirm": "永久删除",
+  "restoredToast": "已恢复「{title}」",
+  "restoreFailed": "恢复失败",
+  "loadFailed": "归档列表加载失败",
+  "deleteFailed": "删除失败"
+}

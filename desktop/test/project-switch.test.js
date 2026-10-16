@@ -21,6 +21,30 @@ const path = require('path');
 const SRC = path.join(__dirname, '../renderer/src');
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(SRC, 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
+
 let pass = 0;
 let total = 0;
 function check(name, fn) {
@@ -116,42 +140,47 @@ check('工具执行失败原因必须可见（可观测性）', () => {
   // agent-core 工具失败时返回 { error: message }。
   // 若界面只展示 stdout/stderr，用户只能看到工具名、看不到失败原因 ——
   // 这类「静默失效」会让排查成本极高，且没有任何报错提示。
-  assert.match(chat, /result\?\.error/, '未展示工具 result.error');
-  assert.match(chat, /tc\.result\?\.error/, '运行中未展示工具 result.error');
-  assert.match(chat, /bg-danger-bg[\s\S]{0,80}result\?\.error|result\?\.error[\s\S]{0,200}bg-danger-bg/,
+  // T1-1 后卡片实现统一在 ToolTrace.tsx：失败原因无需展开、恒显，且用危险色语义 token。
+  const toolTrace = read('components/tools/ToolTrace.tsx');
+  assert.match(toolTrace, /failed && !!res\?\.error/, '失败原因未恒显展示');
+  assert.match(toolTrace, /bg-danger-bg[\s\S]{0,120}String\(res\.error\)/,
     '工具错误未使用危险色语义 token，视觉上无法与正常输出区分');
 });
 
 check('历史重放的 tool 卡片与运行中卡片一致', () => {
   // 两处展示逻辑若不同步，用户会看到「重进线程后错误信息消失」。
-  // 判定方式：stdout / stderr / error 三个字段各应在两处卡片都出现。
-  const cardRegion = (src, marker) => {
-    const i = src.indexOf(marker);
-    assert.ok(i >= 0, `未找到卡片区域标记 ${marker}`);
-    return src.slice(i, i + 2200);
-  };
-  const live = cardRegion(chat, 'toolCalls.map((tc, i) =>');
-  const replay = cardRegion(chat, 'const tr = toolResults.get(tc.id)');
-  for (const field of ['result?.stdout', 'result?.stderr', 'result?.error']) {
-    assert.ok(live.includes(field), `运行中卡片缺少 ${field}`);
-    assert.ok(replay.includes(field), `历史重放卡片缺少 ${field}`);
+  // T1-2 后运行态与历史态共用 ToolTraceGroup 组件（同一渲染实现 = 一致性的结构性保证），
+  // 字段分型（stdout/stderr/error）收敛在 ToolTrace.tsx 单一实现内。
+  // T2-2：运行态/历史态轨迹均经 MessageStream.tsx 挂载 ToolTraceGroup（运行态本轮 + 历史态轮次内）
+  const chat = read('components/MessageStream.tsx');
+  // T3-2 i18n：label="本轮" 已改为 label={t('message.thisRound')}，
+  // 两段式：结构上仍走 ToolTraceGroup + 「本轮」文案存在于 zh-CN/message.json
+  assert.match(chat, /<ToolTraceGroup calls=\{toolCalls\} label=\{t\('message\.thisRound'\)\} defaultOpen \/>/, '运行态未走 ToolTraceGroup');
+  assertI18nCopy(chat, 'message', '本轮', '运行态工具轨迹缺少「本轮」标签');
+  assert.match(chat, /<ToolTraceGroup calls=\{calls\} toolResults=\{toolResults\}/, '历史重放未走 ToolTraceGroup');
+  const toolTrace = read('components/tools/ToolTrace.tsx');
+  for (const field of ['stdout', 'stderr', 'error']) {
+    assert.ok(toolTrace.includes(field), `ToolTrace 缺少 ${field} 分型展示`);
   }
 });
 
 // ── P1-E/F/G/H/M：第三阶段产品闭环门禁 ──
-check('P1-F：401 后回退登录页（auth-changed 监听闭环）', () => {
-  assert.match(app, /addEventListener\('auth-changed'/,
-    'App 未监听 auth-changed：401 清 token 后仍是伪登录态');
-  assert.match(app, /setToken\(null\)/, '401 后未清 token 状态');
-  assert.match(app, /setLocalModeState\(false\)/, '401 后未退出离线态兜底，可能卡在离线模式');
-  const apiSrc = read('lib/api.js');
-  assert.match(apiSrc, /dispatchEvent\(new Event\('auth-changed'\)\)/, 'api 401 分支未派发 auth-changed');
+// 2026-10-16：登录系统已移除（用户指令：直达主页面，不需要登录）。
+// 原「401 回退登录页」「设置页退出登录入口」门禁随之退役，反向断言登录链路不得回流。
+check('登录系统已移除：App 无登录门禁与 token 状态', () => {
+  assert.ok(!/LoginPage/.test(app), 'App 仍引用 LoginPage');
+  assert.ok(!/mj_token/.test(app), 'App 仍读写 mj_token');
+  assert.ok(!/setToken|setLocalModeState/.test(app), 'App 仍保留登录态 state');
+  assert.match(app, /setLocalMode\(true\)/, 'App 未在模块级置入本地模式（数据层应恒本地）');
+  assert.ok(!fs.existsSync(path.join(__dirname, '../renderer/src/components/LoginPage.jsx')),
+    'LoginPage.jsx 应已删除');
 });
 
-check('P1-F：设置页提供退出登录入口', () => {
+check('登录系统已移除：设置页无账户页与退出登录入口', () => {
   const settings = read('components/SettingsModal.jsx');
-  assert.match(settings, /退出登录/, '设置页无退出登录入口');
-  assert.match(settings, /localStorage\.removeItem\('mj_token'\)/, '退出登录未清 token');
+  assert.ok(!/id: 'account'/.test(settings), '设置导航仍含账户页');
+  assert.ok(!/AccountTab/.test(settings), '设置页仍含 AccountTab 实现');
+  assert.ok(!/退出登录/.test(settings), '设置页仍有退出登录入口');
 });
 
 check('P1-E：在线模式隐藏归档入口（服务端归档 API 未实现）', () => {
@@ -175,12 +204,14 @@ check('P1-H：隔离工作区收口三动作接线（worktree 只建不收修复
   for (const fn of ['syncWorktree', 'promoteWorktree', 'removeWorktree']) {
     assert.match(bar, new RegExp(`window\\.mjcode\\.${fn}`), `收口动作缺少 ${fn} 调用`);
   }
-  assert.match(bar, /合并回主目录/);
-  assert.match(bar, /提升为分支/);
+  // T3-2 i18n：收口按钮文案已抽取到 zh-CN/worktree.json，改为两段式验证（文案在包 + 组件引用 key）
+  assertI18nCopy(bar, 'worktree', '合并回主目录', 'WorktreeBar 缺少「合并回主目录」入口');
+  assertI18nCopy(bar, 'worktree', '提升为分支', 'WorktreeBar 缺少「提升为分支」入口');
 });
 
 check('P1-M：MCP 配置出口剥离 env（敏感变量不出本机）', () => {
-  const mainSrc = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8');
+  // T2-1：mcp:getConfig 已拆出 main/ipc/mcp.js，断言随实现走
+  const mainSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/mcp.js'), 'utf8');
   assert.match(mainSrc, /map\(\(\{ env, \.\.\.rest \}\) => rest\)/,
     'mcp:getConfig 未剥离 env：用户配置的 API Key 会跨 IPC 进入渲染层');
 });

@@ -9,6 +9,9 @@
 //   embed     优先级 2  （预留：embedding 端点配置后启用，未配置直接跳过）
 const crypto = require('crypto');
 
+const DEFAULT_DONE_RETENTION_MS = 7 * 24 * 3600 * 1000; // 7 天保留期
+const DEFAULT_MAX_HISTORY_ROWS = 500;                   // 终态行容量上限
+
 const PROCESSORS = {
   compress: async (payload, deps) => deps.memory.compress({
     spaceId: payload.spaceId,
@@ -59,7 +62,35 @@ class MemoryBgScheduler {
     if (!hasDecay.n) { this.enqueue('decay', {}, { priority: 4 }); enqueued += 1; }
     const hasCleanup = db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE type = 'cleanup' AND status IN ('queued','running')`).get();
     if (!hasCleanup.n) { this.enqueue('cleanup', {}, { priority: 5 }); enqueued += 1; }
+    // P0-19（2026-10-16）：定期清理已终态（done/failed）历史行，消除约 952 行/天的无限膨胀
+    this.purgeHistory();
     return enqueued;
+  }
+
+  /**
+   * 清理已终态（done / failed）的后台任务历史记录（P0-19 表生命周期治理）。
+   * 规则：
+   *   1) 超过 retentionMs（默认 7 天）的 done/failed 行物理删除；
+   *   2) 若终态行总数仍超过 maxRows（默认 500），按 updated_at 保留最新 maxRows 条，其余物理删除；
+   *   3) 绝不触碰 queued / running 在途任务。
+   */
+  purgeHistory({ retentionMs = DEFAULT_DONE_RETENTION_MS, maxRows = DEFAULT_MAX_HISTORY_ROWS } = {}) {
+    const db = this.deps.db;
+    const cutoff = Date.now() - Math.max(0, Number(retentionMs) || 0);
+    const r1 = db.prepare(`DELETE FROM memory_bg_tasks
+      WHERE status IN ('done','failed') AND updated_at < ?`).run(cutoff);
+    let trimmed = 0;
+    const cap = Math.max(1, Number(maxRows) || DEFAULT_MAX_HISTORY_ROWS);
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE status IN ('done','failed')`).get();
+    if (total && total.n > cap) {
+      const r2 = db.prepare(`DELETE FROM memory_bg_tasks
+        WHERE status IN ('done','failed') AND id NOT IN (
+          SELECT id FROM memory_bg_tasks WHERE status IN ('done','failed')
+          ORDER BY updated_at DESC, created_at DESC LIMIT ?
+        )`).run(cap);
+      trimmed = r2.changes || 0;
+    }
+    return { expired: r1.changes || 0, trimmed, purged: (r1.changes || 0) + trimmed };
   }
 
   // 取一个可执行任务（优先级 1 最高，FIFO 同级）；attempts>=3 直接判死（卡死防线）

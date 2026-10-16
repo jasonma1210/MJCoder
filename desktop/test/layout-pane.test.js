@@ -8,6 +8,30 @@ const path = require('path');
 const SRC = path.join(__dirname, '../renderer/src');
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(SRC, 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
+
 let pass = 0;
 let total = 0;
 function check(name, fn) {
@@ -58,7 +82,8 @@ check('App 不再保留旧的 showDiff 模态状态', () => {
 check('侧栏文件树已移出（避免与右侧面板重复）', () => {
   const sidebar = read('components/Sidebar.jsx');
   assert.ok(!/FileTree/.test(sidebar), 'Sidebar 仍引入 FileTree');
-  assert.match(sidebar, /任务/, '侧栏区段应改名为「任务」');
+  // T3-2 i18n：原断言 /任务/ 匹配的是「定时任务」区段入口文案，改为两段式验证
+  assertI18nCopy(sidebar, 'sidebar', '任务', '侧栏区段应改名为「任务」');
 });
 
 check('面板开关快捷键已注册（⌘B / ⌘⌥B / ⌘P）', () => {

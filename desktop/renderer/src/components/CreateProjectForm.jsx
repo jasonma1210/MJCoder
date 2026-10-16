@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { IconFolder, IconFolderPlus } from './icons';
+import { useI18n } from '../i18n';
 
 // 创建项目表单（首启向导与项目切换弹窗共用）
 // 默认：在 ~/Documents/.MJCoder 下新建项目目录，未命名时按「日期+随机数」命名（如 20261013-4821）
 // 备选：添加本地文件夹，直接使用已有目录
 export default function CreateProjectForm({ onCreated, onCancel, busy = false, hint = '' }) {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [root, setRoot] = useState('');
   const [firstRun, setFirstRun] = useState(false);
@@ -20,7 +22,7 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
         setRoot(r.root);
         setFirstRun(r.created);
       })
-      .catch((e) => console.warn('[project] 工作区信息获取失败:', e));
+      .catch((e) => console.warn('[project] workspace info fetch failed:', e));
     return () => { cancelled = true; };
   }, []);
 
@@ -30,10 +32,10 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
     setError('');
     try {
       const r = await window.mjcode.createProject({ name: name.trim() });
-      if (!r?.ok) { setError(r?.error || '创建失败'); return; }
+      if (!r?.ok) { setError(r?.error || t('project.createFailed')); return; }
       onCreated?.({ path: r.path, name: r.name });
     } catch (e) {
-      setError(`创建项目目录失败：${e.message}`);
+      setError(t('project.createDirFailed', { error: e.message }));
     } finally {
       setCreating(false);
     }
@@ -55,35 +57,35 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
     <div>
       {/* 项目名称 */}
       <div className="mb-5">
-        <label className="block text-sm text-text2 mb-2">项目名称</label>
+        <label className="block text-sm text-text2 mb-2">{t('project.nameLabel')}</label>
         <div className="flex items-center gap-3 bg-bg border border-border rounded-2xl px-4 h-14 focus-within:border-accent">
           <IconFolder size={18} className="text-text2 shrink-0" />
           <input
             value={name}
             onChange={(e) => { setName(e.target.value); setError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
-            placeholder="输入项目名称"
+            placeholder={t('project.namePlaceholder')}
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-text2"
           />
         </div>
         <p className="text-xs text-text2 mt-2">
           {hint || (root
-            ? `将新建到 ${root}，不填名称时按 日期+随机数 命名`
-            : '将新建到用户文档下的隐藏目录 .MJCoder，不填名称时按 日期+随机数 命名')}
+            ? t('project.newAt', { root })
+            : t('project.newAtDefault'))}
         </p>
-        {firstRun && <p className="text-xs text-accent mt-1">已为本机创建工作区目录 .MJCoder</p>}
+        {firstRun && <p className="text-xs text-accent mt-1">{t('project.workspaceCreated')}</p>}
       </div>
 
       {/* 当前设备本地工作目录 */}
       <div className="mb-2">
-        <label className="block text-sm text-text2 mb-2">当前设备本地工作目录</label>
+        <label className="block text-sm text-text2 mb-2">{t('project.localDirLabel')}</label>
         <button
           onClick={addLocalFolder}
           disabled={disabled}
           className="w-full flex items-center gap-3 bg-bg border border-border rounded-2xl px-4 h-14 text-left hover:bg-hover disabled:opacity-50"
         >
           <IconFolderPlus size={18} className="text-text2 shrink-0" />
-          <span className="text-sm text-text2">添加本地文件夹</span>
+          <span className="text-sm text-text2">{t('project.addFolder')}</span>
         </button>
       </div>
 
@@ -92,11 +94,11 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
       <div className="flex justify-end gap-3 mt-6">
         {onCancel && (
           <button onClick={onCancel} disabled={creating}
-            className="px-5 py-2.5 rounded-xl text-sm border border-border hover:bg-hover disabled:opacity-50">取消</button>
+            className="px-5 py-2.5 rounded-xl text-sm border border-border hover:bg-hover disabled:opacity-50">{t('project.cancel')}</button>
         )}
         <button onClick={create} disabled={disabled}
           className="bg-accent text-white px-5 py-2.5 rounded-xl text-sm disabled:opacity-50">
-          {creating ? '创建中...' : '创建项目'}
+          {creating ? t('project.creating') : t('project.createBtn')}
         </button>
       </div>
     </div>

@@ -5,7 +5,33 @@ const path = require('path');
 
 const SRC = path.join(__dirname, '../renderer/src');
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8');
+
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(SRC, 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
 const chat = read('components/ChatArea.jsx');
+// T2-2：运行流程（沙箱策略/worktree 创建/压缩/agentFilesOf）已拆出 hooks/useAgentRun.ts
+const runHook = read('hooks/useAgentRun.ts');
 const core = fs.readFileSync(path.join(__dirname, '../agent-core/index.js'), 'utf8');
 const diffPanel = read('components/DiffReviewPanel.jsx');
 const mainSrc = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8');
@@ -20,12 +46,18 @@ function check(name, fn) {
 }
 
 // ── D1 Plan 模式 ──
-check('Plan 模式在引擎层移除写工具', () => {
-  assert.match(core, /PLAN_MODE_BLOCKED/);
-  for (const t of ['write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add']) {
-    assert.ok(core.includes(`'${t}'`), `写工具 ${t} 未列入阻断集`);
+// V02（2026-10-16）：plan 过滤从 5 写工具黑名单升级为只读白名单（shell/code_exec/MCP/
+// browser/chrome/orchestrate 全部纳入），白名单名单与运行时守卫见 r1-plan-allowlist.test.mjs 的
+// 行为断言；本断言随契约更新为白名单符号。
+check('Plan 模式在引擎层只保留只读白名单', () => {
+  assert.match(core, /PLAN_MODE_ALLOWED/);
+  for (const t of ['write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'shell', 'code_exec', 'install_plugin', 'orchestrate_task']) {
+    assert.ok(!new RegExp(`PLAN_MODE_ALLOWED[\\s\\S]{0,1200}'${t}'`).test(core.slice(core.indexOf('PLAN_MODE_ALLOWED'))), `效果类工具 ${t} 不得进入白名单`);
   }
-  assert.match(core, /allTools = allTools\.filter\(\(t\) => !PLAN_MODE_BLOCKED/);
+  for (const t of ['read_file', 'grep', 'git_status', 'todo_write', 'spawn_subagent']) {
+    assert.ok(core.includes(`'${t}'`), `只读工具 ${t} 应在白名单中`);
+  }
+  assert.match(core, /allTools = allTools\.filter\(\(t\) => PLAN_MODE_ALLOWED/);
 });
 
 check('Plan 模式附加系统提示约束', () => {
@@ -38,8 +70,8 @@ check('runAgent 接受 planMode 参数', () => {
 });
 
 check('ChatArea 规划模式/未选项目强制沙箱只读（双保险 + fail-safe）', () => {
-  assert.match(chat, /planMode \|\| noProject \? 'read-only'/); // P0-B：planMode 或无项目均强制只读
-  assert.match(chat, /const noProject = /);
+  assert.match(runHook, /planMode \|\| noProject \? 'read-only'/); // P0-B：planMode 或无项目均强制只读
+  assert.match(runHook, /const noProject = /);
   assert.match(chat, /规划模式/);
   assert.match(chat, /enablePlanMode/);
 });
@@ -47,8 +79,10 @@ check('ChatArea 规划模式/未选项目强制沙箱只读（双保险 + fail-s
 // ── D2 Worktree ──
 check('worktree 模块存在且 IPC 已注册', () => {
   assert.ok(fs.existsSync(path.join(__dirname, '../main/worktree.js')));
+  // T2-1：worktree IPC 已拆出 main/ipc/project.js，断言随实现走
+  const projectSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/project.js'), 'utf8');
   for (const ch of ['worktree:create', 'worktree:list', 'worktree:promote', 'worktree:sync', 'worktree:remove']) {
-    assert.ok(mainSrc.includes(`ipcMain.handle('${ch}'`), `缺少 IPC ${ch}`);
+    assert.ok(projectSrc.includes(`ipcMain.handle('${ch}'`), `缺少 IPC ${ch}`);
     assert.ok(preload.includes(ch.split(':')[1].replace(/^/, (m) => m)) || preload.includes(ch), `preload 未暴露 ${ch}`);
   }
 });
@@ -69,14 +103,15 @@ check('syncToLocal 不在 worktree 内解析主检出目录', () => {
 
 check('Composer 提供本地/隔离工作区切换', () => {
   const cc = read('components/ComposerControls.jsx');
-  assert.match(cc, /MODE_OPTIONS/);
+  // T3-2 i18n：顶层常量 MODE_OPTIONS 会冻结求值结果，改为渲染期调用的 getModeOptions()
+  assert.match(cc, /getModeOptions/);
   assert.match(cc, /value: 'worktree'/);
   assert.match(cc, /onModeChange/);
 });
 
 check('隔离模式下实际执行目录切到 worktree 副本', () => {
   assert.match(chat, /const cwd = \(runMode === 'worktree' && worktree\?\.path\)/);
-  assert.match(chat, /window\.mjcode\.createWorktree/);
+  assert.match(runHook, /window\.mjcode\.createWorktree/);
 });
 
 // ── D3 上下文治理 ──
@@ -94,8 +129,8 @@ check('token 估算与压缩函数已从引擎导出', () => {
 });
 
 check('/compact 已接到实际压缩', () => {
-  assert.match(chat, /async function compactContext/);
-  assert.match(chat, /compactHistory\(convo, selectedModel, window\.mjcode\.chat\)/);
+  assert.match(runHook, /async function compactContext/);
+  assert.match(runHook, /compactHistory\(convo, selectedModel, window\.mjcode\.chat\)/);
 });
 
 // ── D4 Diff 三级还原 ──
@@ -106,10 +141,13 @@ check('Diff 解析已按 hunk 拆分', () => {
 });
 
 check('hunk 级还原走 git apply --reverse', () => {
-  assert.match(mainSrc, /ipcMain\.handle\('tool:gitApplyHunk'/);
-  assert.match(mainSrc, /\['apply', '--reverse'/);
+  // T2-1：git 工具 IPC 已拆出 main/tools/exec.js，断言随实现走
+  const toolSrc = fs.readFileSync(path.join(__dirname, '../main/tools/exec.js'), 'utf8');
+  assert.match(toolSrc, /ipcMain\.handle\('tool:gitApplyHunk'/);
+  assert.match(toolSrc, /\['apply', '--reverse'/);
   assert.match(preload, /gitApplyHunk/);
-  assert.match(diffPanel, /还原此块/);
+  // T3-2 i18n：「还原此块」按钮文案已抽取到 zh-CN/diff.json（revertHunk），改为两段式验证
+  assertI18nCopy(diffPanel, 'diff', '还原此块', 'Diff 面板缺少 hunk 级还原按钮文案');
   assert.match(diffPanel, /rejectHunk/);
 });
 
@@ -117,7 +155,7 @@ check('上一轮筛选只看 Agent 改动的文件', () => {
   assert.match(diffPanel, /agentFiles = \[\]/);
   assert.match(diffPanel, /lastTurnOnly/);
   assert.match(diffPanel, /上一轮/);
-  assert.match(chat, /agentFilesOf/);
+  assert.match(runHook, /agentFilesOf/);
   assert.match(chat, /onAgentFilesChange/);
 });
 

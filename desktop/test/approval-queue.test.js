@@ -16,6 +16,25 @@ function check(name, ok, detail = '') {
   else { fail++; console.log(`❌ ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(__dirname, '..', 'renderer', 'src', 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+
 (async () => {
   // ── 结束回调：用户决策 ──
   const ch = new ApprovalChannel();
@@ -86,14 +105,17 @@ function check(name, ok, detail = '') {
   check('审批卡按 approvalId 入队且去重',
     /q\.some\(\(r\) => r\.approvalId === req\.approvalId\)/.test(cardSrc));
   check('审批卡取队首展示（FIFO）', /const pending = queue\[0\]/.test(cardSrc));
-  check('审批卡显示「第 i/N 条」', /第 1\/\$\{total\}/.test(cardSrc) || /第 1\//.test(cardSrc));
+  // T3-2 i18n：「第 1/N 条」文案已抽取到 zh-CN/approval.json（queuePosition），两段式验证接线
+  const qpKeys = zhKeys('approval', '第 1/');
+  check('审批卡显示「第 i/N 条」', qpKeys.length > 0 && refsKey(cardSrc, 'approval', qpKeys));
   check('审批卡监听审批结束回执并出队',
     /onApprovalEnd/.test(cardSrc) && /q\.filter\(\(r\) => r\.approvalId !== approvalId\)/.test(cardSrc));
   check('preload 暴露 onApprovalEnd 且可退订',
     /onApprovalEnd: \(cb\) =>/.test(preloadSrc) && /removeListener\('tool:approval-end'/.test(preloadSrc));
   check('主进程广播 tool:approval-end', /send\('tool:approval-end'/.test(mainSrc));
   check('主进程把结束回调挂到 wait 上',
-    /approvalChannel\.wait\(approvalId, broadcastApprovalEnd\)/.test(mainSrc));
+    // N5：wait 增加第三参 runId（审批挂到发起运行，运行取消统一撤下）——断言容忍追加参数
+    /approvalChannel\.wait\(approvalId, broadcastApprovalEnd[,)]/.test(mainSrc));
   check('决策回传仍携带 approvalId', /approvalId: pending\.approvalId/.test(cardSrc));
 
   // ── abort 监听器泄漏：一次运行连发 N 次 chat，监听器不得累加 ──

@@ -74,7 +74,7 @@ const DEFAULT_TIMEOUT_MS = 12000;
 // 向后兼容：旧 env（MJCODE_WEB_SEARCH_ENDPOINT/KEY）映射为一个 searxng/tavily 之外的
 // 通用「自定义端点」条目不现实（响应结构未知），故 env 只在**完全无配置**时提示仍在，
 // 不再参与请求构造——避免「UI 配了 A、env 里还有个旧 B」时的双源混乱。
-function loadSearchConfig(localStore) {
+function loadSearchConfig(localStore, credentialCrypto = null) {
   let list = null;
   try {
     const raw = localStore?.getPreference?.(PREF_KEY);
@@ -84,21 +84,55 @@ function loadSearchConfig(localStore) {
     list = null;
   }
   const providers = Array.isArray(list) ? list.filter((p) => p && PROVIDER_IDS.includes(p.id)) : [];
+  // P0-20（2026-10-16）：发现历史明文 apiKey 且存在加密器时，自动在落盘层升级为 keyEncrypted
+  let needsMigrate = false;
+  let credentialFailure = false;
+  const migratedIds = new Set();
   // 归一化：保证字段齐全，未知提供方剔除
-  return {
-    providers: SEARCH_PROVIDERS.map((meta) => {
-      const saved = providers.find((p) => p.id === meta.id) || {};
-      return {
-        id: meta.id,
-        enabled: saved.enabled === true,
-        apiKey: String(saved.apiKey || ''),
-        extra: saved.extra && typeof saved.extra === 'object' ? saved.extra : {},
-      };
-    }),
-  };
+  const normalized = SEARCH_PROVIDERS.map((meta) => {
+    const saved = providers.find((p) => p.id === meta.id) || {};
+    let apiKey = '';
+    if (saved.keyEncrypted && credentialCrypto?.decrypt) {
+      try { apiKey = String(credentialCrypto.decrypt(saved.keyEncrypted) || ''); }
+      catch (e) {
+        credentialFailure = true;
+        console.error(`[webSearch] ${meta.id} 密钥解密失败；已禁用该项以防止覆盖密文:`, e.message);
+      }
+    } else if (saved.apiKey) {
+      apiKey = String(saved.apiKey || '');
+      if (credentialCrypto?.encrypt) {
+        needsMigrate = true;
+        migratedIds.add(meta.id);
+      }
+    }
+    return {
+      id: meta.id,
+      enabled: saved.enabled === true && !(saved.keyEncrypted && !apiKey),
+      apiKey,
+      extra: saved.extra && typeof saved.extra === 'object' ? saved.extra : {},
+    };
+  });
+  if (needsMigrate) {
+    try { saveSearchConfig(localStore, normalized, credentialCrypto); }
+    catch (e) {
+      credentialFailure = true;
+      for (const id of migratedIds) {
+        const provider = normalized.find((entry) => entry.id === id);
+        if (provider) provider.enabled = false;
+      }
+      console.error('[webSearch] 明文 Key 自动加密迁移失败；已禁用明文配置项:', e.message);
+    }
+  }
+  if (credentialFailure) {
+    for (const p of normalized) {
+      const saved = providers.find((entry) => entry.id === p.id);
+      if (saved?.keyEncrypted || (saved?.apiKey && credentialCrypto?.encrypt)) p.enabled = false;
+    }
+  }
+  return { providers: normalized.map(({ _migrationFailed, ...provider }) => provider) };
 }
 
-function saveSearchConfig(localStore, providers) {
+function saveSearchConfig(localStore, providers, credentialCrypto = null) {
   const clean = (Array.isArray(providers) ? providers : [])
     .filter((p) => p && PROVIDER_IDS.includes(p.id))
     .map((p) => ({
@@ -107,7 +141,17 @@ function saveSearchConfig(localStore, providers) {
       apiKey: String(p.apiKey || ''),
       extra: p.extra && typeof p.extra === 'object' ? p.extra : {},
     }));
-  localStore?.setPreference?.(PREF_KEY, JSON.stringify(clean));
+  // P0-20：提供 credentialCrypto 时，落库 JSON 只存 keyEncrypted（apiKey 置空），
+  // 保证 local-data.json 内搜索 Key 与 provider Key 具有同一安全级别。
+  const persisted = clean.map((p) => {
+    if (!p.apiKey) return p;
+    if (!credentialCrypto?.encrypt) throw new Error(`[webSearch] ${p.id} 缺少凭证加密器，拒绝明文持久化`);
+    // 配置包含密钥时必须 fail-closed，绝不在加密失败时明文落盘。
+    const encrypted = credentialCrypto.encrypt(p.apiKey);
+    if (typeof encrypted !== 'string' || !encrypted) throw new Error(`[webSearch] ${p.id} 密钥加密失败，拒绝明文持久化`);
+    return { id: p.id, enabled: p.enabled, apiKey: '', keyEncrypted: encrypted, extra: p.extra };
+  });
+  localStore?.setPreference?.(PREF_KEY, JSON.stringify(persisted));
   return { providers: clean };
 }
 

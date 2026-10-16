@@ -98,15 +98,17 @@ function ok(name) { n += 1; console.log(`  ✓ ${name}`); }
   assert.strictEqual(g2.tasks.find((x) => x.taskId === 'b').status, 'failed');
   ok('flush 落盘 → 重开库状态完整（断点续跑前提）');
 
-  // 6. 崩溃恢复：running → queued（failed 任务先手动重试回队，再模拟领取后崩溃）
+  // 6. 崩溃恢复（V14）：running → failed + needsReview（不盲目重放；failed 任务先手动回队再模拟领取后崩溃）
   store2.setTaskStatus('grp', 'b', 'queued');
   store2.claimNext('grp', 'w3');
   assert.strictEqual(store2.getTask('grp', 'b').status, 'running');
   const rec = store2.recoverInterrupted();
-  assert.strictEqual(rec.recoveredTasks, 1);
-  assert.strictEqual(store2.getTask('grp', 'b').status, 'queued');
+  assert.strictEqual(rec.recoveredTasks.length, 1);
+  const recTask = store2.getTask('grp', 'b');
+  assert.strictEqual(recTask.status, 'failed');
+  assert.strictEqual(recTask.result.needsReview, true);
   db2.close();
-  ok('recoverInterrupted 崩溃恢复');
+  ok('recoverInterrupted 崩溃恢复（V14 不重放，needsReview）');
 
   // 7. 防抖窗口内 exit 兜底 flush（新库，写完立刻 close 而不手动 flush）
   const file3 = path.join(tmp, 't3.db');

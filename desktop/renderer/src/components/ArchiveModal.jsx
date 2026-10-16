@@ -3,10 +3,12 @@ import { api } from '../lib/api';
 import { confirm, toast } from './feedback';
 import InlineAlert from './InlineAlert';
 import { IconX } from './icons';
+import { useI18n } from '../i18n';
 
 // A3：已归档会话管理 —— 本地「删除」的真实语义是归档，必须提供恢复/彻底删除出口
 // （对标 Codex Settings → Archived Threads）
 export default function ArchiveModal({ onClose, onChanged, onSelect }) {
+  const { t } = useI18n();
   const [list, setList] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -17,39 +19,39 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
     try {
       setList(await api.archivedThreads());
     } catch (err) {
-      setError(err.message || '归档列表加载失败');
+      setError(err.message || t('archive.loadFailed'));
     }
     setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
 
-  async function restore(t) {
-    const r = await api.restoreThread(t.id);
+  async function restore(thread) {
+    const r = await api.restoreThread(thread.id);
     if (r?.ok) {
-      toast({ message: `已恢复「${t.title || '新会话'}」` });
+      toast({ message: t('archive.restoredToast', { title: thread.title || t('archive.newSession') }) });
       onChanged?.();
-      onSelect?.(t);
+      onSelect?.(thread);
       load();
     } else {
-      setError(r?.error || '恢复失败');
+      setError(r?.error || t('archive.restoreFailed'));
     }
   }
 
-  async function purge(t) {
+  async function purge(thread) {
     const ok = await confirm({
-      title: '彻底删除会话',
-      message: `「${t.title || '新会话'}」及其全部消息将被永久删除，无法恢复。`,
+      title: t('archive.purgeTitle'),
+      message: t('archive.purgeMessage', { title: thread.title || t('archive.newSession') }),
       danger: true,
-      confirmLabel: '永久删除',
+      confirmLabel: t('archive.purgeConfirm'),
     });
     if (!ok) return;
-    const r = await api.purgeThread(t.id);
+    const r = await api.purgeThread(thread.id);
     if (r?.ok) {
       onChanged?.();
       load();
     } else {
-      setError(r?.error || '删除失败');
+      setError(r?.error || t('archive.deleteFailed'));
     }
   }
 
@@ -61,31 +63,31 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
-            <h2 className="text-base font-semibold">已归档会话</h2>
-            <p className="text-xs text-text2 mt-0.5">删除会话会先进入此处，可恢复或彻底删除</p>
+            <h2 className="text-base font-semibold">{t('archive.title')}</h2>
+            <p className="text-xs text-text2 mt-0.5">{t('archive.subtitle')}</p>
           </div>
-          <button onClick={onClose} className="text-text2 hover:text-text" aria-label="关闭"><IconX size={16} /></button>
+          <button onClick={onClose} className="text-text2 hover:text-text" aria-label={t('archive.close')}><IconX size={16} /></button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
           {error && <div className="mb-3"><InlineAlert type="error" onDismiss={() => setError('')}>{error}</InlineAlert></div>}
           {loading ? (
-            <p className="text-text2 text-sm text-center py-8">加载中…</p>
+            <p className="text-text2 text-sm text-center py-8">{t('archive.loading')}</p>
           ) : list.length === 0 ? (
-            <p className="text-text2 text-sm text-center py-8">暂无归档会话</p>
+            <p className="text-text2 text-sm text-center py-8">{t('archive.empty')}</p>
           ) : (
-            list.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 py-2.5 border-b border-border last:border-0">
+            list.map((thread) => (
+              <div key={thread.id} className="flex items-center gap-3 py-2.5 border-b border-border last:border-0">
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm truncate">{t.title || '新会话'}</div>
+                  <div className="text-sm truncate">{thread.title || t('archive.newSession')}</div>
                   <div className="text-xs text-text2 mt-0.5">
-                    {new Date(t.updatedAt || t.createdAt || Date.now()).toLocaleString('zh-CN')}
+                    {new Date(thread.updatedAt || thread.createdAt || Date.now()).toLocaleString('zh-CN')}
                   </div>
                 </div>
-                <button onClick={() => restore(t)} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover shrink-0">
-                  恢复
+                <button onClick={() => restore(thread)} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover shrink-0">
+                  {t('archive.restore')}
                 </button>
-                <button onClick={() => purge(t)} className="text-xs px-3 py-1.5 rounded-lg border border-border text-danger hover:bg-hover shrink-0">
-                  彻底删除
+                <button onClick={() => purge(thread)} className="text-xs px-3 py-1.5 rounded-lg border border-border text-danger hover:bg-hover shrink-0">
+                  {t('archive.purge')}
                 </button>
               </div>
             ))

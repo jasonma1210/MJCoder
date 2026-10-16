@@ -36,13 +36,18 @@ class TaskStore {
 
   // ── 组 ──
   // meta：{ auto, replanDepth, replanOf } 自动编排元数据（auto 组失败后由主进程自动重规划）
-  createGroup({ groupId, goal, cwd, dag, tasks, auto, replanDepth, replanOf }) {
+  // V04（2026-10-16）：approvalMode/sandboxPolicy 是「建组时刻」的宿主治理快照，
+  // 由调用方（main.js 从用户当前设置取值）传入并持久化——Worker 执行时读组内快照，
+  // 不再读取全局最近一次会话设置（否则会话中途改审批档会串到已在排队的组）。
+  // R6（2026-10-16，用户实测反馈）：threadId = 创建组的会话——组绑定会话而非全局可见。
+  createGroup({ groupId, goal, cwd, dag, tasks, auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId }) {
     const now = this.now();
     const tx = this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO task_groups (group_id, goal, cwd, status, dag_json, auto, replan_depth, replan_of, created_at, updated_at)
-                       VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?)`)
+      this.db.prepare(`INSERT INTO task_groups (group_id, goal, cwd, status, dag_json, auto, replan_depth, replan_of, approval_mode, sandbox_policy, thread_id, created_at, updated_at)
+                       VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(groupId, goal, cwd || '', JSON.stringify(dag || null),
-          auto ? 1 : 0, Number(replanDepth) || 0, replanOf || null, now, now);
+          auto ? 1 : 0, Number(replanDepth) || 0, replanOf || null,
+          approvalMode || null, sandboxPolicy || null, threadId || null, now, now);
       tasks.forEach((t, i) => {
         this.db.prepare(`INSERT INTO sub_tasks
           (task_id, group_id, seq, title, prompt, depends_on, critical, max_retry, timeout_ms, status)
@@ -63,6 +68,22 @@ class TaskStore {
   listGroups({ limit = 30 } = {}) {
     return this.db.prepare('SELECT * FROM task_groups ORDER BY created_at DESC LIMIT ?').all(limit)
       .map((g) => ({ ...g, dag: safeParse(g.dag_json), result: safeParse(g.result_json) }));
+  }
+
+  // R6（2026-10-16，用户实测反馈）：删除任务组——否则终态组永远留在任务面板。
+  // fail-closed：running 组不可直接删（先取消/强制关闭，避免账目悬空）；
+  // 事务级联清理 side_effects + sub_tasks + 组本体。
+  deleteGroup(groupId) {
+    const g = this.db.prepare('SELECT status FROM task_groups WHERE group_id = ?').get(groupId);
+    if (!g) return { ok: false, error: `任务组不存在：${groupId}` };
+    if (g.status === 'running') return { ok: false, error: '任务组正在运行，请先取消再删除' };
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM side_effects WHERE group_id = ?').run(groupId);
+      this.db.prepare('DELETE FROM sub_tasks WHERE group_id = ?').run(groupId);
+      this.db.prepare('DELETE FROM task_groups WHERE group_id = ?').run(groupId);
+    });
+    tx();
+    return { ok: true };
   }
 
   setGroupStatus(groupId, status, { error, result } = {}) {
@@ -154,11 +175,69 @@ class TaskStore {
   }
 
   // 崩溃恢复：running → queued（Electron 重启后 WorkerPool 重新领取）
+  // V14（2026-10-16，方案 §11 / R4-N5）：重启恢复**不再盲目重放**。
+  // 原实现 running → queued 直接回队 + 组自动续跑——被中断任务可能已完成部分副作用
+  //（写文件/发请求/安装包），重放 = 同一操作执行两次且用户不知情；副作用账本
+  //（pending/committed/uncertain）就位前，执行状态不可确认的任务一律不自动重放（fail-closed）。
+  // 现契约：running → failed（needsReview：中断原因写入 error，不消耗自动重试次数）；
+  //         运行中的组 → paused（等待用户人工核对后手动续跑）；
+  //         queued 保持原状（从未启动，无副作用，无风险）。
   recoverInterrupted() {
-    const rows = this.db.prepare(`UPDATE sub_tasks SET status = 'queued', worker_id = NULL
-      WHERE status = 'running'`).run();
-    const groups = this.db.prepare(`SELECT group_id FROM task_groups WHERE status = 'running'`).all();
-    return { recoveredTasks: rows.changes, runningGroups: groups.map((g) => g.group_id) };
+    const now = this.now();
+    const interrupted = this.db.prepare(`SELECT group_id, task_id FROM sub_tasks WHERE status = 'running'`).all();
+    const runningGroups = this.db.prepare(`SELECT group_id FROM task_groups WHERE status = 'running'`).all();
+    const tx = this.db.transaction(() => {
+      for (const r of interrupted) {
+        this.db.prepare(`UPDATE sub_tasks SET status = 'failed',
+          error = ?, result_json = ?, worker_id = NULL, finished_at = ?
+          WHERE group_id = ? AND task_id = ?`)
+          .run('应用重启导致执行中断（不自动重放：已执行的副作用无法确认，请人工核对后重试）',
+            JSON.stringify({ needsReview: true, interruptedByRestart: true }),
+            now, r.group_id, r.task_id);
+      }
+      for (const g of runningGroups) {
+        this.db.prepare(`UPDATE task_groups SET status = 'paused', updated_at = ? WHERE group_id = ?`).run(now, g.group_id);
+      }
+    });
+    tx();
+    return {
+      recoveredTasks: interrupted.map((r) => ({ groupId: r.group_id, taskId: r.task_id })),
+      pausedGroups: runningGroups.map((g) => g.group_id),
+    };
+  }
+
+  // ── 副作用账本（N5，方案 §11）──
+  // V14「不自动重放」的可审计地基：Worker 领取任务即记 uncertain（可能产生副作用），
+  // 任务终态时 resolved。重启恢复时 uncertain 记录原样保留——它们正是「副作用无法确认」
+  // 的清单，随 needsReview 一起供人工核对（UI 消费在 R6 编排波次）。
+  markEffectUncertain(groupId, taskId) {
+    const existing = this.db.prepare('SELECT id FROM side_effects WHERE group_id = ? AND task_id = ?').get(groupId, taskId);
+    if (existing) {
+      // 重试重新领取：回到 uncertain（resolved_at 清空）
+      this.db.prepare(`UPDATE side_effects SET state = 'uncertain', resolved_at = NULL WHERE id = ?`).run(existing.id);
+      return;
+    }
+    this.db.prepare('INSERT INTO side_effects (group_id, task_id, state, created_at) VALUES (?, ?, ?, ?)')
+      .run(groupId, taskId, 'uncertain', this.now());
+  }
+
+  resolveEffect(groupId, taskId) {
+    this.db.prepare(`UPDATE side_effects SET state = 'resolved', resolved_at = ? WHERE group_id = ? AND task_id = ?`)
+      .run(this.now(), groupId, taskId);
+  }
+
+  // 组内副作用仍为 uncertain 的任务清单（needsReview 人工核对的输入）
+  listUncertainEffects(groupId) {
+    return this.db.prepare(`SELECT task_id FROM side_effects WHERE group_id = ? AND state = 'uncertain'`).all(groupId).map((r) => r.task_id);
+  }
+
+  // A5（2026-10-16）：重试前置核对的判定——纯查询，供 IPC 层与测试共用。
+  // 语义：该任务上次运行留下了「副作用无法确认」的记录（可能已写文件/已发请求），
+  // 且调用方尚未显式确认（confirmReview !== true）→ 必须先核对再重试，避免重复执行同一批操作。
+  // 提取为方法而非内联在 IPC handler 里，是为了让它可被单测直接驱动（handler 依赖 electron，不可单测）。
+  needsRetryReview(groupId, taskId, confirmReview = false) {
+    if (confirmReview === true) return false;
+    return this.listUncertainEffects(groupId).includes(taskId);
   }
 
   touchGroup(groupId) {

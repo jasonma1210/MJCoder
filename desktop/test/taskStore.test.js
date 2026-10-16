@@ -1,8 +1,8 @@
-// P1-3 任务存储层测试（真实 better-sqlite3）：状态机 / 队列 / 重试 / 阻塞失败 / 崩溃恢复
+// P1-3 任务存储层测试（sql.js 驱动）：状态机 / 队列 / 重试 / 阻塞失败 / 崩溃恢复
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { openDb } = require('../main/db');
+const { openDbAsync } = require('../main/db');
 const { TaskStore, canTransition } = require('../main/taskStore');
 
 let pass = 0;
@@ -12,8 +12,11 @@ function check(name, ok, detail = '') {
   else { fail++; console.log(`❌ ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
+(async () => {
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-tasks-'));
-const db = openDb(dir);
+// 测试走 sql.js（WASM，零原生模块）：绕过 better-sqlite3 的 ABI/编译依赖（无 Xcode CLT 也能跑）。
+// 业务层只用 db.prepare/transaction/exec/pragma，两驱动等价。
+const db = await openDbAsync(dir, { driver: 'sqljs' });
 const store = new TaskStore(db);
 
 const TASKS = [
@@ -103,20 +106,27 @@ try { store.setGroupStatus('g2', 'running'); } catch { threw2 = false; } // paus
 check('paused → running 合法迁移', threw2 === false);
 check('未完结组 isGroupSettled=false', store.isGroupSettled('g2') === false);
 
-// ── 崩溃恢复：running → queued ──
+// ── 崩溃恢复（V14）：running → failed + needsReview，不盲目重放 ──
 store.createGroup({ groupId: 'g3', goal: '恢复场景', cwd: '', dag: null, tasks: [{ id: 'a', title: 'x', prompt: 'y' }] });
 store.enqueueReady('g3');
 store.claimNext('g3', 'w9'); // a → running
 store.setGroupStatus('g3', 'running');
 const rec = store.recoverInterrupted();
-check('崩溃恢复：running 任务回 queued', rec.recoveredTasks >= 1 && store.getTask('g3', 'a').status === 'queued');
-check('恢复清单含 running 组', rec.runningGroups.includes('g3'));
+check('崩溃恢复：中断任务 → failed（不自动重放副作用）', Array.isArray(rec.recoveredTasks) && rec.recoveredTasks.length >= 1 && store.getTask('g3', 'a').status === 'failed');
+check('崩溃恢复：needsReview 标记 + 不消耗自动重试', (() => {
+  const t = store.getTask('g3', 'a');
+  return t.result?.needsReview === true && t.result?.interruptedByRestart === true && t.retryCount === 0;
+})());
+check('恢复清单：运行中的组 → paused', rec.pausedGroups.includes('g3') && store.getGroup('g3').status === 'paused');
 
-// ── 持久化：新连接读回（WAL）──
-const db2 = openDb(dir);
+// ── 持久化：flush 落盘后新连接读回（sql.js 防抖落盘 → 主动 flush 后重开）──
+db.flush();
+const db2 = await openDbAsync(dir, { driver: 'sqljs' });
 const store2 = new TaskStore(db2);
-check('重开连接数据完整（WAL 持久化）', store2.getGroup('g1').tasks.length === 3 && store2.getGroup('g1').tasks.find((t) => t.taskId === 't1').result.summary === 'A 完成');
+check('重开连接数据完整（flush 持久化）', store2.getGroup('g1').tasks.length === 3 && store2.getGroup('g1').tasks.find((t) => t.taskId === 't1').result.summary === 'A 完成');
+db2.close();
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
 process.exit(fail === 0 ? 0 : 1);
+})().catch((e) => { console.error(e); process.exit(1); });

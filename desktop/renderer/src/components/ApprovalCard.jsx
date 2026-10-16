@@ -1,10 +1,12 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
+import { useI18n } from '../i18n'; // T3-2：i18n
 import { IconAlert, IconFile, IconPlug, IconTerminal } from './icons';
 
+// 顶层常量只存标题 key（求值推迟到渲染时经 t()，切换语言即时更新）
 const LEVEL_META = {
-  L1: { label: '危险命令', Icon: IconTerminal, color: 'text-danger' },
-  L2: { label: '文件写入', Icon: IconFile, color: 'text-warn' },
-  L3: { label: 'MCP 工具', Icon: IconPlug, color: 'text-info' },
+  L1: { titleKey: 'approval.dangerTitle', Icon: IconTerminal, color: 'text-danger' },
+  L2: { titleKey: 'approval.fileWriteTitle', Icon: IconFile, color: 'text-warn' },
+  L3: { titleKey: 'approval.mcpTitle', Icon: IconPlug, color: 'text-info' },
 };
 
 // 审批卡片（对标 Codex）：不再全屏遮罩，改为右下角非模态悬浮
@@ -20,6 +22,7 @@ const LEVEL_META = {
 // 拒绝收尾；用户看到的现象是「卡片弹了但命令继续执行，点了又没反应」。
 // 现在每条审批都进队，逐条作答，并显示「第 i/N 条」让用户知道后面还有几条。
 export default function ApprovalCard({ onPendingChange }) {
+  const { t } = useI18n();
   const [queue, setQueue] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [flash, setFlash] = useState(false);
@@ -112,34 +115,44 @@ export default function ApprovalCard({ onPendingChange }) {
       <div className="bg-surface border border-warn rounded-2xl shadow-[var(--shadow-pop)] overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
           <span className={meta.color}><meta.Icon size={15} /></span>
-          <span className="text-sm font-medium">{meta.label}确认</span>
+          <span className="text-sm font-medium">{t(meta.titleKey)}</span>
           <span className="text-text2 text-xs font-mono truncate">{pending.tool}</span>
           {total > 1 && (
-            <span className="text-text2 text-xs shrink-0">第 1/{total} 条</span>
+            <span className="text-text2 text-xs shrink-0">{t('approval.queuePosition', { total })}</span>
           )}
           <button
             onClick={() => setCollapsed((v) => !v)}
             className="ml-auto text-text2 hover:text-text text-xs"
           >
-            {collapsed ? '展开' : '收起'}
+            {collapsed ? t('approval.expand') : t('approval.collapse')}
           </button>
         </div>
 
         {!collapsed && (
           <>
+            {/* V21：显示审批请求来源的工作根（多会话/隔离工作区并发时，
+                用户需要知道命令将作用在哪个目录）。主进程摘要未携带时不显示，不硬造。 */}
+            {(pending.cwd || pending.workingRoot) && (
+              <div className="flex items-center gap-2 px-4 pt-3 text-xs text-text2">
+                <span className="shrink-0">{t('approval.workingRoot')}</span>
+                <span className="font-mono truncate" title={pending.cwd || pending.workingRoot}>
+                  {pending.cwd || pending.workingRoot}
+                </span>
+              </div>
+            )}
             <pre className="px-4 py-3 text-xs font-mono overflow-x-auto max-h-40 whitespace-pre-wrap text-text2">
-              {pending.detail || '（无详情）'}
+              {pending.detail || t('approval.noDetail')}
             </pre>
             <div className="flex flex-wrap gap-2 px-4 pb-3.5">
               <button onClick={() => resolve('once')}
-                className="px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90">允许一次</button>
+                className="px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90">{t('approval.allowOnce')}</button>
               <button onClick={() => resolve('conversation')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">本对话同类允许</button>
+                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
               <button onClick={() => resolve('deny')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">拒绝</button>
+                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.deny')}</button>
               <button onClick={() => resolve('always')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">始终允许</button>
-              <span className="text-[10px] text-text2 self-center ml-auto" title="键盘快捷键">1 拒绝 · 2 允许一次 · 3 本对话 · 4 始终允许</span>
+                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
+              <span className="text-[10px] text-text2 self-center ml-auto" title={t('approval.hotkeyTitle')}>{t('approval.hotkeyHint')}</span>
             </div>
           </>
         )}

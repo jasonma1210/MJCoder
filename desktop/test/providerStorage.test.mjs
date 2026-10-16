@@ -3,9 +3,22 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const API_PATH = pathToFileURL(path.join(ROOT, 'renderer/src/lib/api.js')).href;
+
+// T3-2 i18n：api.js 经 globalThis.__MJ_T__ 运行时通道取翻译（渲染层由 i18n/index.ts 置位）。
+// 纯 Node 测试宿主不加载 i18n 模块，这里按同款规则（查 zh-CN/runtime.json + {var} 插值）注入，
+// 保证 humanizeError 返回真实中文文案，断言语义与改造前一致。
+{
+  const pack = JSON.parse(fs.readFileSync(path.join(ROOT, 'renderer/src/i18n/locales/zh-CN/runtime.json'), 'utf8'));
+  globalThis.__MJ_T__ = (key, params = {}) => {
+    const v = key.startsWith('runtime.') ? pack[key.slice('runtime.'.length)] : undefined;
+    if (typeof v !== 'string') return key;
+    return v.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m));
+  };
+}
 
 let pass = 0;
 let total = 0;
@@ -17,8 +30,10 @@ function check(name, fn) {
 
 // ── 环境桩：模拟渲染层 window.mjcode / localStorage / fetch ──
 const calls = [];
+const fetchCalls = [];
 function stub({ online = false } = {}) {
   calls.length = 0;
+  fetchCalls.length = 0;
   const localProviders = new Map();
   global.window = {
     mjcode: {
@@ -42,8 +57,14 @@ function stub({ online = false } = {}) {
   };
   global.localStorage = { getItem: () => 'stub-token', removeItem() {}, setItem() {} };
   global.fetch = online
-    ? async (url) => ({ ok: true, status: 200, json: async () => (String(url).includes('/providers') ? [{ id: 7, name: '服务端模型', base_url: 'https://x/v1', models: [] }] : {}) })
-    : async () => { throw new TypeError('Failed to fetch'); };
+    ? async (url) => {
+        fetchCalls.push(String(url));
+        return { ok: true, status: 200, json: async () => (String(url).includes('/providers') ? [{ id: 7, name: '服务端模型', base_url: 'https://x/v1', models: [] }] : {}) };
+      }
+    : async (url) => {
+        fetchCalls.push(String(url));
+        throw new TypeError('Failed to fetch');
+      };
 }
 
 // ── 用例 ──
@@ -105,6 +126,27 @@ await (async () => {
   check('服务端 id 剥离 s 前缀后还原为服务端主键', () => {
     assert.equal(strip('s7'), '7');
     assert.equal(strip(7), '7');
+  });
+
+  // ── 离线模式不得打云 provider（防 CSP 噪声回归，2026-10-15）──
+  // 真机事故：App 启动恒 localMode(true)，但 globalProviders() 曾裸 fetch 3001 →
+  // 被 index.html CSP connect-src 拦截，每次启动打印无意义报错。
+  stub({ online: false });
+  setLocalMode(true);
+  const gpOffline = await api.globalProviders();
+  check('离线模式 globalProviders 静默返回 [] 且零 fetch（不触发 CSP 噪声）', () => {
+    assert.deepEqual(gpOffline, []);
+    assert.equal(fetchCalls.length, 0, `不应发起任何 fetch，实际 ${JSON.stringify(fetchCalls)}`);
+  });
+
+  stub({ online: true });
+  setLocalMode(false);
+  const gpOnline = await api.globalProviders();
+  check('在线模式 globalProviders 仍拉取云 provider（能力未被误砍）', () => {
+    assert.equal(fetchCalls.length, 1);
+    assert.ok(fetchCalls[0].includes('/global/providers'), fetchCalls[0]);
+    assert.equal(gpOnline.length, 1);
+    assert.equal(gpOnline[0].name, '服务端模型');
   });
 
   console.log(`\nPASS：${pass}/${total} 项通过`);

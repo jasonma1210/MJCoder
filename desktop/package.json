@@ -1,6 +1,6 @@
 {
   "name": "mj-code-desktop",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "MJ Code - AI coding assistant",
   "main": "main/main.js",
   "scripts": {
@@ -8,27 +8,27 @@
     "dev:vite": "cd renderer && npm run dev",
     "build": "npm run build --prefix renderer && electron-builder",
     "start": "electron .",
-    "test": "node test/ui-conventions.test.js && node test/layout-pane.test.js && node test/undef-ident.test.js && node test/props-contract.test.js && node test/smoke-load.mjs && node test/project-switch.test.js && node test/layout-resilience.test.js && node test/thread-composer.test.js && node test/plan-worktree-context.test.js && node test/featureFlags.test.js && node test/skillCompat.test.js && node test/ide.test.js && node test/skills.test.js && node test/sandbox.test.js && node test/sandbox-crossplatform.test.js && node test/approval.test.js && node test/approval-queue.test.js && node test/model-shape.test.js && node test/run-footer-restore.test.js && node test/credentialCrypto.test.js && node test/plugin-bypass-hardening.test.js && node test/web-todo-tools.test.js && node test/web-search-config.test.js && node test/prompt-injection-parity.test.js && node test/approvalChannel.test.js && node test/writeGuard.test.js && node test/localStore.test.js && node test/workspace.test.js && node test/worktree.test.js && node test/degrade.test.js && node test/ecosystem.test.js && node test/tools-cwd.test.js && node test/apply-patch-hardening.test.js && node test/providerStorage.test.mjs && node test/agent-core.test.mjs && node test/spawn-subagent-budget.test.mjs && node test/message-schema.test.js && node test/agent-engine.test.mjs && node test/checkpointStore.test.js && node test/agentRunner.test.js && node test/dag.test.js && node test/orchestrator.test.js && node test/memory.test.js && node test/aggregator.test.js && node test/taskStore.test.js && node test/sqljsDb.test.js && node test/workerIsolation.test.js && node test/resourceQuota.test.js && node test/workerPool.test.js && node test/mcp-handshake.test.js && node test/pluginMarket.test.js && node test/pluginDiscovery.test.js && node test/computerUse.test.js && node test/cuaVision.test.js && node test/scheduler.test.js && node test/github.test.js && node test/github-pr-review.test.js && node test/mcp-multi-transport.test.js && node test/release-update.test.js && node test/render-smoke.mjs && node test/message-meta.test.mjs && node test/settings-coverage.test.js && node test/tool-loop-guard.test.js && node test/models-file.test.js && node test/build-config.test.js",
+    "test": "node test/run-all.mjs",
     "eval:check": "node eval/run-eval.mjs --check",
     "eval": "node eval/run-eval.mjs",
     "eval:hard": "node eval/run-eval.mjs --tasks eval/tasks-hard.json",
     "eval:compare": "node eval/run-compare.mjs",
     "eval:compare:hard": "node eval/run-compare.mjs --tasks eval/tasks-hard.json",
-    "lint": "eslint main/ agent-core/ renderer/src/ --max-warnings=9999",
-    "lint:strict": "eslint main/ agent-core/ renderer/src/ --max-warnings=0",
+    "lint": "eslint main/ agent-core/ renderer/src/ chrome-extension/ --max-warnings=9999",
+    "lint:strict": "eslint main/ agent-core/ renderer/src/ chrome-extension/ --max-warnings=0",
     "format": "prettier --write \"main/**/*.js\" \"agent-core/**/*.js\" \"renderer/src/**/*.{js,jsx}\"",
-    "format:check": "prettier --check \"main/**/*.js\" \"agent-core/**/*.js\" \"renderer/src/**/*.{js,jsx}\""
+    "format:check": "prettier --check \"main/**/*.js\" \"agent-core/**/*.js\" \"renderer/src/**/*.{js,jsx}\"",
+    "typecheck": "npm run typecheck --prefix renderer"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.2.1",
     "concurrently": "^9.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
-    "wait-on": "^8.0.0",
     "eslint": "^9.39.4",
     "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "prettier": "^3.6.2",
-    "eslint-plugin-react-hooks": "^5.2.0"
+    "wait-on": "^8.0.0"
   },
   "build": {
     "appId": "com.mjcoder.desktop",
@@ -43,6 +43,8 @@
     "files": [
       "main/**/*",
       "agent-core/**/*",
+      "shared/**/*",
+      "shared-ipc/**/*",
       "renderer/dist/**/*",
       "package.json"
     ],
@@ -78,8 +80,11 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
+    "playwright-core": "^1.64.1",
     "sql.js": "^1.13.0",
-    "yjs": "^13.6.33"
+    "ws": "^8.22.0",
+    "yjs": "^13.6.33",
+    "zod": "^4.6.7"
   },
   "author": {
     "name": "jasonma1210",

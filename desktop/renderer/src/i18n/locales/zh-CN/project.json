@@ -1,0 +1,18 @@
+{
+  "title": "打开 / 创建项目",
+  "close": "关闭",
+  "recent": "最近项目",
+  "newSection": "新建项目",
+  "createFailed": "创建失败",
+  "createDirFailed": "创建项目目录失败：{error}",
+  "nameLabel": "项目名称",
+  "namePlaceholder": "输入项目名称",
+  "newAt": "将新建到 {root}，不填名称时按 日期+随机数 命名",
+  "newAtDefault": "将新建到用户文档下的隐藏目录 .MJCoder，不填名称时按 日期+随机数 命名",
+  "workspaceCreated": "已为本机创建工作区目录 .MJCoder",
+  "localDirLabel": "当前设备本地工作目录",
+  "addFolder": "添加本地文件夹",
+  "cancel": "取消",
+  "creating": "创建中...",
+  "createBtn": "创建项目"
+}

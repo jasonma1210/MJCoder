@@ -1,153 +1,146 @@
 # MJ Coder
 
-> 本地优先的 AI 编码工作台 · 桌面端智能体助手（离线可用）
+> Local-first AI coding workbench · Desktop agent assistant (offline-capable)
 >
-> English: [README.en.md](./README.en.md)
+> 中文版: [README.zh-CN.md](./README.zh-CN.md)
 
-**MJ Coder** 是一款开源桌面应用，让你在本机与 AI 结对编程：它拥有完整的 Agent 执行引擎——模型可以读写你的项目文件、执行 Shell 命令、调用 Git 与 MCP 工具，在你审批监督下自主完成编码任务。所有对话、代码与凭证默认只留在你的电脑上，**离线为主、本地优先**。
+**MJ Coder** is an open-source desktop application for pair programming with AI on your own machine. It ships a complete Agent execution engine — the model can read and write your project files, run shell commands, and call Git and MCP tools to complete coding tasks autonomously under your approval and supervision. All conversations, code, and credentials stay on your computer by default — **offline-first, local-first**.
 
-## 核心特性
+## Key Features
 
-- **🤖 完整 Agent 引擎** — 工具调用循环（模型 → 工具执行 → 结果回传 → 模型），支持大任务自动拆分、子代理并行、上下文自动压缩与轮次预算控制
-- **三道安全闸** — 分级审批中心（危险命令 / 文件写入 / MCP 工具三级，危险命令与 MCP 工具永不自动放行）+ 沙箱（macOS 为操作系统级隔离，Windows / Linux 为命令级硬拦截，见下方分档说明）+ 本地审计日志全程留痕
-- **📁 项目工作区** — 项目管理、文件树与文件预览、代码 diff 审查面板、Git 隔离工作区（worktree）与一键创建 PR
-- **⚙️ 双模式模型** — 对接任意 OpenAI 兼容接口（DeepSeek / Qwen / MiniMax 等），本地自定义模型与全局共享模型自由切换，API Key 保存在主进程不进渲染层
-- **⏰ 定时任务** — 离线可用的本地定时调度，到点由完整 Agent 通道执行（含审批、沙箱与超时保护）
-- **🧩 插件生态** — 插件市场（MCP Server / 技能 / 提示词三类包，签名校验 + fail-closed 安装）、内置 100 个官方技能、MCP 工具接入
-- **🖥️ Computer Use** — macOS 辅助功能（AX）结构化驱动桌面应用，敏感操作（支付 / 删除 / 发送）逐次人工确认
-- **👥 协同编辑** — 基于 CRDT（Yjs）的会话线程、任务看板与审批流协同，本地先行、离线可用
-- **📊 数据看板** — 对话数、Token 消耗、模型使用分布与活跃趋势一目了然
-- **🎨 个性换肤** — 5 套预设主题 + 强调色自定义，明暗模式随心切换
+- **🤖 Complete Agent engine** — tool-calling loop (model → tool execution → results back to model), with automatic large-task decomposition, parallel sub-agents, context compaction, and turn-budget controls
+- **🛡️ Three safety gates** — a tiered approval center (dangerous commands / file writes / MCP tools at three levels; dangerous commands and MCP tools are never auto-approved) + sandbox isolation (OS-level on macOS, command-level hard blocking on Windows / Linux — see the tiering table below) + a local audit log for full traceability
+- **📁 Project workspaces** — project management, file tree & previews, code diff review panel, Git worktrees for isolation, and one-click PR creation
+- **⚙️ Dual-mode models** — connect any OpenAI-compatible endpoint (DeepSeek / Qwen / MiniMax / etc.), freely switch between locally defined and globally shared models; API keys stay in the main process and never reach the renderer
+- **⏰ Scheduled tasks** — offline local scheduler; tasks run through the full Agent channel at their due time (with approval, sandbox, and timeout protection)
+- **🧩 Plugin ecosystem** — plugin marketplace (MCP servers / skills / prompt packs with signature verification and fail-closed installation), 100 built-in official skills, MCP tool integration
+- **🖥️ Computer Use** — drive desktop apps via macOS Accessibility (AX) trees; sensitive actions (payment / delete / send) always require case-by-case confirmation
+- **👥 Collaborative editing** — CRDT (Yjs)-based collaboration on conversation threads, task boards, and approval flows; local-first and offline-capable
+- **📊 Analytics dashboard** — conversation counts, token consumption, model usage distribution, and activity trends at a glance
+- **🎨 Theming** — 5 preset themes plus custom accent colors, with light/dark mode support
 
-## 安全模型与沙箱能力分档
+## Security Model & Sandbox Tiering
 
-三道安全闸均为 **fail-closed** 设计（判定不确定时按更严格的一侧处理），且规则集由
-`desktop/main/dangerousPatterns.js` 与 `desktop/main/promptInjection.js` 作为唯一事实来源统一维护，
-审批层与沙箱层同源引用，从结构上避免两侧规则漂移。
+All three safety gates are **fail-closed** (when a verdict is uncertain, the stricter side wins).
+Rule sets are maintained as a single source of truth: dangerous command patterns live in
+`desktop/main/dangerousPatterns.js`, and untrusted-content detection lives in
+`desktop/shared/untrustedContent.mjs` (shared by the main-process install gate and all four
+headless-engine entry points). The approval layer and the sandbox layer reference the same module,
+which structurally prevents them from drifting apart.
 
-| 闸门 | 机制 | 覆盖平台 |
+| Gate | Mechanism | Platforms |
 |---|---|---|
-| 分级审批中心 | L1 危险命令 / L2 文件写入 / L3 MCP 工具三级判定；L1 与 L3 在任何审批档位下都弹卡确认，不可经「本对话同类」规则静默放行 | 全平台 |
-| 沙箱隔离 | 见下方分档 | 分平台 |
-| 本地审计日志 | 工具调用、插件安装、审批决策全程落盘，可追溯 | 全平台 |
+| Tiered approval center | L1 dangerous commands / L2 file writes / L3 MCP tools. L1 and L3 always prompt for confirmation under any approval mode and cannot be silently allowed by a "same kind in this conversation" rule | All |
+| Sandbox isolation | See tiering below | Per-platform |
+| Local audit log | Tool calls, plugin installs, and approval decisions are all persisted and traceable | All |
 
-### 沙箱能力按平台分档
+### Sandbox capability by platform
 
-三平台**均已接通操作系统级隔离**，实现对齐 OpenAI Codex 的公开方案。命令黑名单不再是主力，
-而是 OS 沙箱**不可用时的兜底**——OS 级隔离一旦生效，黑名单自动让位，避免误伤
-`rm -rf ./build` 这类项目内的合理命令。
+**All three platforms now have OS-level isolation**, aligned with OpenAI Codex's published design.
+The command blacklist is no longer the primary mechanism — it is the *fallback* when no OS sandbox is
+available. Once OS-level isolation is active the blacklist steps aside, so legitimate in-project
+commands such as `rm -rf ./build` are not falsely rejected.
 
-| 平台 | 隔离级别 | 实现 | 就绪条件 |
+| Platform | Isolation level | Implementation | Ready when |
 |---|---|---|---|
-| macOS | **操作系统级** | Seatbelt（`sandbox-exec` + 生成 profile）：`deny default` + curated 平台策略 + 按 read-only / workspace-write / full-access 三档限制文件写入，全档禁网 | 开箱即用（`≥10.15`） |
-| Linux | **操作系统级** | bubblewrap（`bwrap`）：`--ro-bind / /` 全盘只读、仅项目目录 `--bind` 可写、`--unshare-all`（含 net/pid/ipc/uts/cgroup）、`--tmpfs /tmp`、`--die-with-parent`、`--seccomp` | 装 sandbox：`apt install bubblewrap` / `dnf install bubblewrap` |
-| Windows | **操作系统级** | 受限令牌 + 专用本地用户 + 定向 ACL + 出站防火墙：以 `MJCodeSandboxOffline` 低权用户身份执行（`schtasks /RL LIMITED`），防火墙阻断其全部出网 | **需一次性管理员设置**（见下） |
+| macOS | **OS-level** | Seatbelt (`sandbox-exec` + generated profile): `deny default` + curated macOS platform policy, three tiers (read-only / workspace-write / full-access) restricting writes, network denied at every tier | Works out of the box (`>= 10.15`) |
+| Linux | **OS-level** | bubblewrap (`bwrap`): `--ro-bind / /` makes the whole disk read-only, only the project dir is `--bind`ed writable, `--unshare-all` (net/pid/ipc/uts/cgroup), `--tmpfs /tmp`, `--die-with-parent`, `--seccomp` | Install it: `apt install bubblewrap` / `dnf install bubblewrap` |
+| Windows | **OS-level** | Restricted token + dedicated local user + targeted ACL + outbound firewall: commands run as the low-privilege `MJCodeSandboxOffline` user (`schtasks /RL LIMITED`), with all outbound traffic blocked by firewall rule | **Requires a one-time admin setup** (see below) |
 
-未满足就绪条件时（未装 bwrap、未完成 Windows 设置、容器内禁用 user namespace 等），
-自动降级为**命令级硬拦截**：30 条危险命令模式（含管道远程执行、`rm` 长选项、凭证外泄等）
-在执行前拦截，审批不可绕过、不可豁免。降级原因会打印到日志，形如
-`[sandbox] 未沙箱执行（bwrap 未安装…）policy=workspace-write`。
+When the prerequisites are not met (bwrap missing, Windows setup not done, user namespaces disabled in
+a container, etc.), it automatically degrades to **command-level hard blocking**: 30 dangerous-command
+patterns are blocked before execution, and approval cannot bypass or exempt them. The reason is logged,
+e.g. `[sandbox] 未沙箱执行（bwrap 未安装…）policy=workspace-write`.
 
-#### Windows 一次性管理员设置
+#### One-time Windows admin setup
 
-Windows 后端需要创建专用低权用户与防火墙规则，**必须管理员权限**执行。
-设置命令全部先由 `windowsSandboxPlan()` 生成供人工审计，再逐条执行，任何一步失败即回滚：
+The Windows backend must create a dedicated low-privilege user and firewall rules, which
+**requires administrator rights**. All setup commands are first produced by `windowsSandboxPlan()`
+for human review, then executed one by one; any failing step triggers rollback:
 
 ```powershell
-# 以管理员身份运行；密码由程序随机生成并经 DPAPI 加密保存，命令行与日志均不落明文
+# Run as Administrator. The password is randomly generated and stored DPAPI-encrypted —
+# it never appears in plaintext in the command line or logs.
 net user MJCodeSandboxOffline <RANDOM_PASSWORD> /add /passwordchg:no /passwordreq:yes /active:yes
 net localgroup Users MJCodeSandboxOffline /delete
 netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out action=block user=MJCodeSandboxOffline enable=yes
 ```
 
-回滚：`netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`、随后删除该用户。
+Rollback: `netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`, then delete the user.
 
-#### 已如实记录的已知局限
+#### Known limitations, honestly documented
 
-- **Windows**：无法阻止对「Everyone SID 已有写权限」目录的写入（world-writable 文件夹）。
-  缓解方式为 workspace-write 档只把项目目录设为可写，其余一律只读。这与 Codex 公开承认的局限相同。
-- **Linux**：容器内（Docker 默认配置）可能禁用 unprivileged user namespace，此时 bwrap 存在也不可用；
-  本项目只做二进制存在性静态探测，运行时失败由 exec 错误路径捕获并降级。
-- **三平台共通**：`full-access` 档按设计不套沙箱、不走命令守卫（它是显式 opt-in，默认策略已被 fail-safe 兜住）。
+- **Windows**: writes to directories that grant write access to the *Everyone* SID cannot be blocked
+  (world-writable folders). Mitigation: the workspace-write tier makes only the project directory
+  writable and everything else read-only. This is the same limitation Codex acknowledges publicly.
+- **Linux**: inside a container (default Docker configuration) unprivileged user namespaces may be
+  disabled, in which case bwrap exists but cannot run. This project only probes for the binary's
+  presence; runtime failures are caught by the exec error path and degraded.
+- **All platforms**: the `full-access` tier intentionally applies neither sandbox nor command guard
+  (it is explicit opt-in; the default policy is already fail-closed).
 
-各后端的设计依据与取舍逐条记录在 `desktop/main/sandbox.js`、`sandboxLinux.js`、`sandboxWindows.js`
-顶部注释中；跨平台行为有 `desktop/test/sandbox-crossplatform.test.js`（61 项断言）守护。
+Design rationale and trade-offs for each backend are documented in the header comments of
+`desktop/main/sandbox.js`, `sandboxLinux.js`, and `sandboxWindows.js`; cross-platform behavior is
+guarded by `desktop/test/sandbox-crossplatform.test.js` (61 assertions).
 
-## 模块构成
+## Modules
 
-| 模块 | 说明 |
+| Module | Description |
 |---|---|
-| `desktop/` | Electron 桌面应用：主进程（安全/沙箱/工具执行）+ React 渲染层（UI）+ agent-core（headless 引擎） |
-| `server/` | 可选的 Node.js 服务端：账号体系、云端任务队列、协同同步、数据看板 |
-| `miniprogram/` | 可选的微信小程序控制面：查看任务、远程审批（不执行任何代码） |
-| `ecosystem/` | 生态资产：100 个技能、100 个 MCP 连接器、50 个数字员工**角色模板**（结构化定义，当前未接入 Agent 运行时，仅作为可复用的角色提示词与工具权限模板库） |
+| `desktop/` | Electron desktop app: main process (security / sandbox / tools) + React renderer (UI) + agent-core (headless engine) |
+| `server/` | Optional Node.js backend: accounts, cloud task queue, collaboration sync, analytics |
+| `miniprogram/` | Optional WeChat mini-program control plane: view tasks, remote approvals (executes no code) |
+| `ecosystem/` | Ecosystem assets: 100 skills, **80 MCP connectors** (curated to mainstream services that either install-and-connect or declare their credentials per the official spec; anything else goes through "Custom connector"), 50 digital-employee **role templates** (structured definitions; not yet wired into the Agent runtime — currently a reusable library of role prompts and tool-permission templates) |
 
-> 完整的目录结构与职责说明见仓库内 `docs/` 目录（不随代码发布）。
+> Full directory structure and responsibilities are documented under `docs/` (not published with the code).
 
-## 技术栈
+## Tech Stack
 
-- **桌面端**：Electron 33 · React 18 · Vite · Tailwind CSS
-- **引擎**：原生 JavaScript（零框架、零运行时依赖的 headless Agent 引擎）
-- **服务端**（可选）：Node.js · Express · PostgreSQL · Yjs
-- **测试**：Node 内置 test runner，52 套测试全绿
+- **Desktop**: Electron 33 · React 18 · Vite · Tailwind CSS; UI component layer is plain JavaScript (JSX), while **IPC / Agent boundary contracts are TypeScript with zod runtime validation** (progressive migration; new boundary files must be `.ts`)
+- **Engine**: plain JavaScript (headless Agent engine with zero framework and zero runtime dependencies)
+- **Server** (optional): Node.js · Express · PostgreSQL · Yjs
+- **Testing**: Node built-in test runner, all suites green (see `desktop/test/` for the current count)
 
-## 快速开始（离线）
+## Quick Start (Offline)
 
 ```bash
-# 1. 安装依赖（首次）
+# 1. Install dependencies (first time)
 cd desktop && npm install
 cd renderer && npm install && cd ..
 
-# 2. 启动
+# 2. Launch
 npm run dev
 ```
 
-无需数据库、无需服务端、无需账号——启动即可在本地创建项目并开始对话。配置任意 OpenAI 兼容模型（Base URL + API Key）即可运行，全部数据保存在本机。
+No database, no server, no account required — create a local project and start chatting right away. Configure any OpenAI-compatible model (Base URL + API Key) and you are set; all data is stored locally.
 
-> 服务端（`server/`）、小程序（`miniprogram/`）为可选扩展，离线单机使用无需部署。
+> The server (`server/`) and mini-program (`miniprogram/`) are optional extensions; no deployment is needed for standalone offline use.
 
-## 项目结构（简览）
+## Project Layout (Overview)
 
 ```
 MJCoder/
-├── desktop/            # 桌面应用（主入口）
-│   ├── main/           #   Electron 主进程：审批·沙箱·工具·调度·插件
-│   ├── renderer/       #   React 渲染层：完整 UI
-│   ├── agent-core/     #   headless Agent 引擎（CLI 可独立运行）
-│   └── test/           #   测试套件（不随 GitHub 发布）
-├── server/             # 可选服务端
-├── miniprogram/        # 可选小程序控制面
-└── ecosystem/          # 技能 / MCP / 数字员工生态资产
+├── desktop/            # Desktop app (main entry)
+│   ├── main/           #   Electron main process: approvals · sandbox · tools · scheduler · plugins
+│   ├── renderer/       #   React renderer: full UI
+│   ├── agent-core/     #   Headless Agent engine (runs standalone as a CLI)
+│   └── test/           #   Test suites (not published to GitHub)
+├── server/             # Optional backend
+├── miniprogram/        # Optional mini-program control plane
+└── ecosystem/          # Skills / MCP / digital-employee ecosystem assets
 ```
 
-## 文档
+## Documentation
 
-- 使用与架构文档、审查报告等 Markdown 文档维护在本地 `docs/` 与根目录，不随 GitHub 代码发布
-- 版本变更记录见本地 `CHANGELOG.md`
+- Architecture docs and review reports live in local `docs/` and the repository root; they are not published with the code on GitHub
+- Release history is kept in the local `CHANGELOG.md`
 
-## 许可
+## License
 
-本项目采用 [MIT 许可证](LICENSE)。你可以自由使用、修改、分发与商用本软件。
+This project is licensed under the [MIT License](LICENSE). You are free to use, modify,
+distribute, and use commercially.
 
-`ecosystem/` 下的 250 项生态资产（100 技能 / 100 MCP 连接器 / 50 数字员工角色模板）为本项目原创的
-结构化定义，适用上述 MIT 许可；若某项资产需标注第三方许可，会在该资产内单独声明。
+The 230 ecosystem assets in `ecosystem/` (100 skills / 80 MCP connectors / 50 digital-employee
+role templates) are original structured definitions covered by the MIT license above; any asset
+requiring third-party attribution declares it within the asset itself.
 
----
-
-## 会话记录（累积追加）
-
-### 2026-10-15 · MJ Coder 本地 Agent 平台 × Codex App 最新版全栈差距审查
-
-- **会话背景**：用户要求以腾讯/阿里/字节联合技术团队视角，把本地 Agent 开发平台（`desktop/`，剔除云相关）与 Codex App 最新版做全流程差距对比。
-- **主要目的**：输出专业、有技术分量、经一手源码取证的差距审查文档，覆盖产品逻辑/产品力/代码质量/页面设计/逻辑展示/产品化流程，并验证每条不足真实性 + 给出优化方案。
-- **完成的主要任务**：
-  1. 一手核查 `agent-core` 引擎（轮次/token 双闸、空收尾守卫、重复失败熔断、断点救援）、`main` 能力层（三平台 OS 沙箱、分级审批、26 工具集、MCP、Computer Use）、`renderer` UI 层实现。
-  2. 以仓库内 `codex-desktop-reverse-manual.md`（Codex v26.721.41059 逆向手册）为对标基线，建立六维度差距矩阵。
-  3. 逐条给出【证据/真实性/根因/优化方案/优先级】，并做「差距是否值得补」的战略头脑风暴。
-- **主要技术栈**：Electron 33 + React 18 + Vite + Tailwind；原生 JS Agent 引擎；对标 Codex 的 Rust 引擎 + Code Mode + CUA + 八插件。
-- **关键决策与解决方案**：核心结论——MJ Coder 与 Codex 差距不在编码内核，而在平台广度与产品化成熟度；优先闭合「工程质量诚实性」与「过程可信度呈现」，对 Browser Use/富能力插件/原生引擎/attestation 按「本地优先」定位清醒取舍，不无差别对标。
-- **使用的工具**：Shell、Read、Grep、Agent(Explore ×3)、TodoWrite、Write、Edit。
-- **修改的文件**：
-  - `MJCode-vs-CodexApp-全栈差距审查与优化方案-2026-10-15.md`（新建）：完整审查文档，含现状强项快照、Codex 基线、六维度差距矩阵、14 条不足逐条核验与优化、P0/P1/P2 路线图、评审总评。
-  - `README.md`（本次追加会话记录）。
-- **关键发现（证据）**：渲染层实测 37 个 `.jsx`/0 个 `.tsx`（README 宣称 TS，实为零类型安全）；`main.js` 2939 行、`ChatArea.jsx` 1754 行等 God File；`.bak` 残留仍在库；引擎缺每轮 wall-clock 超时看门狗；工具轨迹为扁平 mono 芯片、参数裸截断；子代理执行无 UI 可视化；缺 i18n 与崩溃遥测。

@@ -1,0 +1,10 @@
+{
+  "tavily": { "label": "Tavily", "note": "为 Agent 设计的搜索 API，返回干净正文摘要；免费额度每月 1000 次。" },
+  "duckduckgo": { "label": "DuckDuckGo", "note": "无需 Key，开箱可用（HTML 解析，结果质量一般但零配置零成本）。" },
+  "searxng": { "label": "SearXNG（自托管）", "note": "自托管元搜索，需填实例地址（高级项），实例须开启 JSON 输出。" },
+  "brave": { "label": "Brave Search", "note": "独立索引，免费额度每月 2000 次。" },
+  "exa": { "label": "Exa", "note": "语义检索，适合查技术文档与论文。" },
+  "bing": { "label": "Bing Search", "note": "Azure 认知服务；需订阅密钥。" },
+  "google": { "label": "Google CSE", "note": "需同时配置可编程搜索引擎 ID（cx / 高级项）。", "engineId": "搜索引擎 ID（cx）" },
+  "baidu": { "label": "百度", "note": "解析网页结果，无需 Key；百度有反爬策略，可能偶发失败（会自动落到下一家）。" }
+}

@@ -1,0 +1,13 @@
+{
+  "cmdKind": "Commands",
+  "threadKind": "Threads",
+  "fileKind": "Files",
+  "newThread": "New thread",
+  "searchPlaceholder": "Search threads and files, or run a command…",
+  "escClose": "Esc to close",
+  "noResults": "No results for “{q}”",
+  "searchHint": "Type a keyword to search, or browse the commands below",
+  "hintNavigate": "Arrows to select",
+  "hintEnter": "Enter to run",
+  "hintToggle": "⌘K to toggle"
+}

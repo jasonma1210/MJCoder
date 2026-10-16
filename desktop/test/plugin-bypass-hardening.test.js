@@ -22,12 +22,14 @@ const { check, pass, fail, report } = (() => {
 })();
 
 const root = path.join(__dirname, '..');
-const mainSrc = fs.readFileSync(path.join(root, 'main/main.js'), 'utf8');
+// T2-1：market:installGit 已随插件市场域拆出 main/ipc/plugins.js，断言随实现走
+const mainSrc = fs.readFileSync(path.join(root, 'main/ipc/plugins.js'), 'utf8');
 const preloadSrc = fs.readFileSync(path.join(root, 'main/preload.js'), 'utf8');
 const htmlSrc = fs.readFileSync(path.join(root, 'renderer/index.html'), 'utf8');
 
 // ── 1. 主进程不得再从客户端 payload 读取安全降级开关 ──
-const installGitHandler = (mainSrc.match(/ipcMain\.handle\('market:installGit'[\s\S]*?\n\}\);/) || [''])[0];
+// T2-1：handler 已拆入 register() 函数体内（带缩进），闭合匹配容忍缩进
+const installGitHandler = (mainSrc.match(/ipcMain\.handle\('market:installGit'[\s\S]*?\n\s*\}\);/) || [''])[0];
 check('market:installGit handler 存在（供后续断言定位）', installGitHandler.length > 0);
 check('handler 内剥离 payload 中的安全降级参数',
   /allowUnsigned:\s*_\w+/.test(installGitHandler) && /allowUnsafeInjection:\s*_\w+/.test(installGitHandler),

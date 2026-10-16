@@ -1,0 +1,18 @@
+{
+  "heading": "我们要构建什么？",
+  "inProject": "在 {name} 中",
+  "tellUs": "告诉 MJ Coder 你想做什么",
+  "switchProject": "切换项目",
+  "openOrCreateProject": "打开或创建项目",
+  "quickExploreTitle": "探索并理解代码",
+  "quickExplorePrompt": "帮我分析这个项目的结构和代码",
+  "quickBuildTitle": "构建新功能、应用或工具",
+  "quickBuildPrompt": "帮我构建一个新功能",
+  "quickReviewTitle": "审查代码并提出改进",
+  "quickReviewPrompt": "帮我审查代码，找出问题并提出改进建议",
+  "quickFixTitle": "修复问题和错误",
+  "quickFixPrompt": "帮我修复一个 bug",
+  "defaultTip1": "总结这个项目的整体架构与关键模块",
+  "defaultTip2": "找出代码中潜在的性能与安全问题",
+  "modelWarning": "尚未选择模型。请在输入框下方的模型选择器中选择，或在「设置 → 模型配置」中添加。"
+}

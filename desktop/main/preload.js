@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   applyPatch: (payload) => ipcRenderer.invoke('tool:applyPatch', payload),
   // 文件预览（md/代码/图片/PDF/音视频）与「在系统中打开」
   previewFile: (payload) => ipcRenderer.invoke('file:preview', payload),
+  // T3-1：大载荷句柄分页拉取（超限工具结果落盘后按 offset/limit 取回展示）
+  bigPayloadFetch: (payload) => ipcRenderer.invoke('bigPayload:fetch', payload),
   openPath: (payload) => ipcRenderer.invoke('shell:openPath', payload),
   revealPath: (payload) => ipcRenderer.invoke('shell:reveal', payload),
   openExternal: (payload) => ipcRenderer.invoke('shell:openExternal', payload),
@@ -108,6 +110,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   ecosystemEmployees: (payload) => ipcRenderer.invoke('ecosystem:employees', payload),
   ecosystemConnectors: (payload) => ipcRenderer.invoke('ecosystem:connectors', payload),
   ecosystemSkills: () => ipcRenderer.invoke('ecosystem:skills'),
+  // T4-3：数字员工运行时预设（角色模板=系统提示+工具子集+审批档）
+  ecosystemEmployeeRuntime: (payload) => ipcRenderer.invoke('ecosystem:employeeRuntime', payload),
   // 网络配置（web_search 提供方）：设置 → 网络配置
   webSearchGetConfig: () => ipcRenderer.invoke('websearch:getConfig'),
   webSearchSetConfig: (providers) => ipcRenderer.invoke('websearch:setConfig', { providers }),
@@ -174,6 +178,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   mcpListServers: () => ipcRenderer.invoke('mcp:listServers'),
   mcpListTools: () => ipcRenderer.invoke('mcp:listTools'),
   mcpGetConfig: () => ipcRenderer.invoke('mcp:getConfig'),
+  mcpSetConfig: (payload) => ipcRenderer.invoke('mcp:setConfig', payload),
+  // T7：OAuth 浏览器授权（令牌主进程闭环，此桥只回状态）
+  mcpAuthorize: (payload) => ipcRenderer.invoke('mcp:authorize', payload),
+  mcpAuthStatus: (payload) => ipcRenderer.invoke('mcp:authStatus', payload),
   // 定时任务（桌面端本地调度器）
   scheduledList: () => ipcRenderer.invoke('scheduled:list'),
   scheduledSave: (payload) => ipcRenderer.invoke('scheduled:save', payload),
@@ -230,7 +238,13 @@ contextBridge.exposeInMainWorld('mjcode', {
   checkpointClear: (threadKey) => ipcRenderer.invoke('checkpoint:clear', threadKey),
   // Phase 3-4：token 仪表盘数据源（最近一次运行的逐轮用量快照）
   tokenState: () => ipcRenderer.invoke('agent:token/state'),
-  tasksRetryTask: (groupId, taskId) => ipcRenderer.invoke('tasks:retryTask', { groupId, taskId }),
+  // T2-5：渲染层未捕获异常转发主进程聚合（fire-and-forget，诊断落本机不上传）
+  diagReport: (payload) => ipcRenderer.send('diag:report', payload),
+  // T2-6：诊断包一键导出（zip 落 userData/diagnostics/，返回路径）
+  diagExport: () => ipcRenderer.invoke('diag:export'),
+  // A5：confirmReview 用于「该任务留有未确认副作用」时的显式确认（重试前置核对）
+  tasksRetryTask: (groupId, taskId, confirmReview = false) => ipcRenderer.invoke('tasks:retryTask', { groupId, taskId, confirmReview }),
+  tasksDeleteGroup: (groupId) => ipcRenderer.invoke('tasks:deleteGroup', { groupId }),
   tasksConfig: (payload) => ipcRenderer.invoke('tasks:config', payload),
   onTasksEvent: (cb) => {
     const handler = (_, d) => cb(d);
@@ -251,5 +265,21 @@ contextBridge.exposeInMainWorld('mjcode', {
     ipcRenderer.on('cua:approval-request', handler);
     return () => ipcRenderer.removeListener('cua:approval-request', handler);
   },
-  resolveCuaApproval: (decision) => ipcRenderer.send('cua:approval-response', decision),
+  // 2026-10-16：审批响应回带 approvalId（与 tool: 通道同款）。
+  // 原实现只发裸 decision，主进程无法区分是哪个并发请求的响应 ⇒ 张冠李戴。
+  // approvalId 缺省时仍发裸串，由主进程走 dispatchLegacy（仅单一挂起时生效）。
+  resolveCuaApproval: (decision, approvalId) => ipcRenderer.send(
+    'cua:approval-response',
+    approvalId ? { approvalId, decision } : decision,
+  ),
+  // 超时/任意方式收尾后主进程主动撤下卡片，避免卡片常驻导致「点了没反应」
+  onCuaApprovalSettled: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('cua:approval-settled', handler);
+    return () => ipcRenderer.removeListener('cua:approval-settled', handler);
+  },
+  // T4-6：操作录制与回放（录制数据仅存本机 userData/recordings/）
+  cuaReplay: (payload) => ipcRenderer.invoke('cua:replay', payload),
+  cuaRecordingsList: () => ipcRenderer.invoke('cua:recordings:list'),
+  cuaRecordingsDelete: (payload) => ipcRenderer.invoke('cua:recordings:delete', payload),
 });

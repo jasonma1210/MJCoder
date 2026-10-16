@@ -72,7 +72,8 @@ check('flex-1 滚动容器必须带 min-h-0', () => {
 });
 
 check('对话消息流可滚动且不被撑高', () => {
-  const chat = read('components/ChatArea.jsx');
+  // T2-2：消息流容器已拆出 MessageStream.tsx，断言随实现走
+  const chat = read('components/MessageStream.tsx');
   const m = chat.match(/ref=\{scrollRef\} className="([^"]*)"/);
   assert.ok(m, '未找到消息流容器 ref={scrollRef}');
   assert.match(m[1], /overflow-y-auto/, '消息流未启用纵向滚动');

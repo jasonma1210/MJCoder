@@ -65,7 +65,11 @@ let conflictPatchToClean = null;
   check('冲突补丁已落盘到 ~/.mjcode/worktree-conflicts',
     !!conflicted.patchFile && fs.existsSync(conflicted.patchFile));
   check('主目录内容未被冲突合并覆盖', fs.readFileSync(path.join(repo, 'app.txt'), 'utf8') === 'main-side change\n');
-  check('冲突路径同样清理 worktree', !fs.existsSync(iso2.worktreePath));
+  // V06 契约（2026-10-16）：冲突时 **保留 worktree 现场**（成果可取回），
+  // 由调用方写 needs_review 状态并显式 discard —— 不再「清理后标完成」。
+  check('冲突路径保留 worktree 现场（V06 成果不丢）', fs.existsSync(iso2.worktreePath));
+  check('冲突时 worktree 内改动仍在', fs.existsSync(path.join(iso2.worktreePath, 'app.txt')));
+  check('显式 discard 后 worktree 清理', (await discardIsolated({ iso: iso2 })) === true && !fs.existsSync(iso2.worktreePath));
   conflictPatchToClean = conflicted.patchFile;
 
   // ── 无改动路径：ok 且 applied=false ──

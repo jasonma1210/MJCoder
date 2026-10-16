@@ -1,0 +1,19 @@
+{
+  "mergeBack": "Merge to Main",
+  "mergeBackMsg": "Merge the isolated worktree's changes back into the main directory. The main directory must be clean (no uncommitted changes), or the merge will be rejected.",
+  "promote": "Promote to Branch",
+  "promoteMsg": "Promote the isolated copy to a real branch ({branch} → mj/ prefix) and remove the worktree. Changes stay on the branch, ready to merge or push yourself.",
+  "removeTitle": "Clean Up Worktree",
+  "removeMsg": "Remove the isolated worktree. Changes that were neither merged nor promoted will be lost for good. Clean up anyway?",
+  "removeConfirm": "Clean Up Anyway",
+  "cleanedMsg": "Isolated worktree removed",
+  "promotedMsg": "Promoted to branch {branch}",
+  "mergedBackMsg": "Merged back into the main directory",
+  "opFailed": "Operation failed",
+  "label": "Isolated worktree: {name}",
+  "hint": "Changes stay out of the main directory; wrap up when the task is done:",
+  "mergeBackHint": "Merge the worktree's changes back into the main directory",
+  "promoteHint": "Promote to a real branch (mj/ prefix) and remove the worktree",
+  "removeHint": "Remove the isolated worktree (unmerged changes will be lost)",
+  "cleanup": "Clean Up"
+}

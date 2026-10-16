@@ -4,6 +4,8 @@
 //   2) 统一返回 { ok, data, error }，调用方不再记忆 4 种返回值契约；
 //   3) 统一超时与错误归一（离线/冻结态下表现一致，消灭静默失败）；
 //   4) 能力矩阵集中声明（消费 app:flags），冻结功能不再散落可选链判断。
+import { tGlobal } from '../i18n';
+
 const DEFAULT_TIMEOUT = 30000;
 
 const mj = () => (typeof window !== 'undefined' ? window.mjcode : null);
@@ -22,7 +24,7 @@ export async function loadCaps() {
     const r = await api.getFlags();
     if (r && r.ok && r.flags) caps = { ...caps, ...r.flags, probed: true };
   } catch (e) {
-    console.warn('[ipc] 功能开关加载失败:', e.message);
+    console.warn('[ipc] failed to load feature flags:', e.message);
   }
   return caps;
 }
@@ -35,17 +37,17 @@ export function hasCap(name) {
 function withTimeout(promise, ms) {
   if (!ms || ms <= 0) return promise;
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, data: null, error: '请求超时', timeout: true }), ms);
+    const timer = setTimeout(() => resolve({ ok: false, data: null, error: tGlobal('runtime.requestTimeout'), timeout: true }), ms);
     Promise.resolve(promise)
       .then((v) => { clearTimeout(timer); resolve(normalize(v)); })
-      .catch((e) => { clearTimeout(timer); resolve({ ok: false, data: null, error: e && e.message ? e.message : '调用失败' }); });
+      .catch((e) => { clearTimeout(timer); resolve({ ok: false, data: null, error: e && e.message ? e.message : tGlobal('runtime.callFailed') }); });
   });
 }
 
 // 归一：{ok,...} / 数组 / {error} / 裸值 → {ok,data,error}
 function normalize(v) {
   if (v && typeof v === 'object') {
-    if (typeof v.ok === 'boolean') return { ok: v.ok, data: v, error: v.ok ? null : (v.error || '调用失败') };
+    if (typeof v.ok === 'boolean') return { ok: v.ok, data: v, error: v.ok ? null : (v.error || tGlobal('runtime.callFailed')) };
     if (v.error) return { ok: false, data: v, error: v.error };
     return { ok: true, data: v, error: null };
   }
@@ -57,12 +59,12 @@ function normalize(v) {
 export async function call(method, payload, { timeout = DEFAULT_TIMEOUT } = {}) {
   const api = mj();
   if (!api || typeof api[method] !== 'function') {
-    return { ok: false, data: null, error: `能力不可用：${method}（主进程未暴露或已冻结）` };
+    return { ok: false, data: null, error: tGlobal('runtime.capabilityUnavailable', { method }) };
   }
   try {
     return await withTimeout(api[method](payload), timeout);
   } catch (e) {
-    return { ok: false, data: null, error: e && e.message ? e.message : '调用失败' };
+    return { ok: false, data: null, error: e && e.message ? e.message : tGlobal('runtime.callFailed') };
   }
 }
 
@@ -74,7 +76,7 @@ export function on(eventMethod, cb) {
     const off = api[eventMethod](cb);
     return typeof off === 'function' ? off : () => {};
   } catch (e) {
-    console.warn('[ipc] 事件订阅失败:', eventMethod, e.message);
+    console.warn('[ipc] event subscribe failed:', eventMethod, e.message);
     return () => {};
   }
 }

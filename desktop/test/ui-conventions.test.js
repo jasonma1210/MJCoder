@@ -33,12 +33,13 @@ function walk(dir, out = []) {
     if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) walk(full, out);
-    else if (e.name.endsWith('.jsx') || e.name.endsWith('.js')) out.push(full);
+    else if (/\.(jsx?|tsx?)$/.test(e.name)) out.push(full);
   }
   return out;
 }
 
 const files = walk(SRC).filter((f) => !f.includes(`${path.sep}styles${path.sep}`));
+const typedFiles = files.filter((f) => /\.tsx?$/.test(f));
 const counts = { emoji: 0, rawZIndex: 0, paletteColor: 0, hexColor: 0, deadButton: 0, rawIpc: 0 };
 const samples = { emoji: [], rawZIndex: [], paletteColor: [], hexColor: [], deadButton: [], rawIpc: [] };
 
@@ -81,6 +82,7 @@ check('无装饰性死按钮', counts.deadButton <= BASELINE.deadButton, `${coun
 check('渲染层无裸 electron/ipcRenderer（须走 preload 桥）', counts.rawIpc <= BASELINE.rawIpc, `${counts.rawIpc}/${BASELINE.rawIpc} ${samples.rawIpc.join(' | ')}`);
 
 check('扫描到渲染层文件', files.length > 10, `${files.length} 个文件`);
+check('UI 规范扫描纳入 TypeScript/TSX', typedFiles.length > 0, `${typedFiles.length} 个 TS/TSX 文件`);
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
 process.exit(fail === 0 ? 0 : 1);

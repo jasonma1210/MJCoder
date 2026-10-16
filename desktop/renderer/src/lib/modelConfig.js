@@ -2,23 +2,30 @@
 // 结构：{ [modelKey]: { reasoning_effort: ''|'low'|'medium'|'high', context_window: 0|number } }
 // '' / 0 表示跟随服务端默认（不下发参数）
 
+import { tGlobal } from '../i18n';
+
 const STORE_KEY = 'mj_model_configs';
 
-export const REASONING_EFFORT_OPTIONS = [
-  { value: '', label: '默认' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-];
+// i18n：顶层常量会冻结翻译求值（切语言不更新），改为渲染期函数经 tGlobal 解析
+export function getReasoningOptions() {
+  return [
+    { value: '', label: tGlobal('models.reasoningDefault') },
+    { value: 'low', label: tGlobal('models.reasoningLow') },
+    { value: 'medium', label: tGlobal('models.reasoningMedium') },
+    { value: 'high', label: tGlobal('models.reasoningHigh') },
+  ];
+}
 
-export const CONTEXT_WINDOW_OPTIONS = [
-  { value: 0, label: '默认' },
-  { value: 32768, label: '32K' },
-  { value: 65536, label: '64K' },
-  { value: 131072, label: '128K' },
-  { value: 262144, label: '256K' },
-  { value: 1048576, label: '1M' },
-];
+export function getContextOptions() {
+  return [
+    { value: 0, label: tGlobal('models.ctxDefault') },
+    { value: 32768, label: '32K' },
+    { value: 65536, label: '64K' },
+    { value: 131072, label: '128K' },
+    { value: 262144, label: '256K' },
+    { value: 1048576, label: '1M' },
+  ];
+}
 
 export function modelKeyOf(provider, model) {
   const p = provider ? `${provider.isGlobal ? 'g' : provider.source || 'u'}:${provider.id}` : 'none';
@@ -30,7 +37,7 @@ function loadAll() {
   try {
     return JSON.parse(localStorage.getItem(STORE_KEY)) || {};
   } catch (e) {
-    console.warn('[modelConfig] 解析失败，回落空配置');
+    console.warn('[modelConfig] parse failed, falling back to empty config');
     return {};
   }
 }
@@ -47,7 +54,7 @@ export function setModelConfig(key, patch) {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(all));
   } catch (e) {
-    console.warn('[modelConfig] 持久化失败:', e);
+    console.warn('[modelConfig] persist failed:', e);
   }
 }
 

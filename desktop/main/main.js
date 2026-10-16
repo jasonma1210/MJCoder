@@ -1,11 +1,34 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
 const path = require('path');
-const os = require('os');
-const { exec, execFile, spawn } = require('child_process');
 const fsp = require('fs/promises');
 const fs = require('fs');
+const { writeFileDurable } = require('./data/durableWrite');
+const { AsyncLocalStorage } = require('async_hooks');
+
+// ── D2（2026-10-16）：任务写通道（tasks:*）载荷契约 ──
+// tasks:* 是改任务状态 / 恢复暂停组 / 删除任务组的**写通道**；此前直接解构载荷，
+// 畸形输入会走到 store 层才失败或误入分支。现把形状固化为 zod schema，进业务逻辑前校验。
+// 主进程 CJS 无法同步 require ESM（Electron 33 / Node 20），故沿用动态 import + ready 门。
+let taskPayloads = null;
+const taskPayloadsReady = import('../shared-ipc/taskPayloads.mjs')
+  .then((m) => { taskPayloads = m; })
+  .catch((e) => { console.error('[tasks] 载荷契约加载失败（写通道将拒绝请求，fail-closed）:', e.message); });
+
+/** 校验 tasks:* 写通道载荷。契约不可用或载荷不合法时返回 {ok:false}，调用方据此拒绝执行。 */
+async function validateTaskPayload(schemaName, payload) {
+  await taskPayloadsReady;
+  if (!taskPayloads) return { ok: false, error: 'tasks 写通道载荷契约不可用（fail-closed）' };
+  return taskPayloads.parseIpcPayload(taskPayloads[schemaName], payload);
+}
 
 let mainWindow;
+
+// ── N5 rootExecution 统一取消的运行上下文（2026-10-16）──
+// runScope：agentRunner 的工具 handler 全部在 { runId } 上下文内执行——
+//   requestApproval 据此把挂起审批挂到 runId（运行取消 → cancelApprovalsForRun 统一撤下）；
+//   exec.js 据此把 shell 子进程注册到 runId（运行取消 → killChildrenForRun 终止子进程）。
+const runScope = new AsyncLocalStorage();
+const activeRunChildren = new Map(); // runId -> Set<ChildProcess>
 
 // ═══════════════════════════════════════════
 //  MODEL SECRETS（仅主进程持有，严禁流向渲染层）
@@ -26,7 +49,6 @@ const activeChats = new Set(); // 进行中的 chat AbortController
 const approval = require('./approval');
 // P0-A：Web 检索/抓取工具（含 SSRF 防护、HTML 转文本、超时与体积上限）
 const webTools = require('./webTools');
-const searchProviders = require('./webSearchProviders');
 // 本地定时任务调度器（Bug2：到点自动执行提示词，离线可用）
 const scheduler = require('./scheduler');
 const APPROVAL_RULES_FILE = () => path.join(app.getPath('userData'), 'approval-rules.json');
@@ -42,9 +64,13 @@ try {
 
 function saveAlwaysRules() {
   try {
-    fs.writeFileSync(APPROVAL_RULES_FILE(), JSON.stringify(alwaysRules, null, 2));
+    // P0-持久化（2026-10-16）：原为裸 writeFileSync（无 tmp+rename、无 fsync）。
+    // 审批规则写坏的后果是「用户设过的白名单消失」⇒ 同样的操作开始反复弹审批，
+    // 或更糟：曾拒绝过的模式不再被拒绝。改走 writeFileDurable。
+    const res = writeFileDurable(APPROVAL_RULES_FILE(), JSON.stringify(alwaysRules, null, 2));
+    if (!res.ok) console.warn('[approval] 规则持久化失败:', res.error);
   } catch (e) {
-    console.warn('[approval] 规则持久化失败:', e.message);
+    console.warn('[approval] 规则持久化异常:', e.message);
   }
 }
 
@@ -70,8 +96,11 @@ function broadcastApprovalEnd(approvalId, reason) {
 function requestApproval(tool, args) {
   const summary = approval.approvalSummary(tool, args);
   const approvalId = approvalChannel.nextId();
-  const waitP = approvalChannel.wait(approvalId, broadcastApprovalEnd);
-  mainWindow.webContents.send('tool:approval-request', { approvalId, tool, ...summary });
+  // N5：审批挂到发起它的运行（AsyncLocalStorage 上下文由 agentRunner 的 handler 包装注入），
+  // 运行取消时 cancelApprovalsForRun 统一撤下（rootExecution 统一取消之「撤审批」）。
+  const waitP = approvalChannel.wait(approvalId, broadcastApprovalEnd, runScope.getStore()?.runId || null);
+  // V21：审批卡需显示请求来源的工作根——cwd 随摘要下发（无 cwd 时不带该字段）
+  mainWindow.webContents.send('tool:approval-request', { approvalId, tool, ...(args?.cwd ? { cwd: args.cwd } : {}), ...summary });
   return waitP;
 }
 
@@ -116,23 +145,16 @@ ipcMain.handle('approval:deleteRule', async (_, { id }) => {
 // ── 审计日志（工具执行脱敏上报服务端）──
 let authToken = '';
 
-// ── Seatbelt 沙箱（M3）──
-const sandbox = require('./sandbox');
-// P0-3：写路径白名单守卫（写目标必须位于 {项目 cwd, userData, 系统临时目录} 内）
-const writeGuard = require('./writeGuard');
+// T2-1：沙箱（Seatbelt/bwrap/Windows）与写路径白名单守卫现由 main/tools/exec.js 直接使用，
+// main.js 不再持有引用（审批中心与 IPC 接线仍在本文件）。
 
 // ── 桌面端功能开关（战略收敛：默认冻结协同/云端/小程序，聚焦桌面端单点）──
 const { loadFeatureFlags } = require('./featureFlags');
 const featureFlags = loadFeatureFlags(process.env);
-// SKILL.md 兼容层（生态互通）与 IDE 跳转
-const skillCompat = require('./skillCompat');
-const ideLib = require('./ide');
-// 本地项目工作区（~/Documents/.MJCoder）
-const workspace = require('./workspace');
+// T2-1：SKILL.md 兼容层与 IDE 跳转 IPC 已随生态域拆出 main/ipc/ecosystem.js
+// T2-1：本地项目工作区/worktree IPC 已拆出 main/ipc/project.js
 // 统一降级日志原语（区分「服务端不可达」与真错误）
 const degrade = require('./degrade');
-// Git worktree 隔离工作区
-const worktree = require('./worktree');
 
 // ── 本地优先数据层（离线模式）──
 const { LocalStore } = require('./localStore');
@@ -155,11 +177,11 @@ function resolveSecret(providerId, isGlobal = false) {
 function initLocalStore() {
   try {
     localStore = new LocalStore(app.getPath('userData'));
-    // web_search 配置来源注入（webSearchProviders 读 localStore 偏好，见 设置 → 网络配置）
-    webTools.setLocalStore(localStore);
     // 凭证加密双轨（credentialCrypto.js）：safeStorage 不可用（打包版 macOS 27 真机复现）
     // 时降级文件密钥 AES-256-GCM——凭证仍可保存，保护级别显式降级并留痕
     credentialCrypto = new CredentialCrypto(app.getPath('userData'), safeStorage);
+    // web_search 配置读取/写入同样通过 credentialCrypto 加密，P0-20 不得留明文旁路。
+    webTools.setLocalStore(localStore, credentialCrypto);
     if (credentialCrypto.scheme === 'file-key') {
       console.warn('[local] safeStorage 不可用，凭证改用本地文件密钥加密（userData/credential.key，0600）');
     }
@@ -184,279 +206,21 @@ function initLocalStore() {
   }
 }
 
-// ── 自定义模型配置文件（~/.mjcode/models.json）同步 ──
-// 时机：启动一次 + providers/list 与 status 查询时按 mtime 变化热同步（保存文件即生效，无需重启）。
-// 失败/文件不存在只告警不影响启动；解析错误收集后在设置页展示，绝不静默吞。
-let modelsFileMtime = 0;
-let modelsFileLastStatus = { path: modelsFile.modelsFilePath(), exists: false, synced: 0, removed: 0, errors: [] };
+// T2-1：本地数据域已拆出 main/ipc/localData.js（只搬移不改行为）——
+// models.json 同步/写回 + 会话·消息·provider·项目·偏好·记忆 IPC。
+// localStore/credentialCrypto/memory* 在 whenReady 后才存在，经 getter 注入；localVault 为共享 Map 引用。
+const localDataIpc = require('./ipc/localData');
+localDataIpc.initLocalDataIpc({
+  getLocalStore: () => localStore,
+  getCredentialCrypto: () => credentialCrypto,
+  localVault,
+  serverBase,
+  MJ_SERVER_DEFAULT,
+  getMemoryManager: () => memoryManager,
+  getMemoryScheduler: () => memoryScheduler,
+});
+const { syncModelsFile, maybeSyncModelsFile, migrateLocalModelsToFile } = localDataIpc;
 
-function syncModelsFile({ reason = 'manual' } = {}) {
-  const filePath = modelsFile.modelsFilePath();
-  const exists = require('fs').existsSync(filePath);
-  try {
-    if (!exists) {
-      modelsFileLastStatus = { path: filePath, exists: false, synced: 0, removed: 0, errors: [] };
-      return modelsFileLastStatus;
-    }
-    modelsFileMtime = require('fs').statSync(filePath).mtimeMs;
-    const raw = modelsFile.readModelsFile(filePath);
-    const r = modelsFile.syncFileModels({ store: localStore, encrypt: (k) => credentialCrypto.encrypt(k), vault: localVault, raw, filePath });
-    modelsFileLastStatus = { path: filePath, exists: true, synced: r.synced, removed: r.removed.length, errors: r.errors };
-    if (r.synced || r.removed.length) {
-      console.log(`[modelsFile] 同步完成（${reason}）：导入 ${r.synced} 个模型 / 移除 ${r.removed.length} 个 provider${r.errors.length ? `，${r.errors.length} 条解析告警` : ''}`);
-    }
-    if (r.errors.length) console.warn('[modelsFile] 配置告警:', r.errors.map((e) => e.error).join('；'));
-  } catch (e) {
-    console.error('[modelsFile] 同步失败:', e.message);
-    modelsFileLastStatus = { path: filePath, exists, synced: 0, removed: 0, errors: [{ error: `同步失败：${e.message}` }] };
-  }
-  return modelsFileLastStatus;
-}
-
-// mtime 未变则跳过（cheap：一次 statSync），变了才重新解析对账
-function maybeSyncModelsFile() {
-  try {
-    const filePath = modelsFile.modelsFilePath();
-    if (!require('fs').existsSync(filePath)) return modelsFileLastStatus;
-    const mtime = require('fs').statSync(filePath).mtimeMs;
-    if (mtime !== modelsFileMtime) return syncModelsFile({ reason: 'file-changed' });
-  } catch { /* stat 失败按未变化处理 */ }
-  return modelsFileLastStatus;
-}
-
-// ── 迁移：把 UI 手工配置的模型写入配置文件（用户要求：旧模型统一由 models.json 承载）──
-// 触发条件（防覆盖用户手写内容）：文件不存在，或内容仍是初始模板，或文件解析不出任何 provider。
-// 迁移后删除已被文件承载的 UI provider（同 url+Key 的模型已并入文件组，避免双份显示）。
-function migrateLocalModelsToFile() {
-  try {
-    const filePath = modelsFile.modelsFilePath();
-    const raw = modelsFile.readModelsFile(filePath);
-    const parsed = raw ? modelsFile.parseModelsFile(raw) : { providers: [] };
-    // 模板/占位判定：文件缺失、解析不出 provider，或全部条目都是 example.com 占位
-    // （同时兼容 v1 扁平模板与 v2 分组模板——两者文本不同，不能按文本比对）
-    const isPlaceholder = parsed.providers.length > 0
-      && parsed.providers.every((g) => g.base_url.startsWith('https://api.example.com'));
-    const uiProviders = localStore.data.providers.filter((p) => p.source !== 'file');
-    const shouldMigrate = (raw == null || parsed.providers.length === 0 || isPlaceholder) && uiProviders.length > 0;
-    if (!shouldMigrate) return;
-
-    const { raw: nextRaw, migrated } = modelsFile.migrateLocalProviders({
-      raw: isPlaceholder ? '[]' : (raw || ''), // 占位内容直接丢弃，避免示例模型混入真实列表
-      providers: uiProviders,
-      decrypt: (enc) => credentialCrypto.decrypt(enc),
-    });
-    modelsFile.writeModelsFile(nextRaw, filePath);
-    let removed = 0;
-    for (const m of migrated) {
-      try {
-        localStore.deleteProvider(m.id);
-        localVault.delete(Number(m.id));
-        removed += 1;
-      } catch { /* 已不存在则忽略 */ }
-    }
-    console.log(`[modelsFile] 迁移完成：${migrated.length} 个本机模型服务已写入 ${filePath}（其中 ${migrated.filter((x) => x.matched).length} 个并入已有组），UI 侧移除 ${removed} 个（改由文件承载）`);
-  } catch (e) {
-    console.error('[modelsFile] 迁移失败（不影响启动，可稍后在设置页重试）:', e.message);
-  }
-}
-
-// ── UI 对 file 来源 provider 的写回（删除/添加模型 → 修改 models.json → 热同步）──
-function rewriteModelsFileRaw(nextRaw, { reason }) {
-  modelsFile.writeModelsFile(nextRaw);
-  modelsFileMtime = require('fs').statSync(modelsFile.modelsFilePath()).mtimeMs; // 写回后手动对齐，防 mtime 双触发
-  return syncModelsFile({ reason });
-}
-
-ipcMain.handle('local:models-file/remove-model', async (_, { fileKey, modelId } = {}) => {
-  try {
-    const raw = modelsFile.readModelsFile();
-    const r = modelsFile.removeModelFromRaw(raw, fileKey, modelId);
-    if (!r.ok) return r;
-    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-model' }) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-ipcMain.handle('local:models-file/remove-provider', async (_, { fileKey } = {}) => {
-  try {
-    const raw = modelsFile.readModelsFile();
-    const r = modelsFile.removeProviderFromRaw(raw, fileKey);
-    if (!r.ok) return r;
-    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'remove-provider' }) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name } = {}) => {
-  try {
-    const raw = modelsFile.readModelsFile();
-    const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name);
-    if (!r.ok) return r;
-    return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'add-model' }) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('local:models-file/status', async () => (localStore ? maybeSyncModelsFile() : modelsFileLastStatus));
-ipcMain.handle('local:models-file/open', async () => {
-  try {
-    const r = modelsFile.ensureModelsFile();
-    const err = await shell.openPath(r.path);
-    return { ok: !err, created: r.created, error: err || null };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('server:health', async () => {
-  try {
-    const r = await fetch(`${serverBase()}/health`, { signal: AbortSignal.timeout(3000) });
-    return { online: r.ok };
-  } catch (e) {
-    return { online: false };
-  }
-});
-
-ipcMain.handle('local:threads/list', async (_, { projectPath } = {}) => (localStore ? localStore.listThreads(projectPath) : []));
-ipcMain.handle('local:threads/create', async (_, payload) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.createThread(payload || {});
-});
-ipcMain.handle('local:threads/set-status', async (_, { id, status }) => {
-  if (!localStore) return null;
-  return localStore.setThreadStatus(id, status);
-});
-ipcMain.handle('local:messages/add', async (_, payload) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.addMessage(payload || {});
-});
-ipcMain.handle('local:messages/list', async (_, { threadId }) => localStore ? localStore.listMessages(threadId) : []);
-// /compact 落库：压缩摘要历史整体替换（P2-6 收口）
-ipcMain.handle('local:messages/replace', async (_, payload) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.replaceMessages(payload?.threadId, payload?.messages || []);
-});
-ipcMain.handle('local:threads/delete', async (_, { threadId }) => localStore ? localStore.archiveThread(threadId) : { ok: false });
-// A1：会话重命名
-ipcMain.handle('local:threads/rename', async (_, { threadId, title }) => localStore ? localStore.renameThread(threadId, title) : { ok: false });
-// A3：归档可见 —— 恢复 / 彻底删除 / 列表
-ipcMain.handle('local:threads/archived', async () => localStore ? localStore.listArchivedThreads() : []);
-ipcMain.handle('local:threads/restore', async (_, { threadId }) => localStore ? localStore.restoreThread(threadId) : { ok: false });
-ipcMain.handle('local:threads/purge', async (_, { threadId }) => localStore ? localStore.purgeThread(threadId) : { ok: false });
-// B1：孤儿会话归组
-ipcMain.handle('local:threads/set-project', async (_, { threadId, projectPath }) => localStore ? localStore.setThreadProject(threadId, projectPath) : { ok: false });
-
-ipcMain.handle('local:providers/list', async () => {
-  if (!localStore) return [];
-  maybeSyncModelsFile(); // 文件保存即生效（mtime 变化才真正重解析）
-  return localStore.listProviders();
-});
-ipcMain.handle('local:providers/add', async (_, { name, base_url, api_key, model_id }) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  if (!credentialCrypto) throw new Error('本地数据层未初始化');
-  const keyEncrypted = credentialCrypto.encrypt(String(api_key || ''));
-  const p = localStore.addProvider({ name, base_url, keyEncrypted, modelId: model_id });
-  localVault.set(p.id, { api_key: String(api_key || ''), base_url });
-  return p;
-});
-ipcMain.handle('local:providers/set-model', async (_, { id, model_id }) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.setProviderModel(id, model_id);
-});
-// 多模型：本机 provider 模型条目可增可删（修复「单模型不可删、UI 假装无限添加」）
-ipcMain.handle('local:providers/add-model', async (_, { id, model_id, display_name }) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.addProviderModel(id, { model_id, display_name });
-});
-ipcMain.handle('local:providers/remove-model', async (_, { id, model_id }) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  return localStore.removeProviderModel(id, model_id);
-});
-ipcMain.handle('local:providers/delete', async (_, { id }) => {
-  if (localStore) localStore.deleteProvider(id);
-  localVault.delete(Number(id));
-  return { ok: true };
-});
-// B2：供应商编辑（name/base_url/换 Key；Key 走凭证加密双轨落库）
-ipcMain.handle('local:providers/update', async (_, { id, name, base_url, api_key }) => {
-  if (!localStore) throw new Error('本地数据层未初始化');
-  if (!credentialCrypto) throw new Error('本地数据层未初始化');
-  let keyEncrypted;
-  if (api_key) {
-    keyEncrypted = credentialCrypto.encrypt(String(api_key));
-    const cur = localVault.get(Number(id)) || {};
-    localVault.set(Number(id), { ...cur, api_key: String(api_key), base_url: base_url || cur.base_url });
-  } else if (base_url && localVault.get(Number(id))) {
-    localVault.get(Number(id)).base_url = base_url;
-  }
-  return localStore.updateProvider(id, { name, base_url, keyEncrypted });
-});
-// B2：测试连接（对 base_url 的 /models 发起探测，返回延迟；Key 仅在主进程内存解析）
-ipcMain.handle('model:testConnection', async (_, { id, base_url }) => {
-  const vault = localVault.get(Number(id));
-  const url = (base_url || vault?.base_url || '').replace(/\/+$/, '');
-  if (!url) return { ok: false, error: '缺少接口地址' };
-  // Key 含非 ASCII（典型：模板占位「sk-请替换成你的Key」未替换）时 fetch 头部会抛
-  // ByteString 错误（真机复现），提前拦截给出可行动提示，而不是让用户看到天书报错
-  if (vault?.api_key && /[^\x20-\x7E]/.test(vault.api_key)) {
-    return { ok: false, error: 'API Key 含非 ASCII 字符（可能仍是模板占位符），请先替换为真实 Key' };
-  }
-  const started = Date.now();
-  try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (vault?.api_key) headers['Authorization'] = `Bearer ${vault.api_key}`;
-    const r = await fetch(`${url}/models`, { headers, signal: AbortSignal.timeout(8000) });
-    const latencyMs = Date.now() - started;
-    if (!r.ok) return { ok: false, latencyMs, error: `HTTP ${r.status}` };
-    return { ok: true, latencyMs };
-  } catch (err) {
-    return { ok: false, latencyMs: Date.now() - started, error: err.message };
-  }
-});
-
-// B1：项目一等实体（本机持久化）
-ipcMain.handle('local:projects/list', async () => localStore ? localStore.listProjects() : []);
-ipcMain.handle('local:projects/add', async (_, { path, name }) => localStore ? localStore.addProject({ path, name }) : null);
-ipcMain.handle('local:projects/remove', async (_, { path }) => localStore ? localStore.removeProject(path) : { ok: false });
-ipcMain.handle('local:projects/rename', async (_, { path, name }) => localStore ? localStore.renameProject(path, name) : { ok: false });
-
-ipcMain.handle('local:preferences/get', async (_, { key }) => localStore ? localStore.getPreference(key) : undefined);
-ipcMain.handle('local:preferences/set', async (_, { key, value }) => localStore ? localStore.setPreference(key, value) : { ok: false });
-
-// 服务端地址读写（设置-通用）：写偏好（三级解析之首）；读返回当前生效地址与来源
-ipcMain.handle('local:server/base', async (_, { base } = {}) => {
-  if (base != null) {
-    const v = String(base).trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//.test(v)) throw new Error('服务端地址需以 http:// 或 https:// 开头');
-    if (!localStore) throw new Error('本地数据层未初始化');
-    localStore.setPreference('server.apiBase', v);
-  }
-  return {
-    base: serverBase(),
-    default: MJ_SERVER_DEFAULT,
-    source: localStore?.getPreference?.('server.apiBase') ? 'preference' : (process.env.MJ_SERVER_API ? 'env' : 'default'),
-  };
-});
-
-ipcMain.handle('local:memories/add', async (_, { projectPath, content }) => {
-  // P2-1：写入收口 MemoryManager（SQLite）；不可用时回落旧 localStore 链路
-  if (memoryManager) {
-    const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source: 'ipc' });
-    return m ? { id: m.id, content: m.content } : null;
-  }
-  return localStore ? localStore.addMemory({ projectPath, content }) : null;
-});
-ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query } = {}) => {
-  // P2-6：分层召回路由（importance×recency×相关性 Top-K）；不可用时回落旧链路
-  if (memoryManager) {
-    return memoryManager.recallContents({ spaceId: projectPath, query, topK: limit || 5 });
-  }
-  return localStore ? localStore.listMemories(projectPath, limit) : [];
-});
-// P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
-ipcMain.handle('memory:stats', async () => (memoryManager ? { ok: true, stats: memoryManager.stats() } : { ok: false }));
-ipcMain.handle('memory:bgTasks', async (_, opts) => (memoryScheduler ? { ok: true, tasks: memoryScheduler.listTasks(opts) } : { ok: false }));
 
 // ═══════════════════════════════════════════
 //  P3-1/P3-5：ResourceQuotaCenter——全局唯一资源额度中心（槽位预占 + 前后台隔离 + 熔断节流）
@@ -470,6 +234,25 @@ ipcMain.handle('quota:snapshot', () => quota.snapshot());
 // Phase 3-1：Agent 任务断点持久化（预算熔断 = 暂停；「继续」时渲染层取回断点摘要注入）
 const checkpointStore = require('./checkpointStore');
 checkpointStore.initCheckpointStore(app.getPath('userData'));
+// T0-5：本地结构化运行 trace（userData/traces/<runId>.jsonl，不上报；供排障与诊断包）
+const runTrace = require('./runTrace');
+runTrace.initRunTrace(app.getPath('userData'));
+
+// T2-5：本地崩溃/异常聚合（结构化 JSONL + trace 尾部 + 渲染层错误转发 + 原生崩溃 dump）。
+// 全部落本机不上传；agentRunner 在本文件后段声明，经 getter 延迟读取（异常发生才调用）。
+const { initDiagnostics, reportError, startCrashReporter } = require('./diagnostics');
+initDiagnostics({ app, getActiveRunIds: () => agentRunner.getActiveRunIds(), readTraceEvents: (rid) => runTrace.readTraceEvents(rid) });
+startCrashReporter(app);
+// T2-6：诊断包一键导出（设置页触发；审计/崩溃/trace/日志/脱敏配置打 zip，凭证一律剔除）
+const { registerDiagExportIpc } = require('./diagExport');
+registerDiagExportIpc();
+// T3-1：大消息 IPC 可靠传输——超限工具结果落临时文件+句柄分页（agentRunner 发送前卸载）；
+// 大文件预览改 mjpreview:// 流式协议（scheme 特权注册必须早于 app ready）
+const bigPayload = require('./bigPayload');
+bigPayload.initBigPayload({ dataDir: app.getPath('userData') });
+bigPayload.registerBigPayloadIpc(ipcMain);
+const previewScheme = require('./previewScheme');
+previewScheme.registerPreviewSchemePrivileges();
 ipcMain.handle('checkpoint:get', (_, threadKey) => checkpointStore.getCheckpoint(threadKey));
 ipcMain.handle('checkpoint:clear', (_, threadKey) => ({ ok: checkpointStore.clearCheckpoint(threadKey) }));
 // Phase 3-4：token 仪表盘数据源（最近一次运行的逐轮用量快照）
@@ -478,261 +261,17 @@ ipcMain.handle('agent:token/state', () => agentRunner.getTokenState());
 quota.detectLocalBackend().catch(() => {});
 setInterval(() => { quota.detectLocalBackend().catch(() => {}); }, 5 * 60 * 1000).unref?.();
 
-// ── 协同（P4/P5）：主进程侧 Yjs 本地优先快照层 ──
-// 渲染层经 HTTP 与服务端 CRDT 同步；主进程提供离线可读的本地快照与增量编解码
-const { LocalCollab, makeDocId } = require('./collab');
-const COLLAB_DIR = () => path.join(app.getPath('home'), '.mjcode', 'collab');
-let localCollab = null;
-const getLocalCollab = () => {
-  if (!localCollab) localCollab = new LocalCollab(COLLAB_DIR());
-  return localCollab;
-};
 
-// 功能开关查询（渲染层据此隐藏入口）
-ipcMain.handle('app:flags', async () => ({ ok: true, flags: featureFlags }));
+// T2-1：审计域已拆出 main/audit/auditLog.js（只搬移不改行为）。
+// 33 处调用点仍以同名 audit() 使用；authToken 归属本文件（model:getSecrets 成功后赋值），
+// 经 getter 注入供审计读取；serverBase 同源。
+const { initAudit, audit } = require('./audit/auditLog');
+initAudit({ getAuthToken: () => authToken, serverBase });
 
-// 本机数据目录（状态条展示「数据保存在本机」的真实证据）
-ipcMain.handle('app:userDataPath', async () => ({ ok: true, path: app.getPath('userData') }));
-// 版本号动态下发（Sidebar 此前硬编码 v1.0.0，发版后永远显示旧版本）
-ipcMain.handle('app:version', async () => app.getVersion());
-
-if (featureFlags.collab) {
-  ipcMain.handle('collab:open', async (_, { docId } = {}) => {
-    try {
-      const lc = getLocalCollab();
-      lc.open(String(docId || ''));
-      return { ok: true, docId };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('collab:docId', async (_, { type, entityId } = {}) => ({ docId: makeDocId(type, entityId) }));
-
-  ipcMain.handle('collab:persist', async (_, { docId } = {}) => {
-    try {
-      return getLocalCollab().persist(String(docId || ''));
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  // 推给服务端的增量：传服务端已确认的 stateVector（base64），缺省推全量
-  ipcMain.handle('collab:encodePush', async (_, { docId, stateVector } = {}) => {
-    try {
-      return { ok: true, update: getLocalCollab().encodePush(String(docId || ''), stateVector) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('collab:applyUpdate', async (_, { docId, update } = {}) => {
-    try {
-      return { ok: true, ...getLocalCollab().applyServerUpdate(String(docId || ''), update) };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('collab:listLocal', async () => ({ ok: true, docs: getLocalCollab().listLocalDocs() }));
-  ipcMain.handle('collab:closeAll', async () => { getLocalCollab().closeAll(); return { ok: true }; });
-} else {
-  console.log('[features] 协同模块已冻结（默认）。如需恢复设置 MJCODE_FEATURES=\'{"collab":true}\'');
-}
-
-// ── SKILL.md 兼容层 IPC（生态互通：生态目录安装 + 外部技能仓库导入）──
-// 生态目录候选：userData/ecosystem（打包/用户目录）优先，回落仓库根 ecosystem/（开发模式）
-function ecosystemDirCandidates() {
-  const candidates = [ECOSYSTEM_DIR(), path.join(app.getAppPath(), '..', 'ecosystem')];
-  return candidates.filter((d) => fs.existsSync(path.join(d, 'skills.json')));
-}
-
-ipcMain.handle('skills:installEcosystem', async (_, { id } = {}) => {
-  try {
-    const dirs = ecosystemDirCandidates();
-    if (dirs.length === 0) return { ok: false, error: '未找到生态技能目录（skills.json）' };
-    const r = skillCompat.installCatalogSkill(dirs, SKILLS_DIR(), id);
-    if (r.ok) audit('skill_install', r.name || id, `dir=${r.dir}`);
-    return r;
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-ipcMain.handle('skills:importFromDir', async (_, { dir } = {}) => {
-  try {
-    const scan = skillCompat.importSkillsFromDir(dir);
-    if (!scan.ok) return scan;
-    const installed = [];
-    const failed = [];
-    for (const entry of scan.skills) {
-      const r = skillCompat.installSkillToDir(SKILLS_DIR(), entry, { overwrite: true });
-      if (r.ok) installed.push({ dir: r.dir, name: r.name });
-      else failed.push({ name: entry.name, error: r.error });
-    }
-    if (installed.length) audit('skill_import', dir, `installed=${installed.length}`);
-    return { ok: true, found: scan.skills.length, installed, failed };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// ── IDE 跳转（代码视图一键跳转既有编辑器）──
-ipcMain.handle('app:openInIDE', async (_, { path: p } = {}) => {
-  try {
-    if (!p || typeof p !== 'string') return { ok: false, error: '缺少文件路径' };
-    if (p.includes('..') && !path.isAbsolute(p)) return { ok: false, error: '非法路径' };
-    const platform = process.platform;
-    const candidates = ideLib.IDE_CANDIDATES[platform] || ideLib.IDE_CANDIDATES.linux;
-    const whichCmd = platform === 'win32' ? 'where' : 'which';
-    const available = await Promise.all(candidates.map((cmd) =>
-      new Promise((resolve) => {
-        execFile(whichCmd, [cmd], (err) => resolve(err ? null : cmd));
-      })
-    )).then((list) => list.filter(Boolean));
-    const picked = ideLib.pickIde(platform, available);
-    const args = [...(picked.args || []), p];
-    const child = spawn(picked.cmd, args, { detached: true, stdio: 'ignore' });
-    child.unref();
-    audit('open_in_ide', p, `ide=${picked.ide}`);
-    return { ok: true, ide: picked.ide, cmd: picked.cmd };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// ── 生态资产目录（M7）：50 数字员工 / 100 MCP 连接器 / 100 Skill ──
-const ecosystemLib = require('./ecosystem');
-const ECOSYSTEM_DIR = () => path.join(app.getPath('userData'), 'ecosystem');
-
-// 读路径统一解析：userData 无资产时回落仓库根 ecosystem/（开发模式）
-// 事故根因：四个读 IPC 只读 userData/ecosystem，而打包前该目录不存在 →
-// 生态中心/PlusMenu 的数字员工、技能、连接器全部空载（数据本身 50/100/100 完好）
-function resolveEcosystemDir() {
-  const dirs = ecosystemDirCandidates();
-  return dirs[0] || ECOSYSTEM_DIR();
-}
-
-ipcMain.handle('ecosystem:summary', async () => {
-  try {
-    const all = ecosystemLib.loadEcosystem(resolveEcosystemDir());
-    return { ok: true, stats: all.stats };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-ipcMain.handle('ecosystem:employees', async (_, { category } = {}) => {
-  try {
-    let list = ecosystemLib.loadDigitalEmployees(resolveEcosystemDir());
-    if (category) list = list.filter((e) => e.category === category);
-    return { ok: true, employees: list };
-  } catch (err) {
-    return { ok: false, error: err.message, employees: [] };
-  }
-});
-
-ipcMain.handle('ecosystem:connectors', async (_, { category } = {}) => {
-  try {
-    let list = ecosystemLib.loadMcpConnectors(resolveEcosystemDir());
-    if (category) list = list.filter((c) => c.category === category);
-    return { ok: true, connectors: list };
-  } catch (err) {
-    return { ok: false, error: err.message, connectors: [] };
-  }
-});
-
-// ── 网络配置（web_search 提供方）：读写 + 元数据，见 设置 → 网络配置 ──
-ipcMain.handle('websearch:getConfig', async () => ({
-  ok: true,
-  meta: searchProviders.SEARCH_PROVIDERS,
-  config: searchProviders.loadSearchConfig(localStore),
-}));
-ipcMain.handle('websearch:setConfig', async (_, { providers } = {}) => {
-  try {
-    // Key 属敏感凭证：审计只记启用了哪些提供方，绝不落 Key 本体
-    const r = searchProviders.saveSearchConfig(localStore, providers);
-    const enabled = r.providers.filter((p) => p.enabled).map((p) => p.id);
-    audit('settings', 'web_search providers', `enabled=${enabled.join(',') || '(none)'}`, 'ok');
-    return { ok: true, config: r };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-ipcMain.handle('ecosystem:skills', async () => {
-  try {
-    return { ok: true, skills: ecosystemLib.loadSkillCatalog(resolveEcosystemDir()) };
-  } catch (err) {
-    return { ok: false, error: err.message, skills: [] };
-  }
-});
-
-// 审计上报：可丢失遥测。服务端不可达时熔断并静默，仅保留计数，绝不刷屏
-const AUDIT_BREAKER_THRESHOLD = 3;
-let auditFailures = 0;
-let auditBreakerUntil = 0;
-
-// 本地审计（P0-C）：无服务端令牌时落盘 userData/audit-log.jsonl（可丢失遥测，滚动上限 10MB）
-// 「本地优先」产品的最基本合规基线——纯本地场景（shell/写文件/git/MCP/审批放行）也必须留痕，
-// 否则误操作或安全事件发生时无任何事后追溯材料。
-const AUDIT_LOG_FILE = () => path.join(app.getPath('userData'), 'audit-log.jsonl');
-const AUDIT_LOG_MAX_BYTES = 10 * 1024 * 1024;
-let auditLogBytes = -1; // 懒加载：首次写入时探测现有体积
-
-function auditLocal(action, target, detail, approvalResult) {
-  try {
-    const file = AUDIT_LOG_FILE();
-    fs.mkdirSync(path.dirname(file), { recursive: true }); // userData 理论上恒存在，防御性确保
-    const line = JSON.stringify({
-      ts: new Date().toISOString(),
-      action,
-      target: String(target || '').slice(0, 500),
-      detail: String(detail || '').slice(0, 2000),
-      approval_result: approvalResult || 'auto',
-      mode: 'local',
-    }) + '\n';
-    if (auditLogBytes < 0) {
-      try { auditLogBytes = fs.statSync(file).size; } catch (e) { auditLogBytes = 0; }
-    }
-    if (auditLogBytes + Buffer.byteLength(line) > AUDIT_LOG_MAX_BYTES) {
-      // 滚动：旧文件转 .1（只保留一代），重新计数
-      try { fs.renameSync(file, `${file}.1`); } catch (e) { /* 不存在则忽略 */ }
-      auditLogBytes = 0;
-    }
-    fs.appendFileSync(file, line);
-    auditLogBytes += Buffer.byteLength(line);
-  } catch (e) {
-    console.warn('[audit] 本地审计落盘失败:', e.message); // 审计失败绝不阻塞主流程
-  }
-}
-
-function audit(action, target, detail, approvalResult) {
-  if (!authToken) { auditLocal(action, target, detail, approvalResult); return; } // 本地优先：无令牌时落盘留痕
-  if (Date.now() < auditBreakerUntil) { auditFailures++; return; } // 熔断期内不再发起连接
-  fetch(`${serverBase()}/audit`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-    body: JSON.stringify({
-      action,
-      target: String(target || '').slice(0, 500),
-      detail: String(detail || '').slice(0, 2000),
-      approval_result: approvalResult || 'auto',
-    }),
-    signal: AbortSignal.timeout(3000),
-  }).then(() => {
-    if (auditFailures) degrade.markHealthy('audit');
-    auditFailures = 0;
-    auditBreakerUntil = 0;
-  }).catch((err) => {
-    auditFailures++;
-    const degradable = degrade.report('audit', err, { silent: true });
-    if (degradable && auditFailures >= AUDIT_BREAKER_THRESHOLD) {
-      auditBreakerUntil = Date.now() + 5 * 60 * 1000; // 连续失败 → 熔断 5 分钟
-      console.warn(`[audit] 审计上报连续失败 ${auditFailures} 次（服务端不可达），已熔断 5 分钟`);
-    }
-  });
-}
+// T2-1：生态与杂项 IPC 域已拆出 main/ipc/ecosystem.js（只搬移不改行为）——
+// flags/协同/skillCompat/IDE/ecosystem/websearch。audit 与 SKILLS_DIR 经注入保持同源。
+const { initEcosystemIpc } = require('./ipc/ecosystem');
+initEcosystemIpc({ getLocalStore: () => localStore, getCredentialCrypto: () => credentialCrypto, featureFlags, audit, getSkillsDir: () => SKILLS_DIR() });
 
 ipcMain.handle('model:getSecrets', async (_, { token }) => {
   if (!token) return { ok: false, error: 'NO_TOKEN' };
@@ -776,71 +315,11 @@ ipcMain.handle('model:getSecrets', async (_, { token }) => {
   return secretsInFlight;
 });
 
-const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
-
-function loadWindowState() {
-  try {
-    return JSON.parse(fs.readFileSync(WINDOW_STATE_FILE(), 'utf8'));
-  } catch (e) {
-    return null; // 首次启动或文件损坏时回落默认值
-  }
-}
-
-function saveWindowState() {
-  if (!mainWindow) return;
-  try {
-    fs.writeFileSync(WINDOW_STATE_FILE(), JSON.stringify(mainWindow.getBounds()));
-  } catch (e) {
-    console.warn('[window] 状态保存失败:', e.message);
-  }
-}
-
-function createWindow() {
-  const state = loadWindowState();
-  mainWindow = new BrowserWindow({
-    width: state?.width || 1600,
-    height: state?.height || 1000,
-    x: state?.x,
-    y: state?.y,
-    minWidth: 1200, minHeight: 700,
-    title: 'MJ Coder', backgroundColor: '#0d0d0d', titleBarStyle: 'hiddenInset',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true },
-  });
-  // 生产构建走 file:// 加载打包产物；开发走 vite dev server
-  if (app.isPackaged) {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/dist/index.html'));
-  } else {
-    mainWindow.loadURL('http://localhost:5173');
-    if (process.env.NODE_ENV === 'development') mainWindow.webContents.openDevTools();
-  }
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  mainWindow.on('close', saveWindowState);
-}
-
-// 打包版诊断日志：console 全量 tee 到 userData/logs/main-YYYYMMDD.log。
-// 背景：连续三起打包版问题（SIGSEGV/凭证加密/运行中停止）都因「主进程日志不可见」只能靠猜。
-// dev 模式终端可见，不 tee（避免双写）；打包版启用。崩溃类另有 uncaughtException → crash.log。
-function setupFileLogging() {
-  if (!app.isPackaged) return;
-  try {
-    const dir = path.join(app.getPath('userData'), 'logs');
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `main-${new Date().toISOString().slice(0, 10)}.log`);
-    const orig = { log: console.log.bind(console), warn: console.warn.bind(console), error: console.error.bind(console) };
-    const tee = (level) => (...args) => {
-      orig[level](...args);
-      try {
-        const body = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-        fs.appendFileSync(file, `[${new Date().toISOString()}] [${level}] ${body.slice(0, 4000)}\n`);
-      } catch { /* 日志落盘失败不影响主流程 */ }
-    };
-    console.log = tee('log');
-    console.warn = tee('warn');
-    console.error = tee('error');
-  } catch (e) {
-    console.warn('[logging] 文件日志初始化失败:', e.message);
-  }
-}
+// T2-1：窗口生命周期域已拆出 main/lifecycle/window.js（只搬移不改行为）——
+// 窗口状态持久化 / 主窗口创建 / 打包版 console tee。mainWindow 归属本文件，经 getter/setter 注入。
+const windowLifecycle = require('./lifecycle/window');
+windowLifecycle.init({ getMainWindow: () => mainWindow, setMainWindow: (w) => { mainWindow = w; } });
+const { createWindow, setupFileLogging } = windowLifecycle;
 
 // 单实例锁：第二个实例启动时聚焦已有窗口
 if (!app.requestSingleInstanceLock()) {
@@ -854,8 +333,9 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     setupFileLogging();
     createWindow();
+    previewScheme.initPreviewScheme(); // T3-1：流式预览协议处理器（必须 ready 后注册）
     // P1-N：更新检查延迟 10s 自动触发（initUpdater 仍保留供手动检查即时初始化）
-    scheduleAutoUpdateCheck();
+    updater.scheduleAutoUpdateCheck();
     initLocalStore();
     initTaskOrchestration(); // P1：任务编排子系统（SQLite 队列 + Worker 池 + 断点恢复）
     reconnectMcpServers(); // 启动自动重连已持久化的 MCP 服务
@@ -873,12 +353,11 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
-// 崩溃日志（M3-5）：主进程未捕获异常落盘
+// T2-5：崩溃/异常聚合收口升级（原 M3-5 crash.log 纯文本 → 结构化 JSONL）：
+// 主进程未捕获异常统一进 main/diagnostics.js——userData/diagnostics/crash-YYYYMMDD.jsonl，
+// 每条含 ts/kind/stack + 活跃 runId + 该 run 的 trace 尾部（T0-5），只落本机不上传。
 process.on('uncaughtException', (err) => {
-  try {
-    const line = `[${new Date().toISOString()}] ${err.stack || err.message}\n`;
-    fs.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), line);
-  } catch (e) { /* 崩溃兜底路径，避免二次抛出 */ }
+  reportError('uncaughtException', err);
 });
 
 // P0-C 修复：补unhandledRejection 兜底。
@@ -888,88 +367,16 @@ process.on('uncaughtException', (err) => {
 // 整个桌面应用直接退出，用户正在跑的全部 Agent 任务与对话一起丢失，且无任何提示。
 // Node 15+ 可用 process.on('unhandledRejection') 覆盖该行为。
 process.on('unhandledRejection', (reason) => {
-  const msg = String(reason?.message || reason || '');
-  try {
-    const line = `[${new Date().toISOString()}] unhandledRejection: ${reason?.stack || msg}\n`;
-    fs.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), line);
-  } catch (e) { /* 兜底路径，避免二次抛出 */ }
-  console.error('[main]未捕获的 Promise 拒绝（已兜底，未退出进程）:', msg);
+  reportError('unhandledRejection', reason);
+  console.error('[main]未捕获的 Promise 拒绝（已兜底，未退出进程）:', String(reason?.message || reason || ''));
 });
 }
 
 // ── 自动更新（electron-updater，仅打包态生效；延迟 require 避免非 electron 环境崩溃）──
-// P1-N：更新链路默认值三件套——
-//   1) 启动延迟 10s 自动 checkForUpdates（autoDownload 保持 false，下载仍需用户确认）；
-//   2) error/available 态附手动下载链接（GitHub Releases 页），检查失败也能降级自助；
-//   3) 更新通道：MJ_UPDATE_CHANNEL=beta 走预发布通道（默认 latest，与 publish.channel 对齐）。
-// 修复潜在 bug：autoUpdater 原在 initUpdater 内 const 声明，却被模块级 IPC handler 引用，
-// 打包态点「检查更新」必抛 ReferenceError（手动检查链路从未真正工作过）。
-const UPDATE_CHECK_DELAY_MS = 10 * 1000;
-const UPDATE_CHANNEL = process.env.MJ_UPDATE_CHANNEL || 'latest';
-let autoUpdater = null;
-let updaterInitialized = false;
-let autoUpdateChecked = false;
-// 手动下载兜底链接：由 build.publish 推导（owner/repo 缺失时为空串，前端隐藏链接）
-function resolveManualDownloadUrl() {
-  try {
-    const pub = require('../package.json').build?.publish;
-    if (pub?.owner && pub?.repo) return `https://github.com/${pub.owner}/${pub.repo}/releases`;
-  } catch (e) { /* package.json 读取失败不影响主流程 */ }
-  return '';
-}
-const MANUAL_DOWNLOAD_URL = resolveManualDownloadUrl();
-function initUpdater() {
-  if (!app.isPackaged || updaterInitialized) return autoUpdater;
-  updaterInitialized = true;
-  // eslint-disable-next-line global-require
-  autoUpdater = require('electron-updater').autoUpdater;
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
-  if (UPDATE_CHANNEL && UPDATE_CHANNEL !== 'latest') {
-    try { autoUpdater.channel = UPDATE_CHANNEL; } catch (e) { console.warn('[updater] 更新通道设置失败:', e.message); }
-  }
-  const send = (status, data = {}) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:status', { status, ...data });
-  };
-  autoUpdater.on('checking-for-update', () => send('checking'));
-  autoUpdater.on('update-available', (info) => send('available', { version: info.version, downloadUrl: MANUAL_DOWNLOAD_URL }));
-  autoUpdater.on('update-not-available', () => send('up-to-date'));
-  autoUpdater.on('download-progress', (p) => send('downloading', { percent: Math.round(p.percent) }));
-  autoUpdater.on('update-downloaded', () => send('downloaded'));
-  autoUpdater.on('error', (err) => send('error', { message: err.message, downloadUrl: MANUAL_DOWNLOAD_URL }));
-  return autoUpdater;
-}
-
-// P1-N：启动延迟自动检查（不打扰首启；失败仅提示，不阻断使用）
-function scheduleAutoUpdateCheck() {
-  if (!app.isPackaged) return;
-  setTimeout(() => {
-    if (autoUpdateChecked) return;
-    autoUpdateChecked = true;
-    const up = initUpdater();
-    up?.checkForUpdates().catch((err) => console.warn('[updater] 启动自动检查失败（忽略，用户可手动检查）:', err.message));
-  }, UPDATE_CHECK_DELAY_MS).unref?.();
-}
-
-ipcMain.handle('updater:check', async () => {
-  if (!app.isPackaged) return { ok: false, error: '仅打包后可检查更新' };
-  const up = initUpdater();
-  if (!up) return { ok: false, error: '更新器初始化失败' };
-  try {
-    await up.checkForUpdates();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message, downloadUrl: MANUAL_DOWNLOAD_URL };
-  }
-});
-
-ipcMain.handle('updater:install', async () => {
-  if (!app.isPackaged) return { ok: false, error: '仅打包后可安装更新' };
-  const up = initUpdater();
-  if (!up) return { ok: false, error: '更新器初始化失败' };
-  up.quitAndInstall();
-  return { ok: true };
-});
+// T2-1：自动更新域已拆出 main/updater/index.js（只搬移不改行为）。
+// IPC 注册与状态推送目标（主窗口）经 getMainWindow getter 注入；延迟检查由 whenReady 接线。
+const updater = require('./updater');
+updater.init({ getMainWindow: () => mainWindow });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 // P0-1：退出前强制落盘合并窗口内未写盘的内存变更（消息/状态）
@@ -977,12 +384,24 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('will-quit', () => {
   try { localStore?.flushSync(); } catch (e) { console.warn('[local] 退出刷盘失败:', e.message); }
   try { taskStore?.db?.flush?.(); } catch (e) { console.warn('[tasks] 退出刷盘失败:', e.message); }
+  try { scheduler?.persist?.(); } catch (e) { console.warn('[scheduled] 退出刷盘失败:', e.message); }
+  try {
+    const flushResults = require('./data/intentLogRegistry').flushAllIntentLogs();
+    if (flushResults.some((result) => !result.ok || !result.durable)) {
+      console.error('[intentLog] 退出前仍有意图日志未确认 durable:', JSON.stringify(flushResults));
+    }
+  } catch (e) { console.warn('[intentLog] 退出刷盘失败:', e.message); }
   try { memoryScheduler?.stop(); } catch { /* 调度器已停 */ }
-  approvalChannel.disposeAll();
+  try { approvalChannel.disposeAll(); } catch (e) { console.warn('[approval] 退出清理异常:', e.message); }
+  try { cuaApprovalChannel.disposeAll(); } catch (e) { console.warn('[cuaApproval] 退出清理异常:', e.message); }
   try { killAllMcpServers(); } catch (e) { console.warn('[MCP] 退出清理异常:', e.message); }
+  // T4-1：退出前杀掉全部浏览器子进程（Playwright 驱动+浏览器不留孤儿）
+  try { require('./browserTools').disposeAll(); } catch (e) { console.warn('[browser] 退出清理异常:', e.message); }
+  // T4-2：关闭 Chrome 接管中继（断开扩展连接，端口不残留）
+  try { require('./chromeRelay/server').close(); } catch (e) { console.warn('[chromeRelay] 退出清理异常:', e.message); }
 });
-// SIGTERM/SIGINT 优雅退出：pkill/终端 Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
-for (const sig of ['SIGTERM', 'SIGINT']) {
+// SIGTERM/SIGINT/SIGHUP 优雅退出：pkill/终端关闭/Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(sig, () => {
     try { console.log(`[main] 收到 ${sig}，优雅退出（落盘后关闭）`); } catch { /* 日志尽力而为 */ }
     try { app.quit(); } catch { process.exit(0); }
@@ -994,1335 +413,84 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 // ═══════════════════════════════════════════
 //  AGENT TOOL EXECUTION LAYER
 // ═══════════════════════════════════════════
-
-// 打包版 GUI 进程（Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
-// homebrew（node/npm/git 等用户工具）全部找不到——真机复盘：模型被迫每轮先
-// `export PATH=/usr/local/bin:/opt/homebrew/bin:$PATH` 自救，白烧轮次。
-// 统一为子 shell 注入完整 PATH（homebrew 优先，其次系统路径），沙箱内外一致。
-// 复盘文档 P0-1 采纳：增补 bun/volta 等用户级工具目录（存在 HOME 时前置）。
-const SHELL_PATH = '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin';
-const shellEnv = () => {
-  const home = process.env.HOME || '';
-  // 打包版冒烟实测（2026-10-15）：MCP 重连 spawn uvx ENOENT——uv 官方装到
-  // ~/.local/bin（pipx 风格），uv 亦可能装到 ~/.cargo/bin；此前缺这两个目录，
-  // 打包版里 uvx 类 MCP Server 全部启动失败（开发版因继承终端 PATH 而复现不了）。
-  const userPaths = home
-    ? [`${home}/.bun/bin`, `${home}/.volta/bin`, `${home}/.local/bin`, `${home}/.cargo/bin`]
-    : [];
-  return { ...process.env, PATH: [...userPaths, SHELL_PATH].join(':') };
-};
-
-// 命令失败审查修复（真机复盘 2026-10-14）：
-// 1）execFile 的 err.message 是 "Command failed: <file> <args 全文>"——沙箱路径下 args 含整个
-//    Seatbelt profile（数千字符），每次非零退出都把 profile 全文灌进模型上下文，
-//    并让「Command failed」成为模型看到的主信号（stdout 里明明已有答案）。
-// 2）链式命令（a; b; c）退出码只取最后一段：探测类命令（ls 不存在的目录、env|grep 无命中）
-//    非零退出是正常控制流，不是失败。
-// 统一收敛为简洁的退出码说明；stdout/stderr 原样返回（答案在输出里，不靠 error 字段）。
-// 仅真正的 spawn 异常（ENOENT 等，code 非数字且非 killed）保留原始 message。
-function shellErrorNote(error) {
-  if (!error) return null;
-  if (typeof error.code === 'number') {
-    return `命令以退出码 ${error.code} 结束${error.killed ? '（超时被终止）' : ''}（非零退出≠失败，链式命令仅取最后一段的退出码；请以 stdout/stderr 内容为准）`;
-  }
-  if (error.killed) return '命令超时被终止';
-  return String(error.message || '命令执行异常').slice(0, 300);
-}
-
-// P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
-async function toolShell({ command, cwd, timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy }) {
-  let neededApproval = false;
-  let ruleMatched = 'none'; // 审批规则命中情况（always/conversation/none），随审计留痕
-  if (requireApproval) {
-    const verdict = approval.needsApproval({ tool: 'shell', args: { command }, approvalMode, conversationId, alwaysRules, conversationRules });
-    if (verdict.matched) ruleMatched = verdict.matched;
-    if (verdict.need) {
-      neededApproval = true;
-      const decision = await requestApproval('shell', { command });
-      if (decision === 'deny') {
-        audit('shell', command, '用户拒绝', 'denied');
-        return { stdout: '', stderr: '用户拒绝执行', exitCode: -1, error: 'Approval denied' };
-      }
-      applyApprovalDecision(decision, 'shell', { command }, conversationId);
-    }
-  }
-  // 三平台 OS 级沙箱（2026-10）：macOS Seatbelt / Linux bubblewrap / Windows 受限用户。
-  // 方案对齐 OpenAI Codex（各后端实现见 main/sandbox*.js 顶部注释）。
-  // P0-B fail-safe：调用方未显式指定策略时，有项目目录至少 workspace-write，无目录则 read-only。
-  // 此前默认 full-access——任何漏传 sandboxPolicy 的新调用链（定时任务/CUA/skill 自造工具）都会无隔离直跑。
-  const policy = sandboxPolicy || (cwd ? 'workspace-write' : 'read-only');
-  // sb 仍是 macOS Seatbelt 的专用判定（shouldSandbox 历史上只管 darwin，保留语义不扩散）
-  const sb = sandbox.shouldSandbox(policy, cwd);
-  // 三平台各自的「为何没能 OS 级沙箱」原因，用于日志自解释。
-  // Linux 走统一分发读取 bwrap 真实原因；Windows 的就绪态是异步的，此处只能给静态提示。
-  const fallbackReason = process.platform === 'linux'
-    ? (sandbox.osSandboxUsable(policy, cwd).reason || 'bubblewrap 不可用')
-    : (sb.reason || (process.platform === 'win32' ? 'Windows 受限用户沙箱未就绪' : 'seatbelt 不可用'));
-
-  // 守卫 + 直跑：无 OS 级沙箱（或沙箱未就绪/执行失败）时的统一落点。
-  // 守卫先于执行，命中即拒，审批不可绕过。
-  const runFallback = (resolve) => {
-    if (policy !== 'full-access') {
-      // 已确认走到这里 = 本次没有 OS 级沙箱兜底，显式传 backendAvail=false，避免再走平台推断
-      const guard = sandbox.checkCommandGuard(policy, command, process.platform, false, false);
-      if (guard.blocked) {
-        audit('shell', command, guard.reason, 'blocked');
-        resolve({ stdout: '', stderr: guard.reason, exitCode: -1, error: guard.reason, blocked: true });
-        return;
-      }
-      console.warn(`[sandbox] 未沙箱执行（${fallbackReason}）policy=${policy}`);
-    }
-    exec(command, { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-      const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error) };
-      audit('shell', command, `exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-      resolve(result);
-    });
-  };
-
-  // ── macOS：Seatbelt ──
-  if (sb.use) {
-    const profile = sandbox.buildSeatbeltProfile(policy, cwd);
-    return new Promise((resolve) => {
-      execFile(sandbox.SANDBOX_EXEC, ['-p', profile, '/bin/zsh', '-c', command],
-        { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-          const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'seatbelt' };
-          audit('shell', command, `sandbox=${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-          resolve(result);
-        });
-    });
-  }
-
-  // ── Linux：bubblewrap（ro-bind 全盘 + unshare-all 断网 + seccomp + 项目目录唯一可写）──
-  if (process.platform === 'linux' && policy !== 'full-access') {
-    const built = sandbox.linuxBackend.buildBwrapExec(policy, cwd, command, '/bin/sh');
-    if (built.argv.length) {
-      return new Promise((resolve) => {
-        execFile(built.argv[0], built.argv.slice(1),
-          { cwd: cwd || process.cwd(), timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'bubblewrap' };
-            audit('shell', command, `sandbox=bubblewrap/${policy} exitCode=${result.exitCode} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-            resolve(result);
-          });
-      });
-    }
-    console.warn(`[sandbox] Linux 未走 bubblewrap（${built.reason}），落到命令守卫`);
-  }
-
-  // ── Windows：受限专用用户（需一次性管理员设置；未就绪/失败则落到命令守卫）──
-  if (process.platform === 'win32' && policy !== 'full-access') {
-    return new Promise((resolve) => {
-      sandbox.windowsBackend.windowsSandboxReady().then(async (st) => {
-        if (st.ready) {
-          const r = await sandbox.windowsBackend.execAsSandboxUser(command, cwd);
-          if (r.ok) {
-            audit('shell', command, `sandbox=windows-restricted-user/${policy} ok=true`, neededApproval ? 'approved' : 'auto');
-            // schtasks 的 stdout 不易捕获，故以回执形式返回（命令本身的输出由任务体承载）
-            resolve({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: 0, sandboxed: true, sandboxBackend: 'windows-restricted-user' });
-            return;
-          }
-          console.warn(`[sandbox] Windows 受限用户执行失败（${r.error}），落到命令守卫`);
-        } else {
-          console.warn(`[sandbox] Windows 沙箱未就绪（${st.reason}），落到命令守卫`);
-        }
-        runFallback(resolve);
-      });
-    });
-  }
-
-  return new Promise((resolve) => runFallback(resolve));
-}
-ipcMain.handle('tool:shell', (_, payload) => toolShell(payload));
-
-async function toolReadFile({ path: p, cwd, offset, limit }) {
-  // cwd 贯通：相对路径以项目目录为基准解析（此前按主进程 CWD 解析必然失败）
-  const target = resolveToolPath(p, cwd);
-  try {
-    const content = await fsp.readFile(target, 'utf8');
-    const lines = content.split('\n');
-    const body = (offset !== undefined && limit !== undefined)
-      ? lines.slice(offset, offset + limit).join('\n')
-      : content;
-    return { ok: true, path: target, content: body, totalLines: lines.length };
-  } catch (err) {
-    // 文件不存在是设计内的正常控制流（如 AGENTS.md 逐级向上探测），绝不 reject
-    if (err.code === 'ENOENT' || err.code === 'EISDIR') {
-      // 错误信息必须包含「解析后的绝对路径」与「当前项目目录」：
-      // 否则模型只知道「文件不存在」，无法判断是自己路径写错、
-      // 还是该文件属于项目外的其他工程（如应用自身源码），只会反复重试同样的错路径。
-      const base = cwd || process.cwd();
-      const where = path.isAbsolute(p)
-        ? `绝对路径不存在：${target}`
-        : `相对路径已按当前项目目录解析：${target}（项目目录：${base}）。`
-          + `若目标不在当前项目内，请改用绝对路径，或先用 list_dir 确认项目结构。`;
-      const error = err.code === 'EISDIR'
-        ? `${target} 是目录，不是文件。请改用 list_dir 浏览其内容。`
-        : where;
-      return { ok: false, notFound: true, path: target, cwd: base, error };
-    }
-    if (err.code === 'EACCES') return { ok: false, error: '没有读取权限' };
-    return { ok: false, error: err.message };
-  }
-}
-ipcMain.handle('tool:readFile', (_, payload) => toolReadFile(payload));
-
-// 写操作统一走审批中心（L2）
-const WRITE_TOOLS = ['writeFile', 'editFile', 'applyPatch'];
-// P0-D：写工具实现提取为函数（IPC 与定时任务 Agent 通道共用）
-// P0-3：写路径白名单——写目标越出 {项目 cwd, userData, 系统临时目录} 时：
-//   · auto-safe / on-request：强制弹审批（不走 needsApproval，任何「始终允许」规则不可豁免）；
-//   · never 档（全不询问）或 requireApproval=false（无审批通道的调用方）：直接硬拒绝，fail-closed。
-//   白名单外的批准也不落地 conversation/always 规则，防止一次批准演变为永久绕过。
-function outsideWriteTarget(toolName, args) {
-  const roots = writeGuard.allowedWriteRoots({
-    cwd: args.cwd,
-    userDataDir: app.getPath('userData'),
-  });
-  if (toolName === 'applyPatch') {
-    return writeGuard.firstOutsideTarget(writeGuard.patchTargets(args.patch), roots, args.cwd || process.cwd());
-  }
-  if (!args.path) return null;
-  const target = resolveToolPath(args.path, args.cwd);
-  return writeGuard.firstOutsideTarget([target], roots, args.cwd || process.cwd());
-}
-
-async function runWriteTool(toolName, args) {
-  const { approvalMode = 'on-request', conversationId, requireApproval = true, ...rest } = args;
-  const toolKey = { writeFile: 'write_file', editFile: 'edit_file', applyPatch: 'apply_patch' }[toolName];
-  let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
-  const outside = outsideWriteTarget(toolName, rest);
-  if (outside) {
-    if (!requireApproval || approvalMode === 'never') {
-      audit(toolKey, rest.path || '(patch)', `白名单外写入被拦截：${outside}`, 'blocked');
-      return { ok: false, blocked: true, outsideWhitelist: true, path: outside, error: `写入目标超出允许范围（仅限项目目录 / 应用数据 / 系统临时目录）：${outside}` };
-    }
-    const decision = await requestApproval(toolKey, rest);
-    if (decision === 'deny') {
-      audit(toolKey, rest.path || '(patch)', `白名单外写入被拒绝：${outside}`, 'denied');
-      return { ok: false, error: '用户拒绝执行', denied: true };
-    }
-    // 决策仅本次有效（once），不调用 applyApprovalDecision——白名单外路径不允许沉淀「始终允许」
-  } else if (requireApproval) {
-    const verdict = approval.needsApproval({ tool: toolKey, args: rest, approvalMode, conversationId, alwaysRules, conversationRules });
-    if (verdict.matched) ruleMatched = verdict.matched;
-    if (verdict.need) {
-      const decision = await requestApproval(toolKey, rest);
-      if (decision === 'deny') {
-        audit(toolKey, rest.path || 'patch', '用户拒绝', 'denied');
-        return { ok: false, error: '用户拒绝执行', denied: true };
-      }
-      applyApprovalDecision(decision, toolKey, rest, conversationId);
-    }
-  }
-  // 工具实现抛错绝不能冒泡成 IPC rejection：渲染层只能拿到一句 message，
-  // 模型无从判断是路径错、文件被改过还是权限问题，只会用同样的参数再试一次
-  // → 表现就是「明明改完了却一直循环不结束」。统一转成结构化失败，带上可行动上下文。
-  let result;
-  try {
-    result = await executeWriteTool(toolName, rest);
-  } catch (err) {
-    result = { ok: false, error: err?.message || String(err) };
-    if (targetMissing(err)) {
-      result.notFound = true;
-      result.error = `${result.error}（目标：${rest.path || '(空)'}；项目目录：${rest.cwd || process.cwd()}）`;
-    }
-  }
-  audit(toolKey, rest.path || '(patch)', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, 'recorded');
-  return result;
-}
-function targetMissing(err) { return err?.code === 'ENOENT' || err?.code === 'EISDIR'; }
-for (const toolName of WRITE_TOOLS) {
-  ipcMain.handle(`tool:${toolName}`, (_, args) => runWriteTool(toolName, args));
-}
-
-async function executeWriteTool(toolName, { path: p, content, search, replace, patch, cwd }) {
-  // 相对路径同样以项目 cwd 为基准（此前按主进程 CWD 解析，会写错位置或失败）
-  const target = p ? resolveToolPath(p, cwd) : p;
-  if (toolName === 'writeFile') {
-    await fsp.mkdir(path.dirname(target), { recursive: true });
-    await fsp.writeFile(target, content, 'utf8');
-    return { ok: true, path: target };
-  }
-  if (toolName === 'editFile') {
-    // 空 search 必须先拦：'' 对 includes 恒真，会把 replace 插到文件最开头——静默破坏文件
-    if (typeof search !== 'string' || search.length === 0) {
-      return { ok: false, path: target, error: 'search 为空：空片段会匹配到文件开头并把内容插到最前面。请先用 read_file 读取当前内容，再给出精确的待替换片段。' };
-    }
-    if (typeof replace !== 'string') {
-      return { ok: false, path: target, error: 'replace 必须是字符串（当前为 ' + typeof replace + '）' };
-    }
-    let fileContent;
+// T2-1：工具执行层已拆出 main/tools/exec.js（只搬移不改行为）——
+// shell/读写/预览/list_dir·grep·glob/git 全部工具实现与 IPC 注册。
+// 审批中心（requestApproval/applyApprovalDecision/alwaysRules/conversationRules）归属本文件，经注入同源。
+const toolExec = require('./tools/exec');
+toolExec.initToolExec({
+  requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules,
+  // N2 cwd 信任契约：漏传 cwd 的工具调用落到「最近打开的项目目录」（无项目则 HOME），
+  // 绝不回主进程 cwd（打包版=应用安装目录，既无意义又危险）；结果以 cwdFallback 标记、审计留痕。
+  getDefaultCwd: () => {
     try {
-      fileContent = await fsp.readFile(target, 'utf8');
-    } catch (err) {
-      const base = cwd || process.cwd();
-      return {
-        ok: false, notFound: true, path: target, cwd: base,
-        error: err.code === 'EISDIR'
-          ? `${target} 是目录，不是文件。请改用 list_dir 浏览其内容。`
-          : `读取失败：${target} 不存在（项目目录：${base}）。若目标不在当前项目内请改用绝对路径。`,
-      };
-    }
-    if (!fileContent.includes(search)) {
-      // 未命中必须给出「为什么 + 现在是什么样」，否则模型只会重复同一片段 → 空转循环
-      const d = diagnoseEditMiss(fileContent, search);
-      const near = nearestContext(fileContent, search);
-      return {
-        ok: false, path: target, cwd: cwd || process.cwd(), editMiss: true,
-        error: `${d.reason}（文件：${target}；待替换片段 ${search.length} 字符，开头：${d.preview}）`,
-        hint: d.hints.join(' '),
-        ...(near ? {
-          nearest: `${near.matched ? `文件第 ${near.line} 行附近最接近（文件当前内容）` : '文件中没有相似行，这是文件开头'}：\n${near.snippet}`,
-        } : {}),
-      };
-    }
-    const occurrences = fileContent.split(search).length - 1;
-    // 函数形式替换：避免 replace 文本里的 $& / $1 / $` 被当成特殊替换模式展开（静默写坏内容）
-    const next = fileContent.replace(search, () => replace);
-    await fsp.writeFile(target, next, 'utf8');
-    return {
-      ok: true, path: target, replaced: 1, occurrences,
-      warn: occurrences > 1
-        ? `文件中有 ${occurrences} 处完全相同的片段，本次只替换了第 1 处；若需全部替换请逐次调用，或改用 write_file 重写全文。`
-        : null,
-    };
-  }
-  // apply_patch：stdin 送入 patch，在项目 cwd 执行
-  if (!patch || typeof patch !== 'string') throw new Error('patch 内容为空');
-  // 2026-10-15 加固（三类失败模式全部实测复现后修复）：
-  //   · --batch                 永不交互提问。此前 "Reversed (or previously applied)
-  //                             patch detected! Assume -R? [n]" 会等 stdin 回答，
-  //                             而 stdin 是补丁本身（写完即 end）→ EOF 异常或挂死
-  //   · --forward               已应用过的补丁跳过而非报错（重复调用幂等）
-  //   · --no-backup-if-mismatch 失败时不落 .orig / .ouD0ErF 备份
-  //   · -r /dev/null            失败不再写 app.js.rej —— 此前会在用户项目里留下
-  //                             拒绝文件，污染工作区、混进 git status 干扰后续提交
-  const runPatchProcess = (extraArgs) => new Promise((resolve) => {
-    const child = spawn('patch', ['-p1', '--batch', '--forward', '--no-backup-if-mismatch', '-r', '/dev/null', ...extraArgs], { cwd: cwd || process.cwd() });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ stdout: stdout.slice(0, 10000), stderr: 'patch 执行超时', error: 'timeout', exitCode: -1 });
-    }, 30000);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      // 已应用过的补丁：--forward 会跳过（hunk ignored），语义上应视为幂等成功。
-      // 若当失败返回，模型会反复重试同一个补丁直到轮次耗尽（repeat 熔断）。
-      // 注意：GNU patch 的「Reversed / hunk ignored」提示走 **stdout** 而非 stderr（实测），
-      // 所以两个流都要查。
-      const out = `${stdout}\n${stderr}`;
-      if (/previously applied|hunk ignored/i.test(out)) {
-        resolve({ stdout: stdout.slice(0, 10000), stderr: stderr.slice(0, 5000), exitCode: 0, alreadyApplied: true, error: null });
-        return;
-      }
-      resolve({
-        stdout: stdout.slice(0, 10000),
-        stderr: stderr.slice(0, 5000),
-        exitCode: code ?? 0,
-        error: code ? `patch exit ${code}` : null,
-      });
-    });
-    child.stdin.write(patch);
-    child.stdin.end();
-  });
+      const projects = localStore?.listProjects?.() || [];
+      const recent = projects.find((p) => p.path && fs.existsSync(p.path));
+      return recent?.path || app.getPath('home');
+    } catch { return app.getPath('home'); }
+  },
+});
+const { toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob, toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd, shellEnv, runGit } = toolExec;
 
-  const result = await runPatchProcess([]);
-  if (result.exitCode && !result.alreadyApplied) {
-    // 二次机会：-l（忽略空白差异）。补丁失败的头号真实原因是空白对不上
-    //（缩进空格数/制表符/行尾空白），严格模式拒绝而宽松模式能命中。
-    const retry = await runPatchProcess(['-l']);
-    if (!retry.exitCode || retry.alreadyApplied) {
-      return { ...retry, lenientWhitespace: true, note: '严格模式应用失败后已按宽松空白匹配重试成功。' };
-    }
-    // 两次都失败：必须可行动（与 editFile 未命中诊断同一原则）——
-    // 回传目标绝对路径 + 当前内容（截断）+ 最近锚点行，模型据此改用
-    // edit_file 精确替换或重新生成补丁，而不是原样重试同一 patch。
-    const target = patchTargetPath(patch);
-    const abs = target ? resolveToolPath(target, cwd) : null;
-    let currentContent = null;
-    let nearest = null;
-    try {
-      if (abs && fs.existsSync(abs)) {
-        currentContent = fs.readFileSync(abs, 'utf8');
-        const anchor = patchAnchorLine(patch);
-        if (anchor) nearest = nearestContext(currentContent, anchor);
-      }
-    } catch (e) { /* 读不到就不附加，不掩盖原始错误 */ }
-    return {
-      ...retry,
-      error: `patch exit ${retry.exitCode}（补丁上下文与文件当前内容不一致，未做任何修改）`,
-      target: abs || target || undefined,
-      hint: '不要原样重试同一补丁。请先 read_file 确认现状（下方 currentContent），'
-        + '改用 edit_file 精确替换，或基于当前内容重新生成补丁。',
-      currentContent: currentContent ? currentContent.slice(0, 4000) : undefined,
-      nearest: nearest || undefined,
-    };
-  }
-  return result;
-}
-
-// 从补丁解析目标路径（+++ b/ 行）：-p1 语义去一层前缀、去时间戳
-function patchTargetPath(patch) {
-  const line = String(patch || '').split('\n').find((l) => l.startsWith('+++ '));
-  if (!line) return null;
-  let p = line.slice(4).trim();
-  const tab = p.indexOf('\t');
-  if (tab >= 0) p = p.slice(0, tab);
-  p = p.replace(/^[ab]\//, '');
-  return p || null;
-}
-
-// 首个 hunk 的锚点行：取第一条上下文/删除行的内容（文件中应存在），供 nearestContext 定位
-function patchAnchorLine(patch) {
-  const lines = String(patch || '').split('\n');
-  const hunkIdx = lines.findIndex((l) => l.startsWith('@@'));
-  if (hunkIdx < 0) return null;
-  for (let i = hunkIdx + 1; i < lines.length; i += 1) {
-    const l = lines[i];
-    if (l.startsWith('@@')) break;
-    if (l.startsWith(' ') || l.startsWith('-')) {
-      const t = l.slice(1).trim();
-      if (t) return t;
-    }
-  }
-  return null;
-}
-
-// ── editFile 未命中诊断 ──
-// 背景（真机反馈）：「未找到要替换的内容」这句话本身不可行动——模型不知道是文件被前面的
-// 步骤改过了、还是自己缩进抄错、还是换行符差异，唯一能做的就是原样再试一次，
-// 于是同一个失败片段被重试到轮次耗尽，用户看到「明明改完了却一直在转」。
-// 原则：**工具失败必须回传可行动信息**（为什么失败 + 文件现在长什么样 + 下一步该做什么）。
-function diagnoseEditMiss(fileContent, search) {
-  const src = String(fileContent || '');
-  if (src.length === 0) {
-    return { reason: '文件为空（0 字节）', preview: '', hints: ['文件当前没有任何内容：要写入全文请改用 write_file，edit_file 只能替换已有文本。'] };
-  }
-  const hints = [];
-  const norm = (s) => String(s || '').replace(/\r\n/g, '\n');
-  if (norm(src).includes(norm(search))) {
-    hints.push('差异只来自换行符：文件用 CRLF（\\r\\n）而你给的是 LF（\\n），或反之。请按 read_file 返回的原始内容原样复制。');
-  }
-  const squash = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-  if (squash(src).includes(squash(search))) {
-    hints.push('差异只来自空白（缩进空格数 / 制表符 / 空行）。请逐字符比对缩进，或改用更长且唯一的片段定位。');
-  }
-  const firstLine = String(search).split('\n').find((l) => l.trim()) || '';
-  if (firstLine && src.includes(firstLine)) {
-    hints.push('片段首行在文件中存在，但后续行不匹配——这一处很可能已被前面的步骤改掉了；请先确认该步骤是否其实已经完成，不要重复修改。');
-  }
-  if (!hints.length) {
-    hints.push('该片段可能已被前面的步骤修改或删除，也可能你改的是另一个文件。请先用 read_file 读取当前内容确认，再给出精确片段。');
-  }
-  return { reason: '文件中不存在该精确片段', preview: String(search).slice(0, 120).replace(/\n/g, '\\n'), hints };
-}
-
-// 未命中时给出「文件里最接近的锚点」：模型据此重新对齐，而不是盲改。
-// 即使一行都对不上也必须回传文件当前样貌（回退到开头若干行）——
-// 否则模型手里既没有旧片段也没有新内容，只剩「再试一次」这一个选项。
-function nearestContext(fileContent, search) {
-  const lines = String(fileContent || '').split('\n');
-  if (!lines.length) return null;
-  const needles = String(search || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  let best = -1;
-  let bestScore = 0;
-  if (needles.length) {
-    lines.forEach((line, i) => {
-      const t = line.trim();
-      if (!t) return;
-      const score = needles.filter((n) => t.includes(n) || n.includes(t)).length;
-      if (score > bestScore) { bestScore = score; best = i; }
-    });
-  }
-  const anchor = best >= 0 ? best : 0; // 无相似行：退回文件开头，至少让模型看到现状
-  const from = Math.max(0, anchor - 2);
-  const to = Math.min(lines.length, anchor + 3);
-  return {
-    line: anchor + 1,
-    matched: best >= 0,
-    snippet: lines.slice(from, to).map((l, i) => `${from + i + 1}: ${l}`).join('\n').slice(0, 800),
-  };
-}
-
-// 工具路径解析：相对路径以项目目录（cwd）为基准，避免按主进程 CWD 解析导致 ENOENT
-function resolveToolPath(p, cwd) {
-  const raw = String(p || '');
-  if (!raw) return cwd ? path.resolve(cwd) : process.cwd();
-  if (path.isAbsolute(raw)) return raw;
-  return path.resolve(cwd || process.cwd(), raw);
-}
-
-// ── 文件预览与「在系统中打开」（右侧预览面板 / 侧栏右键菜单共用）──
-// 预览白名单：只有可安全内联渲染的类型才读二进制进渲染层，
-// 其余一律交给系统默认应用打开——避免把 4K 视频、数据库文件等读进内存撑爆渲染进程。
-const PREVIEW_BINARY_MIME = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif',
-  '.svg': 'image/svg+xml',
-  '.pdf': 'application/pdf',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
-  '.mp4': 'video/mp4', '.webm': 'video/webm',
-};
-const PREVIEW_MAX_BYTES = 24 * 1024 * 1024; // 24MB：图片/PDF/音视频内联上限
-const MEDIA_KINDS = /^(image|audio|video)\//;
-
-function previewKindOfMime(mime) {
-  if (mime === 'application/pdf') return 'pdf';
-  if (MEDIA_KINDS.test(mime)) return mime.split('/')[0]; // image | audio | video
-  return 'text';
-}
-
-// 预览元信息 + 二进制内容（文本类只回元信息，正文由 tool:readFile 分页取）
-ipcMain.handle('file:preview', async (_, { path: p, cwd } = {}) => {
-  const target = resolveToolPath(p, cwd);
-  try {
-    const st = await fsp.stat(target);
-    if (st.isDirectory()) return { ok: false, path: target, error: '这是目录，请用「打开文件夹」在系统中浏览' };
-    const ext = path.extname(target).toLowerCase();
-    const mime = PREVIEW_BINARY_MIME[ext];
-    if (!mime) {
-      // 未知扩展名：按文本处理（渲染层读到非法编码会自行降级为「不支持预览」）
-      return { ok: true, path: target, kind: 'text', size: st.size, ext };
-    }
-    const kind = previewKindOfMime(mime);
-    if (st.size > PREVIEW_MAX_BYTES) {
-      return {
-        ok: true, path: target, kind, size: st.size, tooLarge: true, mime,
-        error: `文件 ${(st.size / 1048576).toFixed(1)}MB，超出应用内预览上限 ${PREVIEW_MAX_BYTES / 1048576}MB，请在系统应用中打开`,
-      };
-    }
-    const buf = await fsp.readFile(target);
-    return { ok: true, path: target, kind, size: st.size, mime, dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
-  } catch (err) {
-    if (err.code === 'ENOENT') return { ok: false, notFound: true, path: target, error: `文件不存在：${target}` };
-    if (err.code === 'EACCES') return { ok: false, path: target, error: '没有读取权限' };
-    return { ok: false, path: target, error: err.message };
-  }
+// T4-1：Browser Use——Playwright 下沉独立子进程（T3-6 驻留模式），主进程只做编排/审批/审计。
+// 六工具（navigate/click/fill/select/screenshot/extract）经 browserTools 挂进会话 toolHandlers；
+// click/fill/select 恒逐次审批，navigate/screenshot/extract 走 L3 可规则豁免。
+const browserTools = require('./browserTools');
+browserTools.initBrowserTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  userDataDir: app.getPath('userData'),
 });
 
-// 用系统默认应用打开文件或目录（目录 → Finder / 资源管理器）
-ipcMain.handle('shell:openPath', async (_, { path: p, cwd } = {}) => {
-  const target = resolveToolPath(p, cwd);
-  try {
-    if (!fs.existsSync(target)) return { ok: false, error: `路径不存在：${target}` };
-    const err = await shell.openPath(target);
-    if (err) return { ok: false, error: err };
-    audit('open_path', target, '在系统中打开');
-    return { ok: true, path: target };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+// T4-2：Chrome 接管——本地 WebSocket 中继 + 扩展（CDP）操作用户真实浏览器。
+// 中继只监听 127.0.0.1；每次连接逐次弹审批卡（fail-closed：拒绝/超时即断开，授权不沉淀）。
+// 端口占用等启动失败仅降级（chrome_* 工具报未连接），不影响主程序。
+const chromeRelay = require('./chromeRelay/server');
+chromeRelay.initChromeRelay({
+  requestApproval,
+  port: Number(process.env.MJ_CHROME_RELAY_PORT) || undefined,
+});
+chromeRelay.start();
+const chromeTools = require('./chromeTools');
+chromeTools.initChromeTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  userDataDir: app.getPath('userData'),
+  relay: chromeRelay,
 });
 
-// 打开外链：只允许 http/https（shell.openExternal 能拉起任意协议处理器，
-// 传入 file:// 或自定义 scheme 等于把「打开任意本地程序」的能力暴露给渲染层）
-ipcMain.handle('shell:openExternal', async (_, { url } = {}) => {
-  const raw = String(url || '').trim();
-  let parsed;
-  try { parsed = new URL(raw); } catch (e) { return { ok: false, error: '链接格式不正确' }; }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { ok: false, error: `出于安全考虑，只允许打开 http/https 链接（当前：${parsed.protocol}）` };
-  }
-  try {
-    await shell.openExternal(raw);
-    return { ok: true, url: raw };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+// T4-7：Code Mode——JavaScript 代码执行下沉独立子进程（持久 vm 上下文 = cell 状态载体）。
+// 每对话一个代码进程（30 分钟闲置回收）；子进程死亡即状态丢失、不透明重启（见 codeProcess/host.js）。
+// 普通代码 L3 可规则豁免；危险代码（child_process/rm -rf）由 approval 判 L1 恒逐次确认。
+const codeTools = require('./codeTools');
+codeTools.initCodeTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  userDataDir: app.getPath('userData'),
 });
 
-// Git 环境信息（设置页 Git 面板：署名与可用性探测，只读）
-ipcMain.handle('tool:gitConfig', async (_, { cwd } = {}) => {
-  const run = (args) => new Promise((resolve) => {
-    execFile('git', args, { cwd: cwd || process.cwd(), timeout: 8000 }, (err, stdout) => {
-      resolve(err ? '' : String(stdout).trim());
-    });
-  });
-  try {
-    const [version, name, email, globalName, globalEmail] = await Promise.all([
-      run(['--version']),
-      run(['config', '--get', 'user.name']),
-      run(['config', '--get', 'user.email']),
-      run(['config', '--global', '--get', 'user.name']),
-      run(['config', '--global', '--get', 'user.email']),
-    ]);
-    return {
-      ok: true,
-      available: !!version,
-      version,
-      // 仓库级署名优先展示（未配置时回落全局），空字符串表示未配置
-      repoName: name, repoEmail: email,
-      globalName, globalEmail,
-      cwd: cwd || process.cwd(),
-    };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
 
-// 在文件管理器中定位（高亮选中该条目而非打开）
-ipcMain.handle('shell:reveal', async (_, { path: p, cwd } = {}) => {
-  const target = resolveToolPath(p, cwd);
-  try {
-    if (!fs.existsSync(target)) return { ok: false, error: `路径不存在：${target}` };
-    shell.showItemInFolder(target);
-    return { ok: true, path: target };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
+// T2-1：技能与插件市场域已拆出 main/ipc/plugins.js（只搬移不改行为）——
+// SKILL.md 技能体系 / 插件市场（git 安装+权限双闸+签名 fail-closed）/ 网络插件发现与对话内安装。
+// connectMcpServer 归属 MCP 域，经 getter 注入；SKILLS_DIR 导出供生态域接线复用。
+const pluginsIpc = require('./ipc/plugins');
+pluginsIpc.initPluginsIpc({ requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules, audit, getConnectMcpServer: () => connectMcpServer });
+const { SKILLS_DIR, searchPluginsTool, installNetworkPlugin } = pluginsIpc;
 
-// P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
-async function toolListDir({ path: p, cwd } = {}) {
-  const target = resolveToolPath(p, cwd);
-  try {
-    const entries = await fsp.readdir(target, { withFileTypes: true });
-    return entries.map(e => ({ name: e.name, isDir: e.isDirectory(), type: e.isDirectory() ? 'dir' : 'file' }));
-  } catch (err) {
-    // 返回空列表而非 reject：渲染层按数组消费，rejection 会在主进程刷 Electron 错误栈
-    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR' && err.code !== 'EACCES') {
-      console.error(`[listDir] 读取目录失败：${target} — ${err.message}`);
-    }
-    return [];
-  }
-}
-ipcMain.handle('tool:listDir', (_, payload) => toolListDir(payload));
-
-// grep：execFile argv 化，杜绝 LLM 可控参数注入 shell
-async function toolGrep({ pattern, path: p, glob: include, cwd } = {}) {
-  if (!pattern) return { matches: '' };
-  const args = ['-rn'];
-  if (include) args.push('--include', String(include));
-  args.push(String(pattern), p || '.');
-  return new Promise((resolve) => {
-    execFile('grep', args, { cwd: cwd || undefined, timeout: 15000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout) => {
-      resolve({ matches: (stdout || '').slice(0, 20000) });
-    });
-  });
-}
-ipcMain.handle('tool:grep', (_, payload) => toolGrep(payload));
-
-// glob：execFile argv 化
-async function toolGlob({ pattern, path: p, cwd } = {}) {
-  if (!pattern) return { files: [] };
-  const args = [p || '.', '-name', String(pattern), '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*'];
-  return new Promise((resolve) => {
-    execFile('find', args, { cwd: cwd || undefined, timeout: 20000 }, (error, stdout) => {
-      resolve({ files: (stdout || '').trim().split('\n').filter(Boolean).slice(0, 100) });
-    });
-  });
-}
-ipcMain.handle('tool:glob', (_, payload) => toolGlob(payload));
-
-// ── Git 工具（execFile argv 化 + cwd 贯通）──
-// git 提交/暂存属于 L2 写操作，走审批中心
-async function gitWithApproval(toolKey, args, gitArgs) {
-  const { approvalMode = 'on-request', conversationId, cwd, requireApproval = true } = args;
-  let neededApproval = false;
-  let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
-  if (requireApproval) {
-    const verdict = approval.needsApproval({ tool: toolKey, args, approvalMode, conversationId, alwaysRules, conversationRules });
-    if (verdict.matched) ruleMatched = verdict.matched;
-    if (verdict.need) {
-      neededApproval = true;
-      const decision = await requestApproval(toolKey, args);
-      if (decision === 'deny') {
-        audit(toolKey, args.message || args.files || '', '用户拒绝', 'denied');
-        return { stdout: '', stderr: '用户拒绝执行', error: 'Approval denied', denied: true };
-      }
-      applyApprovalDecision(decision, toolKey, args, conversationId);
-    }
-  }
-  const result = await runGit(gitArgs, cwd);
-  audit(toolKey, args.message || args.files || '', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-  return result;
-}
-
-// P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
-const toolGitStatus = ({ cwd } = {}) => runGit(['status', '--short'], cwd);
-const toolGitDiff = ({ cwd, staged } = {}) => runGit(['diff', ...(staged ? ['--staged'] : [])], cwd);
-ipcMain.handle('tool:gitStatus', (_, p) => toolGitStatus(p));
-ipcMain.handle('tool:gitDiff', (_, p) => toolGitDiff(p));
-// hunk 级还原（对标 Codex 三级还原中的最小粒度）：反向应用指定代码块
-ipcMain.handle('tool:gitApplyHunk', async (_, { cwd, patch }) => {
-  if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
-  return new Promise((resolve) => {
-    const child = spawn('git', ['apply', '--reverse', '--unidiff-zero', '-'], { cwd });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ stdout, stderr: 'git apply 超时', error: 'timeout' });
-    }, 15000);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, exitCode: code ?? 0, error: code ? `git apply 失败（退出码 ${code}）` : null });
-    });
-    child.stdin.write(patch);
-    child.stdin.end();
-  });
-});
-const toolGitLog = ({ cwd, count = 10 } = {}) => runGit(['log', '--oneline', `-${Math.min(Math.max(Number(count) || 10, 1), 100)}`], cwd);
-const toolGitBranch = ({ cwd } = {}) => runGit(['branch', '-a'], cwd);
-const toolGitCommit = (args = {}) => gitWithApproval('git_commit', args, ['commit', '-m', String(args.message || '')]);
-const toolGitAdd = (args = {}) => {
-  const list = Array.isArray(args.files) ? args.files.map(String) : String(args.files || '.').split(/\s+/).filter(Boolean);
-  return gitWithApproval('git_add', args, ['add', ...list]);
-};
-ipcMain.handle('tool:gitLog', (_, p) => toolGitLog(p));
-ipcMain.handle('tool:gitBranch', (_, p) => toolGitBranch(p));
-ipcMain.handle('tool:gitCommit', (_, p) => toolGitCommit(p));
-ipcMain.handle('tool:gitAdd', (_, p) => toolGitAdd(p));
-// DiffReviewPanel：接受（add）/ 拒绝（checkout -- / restore --staged）
-ipcMain.handle('tool:gitCheckout', async (_, { cwd, files }) => {
-  const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
-  if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
-  return runGit(['checkout', '--', ...list], cwd);
-});
-ipcMain.handle('tool:gitRestoreStaged', async (_, { cwd, files }) => {
-  const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
-  if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
-  return runGit(['restore', '--staged', ...list], cwd);
-});
-
-function runGit(args, cwd) {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd: cwd || process.cwd(), timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-      resolve({ stdout: (stdout || '').slice(0, 30000), stderr: (stderr || '').slice(0, 5000), error: error?.message || null });
-    });
-  });
-}
-
-// ── SKILL.md 技能体系（~/.mjcode/skills/<name>/SKILL.md）──
-const skillsLib = require('./skills');
-const SKILLS_DIR = () => path.join(app.getPath('home'), '.mjcode', 'skills');
-
-ipcMain.handle('skills:list', async () => {
-  try {
-    return { ok: true, skills: skillsLib.listSkills(SKILLS_DIR()) };
-  } catch (err) {
-    console.error('[skills] 列表失败:', err);
-    return { ok: false, error: err.message };
-  }
-});
-
-ipcMain.handle('skills:get', async (_, { name }) => {
-  try {
-    const content = skillsLib.getSkill(SKILLS_DIR(), String(name || ''));
-    return content ? { ok: true, content } : { ok: false, error: '技能不存在' };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// ── 插件市场（M6-P1/P2/P3）：git 一键安装 + 权限双闸 + 签名 fail-closed ──
-const pluginMarket = require('./pluginMarket');
-const registryLib = require('./registry');
-const PLUGINS_ROOT = () => path.join(app.getPath('home'), '.mjcode', 'plugins');
-const getPluginRegistry = () => new pluginMarket.PluginRegistry(PLUGINS_ROOT());
-const getMarketRegistry = () => new registryLib.Registry({
-  cacheFile: path.join(PLUGINS_ROOT(), 'registry-cache.json'),
-});
-
-// 远端注册中心索引（可选；未配置时 refresh 回落本地缓存）
-const MARKET_INDEX_URL = () => process.env.MJ_MARKET_INDEX_URL || '';
-
-// 注册中心热更新：有远端则拉取，失败保留缓存
-ipcMain.handle('market:refresh', async () => {
-  try {
-    const reg = new registryLib.Registry({
-      cacheFile: path.join(PLUGINS_ROOT(), 'registry-cache.json'),
-      remoteUrl: MARKET_INDEX_URL(),
-    });
-    return await reg.refresh();
-  } catch (err) {
-    console.error('[market] 索引刷新失败:', err);
-    return { ok: false, error: err.message };
-  }
-});
-
-// 浏览/搜索市场索引（关键字/类型/标签过滤）
-ipcMain.handle('market:search', async (_, options = {}) => {
-  try {
-    return { ok: true, ...getMarketRegistry().search(options || {}) };
-  } catch (err) {
-    console.error('[market] 搜索失败:', err);
-    return { ok: false, error: err.message, plugins: [] };
-  }
-});
-
-// ── 网络插件发现与对话内安装（LobeChat 式：输入框说一句，app 搜公网并装）──
-// 公共源：npm registry（MCP Server 生态）+ GitHub（技能仓库）；不依赖自建市场索引
-const pluginDiscovery = require('./pluginDiscovery');
-
-ipcMain.handle('market:searchNetwork', async (_, { query, types } = {}) => {
-  try {
-    const net = await pluginDiscovery.searchNetworkPlugins(query || '', { types });
-    // 本地已装/缓存索引结果并入（source: 'local'），模型可一并参考
-    let local = [];
-    try {
-      const r = getMarketRegistry().search({ query: query || '' });
-      local = (r.plugins || []).map((p) => ({ ...p, source: 'local' }));
-    } catch { /* 本地索引失败不影响网络结果 */ }
-    return { ok: true, results: [...local, ...net.results], notes: net.notes };
-  } catch (err) {
-    return { ok: false, error: err.message, results: [], notes: [] };
-  }
-});
-
-// 对话内插件搜索（只读工具，不走审批）：已装插件 + 本地市场索引 + 网络源合并
-// 「先本地后网络」的本地侧数据源：installed=已装插件（直接可用，无需安装）；local=市场索引
-async function searchPluginsTool(args = {}) {
-  const query = String(args.query || '').trim();
-  if (!query) return { ok: false, error: '缺少搜索关键词 query' };
-  const r = await pluginDiscovery.searchNetworkPlugins(query, { types: args.types, timeoutMs: 10000 });
-  const q = query.toLowerCase();
-  const match = (s) => String(s || '').toLowerCase().includes(q);
-  let installed = [];
-  try {
-    installed = (getPluginRegistry().list() || [])
-      .filter((p) => match(p.name) || match(p.description) || match(p.type))
-      .map((p) => ({ ...p, source: 'installed' }));
-  } catch { /* 已装列表失败不影响后续结果 */ }
-  let local = [];
-  try {
-    const lr = getMarketRegistry().search({ query });
-    local = (lr.plugins || []).map((p) => ({ ...p, source: 'local' }));
-  } catch { /* 本地索引失败不影响网络结果 */ }
-  return {
-    ok: true, query,
-    count: installed.length + local.length + r.results.length,
-    results: [...installed, ...local, ...r.results].slice(0, 12),
-    notes: r.notes,
-  };
-}
-
-// 对话内安装（工具 install_plugin 的实现）。恒走 L3 审批卡（approval.js TOOL_LEVEL），
-// 卡片展示安装对象与风险说明，用户允许才执行；npm 源包名白名单校验防注入。
-async function installNetworkPlugin(args, { approvalMode = 'on-request', conversationId = '' } = {}) {
-  const kind = String(args.kind || '');
-  // 审批闸（L3）：与 toolShell 同一套审批中心，弹卡内容见 approval.approvalSummary
-  const verdict = approval.needsApproval({ tool: 'install_plugin', args, approvalMode, conversationId, alwaysRules, conversationRules });
-  if (verdict.need) {
-    const decision = await requestApproval('install_plugin', args);
-    if (decision === 'deny') {
-      audit('install_plugin', JSON.stringify(args).slice(0, 200), '用户拒绝', 'denied');
-      return { ok: false, error: '用户拒绝安装', denied: true };
-    }
-    applyApprovalDecision(decision, 'install_plugin', args, conversationId);
-  }
-
-  if (kind === 'mcp') {
-    const pkg = String(args.pkg || '').trim();
-    if (!pluginDiscovery.isValidNpmPkg(pkg)) {
-      return { ok: false, error: `npm 包名非法：${pkg}` };
-    }
-    const name = pluginDiscovery.repoToSkillName(args.name || pkg) || `mcp-${Date.now().toString(36)}`;
-    // connectMcpServer：连接成功才持久化 mcp-servers.json（fail-closed），失败即回报
-    const r = await connectMcpServer({ name, command: 'npx', args: ['-y', pkg] });
-    audit('install_plugin', `mcp ${pkg}`, r.ok ? `连接成功 tools=${r.toolCount}` : `失败 ${r.error}`, r.ok ? 'ok' : 'error');
-    return r.ok
-      ? { ok: true, kind: 'mcp', name, package: pkg, toolCount: r.toolCount, tools: (r.tools || []).map((t) => t.name).slice(0, 30), message: `MCP 服务 ${name} 已安装并连接，新增 ${r.toolCount} 个工具` }
-      : { ok: false, error: `安装后连接失败：${r.error}（未写入配置；请检查包是否为有效的 stdio MCP Server）` };
-  }
-
-  if (kind === 'skill') {
-    const url = String(args.url || '').trim();
-    const r = await pluginMarket.installFromGit(url, {
-      pluginsRoot: PLUGINS_ROOT(),
-      registry: getPluginRegistry(),
-      skillsRoot: SKILLS_DIR(), // 技能包落 ~/.mjcode/skills/<name>，listSkills 现读即热生效
-      ref: args.ref,
-      // 网络第三方仓库普遍无签名：签名闸门放宽，但注入检测照常 + 审批卡为用户显式同意
-      policy: { allowUnsigned: true, requireSigstore: false },
-      skillFallback: true,
-      fallbackName: args.name,
-    });
-    if (!r.ok) return { ok: false, error: `安装失败（${r.stage}）：${(r.errors || [r.error]).join('；')}` };
-    const rec = r.plugin || {};
-    audit('install_plugin', `skill ${rec.name}`, `来源=${url} 版本=${rec.version}`, 'ok');
-    return {
-      ok: true, kind: 'skill', name: rec.name, version: rec.version,
-      skillHotLoaded: !!rec.skillsDir,
-      message: `技能 ${rec.name} v${rec.version} 已安装${rec.skillsDir ? '并生效，下一轮对话即可使用' : ''}`,
-    };
-  }
-
-  return { ok: false, error: `不支持的安装类型：${kind}（仅支持 mcp / skill）` };
-}
-
-// 从 git 地址安装（P1 手动装路径）；签名与提示注入检测 fail-closed
-ipcMain.handle('market:installGit', async (_, payload = {}) => {
-  try {
-    // P0-S2 修复：安全开关不得由渲染层决定。
-    // 事故背景：此处原样把 payload.allowUnsigned / payload.allowUnsafeInjection
-    // 透传给 pluginMarket.installFromGit，而 preload 的 marketInstallGit 也原样
-    // invoke 透传 payload（无字段白名单）——这意味着渲染层只要出现一次 XSS，
-    // 就能传 { allowUnsigned: true, allowUnsafeInjection: true } 直接关闭
-    // fail-closed 签名校验与提示注入扫描两道闸门，安装任意恶意 skill。
-    // 正解：签名策略只能来自主进程侧的环境变量（resolveSignaturePolicy），
-    //客户端无权放宽。此处显式剥离这两个字段并留痕，避免以后再被加回来。
-    const { allowUnsigned: _ignoredUnsigned, allowUnsafeInjection: _ignoredInjection, ...safePayload } = payload || {};
-    if (_ignoredUnsigned || _ignoredInjection) {
-      console.warn('[market:installGit] 已忽略来自渲染层的安全降级参数（allowUnsigned/allowUnsafeInjection）：签名与注入检测策略只能由主进程环境变量决定');
-    }
-    const r = await pluginMarket.installFromGit(String(safePayload.url || ''), {
-      pluginsRoot: PLUGINS_ROOT(),
-      registry: getPluginRegistry(),
-      ref: safePayload.ref,
-      policy: pluginMarket.resolveSignaturePolicy(),
-      // 固定为 false：不允许任何来源（含客户端）绕过签名与注入检测。
-      // 确需放宽的开发场景走环境变量 MJCODE_ALLOW_UNSIGNED_PLUGIN=1（仅影响签名，不涉及注入扫描）。
-      allowUnsigned: false,
-      allowUnsafeInjection: false,
-    });
-    if (r.ok && r.record) {
-      audit('plugin.installed', r.record.name, `类型=${r.record.type} 版本=${r.record.version} 来源=git`);
-    }
-    return r;
-  } catch (err) {
-    console.error('[market] git 安装失败:', err);
-    return { ok: false, error: err.message };
-  }
-});
-
-// 已安装插件列表（含权限摘要，供权限面板展示）
-ipcMain.handle('market:listInstalled', async () => {
-  try {
-    return { ok: true, plugins: getPluginRegistry().list() };
-  } catch (err) {
-    return { ok: false, error: err.message, plugins: [] };
-  }
-});
-
-// 单插件权限面板详情
-ipcMain.handle('market:inspect', async (_, payload = {}) => {
-  try {
-    const reg = getPluginRegistry();
-    const entry = reg.get(String(payload.name || ''));
-    if (!entry) return { ok: false, error: '插件未安装' };
-    return {
-      ok: true,
-      plugin: entry,
-      permissions: pluginMarket.summarizePermissions(entry.permissions),
-    };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// 启停插件（停用后运行期权限闸门直接拒绝）
-ipcMain.handle('market:setEnabled', async (_, payload = {}) => {
-  try {
-    const reg = getPluginRegistry();
-    const r = reg.setEnabled(String(payload.name || ''), !!payload.enabled);
-    if (r.ok) audit('plugin.enabled_changed', payload.name, `enabled=${!!payload.enabled}`);
-    return r;
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// 卸载插件
-ipcMain.handle('market:uninstall', async (_, payload = {}) => {
-  try {
-    const r = pluginMarket.uninstall(getPluginRegistry(), String(payload.name || ''));
-    if (r.ok) audit('plugin.uninstalled', payload.name, '用户卸载插件');
-    return r;
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// 运行期实扣：校验插件是否被授予某级别权限（fail-closed）
-ipcMain.handle('market:checkPermission', async (_, payload = {}) => {
-  try {
-    const reg = getPluginRegistry();
-    const res = pluginMarket.authorizePluginAction(
-      reg, String(payload.name || ''), String(payload.level || ''), payload.scope
-    );
-    const allow = !!(res && res.allow);
-    if (allow) audit('plugin.permission_granted', payload.name, `level=${payload.level} scope=${payload.scope || '*'}`);
-    return { ok: true, allow, reason: res && res.reason };
-  } catch (err) {
-    return { ok: false, allow: false, error: err.message };
-  }
-});
-
-// ── 目录选择 / 文件选择对话框 ──
-ipcMain.handle('dialog:pickDirectory', async () => {
-  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
-  if (r.canceled || r.filePaths.length === 0) return { ok: false };
-  return { ok: true, path: r.filePaths[0] };
-});
-
-ipcMain.handle('dialog:pickFiles', async () => {
-  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] });
-  if (r.canceled || r.filePaths.length === 0) return { ok: false };
-  return { ok: true, paths: r.filePaths };
-});
-
-// ── 本地项目工作区（~/Documents/.MJCoder，隐藏目录；项目目录按 日期+随机数 创建）──
-ipcMain.handle('project:workspaceInfo', async () => {
-  try {
-    const { root, created } = await workspace.ensureWorkspaceRoot(
-      app.getPath('documents'), app.getPath('home'),
-    );
-    return { ok: true, root, created };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('project:create', async (_, { name } = {}) => {
-  try {
-    const proj = await workspace.createProject({
-      docsDir: app.getPath('documents'), homeDir: app.getPath('home'), name,
-    });
-    return { ok: true, ...proj };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-// ── 项目探测（git 分支/远端/文件数/技术栈标记）──
-const LANG_MARKERS = {
-  'package.json': 'Node.js', 'Cargo.toml': 'Rust', 'pom.xml': 'Java', 'build.gradle': 'Java',
-  'go.mod': 'Go', 'requirements.txt': 'Python', 'pyproject.toml': 'Python', 'Gemfile': 'Ruby',
-};
-
-ipcMain.handle('tool:probeProject', async (_, { path: p }) => {
-  const proj = { path: p, name: path.basename(p || ''), branch: '', remote: '', fileCount: 0, languages: [] };
-  if (!p) return proj;
-  try {
-    const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], p);
-    if (!branch.error && branch.stdout.trim()) proj.branch = branch.stdout.trim();
-    const remote = await runGit(['remote', 'get-url', 'origin'], p);
-    if (!remote.error && remote.stdout.trim()) proj.remote = remote.stdout.trim();
-    const entries = await fsp.readdir(p, { withFileTypes: true });
-    proj.fileCount = entries.filter(e => e.isFile()).length;
-    proj.languages = Object.keys(LANG_MARKERS).filter(m => entries.some(e => e.name === m)).map(m => LANG_MARKERS[m]);
-  } catch (e) {
-    console.warn('[probe] 项目探测失败:', p, e.message);
-  }
-  return proj;
-});
-
-// ── Git Worktree 隔离工作区（对标 Codex Worktree 模式）──
-ipcMain.handle('worktree:create', async (_, { path: projectPath, taskTitle }) => {
-  try {
-    return { ok: true, ...(await worktree.createWorktree(projectPath, taskTitle)) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('worktree:list', async (_, { path: projectPath }) => {
-  try {
-    const root = await worktree.repoRoot(projectPath);
-    if (!root) return { ok: true, list: [], isRepo: false };
-    return { ok: true, isRepo: true, list: await worktree.listWorktrees(root, root) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('worktree:promote', async (_, { path: worktreePath }) => {
-  try {
-    return { ok: true, ...(await worktree.promoteToBranch(worktreePath)) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('worktree:sync', async (_, { path: worktreePath }) => {
-  try {
-    return { ok: true, ...(await worktree.syncToLocal(worktreePath)) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('worktree:remove', async (_, { path: worktreePath }) => {
-  try {
-    return { ok: true, ...(await worktree.removeWorktree(worktreePath)) };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-// ── A2：DiffReview 放弃修改前的磁盘快照（撤销出口）──
-// 快照落 userData/backup/<snapshotId>/，保持相对路径结构；不写入用户项目目录
-const backupRoot = () => path.join(app.getPath('userData'), 'backup');
-
-ipcMain.handle('backup:create', async (_, { cwd, files }) => {
-  try {
-    const list = (Array.isArray(files) ? files : [files]).filter(Boolean);
-    if (!cwd || list.length === 0) return { ok: false, error: '缺少项目目录或文件列表' };
-    const snapshotId = `snap-${Date.now()}`;
-    const dir = path.join(backupRoot(), snapshotId);
-    let snapshotted = 0;
-    for (const rel of list) {
-      const abs = path.join(cwd, rel);
-      try {
-        const stat = await fsp.stat(abs);
-        if (!stat.isFile()) continue;
-        const dest = path.join(dir, rel);
-        await fsp.mkdir(path.dirname(dest), { recursive: true });
-        await fsp.copyFile(abs, dest);
-        snapshotted += 1;
-      } catch (e) {
-        // 单文件快照失败不阻断（如新建未保存文件），放弃操作本身仍继续
-        console.warn(`[backup] 跳过 ${rel}:`, e.message);
-      }
-    }
-    await fsp.writeFile(path.join(dir, '.meta.json'), JSON.stringify({ cwd, files: list, createdAt: Date.now() }));
-    return { ok: true, snapshotId, dir, count: snapshotted };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-ipcMain.handle('backup:restore', async (_, { snapshotId }) => {
-  try {
-    const dir = path.join(backupRoot(), String(snapshotId).replace(/[^a-zA-Z0-9-]/g, ''));
-    const meta = JSON.parse(await fsp.readFile(path.join(dir, '.meta.json'), 'utf8'));
-    let restored = 0;
-    for (const rel of meta.files) {
-      const src = path.join(dir, rel);
-      try {
-        const dest = path.join(meta.cwd, rel);
-        await fsp.mkdir(path.dirname(dest), { recursive: true });
-        await fsp.copyFile(src, dest);
-        restored += 1;
-      } catch (e) {
-        console.warn(`[backup] 恢复跳过 ${rel}:`, e.message);
-      }
-    }
-    return { ok: true, restored };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
-
-// A12：粘贴/无路径文件落盘（渲染层 ArrayBuffer → userData/uploads）
-ipcMain.handle('files:saveUpload', async (_, { name, dataBase64 }) => {
-  try {
-    const dir = path.join(app.getPath('userData'), 'uploads');
-    await fsp.mkdir(dir, { recursive: true });
-    const safeName = String(name || 'file').replace(/[/\\:*?"<>|]/g, '_').slice(0, 120);
-    const dest = path.join(dir, `${Date.now()}-${safeName}`);
-    await fsp.writeFile(dest, Buffer.from(String(dataBase64 || ''), 'base64'));
-    return { ok: true, path: dest };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
+// T2-1：项目与工作区域已拆出 main/ipc/project.js（只搬移不改行为）——
+// 对话框 / 本地工作区 / 项目探测 / worktree / 磁盘快照 / 粘贴文件落盘。
+const { initProjectIpc } = require('./ipc/project');
+initProjectIpc({ getMainWindow: () => mainWindow, runGit });
 
 // ── MCP 客户端（多传输：stdio + Streamable HTTP）──
-// 2026-10-15：客户端实现抽到 main/mcpClient.js（God Object 拆分）并新增 HTTP 传输
-//（MCP Streamable HTTP spec）。本层只保留配置持久化与 IPC 接线。
-const mcp = require('./mcpClient');
-const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpServers() };
-
-// MCP 配置持久化（userData/mcp-servers.json）+ 子进程 env 白名单
-const MCP_CONFIG_FILE = () => path.join(app.getPath('userData'), 'mcp-servers.json');
-const ENV_WHITELIST = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SHELL', 'USER', 'TMPDIR', 'NODE_ENV'];
-
-function loadMcpConfig() {
-  try {
-    const list = JSON.parse(fs.readFileSync(MCP_CONFIG_FILE(), 'utf8'));
-    return Array.isArray(list) ? list : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveMcpConfig(list) {
-  try {
-    fs.writeFileSync(MCP_CONFIG_FILE(), JSON.stringify(list, null, 2));
-  } catch (e) {
-    console.warn('[mcp] 配置持久化失败:', e.message);
-  }
-}
-
-// env 白名单：仅透传系统基础变量 + 用户显式配置，杜绝 process.env 全量泄漏（P2-10）
-// PATH 特殊处理：打包版 GUI 进程继承的 PATH 极简（/usr/bin:/bin:...），
-// npx/uvx（homebrew）全找不到——真机复盘：MCP 服务全部 spawn ENOENT。
-// 注入与 toolShell 子 shell 一致的完整 PATH（见 SHELL_PATH 定义）。
-function sanitizeEnv(env) {
-  const out = {};
-  for (const k of ENV_WHITELIST) {
-    if (process.env[k]) out[k] = process.env[k];
-  }
-  return { ...out, PATH: shellEnv().PATH, ...(env || {}) };
-}
-
-// MCP 连接核心逻辑（IPC 处理器与启动重连共用）：委托给 mcpClient（stdio/http 双传输）
-async function connectMcpServer({ name, transport = 'stdio', command, args = [], env = {}, url, headers = {} } = {}) {
-  const r = await mcp.connectMcpServer({
-    name, transport, command, args, env: sanitizeEnv(env), url, headers,
-    onStatus: (n, st, code) => emitMcpStatus(n, st, code),
-    onLog: (line) => console.log(`[MCP ${name}]`, line),
-  });
-  // 连接成功 → 持久化配置（重启后自动重连）。fail-closed：握手失败不写盘。
-  if (r.ok && name) {
-    const config = loadMcpConfig().filter((s) => s.name !== name);
-    config.push(transport === 'http'
-      ? { name, transport, url, headers, env }
-      : { name, transport: 'stdio', command, args, env });
-    saveMcpConfig(config);
-  }
-  return r;
-}
-
-ipcMain.handle('mcp:connect', async (_, payload) => connectMcpServer(payload));
-
-// P1-1：MCP 服务状态变更 → 通知渲染层（AgentDock / 设置页据此标红断开的服务）
-function emitMcpStatus(name, status, code) {
-  try {
-    emitTaskEvent({ type: 'mcp_status', name, status, code, ts: Date.now() });
-  } catch (e) { /* 事件发送失败不影响主流程 */ }
-}
-
-// P1-1：统一清理全部 MCP 子进程（应用退出时调用）→ 委托 mcpClient（stdio SIGTERM→SIGKILL）
-function killAllMcpServers() {
-  return mcp.killAllMcpServers();
-}
-
-// P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
-async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-request', conversationId }) {
-  const s = mcpServers.get(server);
-  if (!s) throw new Error(`MCP 服务 ${server} 未连接`);
-  // L3：MCP 工具调用审批（auto-safe 档仍询问）
-  const verdict = approval.needsApproval({ tool: `mcp__${server}__${tool}`, args: args || {}, approvalMode, conversationId, alwaysRules, conversationRules });
-  if (verdict.need) {
-    const decision = await requestApproval(`mcp__${server}__${tool}`, args || {});
-    if (decision === 'deny') {
-      audit(`mcp:${server}`, tool, '用户拒绝', 'denied');
-      return { error: '用户拒绝执行', denied: true };
-    }
-    applyApprovalDecision(decision, `mcp__${server}__${tool}`, args || {}, conversationId);
-  }
-  try {
-    const result = await mcp.mcpRpc(s, 'tools/call', { name: tool, arguments: args || {} });
-    audit(`mcp:${server}`, tool, `${result?.error ? `error: ${result.error}` : 'ok'} rule=${verdict.matched || 'none'}`, verdict.need ? 'approved' : 'auto');
-    return result;
-  } catch (err) {
-    audit(`mcp:${server}`, tool, `error: ${err.message}`, 'error');
-    return { error: err.message };
-  }
-}
-ipcMain.handle('mcp:callTool', (_, payload) => callMcpTool(payload));
-
-ipcMain.handle('mcp:disconnect', async (_, { name }) => {
-  // 断开 + 同步移除持久化配置（http 传输无子进程，close 为空操作）
-  mcp.disconnectMcpServer(name);
-  saveMcpConfig(loadMcpConfig().filter((s) => s.name !== name));
-  return { ok: true };
-});
-
-// ═══════════════════════════════════════════
-//  P0-F：沙箱状态查询（UI 明示隔离能力与兜底状态）
-// ═══════════════════════════════════════════
-ipcMain.handle('sandbox:status', async () => {
-  // 2026-10：三平台均已有 OS 级后端，状态不能再只看 macOS Seatbelt。
-  // Windows 的就绪态是异步的（要 net user 查专用用户），在此统一异步确认，
-  // 让 UI 能显示「为什么没隔离 + 下一步怎么做」，而不是一句笼统的「你的系统不支持」。
-  const detected = sandbox.detectBackend();
-  let available = detected.backend !== 'none';
-  let hint = detected.reason;
-  if (detected.backend === 'windows-restricted-user') {
-    const st = await sandbox.windowsBackend.windowsSandboxReady();
-    available = st.ready;
-    hint = st.reason;
-  }
-  return {
-    ok: true,
-    platform: process.platform,
-    available,            // OS 级沙箱是否就绪（三平台：seatbelt / bubblewrap / windows-restricted-user）
-    backend: detected.backend,
-    hint,                 // 未就绪时的可行动提示（如「apt install bubblewrap」）
-    fallbackActive: !available, // 无 OS 级沙箱时启用命令级硬拦截兜底
-  };
-});
-
-// ═══════════════════════════════════════════
-//  P0-E：GitHub 最小闭环（gh CLI 封装）
-//  diff 审查的「交付」出口：创建 PR。依赖本机 gh 登录态，不做云端 OAuth。
-// ═══════════════════════════════════════════
+// T2-1：MCP 与杂项 IPC 域已拆出 main/ipc/mcp.js（只搬移不改行为）——
+// MCP 配置持久化/连接/状态 + 沙箱状态查询 + GitHub 闭环 IPC + 语音转写。
+// emitTaskEvent 归属任务编排域（本文件，函数声明提升可用），经注入转发 MCP 状态事件。
+const mcpIpc = require('./ipc/mcp');
+mcpIpc.initMcpIpc({ requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules, audit, emitTaskEvent, getCredentialCrypto: () => credentialCrypto });
+const { connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, mcpServers } = mcpIpc;
+// GitHub PR 审查闭环工具仍在本文件组装（gh CLI 封装见 main/github.js）
 const github = require('./github');
 
-ipcMain.handle('github:status', async () => {
-  const available = await github.ghAvailable();
-  if (!available) {
-    return { ok: true, available: false, authed: false, hint: '未检测到 GitHub CLI（gh）。请先安装 https://cli.github.com 并执行 gh auth login' };
-  }
-  const auth = await github.ghAuthed();
-  return { ok: true, available: true, authed: auth.ok, hint: auth.ok ? '' : 'gh 未登录，请先执行 gh auth login' };
-});
-
-ipcMain.handle('github:createPr', async (_, payload = {}) => {
-  const available = await github.ghAvailable();
-  if (!available) {
-    return { ok: false, error: '未检测到 GitHub CLI（gh）。请先安装 https://cli.github.com 并执行 gh auth login' };
-  }
-  const r = await github.createPullRequest(payload);
-  if (r.ok) {
-    audit('github:createPr', String(payload.cwd || ''), `title=${String(payload.title || '').slice(0, 80)} url=${r.url}`, 'recorded');
-  } else {
-    audit('github:createPr', String(payload.cwd || ''), `error: ${r.error}`, 'error');
-  }
-  return r;
-});
-
-ipcMain.handle('mcp:listServers', async () => {
-  return mcp.listMcpServers().map((name) => {
-    const s = mcp.getMcpServer(name);
-    return { name, toolCount: s?.tools?.length || 0, kind: s?.kind || 'stdio' };
-  });
-});
-
-// Bug3：已连接服务的全量工具清单（含 inputSchema）——
-// 应用重启后主进程自动重连，但渲染层 mcpTools 状态为空，
-// 渲染层启动时调此通道重建 agent 工具集，MCP 工具即全程可用
-ipcMain.handle('mcp:listTools', async () => {
-  return mcp.listMcpServers().map((name) => {
-    const s = mcp.getMcpServer(name);
-    return { server: name, tools: s?.tools || [] };
-  });
-});
-
-// B3：已保存（持久化）的 MCP 配置列表 —— 前端据此渲染「已保存但未连接」状态
-// P1-M：env 可能含用户配置的 API Key 等敏感变量——跨 IPC 出口一律剥离，
-//  spawn 路径直接读磁盘配置（不经此通道），渲染层永远拿不到 env
-ipcMain.handle('mcp:getConfig', async () => ({
-  ok: true,
-  servers: loadMcpConfig().map(({ env, ...rest }) => rest),
-}));
-
-// A5：语音本地转写（whisper.cpp；音频不出本机）
-const voice = require('./voice');
-ipcMain.handle('voice:transcribe', async (_, { wavBase64, language }) => voice.transcribeWav({ wavBase64, language }));
-
-// 启动时自动重连已持久化的 MCP 服务
-async function reconnectMcpServers() {
-  const config = loadMcpConfig();
-  if (config.length === 0) return;
-  console.log(`[mcp] 自动重连 ${config.length} 个已保存服务...`);
-  for (const s of config) {
-    try {
-      const res = await connectMcpServer(s);
-      console.log(`[mcp] 重连 ${s.name}: ${res.ok ? `${res.toolCount} 个工具` : res.error}`);
-    } catch (err) {
-      console.warn(`[mcp] 重连 ${s.name} 失败:`, err.message);
-    }
-  }
-}
 
 // ═══════════════════════════════════════════
 //  MODEL PROXY (streaming, main-process direct)
@@ -2602,21 +770,57 @@ function scheduledToolHandlers() {
 // 渲染层只负责发起（agent:run）、订阅事件（agent:event）、中止（agent:abort）；
 // 循环本体与全部工具副作用都在主进程，刷新/关闭窗口不再杀死进行中任务。
 const agentRunner = require('./agentRunner');
-const { waitGroupSettled, humanizeGroupResult } = require('./orchestrator/invoke');
+// T3-7：引擎子进程驻留——runAgent 迁入独立 utilityProcess 子进程（每 run 一个，用后即杀），
+// 工具实现/审批/凭证/流式推送全部留在主进程，由子进程经 RPC 回调（依赖方向反转）。
+// 崩溃半径从「整个应用」收缩到「单个任务」；utilityProcess 不可用（单测 stub 环境）时
+// isAvailable()=false，agentRunner 自动回退主进程 in-process 路径（生产降级链）。
+const engineHost = require('./engineProcess/host');
+engineHost.initEngineHost({});
+const { waitGroupSettled, humanizeGroupResult, diffGroupEvents } = require('./orchestrator/invoke');
 
 // orchestrate_task 工具实现：对话内自动多 Agent 编排（模型自主决策触发）。
 // 同步等待整组收尾，返回人话聚合结果；用户「停止」时立即返回未完成说明。
 // 注意：仅在主会话 handlers 注入——Worker 内不可再编排（防递归失控）。
-async function toolOrchestrateTask(args, { signal } = {}) {
+// T1-3：emitSubagent 注入——把编排组内每个子任务的状态流转 diff 上报为 subagent 事件
+//（spawn/progress/done/failed + tokens + 结论摘要），供渲染层子任务树可视化。
+async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId } = {}) {
   const goal = String(args?.goal || '').trim();
   if (!goal) return { ok: false, error: 'goal 不能为空' };
   if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
   const cwd = String(args?.cwd || '');
-  const maxAgents = Number(args?.max_agents);
-  if (maxAgents >= 1 && maxAgents <= 8) workerPool.setMaxConcurrent(Math.floor(maxAgents));
-  const plan = await orchestrator.autoOrchestrate({ goal, cwd });
+  // P0 治理修复（2026-10-16）：原实现 `workerPool.setMaxConcurrent(args.max_agents)`
+  // 存在三个问题：
+  //   ① 治理方向反了——这是**模型**经工具调用在改并发上限，模型可自行调大（1→8）；
+  //   ② 改的是模块级全局变量 ⇒ 污染同进程内所有其他会话与组；
+  //   ③ 不写回偏好 ⇒ 重启即丢，行为不可预测。
+  // 现移除该副作用：并发宽度应由用户设置（tasks:config，唯一会持久化的入口）决定，
+  // 模型侧的动态宽度由 Wave D 的决策器按「复杂度 × 模型能力 × 预算」计算后下发。
+  // 在决策器落地前，max_agents 仅作提示性信息被忽略并记录——不让模型越权。
+  const requestedAgents = Number(args?.max_agents);
+  if (Number.isFinite(requestedAgents) && requestedAgents >= 1) {
+    console.warn(`[orchestrate] 忽略模型请求的 max_agents=${requestedAgents}`
+      + `（并发上限由用户设置决定，不接受模型侧改写；动态宽度待决策器落地）`);
+  }
+  // R6：对话内编排的组绑定发起会话（threadId=conversationId，渲染层按会话归属显示）
+  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
   if (!plan.ok) return { ok: false, error: `编排启动失败：${plan.error}` };
-  const waited = await waitGroupSettled(taskStore, plan.groupId, { signal });
+  // T1-3：spawn 上报（编排落地即逐任务发出，先于任何轮询）
+  const reportSubagent = (evt) => {
+    try { emitSubagent?.({ tool: 'orchestrate_task', groupId: plan.groupId, ...evt }); }
+    catch (e) { console.warn('[orchestrate] 子任务事件上报失败:', e.message); }
+  };
+  for (const t of plan.tasks || []) {
+    // T1-4：spawn 事件透出 DAG 依赖边，渲染层子任务树据此建图（无需二次查询编排器）
+    reportSubagent({ phase: 'spawn', taskId: t.id, title: t.title, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [] });
+  }
+  // T1-3：轮询 diff——每次快照与上次比较，状态变化即上报（映射逻辑在 diffGroupEvents，可单测）
+  const seen = new Map(); // taskId -> { status, retryCount }
+  const waited = await waitGroupSettled(taskStore, plan.groupId, {
+    signal,
+    onPoll: (g) => {
+      for (const evt of diffGroupEvents(seen, g)) reportSubagent(evt);
+    },
+  });
   if (waited.aborted) {
     // 用户已停止：强停该组全部在役 Agent（已完成结果保留在组内，胶囊面板可查）
     for (const a of workerPool.listActive()) {
@@ -2633,23 +837,54 @@ async function toolOrchestrateTask(args, { signal } = {}) {
 
 agentRunner.initAgentRunner({
   loadAgentCore,
+  // T3-7：引擎子进程宿主（isAvailable 时 runAgent 走独立进程，否则回退 loadAgentCore in-process）
+  engineHost,
+  // N5 rootExecution 统一取消：runScope（handler 包装用）/ 撤审批 / 终止子进程 / 子进程注册
+  runScope,
+  cancelApprovalsForRun: (runId) => approvalChannel.cancelByRun(runId),
+  registerChild: (child) => {
+    const runId = runScope.getStore()?.runId;
+    if (!runId || !child || typeof child.kill !== 'function' || !child.pid) return;
+    let set = activeRunChildren.get(runId);
+    if (!set) { set = new Set(); activeRunChildren.set(runId, set); }
+    set.add(child);
+    child.once('close', () => {
+      set.delete(child);
+      if (set.size === 0) activeRunChildren.delete(runId);
+    });
+  },
+  killChildrenForRun: (runId) => {
+    const set = activeRunChildren.get(runId);
+    if (!set) return 0;
+    let n = 0;
+    for (const c of set) { try { c.kill('SIGTERM'); n += 1; } catch { /* 已退出的忽略 */ } }
+    return n;
+  },
   // 2026-10-15：会话消息持久化通道（agentRunner 收归主进程落库用）——
   // conversationId 即 threadKey（thread.id），camelCase 形状与 localStore.addMessage 对齐
   persistMessage: ({ conversationId, message }) => {
     if (!localStore) throw new Error('本地数据层未初始化');
     return localStore.addMessage({ threadId: conversationId, ...message });
   },
+  // V08：持久 ACK——最终总结落库后强制刷盘，只有 durable 成功才允许 mainPersisted:true
+  flushPersistence: () => {
+    if (!localStore) return { ok: false, error: '本地数据层未初始化' };
+    return localStore.flushSync();
+  },
   // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
-  createToolHandlers: ({ sender, signal, runId }) => ({
+  // V01：createToolHandlers 接收本 run 的宿主治理值（agentRunner 已按角色钳制），
+  // 工具处理器内一律使用宿主值，不读模型参数里的治理字段。
+  createToolHandlers: ({ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId }) => ({
     ...scheduledToolHandlers(),
     // runId 作为 streamTag：Agent 运行的流式输出带标签，渲染层按活跃会话过滤（切会话/后台运行不串显）
     chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal, runId),
-    orchestrateTask: (args) => toolOrchestrateTask(args, signal),
+    orchestrateTask: (args) => toolOrchestrateTask(args, { signal, emitSubagent, conversationId: conversationId || '' }),
     // 对话内网络插件搜索/安装（LobeChat 式）：搜索只读；安装恒走 L3 审批卡
     searchPlugins: (args) => searchPluginsTool(args),
     installPlugin: (args) => installNetworkPlugin(args, {
-      approvalMode: args.approvalMode || 'on-request',
+      // V01/V04：审批档由宿主绑定（run 的有效档），模型传参里的 approvalMode 不可信
+      approvalMode: runApprovalMode || 'on-request',
       conversationId: args.conversationId || '',
     }),
     // P0-A：Web 检索/抓取。内网地址已由 webTools 自行拦截（SSRF 防护）。
@@ -2662,6 +897,26 @@ agentRunner.initAgentRunner({
     prDiff: prTools.prDiff,
     prReview: prTools.prReview,
     prComment: prTools.prComment,
+    // T4-1：Browser Use 六工具（子进程执行 + L3 审批；仅主会话注入——
+    // Worker/定时任务无审批通道语义，浏览器操作必须有人在场确认）
+    browserNavigate: browserTools.toolBrowserNavigate,
+    browserClick: browserTools.toolBrowserClick,
+    browserFill: browserTools.toolBrowserFill,
+    browserSelect: browserTools.toolBrowserSelect,
+    browserScreenshot: browserTools.toolBrowserScreenshot,
+    browserExtract: browserTools.toolBrowserExtract,
+    // T4-2：Chrome 接管七工具（经中继转发扩展；仅主会话注入——与 browser_* 同纪律，
+    // Worker/定时任务无审批通道语义，不允许触碰用户真实浏览器）
+    chromeStatus: chromeTools.toolChromeStatus,
+    chromeTabs: chromeTools.toolChromeTabs,
+    chromeNavigate: chromeTools.toolChromeNavigate,
+    chromeClick: chromeTools.toolChromeClick,
+    chromeFill: chromeTools.toolChromeFill,
+    chromeScreenshot: chromeTools.toolChromeScreenshot,
+    chromeExtract: chromeTools.toolChromeExtract,
+    // T4-7：Code Mode（子进程持久会话 + L3/L1 审批；仅主会话注入——
+    // Worker/定时任务无审批通道语义，不允许执行任意代码）
+    codeExec: codeTools.toolCodeExec,
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
@@ -2773,6 +1028,8 @@ function setupTaskOrchestration(db) {
       loadAgentCore,
       store: taskStore,
       maxConcurrent: Number(localStore?.getPreference('tasks.max_concurrent')) || 4,
+      // 2026-10-16：子任务继承用户当前审批档（此前硬编码 auto-safe，用户设 always 时被静默忽略）
+      getApprovalMode: agentRunner.getCurrentApprovalMode,
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
       createToolHandlers: ({ signal }) => ({
@@ -2820,12 +1077,19 @@ function setupTaskOrchestration(db) {
       runGroup: (gid) => workerPool.runGroup(gid),
     });
 
-    // 崩溃恢复：中断的 running 任务回队；上轮运行中的组自动续跑（断点续跑）
+    // 崩溃恢复（V14，2026-10-16）：中断的 running 任务 → failed + needsReview（不自动重放——
+    // 已执行的副作用无法确认，重放 = 同一操作执行两次且用户不知情）；运行中的组 → paused，
+    // 等待用户人工核对后手动续跑。渲染层经 task_update 事件刷新。
     const rec = taskStore.recoverInterrupted();
-    if (rec.recoveredTasks > 0 || rec.runningGroups.length > 0) {
-      console.log(`[tasks] 崩溃恢复：${rec.recoveredTasks} 个任务回队，${rec.runningGroups.length} 个组续跑`);
-      for (const gid of rec.runningGroups) {
-        workerPool.runGroup(gid).catch((e) => console.error(`[tasks] 组 ${gid} 续跑失败:`, e.message));
+    if (rec.recoveredTasks.length > 0 || rec.pausedGroups.length > 0) {
+      console.log(`[tasks] 崩溃恢复：${rec.recoveredTasks.length} 个中断任务待人工审查，${rec.pausedGroups.length} 个组已暂停（不自动重放副作用）`);
+      // N5 副作用账本：各组 uncertain 清单随日志与事件透出（人工核对的输入）
+      for (const gid of rec.pausedGroups) {
+        const uncertain = taskStore.listUncertainEffects(gid);
+        if (uncertain.length > 0) console.log(`[tasks] 组 ${gid} 副作用待核对：${uncertain.join(', ')}`);
+      }
+      for (const t of rec.recoveredTasks) {
+        emitTaskEvent({ type: 'task_update', groupId: t.groupId, taskId: t.taskId, status: 'failed', needsReview: true, error: '应用重启导致执行中断' });
       }
     }
     console.log('[tasks] 任务编排子系统就绪（SQLite 持久化队列 + Worker 池）');
@@ -2837,15 +1101,25 @@ function setupTaskOrchestration(db) {
 }
 
 // ── 任务编排 IPC ──
-ipcMain.handle('tasks:autoRun', async (_, { goal, cwd } = {}) => {
-  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
-  // 一键自动：拆解（失败自动修复重试）→ 直接执行；组失败后由 orchestrator 自动重规划
-  return orchestrator.autoOrchestrate({ goal, cwd });
-});
-ipcMain.handle('tasks:plan', async (_, { goal, cwd } = {}) => {
-  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
-  return orchestrator.planGoal({ goal, cwd });
-});
+  // V04：编排建组时固化「宿主治理快照」——审批档取用户当前设置，沙箱按宿主推导（cwd 有无），
+  // 一律不接受模型参数（max_agents 已被忽略，治理字段同理）；快照随组持久化，Worker 执行时读取。
+  function hostPolicySnapshot(cwd) {
+    return {
+      approvalMode: agentRunner.getCurrentApprovalMode(),
+      sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
+    };
+  }
+
+  ipcMain.handle('tasks:autoRun', async (_, { goal, cwd, conversationId } = {}) => {
+    if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+    // 一键自动：拆解（失败自动修复重试）→ 直接执行；组失败后由 orchestrator 自动重规划
+    // R6：组绑定发起会话（threadId）——渲染层任务面板按会话归属显示
+    return orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
+  });
+  ipcMain.handle('tasks:plan', async (_, { goal, cwd, conversationId } = {}) => {
+    if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+    return orchestrator.planGoal({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
+  });
 ipcMain.handle('tasks:execute', async (_, { groupId } = {}) => {
   if (!taskStore) return { ok: false, error: '任务编排子系统不可用' };
   try {
@@ -2857,8 +1131,11 @@ ipcMain.handle('tasks:execute', async (_, { groupId } = {}) => {
 });
 ipcMain.handle('tasks:list', async (_, opts) => (taskStore ? { ok: true, groups: taskStore.listGroups(opts) } : { ok: false, error: '不可用' }));
 ipcMain.handle('tasks:get', async (_, { groupId } = {}) => (taskStore ? { ok: true, group: taskStore.getGroup(groupId) } : { ok: false, error: '不可用' }));
-ipcMain.handle('tasks:cancel', async (_, { groupId } = {}) => {
+ipcMain.handle('tasks:cancel', async (_, payload) => {
   if (!taskStore) return { ok: false, error: '不可用' };
+  const v = await validateTaskPayload('taskGroupRefSchema', payload);
+  if (!v.ok) return v;
+  const { groupId } = v.data;
   try {
     // v1：仅允许取消未在执行的组（ready/paused）；running 组等收尾或用任务级重试干预
     const g = taskStore.getGroup(groupId);
@@ -2870,22 +1147,50 @@ ipcMain.handle('tasks:cancel', async (_, { groupId } = {}) => {
   }
 });
 // 强制关闭正在执行的子任务（Agent 面板入口）：中止运行且不重试
-ipcMain.handle('tasks:abortTask', async (_, { groupId, taskId } = {}) => {
+ipcMain.handle('tasks:abortTask', async (_, payload) => {
   if (!taskStore) return { ok: false, error: '不可用' };
+  const v = await validateTaskPayload('taskRefSchema', payload);
+  if (!v.ok) return v;
+  const { groupId, taskId } = v.data;
   const done = workerPool.abortTask(groupId, taskId);
   return done ? { ok: true } : { ok: false, error: '该任务不在执行中（可能已完成或尚未开始）' };
 });
 // 组级强停（对话中止联动 / 胶囊面板「全部停止」）
-ipcMain.handle('tasks:abortGroup', async (_, { groupId } = {}) => {
+ipcMain.handle('tasks:abortGroup', async (_, payload) => {
   if (!taskStore) return { ok: false, error: '不可用' };
-  const n = workerPool.abortGroup(groupId);
+  const v = await validateTaskPayload('taskGroupRefSchema', payload);
+  if (!v.ok) return v;
+  const n = workerPool.abortGroup(v.data.groupId);
   return { ok: true, aborted: n };
 });
-ipcMain.handle('tasks:retryTask', async (_, { groupId, taskId } = {}) => {  if (!taskStore) return { ok: false, error: '不可用' };
+ipcMain.handle('tasks:retryTask', async (_, payload) => {
+  if (!taskStore) return { ok: false, error: '不可用' };
+  // D2：进业务逻辑前先校验载荷（不合法即拒绝，不触碰任何任务状态）
+  const v = await validateTaskPayload('taskRetryPayloadSchema', payload);
+  if (!v.ok) return v;
+  const { groupId, taskId, confirmReview } = v.data;
   try {
     const t = taskStore.getTask(groupId, taskId);
     if (!t) return { ok: false, error: '子任务不存在' };
     if (t.status !== 'failed') return { ok: false, error: `仅失败任务可重试（当前：${t.status}）` };
+    // A5（2026-10-16）：重试前置「副作用核对」。
+    // 该任务上次运行若在产生副作用后被中断（写文件 / 发请求 / 装包），其副作用状态记为
+    // uncertain（见 taskStore.markEffectUncertain）——重试会**再执行一次**同一批操作，
+    // 可能重复写入或重复提交。因此存在未确认副作用时必须由用户显式确认（confirmReview=true）。
+    const uncertain = typeof taskStore.listUncertainEffects === 'function'
+      ? taskStore.listUncertainEffects(groupId)
+      : [];
+    if (taskStore.needsRetryReview(groupId, taskId, confirmReview)) {
+      return {
+        ok: false,
+        requiresReview: true,
+        groupId,
+        taskId,
+        uncertainEffects: uncertain,
+        message: '该任务上次运行留下了未确认的副作用（可能已写入文件或发出请求）。'
+          + '重试会再次执行同一批操作，请先核对工作区改动后再确认。',
+      };
+    }
     taskStore.setTaskStatus(groupId, taskId, 'queued');
     const g = taskStore.getGroup(groupId);
     if (g.status === 'paused') taskStore.setGroupStatus(groupId, 'running'); // paused → running（重试续跑）
@@ -2895,8 +1200,20 @@ ipcMain.handle('tasks:retryTask', async (_, { groupId, taskId } = {}) => {  if (
     return { ok: false, error: err.message };
   }
 });
-ipcMain.handle('tasks:config', async (_, { maxConcurrent } = {}) => {
-  const n = workerPool.setMaxConcurrent(maxConcurrent);
+ipcMain.handle('tasks:deleteGroup', async (_, payload) => {
+  if (!taskStore) return { ok: false, error: '不可用' };
+  const v = await validateTaskPayload('taskGroupRefSchema', payload);
+  if (!v.ok) return v;
+  const { groupId } = v.data;
+  // R6（用户实测反馈）：任务组可删除——终态/暂停组从面板消失，不留僵尸记录
+  const r = taskStore.deleteGroup(groupId);
+  if (r.ok) emitTaskEvent({ type: 'group_deleted', groupId });
+  return r;
+});
+ipcMain.handle('tasks:config', async (_, payload) => {
+  const v = await validateTaskPayload('taskConfigPayloadSchema', payload);
+  if (!v.ok) return v;
+  const n = workerPool.setMaxConcurrent(v.data.maxConcurrent);
   localStore?.setPreference('tasks.max_concurrent', n);
   return { ok: true, maxConcurrent: n };
 });
@@ -2906,20 +1223,51 @@ ipcMain.handle('tasks:config', async (_, { maxConcurrent } = {}) => {
 //  事件契约与实现细节见 computerUse.js 头部注释
 // ═══════════════════════════════════════════
 const cua = require('./computerUse');
+// T3-6：高风险原生执行下沉独立子进程——osascript 键鼠执行/AX 采集不再跑在主进程里，
+// 崩溃或挂起只影响单步：宿主透明重启重试，超限抛能力降级错误经 cua:event 提示（主会话不崩）。
+// utilityProcess 不可用（单测 stub 环境）时 isAvailable()=false，回退主进程直调（T3-7 同纪律）。
+const cuaProcess = require('./cuaProcess/host');
+cuaProcess.initCuaProcess({});
+// T4-6：操作录制与回放——LLM 跑通的任务录成确定性 AX 脚本，回放不调模型
+const cuaRecorder = require('./cuaRecorder');
+const cuaRecordingsDir = () => path.join(app.getPath('userData'), 'recordings');
 let activeCuaLoop = null; // 当前进行中的 CUA 循环（供 cua:stop 中断）
+let activeReplayLoop = null; // 当前进行中的回放循环（与录制互斥，共用 stop）
 
 // CUA 逐次确认弹窗：独立通道，避免与并行工具审批（tool:approval-response）互相串扰
 // 决策不进入 applyApprovalDecision 规则库 —— 敏感动作必须逐次确认，不可会话/永久放行
+//
+// P0 修复（2026-10-16）：原实现是 `ipcMain.once('cua:approval-response')`——
+// 即 main.js:54 注释所述 P0-2 缺陷在 CUA 通道的重演（tool: 通道早已用
+// ApprovalChannel 按 approvalId 精确分发修掉，此处漏改）。后果：
+//   ① 每次请求都注册一个新的一次性监听器，并发两个 CUA 确认时，
+//      先到的响应被「先注册的那个」消费 ⇒ 决策张冠李戴。CUA 要求逐次确认，
+//      张冠李戴的后果比工具审批更严重（把「允许」发给另一条敏感动作）；
+//   ② 超时分支只 resolve 不摘监听器 ⇒ 监听器残留，可能吃掉后续无关响应。
+// 现与 tool: 通道同款：生成 approvalId → 按 id 精确分发；无 id 的旧响应走
+// dispatchLegacy（仅在恰有一个挂起时按唯一挂起处理，多于一个则拒绝猜测、按超时 deny）。
+const cuaApprovalChannel = new ApprovalChannel({ timeoutMs: 120000 });
+ipcMain.on('cua:approval-response', (_, payload) => {
+  const hasId = payload && typeof payload === 'object' && payload.approvalId;
+  const dispatched = hasId
+    ? cuaApprovalChannel.dispatch(payload.approvalId, payload.decision)
+    : cuaApprovalChannel.dispatchLegacy(payload && payload.decision !== undefined ? payload.decision : payload);
+  if (!dispatched) {
+    console.warn('[cua] 收到无法匹配的审批响应，已忽略（fail-closed，按 deny 收尾）');
+  }
+});
+
 function requestCuaApproval(summary) {
-  return new Promise((resolve) => {
-    if (!mainWindow || mainWindow.isDestroyed()) { resolve('deny'); return; }
-    const timer = setTimeout(() => resolve('deny'), 120000); // 2 分钟无响应按拒绝处理
-    ipcMain.once('cua:approval-response', (_, decision) => {
-      clearTimeout(timer);
-      resolve(decision || 'deny');
-    });
-    mainWindow.webContents.send('cua:approval-request', summary);
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('deny');
+  const approvalId = cuaApprovalChannel.nextId();
+  // 无论以何种方式收尾（含超时）都通知渲染层撤下卡片——否则卡片常驻，
+  // 用户再点时主进程已无挂起项，表现为「点了没反应」
+  const settled = cuaApprovalChannel.wait(approvalId, () => {
+    try { mainWindow?.webContents?.send('cua:approval-settled', { approvalId }); }
+    catch { /* 窗口已销毁 */ }
   });
+  mainWindow.webContents.send('cua:approval-request', { ...summary, approvalId });
+  return settled;
 }
 
 // CUA 循环用非流式 chat（复用 model:chat 同款凭证解析结果）
@@ -2961,21 +1309,50 @@ ipcMain.handle('cua:status', async () => {
   };
 });
 
-ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-request', conversationId, model, providerId, isGlobal = false, baseUrl, allowedApps, maxSteps }) => {
-  if (activeCuaLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
+ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-request', conversationId, model, providerId, isGlobal = false, baseUrl, allowedApps, maxSteps, record = false, recordingName = '' }) => {
+  if (activeCuaLoop || activeReplayLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
   if (!objective || !appName) return { ok: false, error: 'objective 与 appName 必填' };
   if (process.platform !== 'darwin') return { ok: false, error: '界面自动化仅支持 macOS' };
-  if (!(await cua.isAccessibilityGranted())) {
-    return { ok: false, error: 'NEED_ACCESSIBILITY: 未授予辅助功能权限，请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用' };
+  // T3-6：原生执行会话（每 run 一个子进程，惰性 spawn，finally dispose）
+  const cuaSession = cuaProcess.isAvailable() ? cuaProcess.createSession() : null;
+  const cuaExec = (name, ...args) => (cuaSession ? cuaSession.call(name, ...args) : cua[name](...args));
+  const bail = async (result) => { try { cuaSession?.dispose(); } catch (e) { console.warn('[cua] 会话释放失败:', e.message); } return result; };
+  if (!(await cuaExec('isAccessibilityGranted'))) {
+    return bail({ ok: false, error: 'NEED_ACCESSIBILITY: 未授予辅助功能权限，请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用' });
   }
   // 凭证解析：与 model:chat 同款（本地优先）
   const secret = resolveSecret(providerId, isGlobal);
-  if (!secret || !secret.api_key) return { ok: false, error: 'KEY_MISSING: 模型凭证未加载，请在本机模型设置中重新填写 API Key' };
+  if (!secret || !secret.api_key) return bail({ ok: false, error: 'KEY_MISSING: 模型凭证未加载，请在本机模型设置中重新填写 API Key' });
   const root = (baseUrl || secret.base_url || '').replace(/\/+$/, '');
-  if (!root) return { ok: false, error: 'BASE_URL_MISSING: 模型服务地址为空' };
+  if (!root) return bail({ ok: false, error: 'BASE_URL_MISSING: 模型服务地址为空' });
 
   const send = (evt) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('cua:event', evt);
+  };
+  // T4-6 录制模式：累积实际执行成功的 AX 步骤（每步截图），run 完成后整体落盘；
+  // 视觉兜底步骤（node=null）不可确定性回放，不入录制。
+  const rec = record ? {
+    id: cuaRecorder.newRecordingId(),
+    name: String(recordingName || objective).slice(0, 80),
+    steps: [],
+  } : null;
+  let recChain = Promise.resolve(); // 截图串行链：保证步骤序号与落盘顺序一致
+  let recCounter = 0; // 步骤序号独立计数（截图异步，不能依赖 steps.length——链未 flush 时会重复）
+  const onEvent = (evt) => {
+    if (rec && evt.type === 'step' && evt.mode !== 'vision' && evt.node && evt.result?.ok) {
+      const index = ++recCounter;
+      const step = cuaRecorder.sanitizeStep(evt, index);
+      recChain = recChain.then(async () => {
+        try {
+          const shot = await cua.captureScreen();
+          if (shot && shot.dataUrl) {
+            step.screenshotFile = cuaRecorder.writeScreenshot(rec.id, index, shot.dataUrl, { dir: cuaRecordingsDir() });
+          }
+        } catch (e) { console.warn('[cua] 录制截图失败（不影响步骤）:', e.message); }
+        rec.steps.push(step);
+      });
+    }
+    send(evt);
   };
   const hud = cua.createHudWindow(BrowserWindow);
   const loop = new cua.ComputerUseLoop({
@@ -2986,10 +1363,11 @@ ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-req
     approvalMode,
     allowedApps: allowedApps || [appName],
     toolHandlers: {
+      // chat 留主进程（凭证不出界）；原生执行面全部经子进程会话（T3-6）
       chat: (messages) => cuaChat(root, secret.api_key, model, messages),
-      collectAx: (name) => cua.collectAxTree(name || appName),
-      perform: (action, node) => cua.performAction(action, node, { appName: appName || node?.name || '' }),
-      isLocked: () => cua.isScreenLocked(),
+      collectAx: (name) => cuaExec('collectAxTree', name || appName),
+      perform: (action, node) => cuaExec('performAction', action, node, { appName: appName || node?.name || '' }),
+      isLocked: () => cuaExec('isScreenLocked'),
     },
     approval: {
       requestApproval: (summary) => requestCuaApproval(summary),
@@ -2997,22 +1375,90 @@ ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-req
       audit: (step, actionText, result) => audit('cua', appName, `step${step}: ${actionText} -> ${result}`, result === 'denied' ? 'denied' : 'approved'),
     },
     hud,
-    onEvent: send,
+    onEvent,
   });
   activeCuaLoop = loop;
   loop.run()
-    .catch((err) => send({ type: 'error', message: err.message }))
+    // T4-6：任务成功完成且有已执行步骤 → 录制落盘；中途失败/停止 → 清理半成品截图不留脏数据
+    .then(async (res) => {
+      if (!rec) return;
+      await recChain;
+      if (res && res.completed && rec.steps.length) {
+        const saved = cuaRecorder.saveRecording(
+          { version: 1, id: rec.id, name: rec.name, objective, appName, createdAt: Date.now(), steps: rec.steps },
+          { dir: cuaRecordingsDir() },
+        );
+        if (saved.ok) send({ type: 'recorded', recordingId: rec.id, stepCount: rec.steps.length });
+        else send({ type: 'error', message: saved.error });
+      } else if (rec.steps.length) {
+        cuaRecorder.deleteRecording(rec.id, { dir: cuaRecordingsDir() });
+      }
+    })
+    // cuaDegraded：子进程重启超限——消息本身即能力降级提示（degraded 标记供渲染层区分展示）
+    .catch((err) => send({ type: 'error', message: err.message, degraded: !!err.cuaDegraded }))
     .finally(() => {
       activeCuaLoop = null;
       cua.destroyHud();
+      try { cuaSession?.dispose(); } catch (e) { console.warn('[cua] 会话释放失败:', e.message); }
     });
   return { ok: true };
 });
 
 ipcMain.handle('cua:stop', async () => {
+  if (activeReplayLoop) { activeReplayLoop.stop(); return { ok: true }; }
   if (!activeCuaLoop) return { ok: false, error: '没有进行中的界面自动化任务' };
   activeCuaLoop.stop();
   return { ok: true };
+});
+
+// T4-6：确定性回放——不调模型，按录制步骤逐一「定位节点→（敏感则逐次确认）→执行」；
+// 节点定位失败 fail-closed 中止；审批/审计与录制路径共用同一套通道（requestCuaApproval/audit）
+ipcMain.handle('cua:replay', async (_, { recordingId, approvalMode = 'on-request' } = {}) => {
+  if (activeCuaLoop || activeReplayLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
+  if (process.platform !== 'darwin') return { ok: false, error: '界面自动化仅支持 macOS' };
+  const loaded = cuaRecorder.loadRecording(String(recordingId || ''), { dir: cuaRecordingsDir() });
+  if (!loaded.ok) return { ok: false, error: loaded.error };
+  const recording = loaded.recording;
+  const cuaSession = cuaProcess.isAvailable() ? cuaProcess.createSession() : null;
+  const cuaExec = (name, ...args) => (cuaSession ? cuaSession.call(name, ...args) : cua[name](...args));
+  const bail = (result) => { try { cuaSession?.dispose(); } catch (e) { console.warn('[cua] 会话释放失败:', e.message); } return result; };
+  if (!(await cuaExec('isAccessibilityGranted'))) {
+    return bail({ ok: false, error: 'NEED_ACCESSIBILITY: 未授予辅助功能权限，请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用' });
+  }
+  const send = (evt) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('cua:event', { mode: 'replay', ...evt });
+  };
+  const loop = new cuaRecorder.ReplayLoop({
+    recording,
+    approvalMode,
+    toolHandlers: {
+      collectAx: (name) => cuaExec('collectAxTree', name || recording.appName),
+      perform: (action, node) => cuaExec('performAction', action, node, { appName: recording.appName || node?.name || '' }),
+    },
+    approval: {
+      requestApproval: (summary) => requestCuaApproval(summary),
+      audit: (step, actionText, result) => audit('cua', recording.appName, `replay step${step}: ${actionText} -> ${result}`, result === 'denied' ? 'denied' : 'approved'),
+    },
+    onEvent: send,
+  });
+  activeReplayLoop = loop; // eslint-disable-line require-atomic-updates -- 互斥守卫已在 await 前检查，单窗口串行赋值安全
+  loop.run()
+    .catch((err) => send({ type: 'error', message: err.message, degraded: !!err.cuaDegraded }))
+    .finally(() => {
+      activeReplayLoop = null;
+      try { cuaSession?.dispose(); } catch (e) { console.warn('[cua] 会话释放失败:', e.message); }
+    });
+  return { ok: true };
+});
+
+// 录制列表/删除（数据仅存本机 userData/recordings/，不上传）
+ipcMain.handle('cua:recordings:list', async () => ({
+  ok: true,
+  recordings: cuaRecorder.listRecordings({ dir: cuaRecordingsDir() }),
+}));
+ipcMain.handle('cua:recordings:delete', async (_, { recordingId } = {}) => {
+  const r = cuaRecorder.deleteRecording(String(recordingId || ''), { dir: cuaRecordingsDir() });
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
 });
 // ═══════════════════════════════════════════
 //  END COMPUTER USE (M4-C)

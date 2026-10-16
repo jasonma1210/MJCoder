@@ -127,32 +127,38 @@ function captureConsole(fn) {
 
   // ── 主进程 readFile/listDir：不得裸抛 ──
   // P0-D 起实现提取为命名函数（IPC 与定时任务 Agent 通道共用同一实现），门禁改查实现函数本体
+  // T2-1：工具执行层已拆出 main/tools/exec.js，断言随实现走；getSecrets 仍在 main.js
+  const toolSrc = fs.readFileSync(path.join(__dirname, '../main/tools/exec.js'), 'utf8');
   const mainSrc = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8');
 
   await check('tool:readFile 处理器不含裸 readFile 抛出', () => {
-    const block = mainSrc.match(/async function toolReadFile\([\s\S]*?\n\}/);
+    const block = toolSrc.match(/async function toolReadFile\([\s\S]*?\n\}/);
     assert.ok(block, '未找到 toolReadFile 实现');
     assert.ok(block[0].includes('try {'), 'readFile 必须包 try/catch');
     assert.ok(block[0].includes('notFound'), 'ENOENT 必须走结构化返回而非 reject');
     assert.ok(block[0].includes('resolveToolPath'), 'readFile 必须做 cwd 贯通');
-    assert.match(mainSrc, /ipcMain\.handle\('tool:readFile', \(_, payload\) => toolReadFile\(payload\)\)/, 'IPC 必须委托同一实现');
+    assert.match(toolSrc, /ipcMain\.handle\('tool:readFile', \(_, payload\) => toolReadFile\(payload\)\)/, 'IPC 必须委托同一实现');
   });
 
   await check('tool:listDir 处理器不含裸 readdir 抛出', () => {
-    const block = mainSrc.match(/async function toolListDir\([\s\S]*?\n\}/);
+    const block = toolSrc.match(/async function toolListDir\([\s\S]*?\n\}/);
     assert.ok(block, '未找到 toolListDir 实现');
     assert.ok(block[0].includes('try {'), 'listDir 必须包 try/catch');
-    assert.match(mainSrc, /ipcMain\.handle\('tool:listDir', \(_, payload\) => toolListDir\(payload\)\)/, 'IPC 必须委托同一实现');
+    assert.match(toolSrc, /ipcMain\.handle\('tool:listDir', \(_, payload\) => toolListDir\(payload\)\)/, 'IPC 必须委托同一实现');
   });
 
   await check('resolveToolPath 存在且以 cwd 为基准', () => {
-    assert.match(mainSrc, /function resolveToolPath\(p, cwd\)/);
-    assert.match(mainSrc, /path\.resolve\(cwd \|\| process\.cwd\(\), raw\)/);
+    // 2026-10-16 resolveToolPath 自 exec.js 移入 execCwd.js（N2 执行契约模块）
+    const cwdSrc = fs.readFileSync(path.join(__dirname, '../main/tools/execCwd.js'), 'utf8');
+    assert.match(cwdSrc, /function resolveToolPath\(p, cwd\)/);
+    assert.match(cwdSrc, /path\.resolve\(cwd \|\| process\.cwd\(\), raw\)/);
   });
 
   await check('audit 熔断与超时已就位', () => {
-    assert.match(mainSrc, /auditBreakerUntil/);
-    assert.match(mainSrc, /AbortSignal\.timeout\(3000\)/);
+    // T2-1：审计域已拆出 main/audit/auditLog.js，熔断与超时断言改指新模块
+    const auditSrc = fs.readFileSync(path.join(__dirname, '../main/audit/auditLog.js'), 'utf8');
+    assert.match(auditSrc, /auditBreakerUntil/);
+    assert.match(auditSrc, /AbortSignal\.timeout\(3000\)/);
   });
 
   await check('authToken 改为拉取成功后赋值（失败不打开审计门）', () => {
@@ -169,10 +175,10 @@ function captureConsole(fn) {
     assert.match(mainSrc, /secretsInFlight/);
   });
 
-  // ── 死代码已移除 ──
-  await check('死代码 desktop/main.js 已移除（保留 .bak 可恢复）', () => {
+  // ── 死代码已移除（T2-4：.bak 残留一并清理，历史恢复走 git 而非库内备份文件）──
+  await check('死代码 desktop/main.js 与 .bak 残留均已移除', () => {
     assert.equal(fs.existsSync(path.join(__dirname, '../main.js')), false);
-    assert.equal(fs.existsSync(path.join(__dirname, '../main.js.deprecated.bak')), true);
+    assert.equal(fs.existsSync(path.join(__dirname, '../main.js.deprecated.bak')), false);
   });
 
   fs.rmSync(path.join(os.tmpdir(), 'mjcode-degrade-unused'), { recursive: true, force: true });

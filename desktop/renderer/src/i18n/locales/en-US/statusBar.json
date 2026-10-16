@@ -1,0 +1,14 @@
+{
+  "offlineTitle": "Server unreachable: threads and messages are stored on this machine; model calls still need network (configure Ollama in model settings for fully local inference)",
+  "connectedTitle": "Connected to local server",
+  "offlineMode": "Offline · data stays on this machine (model calls still need network)",
+  "connected": "Connected to local server",
+  "model": "Model: {name}",
+  "dataTitle": "Threads and messages are stored on this machine; model keys never leave it",
+  "threadCount": "{n} threads",
+  "dataPathTitle": "Data stored in your local user directory",
+  "dataPath": "Local data: {path}",
+  "dataLocal": "Data stored locally",
+  "keyTitle": "Model API keys stay on this machine (encrypted in the system keychain in offline mode) and are never uploaded",
+  "keyBadge": "Keys stay local"
+}

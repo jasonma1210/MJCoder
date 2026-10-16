@@ -130,7 +130,7 @@ fs.writeFileSync = origWriteFile;
 check('20 条消息合并为少量写盘（≤2 次磁盘写）', writesBeforeFlush <= 2,
   `合并窗口内写盘 ${writesBeforeFlush} 次`);
 check('合并刷盘后 20 条消息完整落盘', new LocalStore(dirHot).listMessages(tHot.id).length === 20);
-check('flushSync 幂等（无脏数据不再写盘）', sHot.flushSync() === false);
+check('flushSync 幂等（无脏数据不再写盘）', (() => { const r = sHot.flushSync(); return r && r.ok === true && r.nothingPending === true; })()); // V08：返回值从布尔升级为 {ok,nothingPending}
 
 // scheduleFlush 定时器到期自动落盘（异步段收尾，统一在此清理与退出）
 (async () => {

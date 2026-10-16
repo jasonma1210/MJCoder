@@ -1,0 +1,21 @@
+{
+  "phaseSpawn": "Pending",
+  "phaseRunning": "Running",
+  "phaseDone": "Done",
+  "phaseFailed": "Failed",
+  "clickToView": "Click to view the outcome",
+  "dependsOn": "Depends on:",
+  "earlyStop": "Stopped early: {reason}",
+  "stopTokens": "token budget exhausted",
+  "stopRounds": "round limit reached",
+  "stopAborted": "aborted",
+  "subagent": "Subagent",
+  "subagentTask": "Subagent task",
+  "singleAgent": "Single agent · {type}",
+  "general": "General",
+  "empty": "No subtasks yet",
+  "emptyHint": "Orchestrated groups and spawned subagents will appear here in real time",
+  "group": "Orchestration group",
+  "doneRatio": "{done}/{total} done",
+  "failedCount": "{n} failed"
+}

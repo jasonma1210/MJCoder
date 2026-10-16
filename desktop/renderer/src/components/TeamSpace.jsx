@@ -11,13 +11,15 @@ import {
 import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
 import { IconCheck, IconClock, IconPlus, IconRefresh, IconUser, IconX } from './icons';
+import { useI18n, tGlobal } from '../i18n';
 
 const POLL_MS = 5000; // 在线成员与远端变更轮询间隔
 
+// 非 hook 纯函数：调用时经 tGlobal 求值（渲染期每次调用，切语言即时生效）
 function approvalLabel(decision) {
-  if (decision === 'approve') return '已批准';
-  if (decision === 'deny') return '已驳回';
-  return '已备注';
+  if (decision === 'approve') return tGlobal('teamSpace.approved');
+  if (decision === 'deny') return tGlobal('teamSpace.denied');
+  return tGlobal('teamSpace.noted');
 }
 
 function approvalClass(decision) {
@@ -27,6 +29,12 @@ function approvalClass(decision) {
 }
 
 export default function TeamSpace({ spaceId = 'default' }) {
+  const { t } = useI18n();
+  // 看板列显示名：collab.BOARD_COLUMNS 只存 i18n key，渲染期解析（切语言即时生效）
+  const colLabel = (key) => {
+    const c = BOARD_COLUMNS.find((x) => x.key === key);
+    return c ? t(c.labelKey) : key;
+  };
   const boardDocId = makeDocId(DOC_TYPES.BOARD, spaceId);
   const approvalDocId = makeDocId(DOC_TYPES.APPROVAL, spaceId);
 
@@ -45,9 +53,9 @@ export default function TeamSpace({ spaceId = 'default' }) {
 
   function dropTo(column) {
     if (!draggingId) return;
-    moveCard(boardDocId, draggingId, { column, position: Date.now(), actor: '我' });
+    moveCard(boardDocId, draggingId, { column, position: Date.now(), actor: t('teamSpace.me') });
     reloadLocal();
-    setNotice(`已移动到「${BOARD_COLUMNS.find(c => c.key === column)?.label || column}」，联网后同步`);
+    setNotice(t('teamSpace.movedNotice', { column: colLabel(column) }));
     setDraggingId(null);
     setDragOverCol(null);
   }
@@ -62,17 +70,17 @@ export default function TeamSpace({ spaceId = 'default' }) {
   const doSync = useCallback(async () => {
     setSyncing(true);
     try {
-      await syncDoc(boardDocId, '我');
-      await syncDoc(approvalDocId, '我');
+      await syncDoc(boardDocId, t('teamSpace.me'));
+      await syncDoc(approvalDocId, t('teamSpace.me'));
       reloadLocal();
       setError('');
     } catch (err) {
       // 离线属正常态：本地内容照常可用，仅提示未同步
-      setNotice('当前离线，改动已保存在本地，联网后自动合并');
+      setNotice(t('teamSpace.offlineNotice'));
     } finally {
       setSyncing(false);
     }
-  }, [boardDocId, approvalDocId, reloadLocal]);
+  }, [boardDocId, approvalDocId, reloadLocal, t]);
 
   useEffect(() => {
     reloadLocal();
@@ -89,7 +97,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
     const loadMembers = async () => {
       if (document.hidden) return; // W3：不可见时跳过本轮
       try {
-        await touchPresence(spaceId, '我');
+        await touchPresence(spaceId, t('teamSpace.me'));
         const list = await fetchMembers(spaceId);
         if (alive) setMembers(list);
       } catch {
@@ -99,31 +107,31 @@ export default function TeamSpace({ spaceId = 'default' }) {
     loadMembers();
     const timer = setInterval(loadMembers, POLL_MS);
     return () => { alive = false; clearInterval(timer); };
-  }, [spaceId]);
+  }, [spaceId, t]);
 
   // W4：删除看板卡片（墓碑语义，确认后执行）
   async function removeCard(card) {
     const ok = await confirm({
-      title: '删除卡片',
-      message: `确定删除卡片「${card.title || card.id}」吗？`,
+      title: t('teamSpace.deleteCardTitle'),
+      message: t('teamSpace.deleteCardMessage', { name: card.title || card.id }),
       danger: true,
-      confirmLabel: '删除',
+      confirmLabel: t('teamSpace.delete'),
     });
     if (!ok) return;
-    const r = deleteCard(boardDocId, card.id, '用户删除');
+    const r = deleteCard(boardDocId, card.id, t('teamSpace.deleteReason'));
     if (r?.ok) { setError(''); reloadLocal(); }
-    else setError(r?.error || '删除失败');
+    else setError(r?.error || t('teamSpace.deleteFailed'));
   }
 
   function addCard() {
     const title = cardTitle.trim();
     if (!title) {
-      setError('卡片标题不能为空');
+      setError(t('teamSpace.titleRequired'));
       return;
     }
     const cardId = newCardId();
     upsertCard(boardDocId, cardId, title);
-    moveCard(boardDocId, cardId, { column: 'backlog', position: Date.now(), actor: '我' });
+    moveCard(boardDocId, cardId, { column: 'backlog', position: Date.now(), actor: t('teamSpace.me') });
     setCardTitle('');
     setShowAdd(false);
     setError('');
@@ -131,22 +139,22 @@ export default function TeamSpace({ spaceId = 'default' }) {
   }
 
   function drag(cardId, column) {
-    moveCard(boardDocId, cardId, { column, position: Date.now(), actor: '我' });
+    moveCard(boardDocId, cardId, { column, position: Date.now(), actor: t('teamSpace.me') });
     reloadLocal();
-    setNotice(`已移动到「${BOARD_COLUMNS.find(c => c.key === column)?.label || column}」，联网后同步`);
-  }
+    setNotice(t('teamSpace.movedNotice', { column: colLabel(column) }));
+    setDraggingId(null)}
 
   async function decide(approvalId, decision) {
     try {
       recordApproval(approvalDocId, {
-        approvalId, decision, note: noteDraft[approvalId] || '', actor: '我', instanceId: spaceId,
+        approvalId, decision, note: noteDraft[approvalId] || '', actor: t('teamSpace.me'), instanceId: spaceId,
       });
       reloadLocal();
-      setNotice('审批动作已记录（同一实例重复提交只记一次）');
+      setNotice(t('teamSpace.approvalRecorded'));
       setError('');
       await doSync();
     } catch (err) {
-      setError(`审批提交失败：${err.message}`);
+      setError(t('teamSpace.approvalSubmitFailed', { msg: err.message }));
     }
   }
 
@@ -155,13 +163,13 @@ export default function TeamSpace({ spaceId = 'default' }) {
       {/* 头部：标题 + 在线成员 + 手动同步 */}
       <header className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-medium text-text">团队空间</h2>
-          <p className="text-xs text-text2">代码协同请使用 git；此处协同会话线程、看板与审批</p>
+          <h2 className="text-base font-medium text-text">{t('teamSpace.title')}</h2>
+          <p className="text-xs text-text2">{t('teamSpace.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs text-text2">
             <IconUser size={14} />
-            {members.length > 0 ? members.map(m => m.display_name).join('、') : '暂无其他成员'}
+            {members.length > 0 ? members.map(m => m.display_name).join(t('teamSpace.listSep')) : t('teamSpace.noMembers')}
           </div>
           <button
             onClick={doSync}
@@ -169,7 +177,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
             className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-text2 hover:bg-hover disabled:opacity-50"
           >
             <IconRefresh size={14} />
-            {syncing ? '同步中' : '同步'}
+            {syncing ? t('teamSpace.syncing') : t('teamSpace.sync')}
           </button>
         </div>
       </header>
@@ -180,13 +188,13 @@ export default function TeamSpace({ spaceId = 'default' }) {
       {/* 任务看板 */}
       <section className="rounded-2xl border border-border bg-surface p-3">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-medium text-text">任务看板</h3>
+          <h3 className="text-sm font-medium text-text">{t('teamSpace.boardTitle')}</h3>
           <button
             onClick={() => setShowAdd(v => !v)}
             className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs text-text2 hover:bg-hover"
           >
             <IconPlus size={14} />
-            新建卡片
+            {t('teamSpace.newCard')}
           </button>
         </div>
 
@@ -195,11 +203,11 @@ export default function TeamSpace({ spaceId = 'default' }) {
             <input
               value={cardTitle}
               onChange={e => setCardTitle(e.target.value)}
-              placeholder="卡片标题"
+              placeholder={t('teamSpace.cardTitlePlaceholder')}
               className="flex-1 rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
             />
-            <button onClick={addCard} className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">添加</button>
-            <button onClick={() => setShowAdd(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm text-text2">取消</button>
+            <button onClick={addCard} className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">{t('teamSpace.add')}</button>
+            <button onClick={() => setShowAdd(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm text-text2">{t('teamSpace.cancel')}</button>
           </div>
         ) : null}
 
@@ -216,7 +224,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
                 }`}
               >
                 <div className="mb-2 flex items-center justify-between text-xs text-text2">
-                  <span>{col.label}</span>
+                  <span>{colLabel(col.key)}</span>
                   <span>{inCol.length}</span>
                 </div>
                 <div className="flex flex-col gap-2">
@@ -233,7 +241,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
                       {/* W4：卡片删除入口（hover 显示，确认后墓碑删除） */}
                       <button onClick={() => removeCard(card)}
                         className="absolute right-1.5 top-1.5 text-text2 hover:text-danger opacity-0 group-hover:opacity-100"
-                        title="删除卡片" aria-label={`删除卡片 ${card.title || card.id}`}>
+                        title={t('teamSpace.deleteCardTitle')} aria-label={t('teamSpace.deleteCardAria', { name: card.title || card.id })}>
                         <IconX size={11} />
                       </button>
                       <select
@@ -242,12 +250,12 @@ export default function TeamSpace({ spaceId = 'default' }) {
                         className="w-full rounded border border-border bg-surface px-1.5 py-1 text-xs text-text2 outline-none focus:border-accent"
                       >
                         {BOARD_COLUMNS.map(c => (
-                          <option key={c.key} value={c.key}>{c.label}</option>
+                          <option key={c.key} value={c.key}>{colLabel(c.key)}</option>
                         ))}
                       </select>
                     </div>
                   ))}
-                  {inCol.length === 0 ? <div className="px-1 py-2 text-xs text-text2">暂无卡片</div> : null}
+                  {inCol.length === 0 ? <div className="px-1 py-2 text-xs text-text2">{t('teamSpace.emptyColumn')}</div> : null}
                 </div>
               </div>
             );
@@ -257,10 +265,10 @@ export default function TeamSpace({ spaceId = 'default' }) {
 
       {/* 共享审批 */}
       <section className="rounded-2xl border border-border bg-surface p-3">
-        <h3 className="mb-3 text-sm font-medium text-text">共享审批</h3>
+        <h3 className="mb-3 text-sm font-medium text-text">{t('teamSpace.approvalsTitle')}</h3>
         <div className="flex flex-col gap-2">
           {approvals.length === 0 ? (
-            <div className="py-3 text-xs text-text2">暂无审批请求</div>
+            <div className="py-3 text-xs text-text2">{t('teamSpace.emptyApprovals')}</div>
           ) : null}
           {approvals.map(a => (
             <div key={a.approvalId} className="rounded-lg border border-border p-3">
@@ -272,25 +280,25 @@ export default function TeamSpace({ spaceId = 'default' }) {
                 </span>
               </div>
               {a.note ? <p className="mt-1 text-xs text-text2">{a.note}</p> : null}
-              <p className="mt-1 text-xs text-text2">裁决人：{a.actor}</p>
+              <p className="mt-1 text-xs text-text2">{t('teamSpace.actorLabel', { actor: a.actor })}</p>
               <div className="mt-2 flex gap-2">
                 <input
                   value={noteDraft[a.approvalId] || ''}
                   onChange={e => setNoteDraft({ ...noteDraft, [a.approvalId]: e.target.value })}
-                  placeholder="审批意见"
+                  placeholder={t('teamSpace.notePlaceholder')}
                   className="flex-1 rounded-lg border border-border bg-bg px-2 py-1 text-xs text-text outline-none focus:border-accent"
                 />
                 <button
                   onClick={() => decide(a.approvalId, 'approve')}
                   className="rounded-lg bg-accent px-3 py-1 text-xs text-white"
                 >
-                  批准
+                  {t('teamSpace.approve')}
                 </button>
                 <button
                   onClick={() => decide(a.approvalId, 'deny')}
                   className="rounded-lg border border-border px-3 py-1 text-xs text-text2 hover:bg-hover"
                 >
-                  驳回
+                  {t('teamSpace.deny')}
                 </button>
               </div>
             </div>

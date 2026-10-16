@@ -97,7 +97,7 @@ function compile(rel) {
     format: 'cjs',
     platform: 'neutral',
     jsx: 'automatic',
-    loader: { '.jsx': 'jsx', '.js': 'jsx', '.mjs': 'jsx' },
+    loader: { '.jsx': 'jsx', '.tsx': 'tsx', '.js': 'jsx', '.mjs': 'jsx' },
     write: false,
     logLevel: 'silent',
   });

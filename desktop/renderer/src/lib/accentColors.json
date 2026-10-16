@@ -1,8 +1,8 @@
 [
-  { "value": null, "label": "主题默认" },
-  { "value": "#8B5CF6", "label": "紫" },
-  { "value": "#3B82F6", "label": "蓝" },
-  { "value": "#14B8A6", "label": "青" },
-  { "value": "#F97316", "label": "橙" },
-  { "value": "#E11D48", "label": "玫红" }
+  { "value": null, "labelKey": "theme.accentDefault" },
+  { "value": "#8B5CF6", "labelKey": "theme.accentPurple" },
+  { "value": "#3B82F6", "labelKey": "theme.accentBlue" },
+  { "value": "#14B8A6", "labelKey": "theme.accentTeal" },
+  { "value": "#F97316", "labelKey": "theme.accentOrange" },
+  { "value": "#E11D48", "labelKey": "theme.accentRose" }
 ]

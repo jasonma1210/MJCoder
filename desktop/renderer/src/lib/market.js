@@ -1,10 +1,12 @@
 // 插件市场数据层：封装 window.mjcode.marketXxx 主进程通道
 // 与 lib/api.js 并列：市场功能完全本地（主进程直接读盘），不依赖服务端在线
 
+import { tGlobal } from '../i18n';
+
 // 桥接缺失时给出明确文案，避免渲染层直接抛 undefined
 function bridge() {
   const api = typeof window !== 'undefined' ? window.mjcode : null;
-  if (!api) throw new Error('主进程桥接未就绪');
+  if (!api) throw new Error(tGlobal('runtime.bridgeNotReady'));
   return api;
 }
 
@@ -12,7 +14,7 @@ async function call(fn, fallback, ...args) {
   try {
     return await bridge()[fn](...args);
   } catch (e) {
-    return fallback(e.message || '调用失败');
+    return fallback(e.message || tGlobal('runtime.callFailed'));
   }
 }
 
@@ -41,28 +43,28 @@ export const market = {
   listSkills: () => call('listSkills', (msg) => ({ ok: false, error: msg, skills: [] })),
 };
 
-// 权限级别中文文案（与主进程 summarizePermissions 保持一致的展示口径）
+// 权限级别 i18n key（与主进程 summarizePermissions 保持一致的展示口径；渲染层经 t() 求值）
 export const PERMISSION_LABELS = {
-  filesystem: '访问文件系统',
-  network: '访问网络',
-  shell: '执行系统命令',
+  filesystem: 'market.permFilesystem',
+  network: 'market.permNetwork',
+  shell: 'market.permShell',
 };
 
-// 插件形态中文文案
+// 插件形态 i18n key
 export const TYPE_LABELS = {
-  mcp: 'MCP 服务',
-  skill: '技能包',
-  prompt: '提示词模板',
+  mcp: 'market.typeMcp',
+  skill: 'market.typeSkill',
+  prompt: 'market.typePrompt',
 };
 
-// 签名状态中文文案（fail-closed 口径）
+// 签名状态（fail-closed 口径）：返回 key + 插值参数，渲染层经 t() 求值
 export function signatureLabel(plugin) {
-  if (!plugin || !plugin.signature) return { text: '未签名（安装将被拒绝）', cls: 'text-danger' };
+  if (!plugin || !plugin.signature) return { textKey: 'market.sigUnsigned', cls: 'text-danger' };
   if (String(plugin.signature).startsWith('sigstore:')) {
     return plugin.publisher
-      ? { text: `已签名 · ${plugin.publisher}`, cls: 'text-success' }
-      : { text: '已签名（sigstore）', cls: 'text-success' };
+      ? { textKey: 'market.sigSignedPublisher', vars: { publisher: plugin.publisher }, cls: 'text-success' }
+      : { textKey: 'market.sigSigstore', cls: 'text-success' };
   }
-  if (String(plugin.signature).startsWith('sha256:')) return { text: '仅内容完整性', cls: 'text-warn' };
-  return { text: '签名不可识别', cls: 'text-danger' };
+  if (String(plugin.signature).startsWith('sha256:')) return { textKey: 'market.sigSha256Only', cls: 'text-warn' };
+  return { textKey: 'market.sigUnknown', cls: 'text-danger' };
 }

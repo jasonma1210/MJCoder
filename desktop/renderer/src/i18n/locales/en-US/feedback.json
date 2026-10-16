@@ -1,0 +1,8 @@
+{
+  "confirmFallback": "Confirm action",
+  "countConfirmPlaceholder": "Enter {count} to confirm",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "confirmDanger": "Confirm delete",
+  "closeToast": "Dismiss notification"
+}

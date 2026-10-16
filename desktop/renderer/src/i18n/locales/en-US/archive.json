@@ -1,0 +1,17 @@
+{
+  "title": "Archived Chats",
+  "subtitle": "Deleted chats land here first; restore them or delete them permanently",
+  "close": "Close",
+  "loading": "Loading…",
+  "empty": "No archived chats",
+  "newSession": "New chat",
+  "restore": "Restore",
+  "purge": "Delete permanently",
+  "purgeTitle": "Delete chat permanently",
+  "purgeMessage": "\"{title}\" and all of its messages will be permanently deleted and cannot be recovered.",
+  "purgeConfirm": "Delete forever",
+  "restoredToast": "Restored \"{title}\"",
+  "restoreFailed": "Restore failed",
+  "loadFailed": "Failed to load archived chats",
+  "deleteFailed": "Delete failed"
+}

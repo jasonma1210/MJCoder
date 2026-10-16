@@ -9,8 +9,37 @@ const ROOT = path.join(__dirname, '../..');
 const DESKTOP = path.join(ROOT, 'desktop');
 const read = (p) => fs.readFileSync(p, 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(DESKTOP, 'renderer/src/i18n/locales/zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
+
 const mainSrc = read(path.join(DESKTOP, 'main/main.js'));
-const settings = read(path.join(DESKTOP, 'renderer/src/components/SettingsModal.jsx'));
+// T2-1：自动更新域已拆出 main/updater/index.js——更新链路断言改指新模块；
+// main.js 仍断言接线点（whenReady 调 updater.scheduleAutoUpdateCheck()）。
+const updaterSrc = read(path.join(DESKTOP, 'main/updater/index.js'));
+// 2026-10-15：账户页移除后更新区块拆出 components/UpdateSection.tsx（断言随实现走）
+const settings = read(path.join(DESKTOP, 'renderer/src/components/SettingsModal.jsx'))
+  + read(path.join(DESKTOP, 'renderer/src/components/UpdateSection.tsx'));
 const ci = read(path.join(ROOT, '.github/workflows/ci.yml'));
 const pkg = JSON.parse(read(path.join(DESKTOP, 'package.json')));
 const serverPkg = JSON.parse(read(path.join(ROOT, 'server/package.json')));
@@ -25,44 +54,46 @@ function check(name, fn) {
 }
 
 check('autoUpdater 为模块作用域声明（修复手动检查 ReferenceError）', () => {
-  assert.match(mainSrc, /^let autoUpdater = null;$/m, 'autoUpdater 未在模块作用域声明');
-  assert.ok(!/const \{ autoUpdater \} = require\('electron-updater'\)/.test(mainSrc),
+  assert.match(updaterSrc, /^let autoUpdater = null;$/m, 'autoUpdater 未在模块作用域声明');
+  assert.ok(!/const \{ autoUpdater \} = require\('electron-updater'\)/.test(updaterSrc),
     'autoUpdater 又被收回函数作用域：IPC handler 会抛 ReferenceError');
 });
 
 check('initUpdater 返回实例且 IPC handler 使用返回值', () => {
-  assert.match(mainSrc, /function initUpdater\(\) \{[\s\S]*?return autoUpdater;/);
-  assert.match(mainSrc, /const up = initUpdater\(\);\s*\n\s*if \(!up\)/,
+  assert.match(updaterSrc, /function initUpdater\(\) \{[\s\S]*?return autoUpdater;/);
+  assert.match(updaterSrc, /const up = initUpdater\(\);\s*\n\s*if \(!up\)/,
     'IPC handler 未使用 initUpdater 返回值（再次引用裸 autoUpdater 会炸）');
 });
 
 check('启动延迟 10s 自动检查（保持手动下载）', () => {
-  assert.match(mainSrc, /const UPDATE_CHECK_DELAY_MS = 10 \* 1000;/);
-  assert.match(mainSrc, /function scheduleAutoUpdateCheck\(\) \{[\s\S]*?if \(!app\.isPackaged\) return;/);
-  assert.match(mainSrc, /scheduleAutoUpdateCheck\(\);/, 'whenReady 未接线延迟检查');
-  assert.match(mainSrc, /autoDownload = false/, 'autoDownload 必须保持 false：下载由用户确认');
-  assert.match(mainSrc, /autoUpdateChecked/, '缺少自动检查去重标志');
+  assert.match(updaterSrc, /const UPDATE_CHECK_DELAY_MS = 10 \* 1000;/);
+  assert.match(updaterSrc, /function scheduleAutoUpdateCheck\(\) \{[\s\S]*?if \(!app\.isPackaged\) return;/);
+  assert.match(mainSrc, /updater\.scheduleAutoUpdateCheck\(\);/, 'whenReady 未接线延迟检查');
+  assert.match(updaterSrc, /autoDownload = false/, 'autoDownload 必须保持 false：下载由用户确认');
+  assert.match(updaterSrc, /autoUpdateChecked/, '缺少自动检查去重标志');
 });
 
 check('检查失败附手动下载降级链接（build.publish 推导）', () => {
-  assert.match(mainSrc, /function resolveManualDownloadUrl\(\)/);
-  assert.match(mainSrc, /github\.com\/\$\{pub\.owner\}\/\$\{pub\.repo\}\/releases/,
+  assert.match(updaterSrc, /function resolveManualDownloadUrl\(\)/);
+  assert.match(updaterSrc, /github\.com\/\$\{pub\.owner\}\/\$\{pub\.repo\}\/releases/,
     '手动下载链接未由 publish owner/repo 推导');
-  assert.match(mainSrc, /send\('error', \{ message: err\.message, downloadUrl: MANUAL_DOWNLOAD_URL \}\)/);
-  assert.match(mainSrc, /send\('available', \{ version: info\.version, downloadUrl: MANUAL_DOWNLOAD_URL \}\)/);
-  assert.match(mainSrc, /return \{ ok: false, error: err\.message, downloadUrl: MANUAL_DOWNLOAD_URL \};/,
+  // T2-7：error 事件附分类 hint（kind/hint），手动下载兜底链接保持
+  assert.match(updaterSrc, /send\('error', \{ message: err\.message, kind, hint, downloadUrl: MANUAL_DOWNLOAD_URL \}\)/);
+  assert.match(updaterSrc, /send\('available', \{ version: info\.version, downloadUrl: MANUAL_DOWNLOAD_URL \}\)/);
+  assert.match(updaterSrc, /return \{ ok: false, error: err\.message, kind, hint, downloadUrl: MANUAL_DOWNLOAD_URL \};/,
     '手动检查失败未带回 downloadUrl');
 });
 
 check('更新通道支持 beta 灰度（MJ_UPDATE_CHANNEL）', () => {
-  assert.match(mainSrc, /const UPDATE_CHANNEL = process\.env\.MJ_UPDATE_CHANNEL \|\| 'latest';/);
-  assert.match(mainSrc, /autoUpdater\.channel = UPDATE_CHANNEL;/);
+  assert.match(updaterSrc, /const UPDATE_CHANNEL = process\.env\.MJ_UPDATE_CHANNEL \|\| 'latest';/);
+  assert.match(updaterSrc, /autoUpdater\.channel = UPDATE_CHANNEL;/);
   assert.equal(pkg.build.publish.channel, 'latest', 'publish.channel 应为 latest');
 });
 
 check('设置页渲染手动下载链接（error/available 态）', () => {
   assert.match(settings, /updateDownloadUrl/, '设置页无 downloadUrl 状态');
-  assert.match(settings, /手动下载最新版本/, '未渲染手动下载入口');
+  // T3-2 i18n：「手动下载最新版本」文案已抽取到 zh-CN/settings.json（manualDownload），改为两段式验证
+  assertI18nCopy(settings, 'settings', '手动下载最新版本', '未渲染手动下载入口');
   assert.match(settings, /setUpdateDownloadUrl\(r\.downloadUrl/, '手动检查失败未降级到下载链接');
   assert.match(settings, /d\.status === 'error' \|\| d\.status === 'available'/,
     'downloadUrl 仅在 error/available 态展示');

@@ -11,6 +11,7 @@
 const { aggregateGroup } = require('./aggregator/merge');
 const workerIsolation = require('./workerIsolation');
 const { toAgentModel } = require('./modelShape');
+const { stricterApproval } = require('./approvalPolicy');
 const path = require('path');
 
 let deps = null;
@@ -107,11 +108,16 @@ function dispatch(group, task) {
   const name = pickWorkerName();
   activeRuns.set(runKey, { controller, name, manual: false, iso: null });
   deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'running', title: task.title, name });
-  deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'start', text: `${name} 接手任务「${task.title}」` });
+  // A1（2026-10-16）：活动流文案改 textKey/textParams，由渲染层按用户语言翻译。
+  // 此前五处裸中文经 tasks:event 直出 ⇒ 英文界面漏中文，且 i18n 门禁只扫 renderer/src 抓不到。
+  // textParams 携带的是非语言性数据（name/标题/错误详情），title 属用户内容按原样插值。
+  deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'start', textKey: 'runtime.workerTakeOver', textParams: { name, title: task.title } });
 
   // P1 遗留项落地：真并行隔离——可写任务在独立 worktree 中执行，结束后合并回主目录。
   // 非 git 仓库/创建失败自动回落主目录（不阻塞）；写沙箱为只读时不隔离（无写冲突可能）。
-  const wantsIsolation = !!group.cwd && group.sandboxPolicy !== 'read-only';
+  // V04：沙箱档读组内快照（建组时刻的父上下文）；旧组无快照列时按 cwd 推导（兼容旧行为）。
+  const groupSandboxPolicy = group.sandbox_policy || (group.cwd ? 'workspace-write' : 'read-only');
+  const wantsIsolation = !!group.cwd && groupSandboxPolicy !== 'read-only';
   (async () => {
     let iso = null;
     if (wantsIsolation) {
@@ -119,11 +125,16 @@ function dispatch(group, task) {
       if (iso) {
         const entry = activeRuns.get(runKey);
         if (entry) entry.iso = iso;
-        deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'start', text: `${name} 在隔离工作区中执行（${path.basename(iso.worktreePath)}）` });
+        deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'start', textKey: 'runtime.workerInWorktree', textParams: { name, worktree: path.basename(iso.worktreePath) } });
       }
     }
     const runCwd = iso?.worktreePath || group.cwd || '';
-    await runWorkerTask({ group, task, runKey, controller, name, runCwd, iso });
+    // N5 副作用账本：领取即记 uncertain（该任务可能产生副作用），终态时 resolveEffect。
+    // 重启恢复后 uncertain 记录保留 = 「副作用无法确认」清单，随 needsReview 供人工核对。
+    deps.store.markEffectUncertain(group.group_id, task.taskId);
+    // V06：iso 的后续处置全部经 activeRuns 中的 entry.iso（成功合并/失败归档/显式丢弃），
+    // 本函数不再直接持有 iso 形参——避免两处引用漂移。
+    await runWorkerTask({ group, task, runKey, controller, name, runCwd, groupSandboxPolicy });
   })().catch((e) => {
     // P0-C 修复：此前这个IIFE 是「浮动 Promise」且无 .catch()。
     // runWorkerTask 之外抛出的异常（典型：workerIsolation.createIsolated 失败、
@@ -138,7 +149,7 @@ function dispatch(group, task) {
       deps.store?.setTaskStatus?.(group.group_id, task.taskId, 'failed', { error: `任务执行异常：${msg}` });
       deps.emit?.({
         type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name,
-        kind: 'error', text: `任务执行异常：${msg}`,
+        kind: 'error', textKey: 'runtime.workerError', textParams: { msg },
       });
       // 不静默：组状态置为paused，用户可读可重试；绝不让主进程带病退出
       deps.store?.setGroupStatus?.(group.group_id, 'paused', { error: `任务「${task?.title || task.taskId}」执行异常：${msg}` });
@@ -150,7 +161,7 @@ function dispatch(group, task) {
   });
 }
 
-async function runWorkerTask({ group, task, runKey, controller, name, runCwd, iso }) {
+async function runWorkerTask({ group, task, runKey, controller, name, runCwd, groupSandboxPolicy }) {
   {
     let result = null;
     let errorMsg = null;
@@ -163,8 +174,19 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, is
       const onToolCall = (tc) => {
         deps.emit?.({
           type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name,
-          kind: 'tool', text: `${tc?.name || '工具'} ${summarizeArgs(tc?.args)}`,
+          kind: 'tool', text: `${tc?.name || ''} ${summarizeArgs(tc?.args)}`.trim(),
         });
+      };
+      // T1-3/T1-4：子任务 token 用量累计（写入 result.tokensUsed，渲染层子任务树节点角标）。
+      // 与 spawn_subagent 同口径：usage 缺失时按内容长度估算（≈4 字符/token + 每次调用 60）。
+      let usedTokens = 0;
+      const onUsage = (m) => {
+        if (m?.role !== 'assistant') return;
+        const reported = (m.tokens_input || 0) + (m.tokens_output || 0);
+        const estimated = reported > 0 ? 0
+          : Math.ceil(String(m.content || '').length / 4)
+            + (Array.isArray(m.tool_calls) ? m.tool_calls.length * 60 : 0);
+        usedTokens += reported + estimated;
       };
       try {
         const finalText = await core.runAgent({
@@ -176,19 +198,25 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, is
         model: toAgentModel(deps.resolveModel()),
           cwd: runCwd,
           signal: controller.signal,
-          approvalMode: 'auto-safe',
-          sandboxPolicy: runCwd ? 'workspace-write' : 'read-only',
+          // P0 治理修复（2026-10-16）：原为硬编码 'auto-safe'，后改为读全局「最近一次会话审批档」。
+          // V04 修复：子任务权限取「建组时刻的组内快照」（deps.getApprovalMode 仅作旧组兼容回退），
+          // 会话中途改审批档不再串到已在排队的组；再与 auto-safe 地板取更严者
+          //（never/full-access 是危险组合，有意抬升，UI 需明示生效值）。
+          // V04 沙箱：读组内快照，且不允许 worktree 存在把只读父组抬成 workspace-write。
+          approvalMode: stricterApproval(group.approval_mode || deps.getApprovalMode?.() || 'on-request', 'auto-safe'),
+          sandboxPolicy: runCwd ? groupSandboxPolicy : 'read-only',
           conversationId: `task:${group.group_id}:${task.taskId}`,
           maxRounds: 20,
           chatRetryBaseMs: 2000,
           tokenBudget: 200000,
           toolHandlers: handlers,
           onToolCall,
+          onMessage: onUsage,
           systemPrompt: '你是 MJ Coder 的并行任务 Worker：只完成分配给你的子任务，产出精炼、可执行的结论。'
             + '完成前必须自测验证：能运行测试/命令验证的就实际运行，写完的文件就回读确认关键内容存在；验证不过要修复后再收尾。'
             + '结束时用一段「summary」总结做了什么、验证结果与关键产物（文件路径等）；不要反问，不要输出无关寒暄。',
         });
-        result = { summary: String(finalText || ''), artifacts: extractPaths(finalText) };
+        result = { summary: String(finalText || ''), artifacts: extractPaths(finalText), tokensUsed: usedTokens };
       } finally {
         clearTimeout(timer);
       }
@@ -202,14 +230,17 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, is
       if (entry?.manual) {
         // 强制关闭：不重试，直接终态（用户意图 = 不再跑；不计入自动重试次数）
         deps.store.setTaskStatus(group.group_id, task.taskId, 'failed', { error: '已手动强制关闭', skipRetryCount: true });
-        deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'stop', text: `${name} 已被强制关闭` });
+        deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'stop', textKey: 'runtime.workerForceStopped', textParams: { name } });
         deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'failed', error: '已手动强制关闭' });
-        if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso });
+        // V06：强制关闭也先归档——有改动保留现场，无改动才清理
+        await archiveIsoIfNeeded(entry, group, task, '已手动强制关闭');
       } else if (errorMsg != null && result == null) {
         const { retried } = deps.store.handleFailure(group.group_id, task.taskId, errorMsg);
         deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: retried ? 'queued' : 'failed', error: errorMsg });
         maybePauseOnCritical(group.group_id, task, retried);
-        if (!retried && entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }); // 失败丢弃隔离副本
+        // V06：不再无条件丢弃隔离副本——将重试（新副本覆盖）才清理；终态失败先归档保留产物
+        if (retried) { if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {}); }
+        else await archiveIsoIfNeeded(entry, group, task, errorMsg);
       } else {
         // Agent 引擎的「未完成收尾」标记（重复失败熔断 / 预算耗尽）→ 任务判 failed，
         // 走失败处置（重试回队 / 关键失败暂停组），不得伪装成 done
@@ -218,27 +249,73 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, is
           const { retried } = deps.store.handleFailure(group.group_id, task.taskId, 'Agent 未完成收尾（重复失败熔断或预算耗尽）', { summary: result.summary, artifacts: result.artifacts });
           deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: retried ? 'queued' : 'failed', error: 'Agent 未完成收尾' });
           maybePauseOnCritical(group.group_id, task, retried);
-          if (!retried && entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso });
+          if (retried) { if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {}); }
+          else await archiveIsoIfNeeded(entry, group, task, 'Agent 未完成收尾');
         } else {
-          // 成功：worktree 改动合并回主目录（冲突 → 补丁落盘 + 降级警告）
+          // 成功：worktree 改动合并回主目录
           let mergeInfo = null;
           if (entry?.iso) {
             mergeInfo = await workerIsolation.mergeBackIsolated({ cwd: group.cwd, iso: entry.iso });
-            if (mergeInfo.conflicts) {
-              result.warnings = [...(result.warnings || []), `隔离工作区改动合并冲突：${mergeInfo.error}`];
-            } else if (mergeInfo.applied) {
+          }
+          // V06：合并成功（或无隔离）才允许 done；冲突/失败 → needs_review 语义
+          //（终态 failed + error 指明补丁与 worktree 位置），绝不「清理后标完成」。
+          if (mergeInfo && !mergeInfo.ok) {
+            const detail = mergeInfo.error || '隔离工作区改动合并失败';
+            deps.store.setTaskStatus(group.group_id, task.taskId, 'failed', {
+              error: `成果待人工审查（needs_review）：${detail}`,
+              result: {
+                summary: result.summary,
+                artifacts: result.artifacts,
+                tokensUsed: result.tokensUsed,
+                needsReview: true,
+                patchFile: mergeInfo.patchFile || null,
+                worktreePath: mergeInfo.worktreePath || null,
+              },
+              skipRetryCount: true, // 合并失败不是 Agent 失败，不消耗自动重试次数（避免重跑覆盖已有成果）
+            });
+            deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'failed', error: `成果待人工审查：${detail}`, needsReview: true });
+            maybePauseOnCritical(group.group_id, task, false);
+          } else {
+            if (mergeInfo?.applied) {
               result.warnings = [...(result.warnings || []), '隔离工作区改动已合并回主目录'];
             }
+            deps.store.setTaskStatus(group.group_id, task.taskId, 'done', { result });
+            deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'done' });
           }
-          deps.store.setTaskStatus(group.group_id, task.taskId, 'done', { result });
-          deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'done' });
         }
       }
     } catch (e) {
       console.error('[workerPool] 结果落库失败:', e.message);
-      if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {});
+      // V06：落库失败也不静默销毁产物——先归档再吞异常
+      await archiveIsoIfNeeded(entry, group, task, `结果落库失败：${e.message}`).catch(() => {});
     }
+    // N5 副作用账本：任务到达终态（done / failed / skipped，含 needsReview 分支）→ resolved。
+    // needsReview 的 needsReview 标记在任务 result 里，账本只管「该任务已终态、副作用清单已定」。
+    try { deps.store.resolveEffect(group.group_id, task.taskId); } catch (e) { console.warn('[workerPool] 副作用账本 resolve 失败:', e.message); }
     schedule(); // 任务结束后推进调度
+  }
+}
+
+// V06：失败/中止路径的隔离副本归档——有改动保留现场（worktree+补丁路径写进任务结果），无改动才清理
+async function archiveIsoIfNeeded(entry, group, task, reason) {
+  if (!entry?.iso) return;
+  try {
+    const archived = await workerIsolation.archiveIsolated({ iso: entry.iso });
+    if (!archived.empty) {
+      try {
+        deps.store.setTaskStatus(group.group_id, task.taskId, 'failed', {
+          error: `${reason}（改动未丢失，待人工审查：补丁 ${archived.patchFile || '未生成'}，worktree ${archived.worktreePath}）`,
+          result: { needsReview: true, patchFile: archived.patchFile || null, worktreePath: archived.worktreePath || null },
+          skipRetryCount: true,
+        });
+      } catch (e) {
+        // 状态已终态/迁移非法时保留日志：产物仍在 worktree 与补丁目录，不因落库失败而销毁
+        console.warn('[workerPool] needs_review 状态写入失败（产物已保留）:', e.message);
+      }
+      deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'failed', error: reason, needsReview: true });
+    }
+  } catch (e) {
+    console.warn('[workerPool] 隔离副本归档失败（保留现场）:', e.message);
   }
 }
 
@@ -288,11 +365,28 @@ function maybePauseOnCritical(groupId, task, retried) {
     if (deps.store.groupHasBlockingFailure(groupId)) {
       // 取消还在排队的下游任务（skip），保留已完成结果供重新规划
       const tasks = deps.store.listTasks(groupId);
-      for (const t of tasks) {
-        if (t.status === 'queued' || t.status === 'pending') {
-          try { deps.store.setTaskStatus(groupId, t.taskId, 'skipped'); } catch { /* 状态竞争忽略 */ }
+for (const t of tasks) {
+          if (t.status === 'queued' || t.status === 'pending') {
+            // 原为 `catch { /* 状态竞争忽略 */ }`——纯空吞。
+            // setTaskStatus 对非法迁移会 throw，吞掉后该任务永远停在 queued，
+            // 而组的收尾判定依赖「无待执行任务」⇒ 组永不能收尾、界面一直转圈。
+            // 现按「是否仍在运行」区分处理：仍在运行 = 正常竞争，记 debug；
+            // 仍在但被吞 = 异常，显式记录并强制置为 skipped 以保证组可收尾。
+            try {
+              deps.store.setTaskStatus(groupId, t.taskId, 'skipped');
+            } catch (e) {
+              const stillPending = deps.store.getTask?.(groupId, t.taskId)?.status;
+              if (stillPending === 'queued' || stillPending === 'pending') {
+                console.error(`[workerPool] 子任务 ${t.taskId} 标记 skipped 失败且状态未推进`
+                  + `（${stillPending}）：${e.message}；强制置为 skipped 以免组无法收尾`);
+                try { deps.store.setTaskStatus(groupId, t.taskId, 'skipped', { force: true }); }
+                catch (e2) { console.error(`[workerPool] 强制置 skipped 仍失败：${e2.message}`); }
+              } else {
+                console.warn(`[workerPool] 子任务 ${t.taskId} 状态竞争（已为 ${stillPending}），忽略`);
+              }
+            }
+          }
         }
-      }
       deps.store.setGroupStatus(groupId, 'paused', { error: `关键任务「${task.title}」失败，下游任务已跳过：组已暂停（可重试失败任务或取消）` });
       deps.emit?.({ type: 'group_update', groupId, status: 'paused', error: `关键任务「${task.title}」失败` });
     }

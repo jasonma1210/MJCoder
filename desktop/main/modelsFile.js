@@ -269,7 +269,11 @@ function readModelsFile(filePath = modelsFilePath()) {
 function writeModelsFile(raw, filePath = modelsFilePath()) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, raw, { mode: 0o600 });
-  try { fs.chmodSync(filePath, 0o600); } catch { /* 只读介质等场景忽略 */ }
+  try { fs.chmodSync(filePath, 0o600); } catch (e) {
+    // P0-16 修复（2026-10-16）：原为纯空吞（注释只说"只读介质等场景忽略"）。
+    // 文件内含 provider 密文与结构信息，0600 失效须显式留痕。
+    console.error(`[models] 模型配置文件权限收紧失败（0600 未生效）: ${e.message}`);
+  }
 }
 
 // 同步：parse → 对账进 store（addProvider/updateFileProvider）→ 剪除已从文件消失的条目 → vault 注入。

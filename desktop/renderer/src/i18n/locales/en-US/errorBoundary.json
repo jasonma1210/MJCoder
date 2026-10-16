@@ -1,0 +1,6 @@
+{
+  "title": "Something went wrong",
+  "hint": "Threads and window state are saved — reopening will restore them.",
+  "retry": "Retry",
+  "reload": "Reload"
+}

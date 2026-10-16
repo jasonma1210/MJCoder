@@ -1,5 +1,17 @@
 // 生态资产目录加载器（M7）：把 50 数字员工 / 100 MCP 连接器 / 100 Skill 接入产品
 // 纯数据层：读取 ecosystem/*.json 并做归一化与关联，不依赖 electron，便于单测
+//
+// T4-3 角色模板机制（数字员工 → Agent 运行时的接线，单一事实来源在此）：
+//   角色模板 = 系统提示 + 工具子集 + 审批档（+ 沙箱策略）
+//   - 系统提示：员工 system_prompt，经 IPC ecosystem:employeeRuntime 组装进 rolePreset，
+//     引擎把它拼在 BASE_PROMPT 之后（叠加身份，不替换工具约定）；
+//   - 工具子集：员工 tools 抽象名（read/write/edit/bash/grep/glob/web/browser）由
+//     本文件 buildEmployeeRuntimePreset 的 ROLE_TOOL_ALIASES 映射为引擎具体工具名，未知名丢弃；
+//     引擎按 toolNames 对 BASE_TOOLS 取交集，交集为空回落全量；
+//   - 审批档/沙箱：ROLE_APPROVAL_MAP 归一到引擎枚举后，由 main/agentRunner.js 与
+//     用户设置取「更严格者」——角色只能收紧权限，绝不能放宽（fail-closed）。
+//   产品入口：生态中心员工卡片「用此角色开会话」→ sessionExtras.expert.runtime
+//   → useAgentRun 每轮携带 rolePreset → agent:run。
 const fs = require('fs');
 const path = require('path');
 
@@ -94,6 +106,40 @@ function loadSkillCatalog(ecosystemDir) {
   }
 }
 
+// ── T4-3：角色模板运行时预设（纯函数：抽象工具名→具体工具名映射的单一事实来源）──
+// 生态数据里的 tools 是抽象名，这里映射为引擎注册的具体工具名；未知抽象名直接丢弃
+//（角色只裁剪工具、绝不发明工具，fail-closed）。browser 只映射只读三件套——
+// click/fill/select 有真实页面副作用，角色模板不默认授予。
+const ROLE_TOOL_ALIASES = {
+  read: ['read_file', 'list_dir'],
+  write: ['write_file'],
+  edit: ['edit_file'],
+  bash: ['shell'],
+  grep: ['grep'],
+  glob: ['glob'],
+  web: ['web_search', 'web_fetch'],
+  browser: ['browser_navigate', 'browser_screenshot', 'browser_extract'],
+};
+// 生态审批策略 → 引擎四档枚举（main/approval.js）；trusted=完全信任→never（不弹卡）
+const ROLE_APPROVAL_MAP = {
+  'on-request': 'on-request',
+  'auto-safe': 'auto-safe',
+  'safe-auto': 'auto-safe',
+  always: 'always',
+  trusted: 'never',
+};
+
+// 由归一化后的员工对象组装 rolePreset（进 agent:run 载荷；审批/沙箱的最终钳制在 agentRunner）
+function buildEmployeeRuntimePreset(emp) {
+  const toolNames = [...new Set((emp.tools || []).flatMap((t) => ROLE_TOOL_ALIASES[t] || []))];
+  return {
+    systemPrompt: String(emp.system_prompt || ''),
+    toolNames,
+    approvalMode: ROLE_APPROVAL_MAP[emp.approval_policy] || 'on-request',
+    sandboxPolicy: emp.sandbox_policy || 'workspace-write',
+  };
+}
+
 // slug 规范化（kebab-case）
 function slug(name) {
   return String(name || '')
@@ -151,5 +197,8 @@ module.exports = {
   loadSkillCatalog,
   groupEmployeesByCategory,
   groupConnectorsByCategory,
+  buildEmployeeRuntimePreset,
+  ROLE_TOOL_ALIASES,
+  ROLE_APPROVAL_MAP,
   slug,
 };

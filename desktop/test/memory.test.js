@@ -3,7 +3,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { openDb } = require('../main/db');
+const { openDbAsync } = require('../main/db');
 const { MemoryManager } = require('../main/memory');
 const { MemoryBgScheduler } = require('../main/memory/bgScheduler');
 const scorer = require('../main/memory/scorer');
@@ -24,7 +24,7 @@ function ok(name) { n += 1; console.log(`  ✓ ${name}`); }
 
   // ── 2. MemoryManager：五域写入 + 分层召回 ──
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-mem-'));
-  const mem = new MemoryManager({ db: openDb(dir) });
+  const mem = new MemoryManager({ db: await openDbAsync(dir, { driver: 'sqljs' }) });
   mem.remember({ spaceId: '/proj', domain: 'global_knowledge', content: '项目使用 pnpm monorepo，13 个包', importance: 0.9 });
   mem.remember({ spaceId: '/proj', domain: 'session', content: '今天修复了审批通道竞态 Bug', importance: 0.6 });
   mem.remember({ spaceId: '/other', domain: 'session', content: '别的项目的记忆不应该出现' });
@@ -91,7 +91,25 @@ function ok(name) { n += 1; console.log(`  ✓ ${name}`); }
   const sched2 = new MemoryBgScheduler({ db: mem.db, memory: mem, emit: () => {} });
   const resumed = await sched2.drain(5);
   assert.ok(resumed.some((r) => r.task.type === 'cleanup'), '重启后 queued 任务被新调度器恢复续跑');
-  ok('BgScheduler：入队/执行/失败回队/3 次判死/重启恢复');
+  // P0-19：purgeHistory 清理过期与超限的 done/failed 行，且不碰 queued/running
+  for (let i = 0; i < 12; i += 1) {
+    mem.db.prepare(`INSERT INTO memory_bg_tasks (id, type, payload, priority, status, attempts, created_at, updated_at)
+      VALUES (?, 'decay', '{}', 4, 'done', 1, ?, ?)`).run(`old-done-${i}`, Date.now() - 10 * 86400000, Date.now() - 10 * 86400000);
+  }
+  for (let i = 0; i < 8; i += 1) {
+    mem.db.prepare(`INSERT INTO memory_bg_tasks (id, type, payload, priority, status, attempts, created_at, updated_at)
+      VALUES (?, 'decay', '{}', 4, 'done', 1, ?, ?)`).run(`recent-done-${i}`, Date.now(), Date.now() + i);
+  }
+  const keepTask = sched2.enqueue('promote', {}, { priority: 3 });
+  const pr = sched2.purgeHistory({ retentionMs: 7 * 86400000, maxRows: 5 });
+  assert.strictEqual(pr.expired, 12, '超过 7 天的 done 行被物理清理');
+  assert.ok(pr.trimmed >= 3, '超出 maxRows 上限的旧终态行被裁剪');
+  const terminalLeft = mem.db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE status IN ('done','failed')`).get().n;
+  assert.strictEqual(terminalLeft, 5, '终态行严格收敛至 maxRows=5');
+  const queuedStillThere = mem.db.prepare(`SELECT status FROM memory_bg_tasks WHERE id = ?`).get(keepTask.id);
+  assert.strictEqual(queuedStillThere?.status, 'queued', 'purgeHistory 绝不误删 queued 任务');
+  await sched2.drain(5);
+  ok('BgScheduler：入队/执行/失败回队/3 次判死/重启恢复/P0-19 历史生命周期治理');
 
   // ── 7. 统计（可视化数据源）──
   const st = mem.stats();

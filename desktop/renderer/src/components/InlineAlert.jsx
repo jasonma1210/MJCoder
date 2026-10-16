@@ -1,7 +1,9 @@
 // 内联提示条：替换原生 alert()，支持 info/warn/error 三级
 import { IconAlert, IconCheck, IconX } from './icons';
+import { useI18n } from '../i18n';
 
 export default function InlineAlert({ type = 'info', children, onDismiss }) {
+  const { t } = useI18n();
   const styles = {
     info: 'border-border text-text2',
     warn: 'border-warn text-warn bg-warn-bg',
@@ -13,7 +15,7 @@ export default function InlineAlert({ type = 'info', children, onDismiss }) {
       <span className="mt-0.5 shrink-0"><Icon size={14} /></span>
       <div className="flex-1 leading-relaxed">{children}</div>
       {onDismiss && (
-        <button onClick={onDismiss} className="shrink-0 hover:opacity-70" title="关闭">
+        <button onClick={onDismiss} className="shrink-0 hover:opacity-70" title={t('inlineAlert.close')}>
           <IconX size={14} />
         </button>
       )}

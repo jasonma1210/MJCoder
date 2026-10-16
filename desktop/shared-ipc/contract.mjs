@@ -1,0 +1,186 @@
+// ═══════════════════════════════════════════════════════════════
+// T0-2：IPC / Agent 边界契约（单一事实来源，M0/P0，2026-10-15）
+// ═══════════════════════════════════════════════════════════════
+// 背景：渲染层与主进程之间的 agent:event / agent:run 载荷全靠口头约定，
+// 字段漂移（如 done 少 mainPersisted、payload.model 扁平形）只能在运行时
+// 以 TypeError 的形式爆出来——本模块把边界形状固化为 zod schema：
+//   · 主进程发送前校验（agentRunner emitter，非法载荷降级为 error 事件，绝不静默）；
+//   · 渲染层接收前校验（lib/agent.js 事件分发处，非法即拒并给出可读原因）；
+//   · 渲染层发起 agent:run 前主进程校验（缺 messages/model 直接拒绝启动）。
+// 加载形态说明（为什么是 .mjs 而不是 .ts）：
+//   本文件被三个宿主共享——Electron 主进程（Node 20，动态 import）、
+//   渲染层（Vite/ESM）、测试（Node 26）。Node 20 无法直接运行 .ts，
+//   因此运行时为 .mjs，类型由同目录 contract.d.mts 提供给 tsc（T0-3 门禁）。
+import { z } from 'zod';
+
+// ── 通道名常量：主渲染两侧同源引用，杜绝字符串手滑 ──
+export const AGENT_CHANNELS = {
+  run: 'agent:run',
+  event: 'agent:event',
+  abort: 'agent:abort',
+};
+
+// ── agent:event：主进程 → 渲染层事件流 ──
+// 信封形状：{ runId, type, data }；data 形状按 type 判别
+export const messageDataSchema = z.object({
+  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  content: z.string(),
+  tool_calls: z.array(z.any()).optional(),
+  tool_call_id: z.string().optional(),
+  tokens_input: z.number().optional(),
+  tokens_output: z.number().optional(),
+});
+
+export const toolCallDataSchema = z.object({
+  name: z.string().min(1),
+  args: z.record(z.string(), z.any()),
+  result: z.any(), // 工具结果形状由各工具自定，边界只保证「存在且可序列化」
+});
+
+// T1-3：子代理事件（spawn_subagent / orchestrate_task 透出）
+// phase 序列：spawn → progress* → done | failed；可选字段按 phase 取用
+export const subagentDataSchema = z.object({
+  tool: z.enum(['spawn_subagent', 'orchestrate_task']),
+  phase: z.enum(['spawn', 'progress', 'done', 'failed']),
+  objective: z.string().max(4000).optional(),
+  taskType: z.string().max(80).optional(),
+  groupId: z.string().optional(),
+  taskId: z.string().optional(),
+  title: z.string().max(400).optional(),
+  // T1-4：DAG 依赖边（仅 orchestrate_task 的 spawn 事件携带，供渲染层子任务树建图）
+  dependsOn: z.array(z.string().max(80)).max(16).optional(),
+  tokens: z.number().optional(),
+  budgetKind: z.string().max(40).optional(),
+  round: z.number().optional(),
+  ms: z.number().optional(),
+  summary: z.string().max(2000).optional(),
+  error: z.string().max(2000).optional(),
+});
+
+export const todosDataSchema = z.object({
+  todos: z.array(z.object({
+    content: z.string(),
+    status: z.enum(['pending', 'in_progress', 'completed']),
+  })),
+  doneCount: z.number(),
+  total: z.number(),
+});
+
+export const suspendedDataSchema = z.object({
+  saved: z.boolean(),
+  kind: z.enum(['tokens', 'rounds']),
+  summary: z.string(),
+  usage: z.any().optional(),
+  roundsUsed: z.number(),
+  rescues: z.number(),
+  windowSpent: z.number(),
+  budget: z.number(),
+});
+
+export const doneDataSchema = z.object({
+  finalText: z.string(),
+  usage: z
+    .object({ prompt_tokens: z.number(), completion_tokens: z.number() })
+    .nullable()
+    .optional(),
+  aborted: z.boolean(),
+  mainPersisted: z.boolean().optional(),
+  // V08（2026-10-16）：持久 ACK 分层——durable=已刷盘 / pending=落库但未刷盘 / failed=未落库
+  persistState: z.enum(['durable', 'pending', 'failed']).optional(),
+});
+
+// type → data schema 分发表（新增事件类型必须在此登记，否则校验拒绝——防漂移）
+export const AGENT_EVENT_SCHEMAS = {
+  message: messageDataSchema,
+  stream: z.string(),
+  tool_call: toolCallDataSchema,
+  subagent: subagentDataSchema,
+  todos: todosDataSchema,
+  suspended: suspendedDataSchema,
+  done: doneDataSchema,
+  error: z.string(),
+};
+
+export const agentEventSchema = z.discriminatedUnion('type', [
+  ...Object.entries(AGENT_EVENT_SCHEMAS).map(([type, data]) =>
+    z.object({ runId: z.string().min(1), type: z.literal(type), data })
+  ),
+]);
+
+// ── agent:run：渲染层 → 主进程启动载荷 ──
+// 与 renderer/src/lib/agent.js runAgentViaMain 实际发送的字段对齐；
+// passthrough：允许新增可选字段透传给引擎，但必备字段缺失即拒绝（fail-closed）。
+export const agentRunPayloadSchema = z
+  .object({
+    runId: z.string().min(1).max(120),
+    messages: z
+      .array(z.object({ role: z.string().min(1), content: z.any() }))
+      .min(1, 'messages 至少包含一条用户消息'),
+    model: z.object({
+      // 引擎入口 assertAgentModelShape 要求嵌套形 {provider:{id}, model:{model_id}}；
+      // 边界先拦住扁平形（历史 TypeError 事故根因），错误信息直接给出期望形状
+      provider: z.object({ id: z.union([z.number(), z.string()]) }),
+      model: z.object({ model_id: z.string().min(1) }),
+    }),
+    cwd: z.string().optional(),
+    conversationId: z.string().optional(),
+    approvalMode: z.enum(['on-request', 'auto-safe', 'always', 'never']).optional(),
+    sandboxPolicy: z.enum(['read-only', 'workspace-write', 'full-access']).optional(),
+    planMode: z.boolean().optional(),
+    tokenBudget: z.number().int().min(0).optional(),
+    resumeContext: z.string().optional(),
+    mcpTools: z.array(z.any()).optional(),
+    enabledSkills: z.array(z.string()).optional(),
+    skills: z.array(z.any()).optional(),
+    memories: z.array(z.string()).optional(),
+    agentsMd: z.object({ path: z.string(), content: z.string() }).nullable().optional(),
+    // T4-3：角色模板（数字员工运行时预设）——systemPrompt/toolNames 进引擎，
+    // approvalMode/sandboxPolicy 由主进程与用户设置取更严格者后生效
+    rolePreset: z
+      .object({
+        systemPrompt: z.string().max(20000).optional(),
+        toolNames: z.array(z.string().min(1).max(64)).max(64).optional(),
+        approvalMode: z.enum(['on-request', 'auto-safe', 'always', 'never']).optional(),
+        sandboxPolicy: z.enum(['read-only', 'workspace-write', 'full-access']).optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+// ── 校验工具函数（主渲染共用）──
+
+/** zod 错误 → 单行可读信息（前 3 条问题，带字段路径） */
+export function describeZodError(err) {
+  const issues = err?.issues || [];
+  return issues
+    .slice(0, 3)
+    .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+    .join('；') || '未知契约错误';
+}
+
+/** 校验 agent:event 信封。返回 { ok:true, data } 或 { ok:false, error } */
+export function validateAgentEvent(payload) {
+  const r = agentEventSchema.safeParse(payload);
+  return r.success ? { ok: true, data: r.data } : { ok: false, error: describeZodError(r.error) };
+}
+
+/**
+ * 非法事件降级：契约不匹配的载荷不静默丢弃，转成同 runId 的 error 事件
+ * 推送给渲染层——用户/开发者至少能看到「边界拒绝了什么」。
+ */
+export function safeAgentEventEnvelope(payload) {
+  const v = validateAgentEvent(payload);
+  if (v.ok) return v.data;
+  const runId = typeof payload?.runId === 'string' && payload.runId ? payload.runId : 'unknown-run';
+  return {
+    runId,
+    type: 'error',
+    data: `IPC 契约校验失败（agent:event type=${String(payload?.type)}）：${v.error}`,
+  };
+}
+
+/** 校验 agent:run 启动载荷。返回 { ok:true, data } 或 { ok:false, error } */
+export function validateAgentRunPayload(payload) {
+  const r = agentRunPayloadSchema.safeParse(payload);
+  return r.success ? { ok: true, data: r.data } : { ok: false, error: describeZodError(r.error) };
+}

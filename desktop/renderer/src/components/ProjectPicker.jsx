@@ -1,9 +1,11 @@
 import CreateProjectForm from './CreateProjectForm';
 import { IconFolder, IconX } from './icons';
+import { useI18n } from '../i18n';
 
 // 创建项目弹窗：默认在 ~/Documents/.MJCoder 下新建（日期+随机数），或添加已有本地文件夹
 // O6：顶部补最近项目列表 —— 名为 Picker 实为 Creator 的问题修正，切换项目不必绕道侧栏
 export default function ProjectPicker({ open, onClose, onSelect, projects = [], onSelectProject }) {
+  const { t } = useI18n();
   if (!open) return null;
 
   return (
@@ -13,15 +15,15 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold">打开 / 创建项目</h3>
-          <button onClick={onClose} aria-label="关闭" className="text-text2 hover:text-text">
+          <h3 className="text-lg font-semibold">{t('project.title')}</h3>
+          <button onClick={onClose} aria-label={t('project.close')} className="text-text2 hover:text-text">
             <IconX size={20} />
           </button>
         </div>
 
         {projects.length > 0 && (
           <div className="mb-6">
-            <div className="text-xs text-text2 mb-2">最近项目</div>
+            <div className="text-xs text-text2 mb-2">{t('project.recent')}</div>
             <div className="space-y-1">
               {projects.slice(0, 5).map((p) => (
                 <button key={p.path} onClick={() => onSelectProject?.(p)}
@@ -37,7 +39,7 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
           </div>
         )}
 
-        <div className="text-xs text-text2 mb-2">新建项目</div>
+        <div className="text-xs text-text2 mb-2">{t('project.newSection')}</div>
         <CreateProjectForm
           onCreated={(p) => { onSelect?.(p); onClose?.(); }}
           onCancel={onClose}

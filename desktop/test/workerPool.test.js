@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { openDb } = require('../main/db');
+const { openDbAsync } = require('../main/db');
 const { TaskStore } = require('../main/taskStore');
 const { initWorkerPool, runGroup, setMaxConcurrent, activeCount, abortTask } = require('../main/workerPool');
 
@@ -43,7 +43,7 @@ const events = [];
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-wp-'));
-  const db = openDb(dir);
+  const db = await openDbAsync(dir, { driver: 'sqljs' });
   const store = new TaskStore(db);
 
   // ── 场景 1：两层 DAG（并行 2 + 依赖 1）顺序执行、聚合收尾 ──

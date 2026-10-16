@@ -71,6 +71,65 @@ const DANGEROUS_PATTERNS = [
   // ── 包管理器全局卸载（误伤面大，保留但放在末尾）──
   /\bnpm\s+(uninstall|rm)\s+-g\b/,
   /\bbrew\s+uninstall\b/,
+
+  // ── Windows / PowerShell / cmd 等价物（P0 补齐，2026-10-16）──
+  // 缺口实证：此前 30 条规则**全是 POSIX 语义**。Windows 上
+  //   Remove-Item -Recurse -Force / rmdir /s /q / del /f /q / format 一条未覆盖；
+  //   Invoke-Expression / iex / DownloadString（等价 curl|sh）一条未覆盖。
+  // 叠加「Windows 沙箱需一次性管理员设置、默认不启用」这一事实，
+  // Windows 用户当时**既无 OS 级沙箱、又无有效黑名单** ⇒ 危险命令防护实际为零。
+  // 设计原则同上：宁可误报不可漏报，覆盖别名与参数缩写。
+
+  // 递归删除：Remove-Item / ri / rd / rm / del（PowerShell 别名与 POSIX 同名）
+  /\b(Remove-Item|ri|rd|rm|del)\b[^|;&]*(\s-[a-zA-Z]*[rR]|-Recurse\b)/,
+  /\b(Remove-Item|ri|rd|rm|del)\b[^|;&]*(-Force|-fo\b|-Confirm\s*:\s*\$false)/i,
+
+  // cmd 删除：rmdir /s /q、rd /s /q、del /f /q /s、erase /f
+  /\b(rmdir|rd|del|erase)\b[^|;&]*\/s\b/i,
+  /\b(rmdir|rd|del|erase)\b[^|;&]*\/q\b/i,
+  /\b(rmdir|rd|del|erase)\b[^|;&]*\/f\b/i,
+
+  // 磁盘与卷破坏（等价 mkfs / dd if= / diskutil erase）
+  /\bformat\s+[a-zA-Z]:/i,
+  /\bdiskpart\b/i,
+  /\b(Clear-Disk|Initialize-Disk|Remove-Partition|Remove-Volume)\b/i,
+  /\bcipher\s+\/w\b/i,
+
+  // 动态执行（等价 curl xxx | sh）：Invoke-Expression 与调用运算符 &()
+  /\b(Invoke-Expression|iex)\b/i,
+  /&\s*\(/,
+
+  // 远程下载后执行（等价 curl/wget 取脚本再跑）
+  /\b(DownloadString|DownloadFile|DownloadData)\b/i,
+  /\b(Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i,
+  /\bStart-BitsTransfer\b/i,
+  /\bNet\.WebClient\b/i,
+
+  // 编码混淆执行（等价 base64 -d | sh）
+  /-EncodedCommand\b/i,
+  /\s-enc(odedcommand)?\s+[A-Za-z0-9+/]{40,}/i,
+  /\[\s*Convert\s*\]\s*::\s*FromBase64String/i,
+
+  // 提权（等价 sudo）：Start-Process -Verb RunAs / runas
+  /\bStart-Process\b[^|;&]*-Verb\s+RunAs/i,
+  /\brunas\b/i,
+
+  // 系统控制与强制终止
+  /\b(Stop-Computer|Restart-Computer)\b/i,
+  /\btaskkill\b[^|;&]*\/f\b/i,
+  /\bStop-Process\b[^|;&]*-Force\b/i,
+
+  // 凭证与历史外泄
+  /\bGet-Content\b[^|;&]*(\.ssh\\|\.aws\\|\.env\b|\.npmrc|\.git-credentials)/i,
+  /\bcmdkey\b/i,
+
+  // 防护篡改 / 持久化入口 / ACL 篡改
+  /\bSet-ExecutionPolicy\b[^|;&]*(Unrestricted|Bypass)/i,
+  /\bsc(\.exe)?\s+create\b/i,
+  /\b(New-ScheduledTask|Register-ScheduledTask)\b/i,
+  /\bschtasks\b[^|;&]*\/create\b/i,
+  /\bicacls\b[^|;&]*\/grant\b/i,
+  /\btakeown\b/i,
 ];
 
 // ── 判定工具 ──

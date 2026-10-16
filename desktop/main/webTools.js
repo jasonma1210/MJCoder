@@ -162,13 +162,17 @@ async function webSearch({ query, max_results: maxResults } = {}) {
   if (!q) return { ok: false, error: 'search_query_missing: 必须提供 query 关键词' };
   const limit = Math.max(1, Math.min(Number(maxResults) || 5, 10));
   const { searchWithProviders, loadSearchConfig } = require('./webSearchProviders');
-  const config = loadSearchConfig(localStoreRef);
+  const config = loadSearchConfig(localStoreRef, credentialCryptoRef);
   return searchWithProviders(config, { query: q, limit });
 }
 
 // 配置来源注入：main.js 在 localStore 初始化后调用（避免 webTools 反向依赖 main）
 let localStoreRef = null;
-function setLocalStore(ls) { localStoreRef = ls || null; }
+let credentialCryptoRef = null;
+function setLocalStore(ls, cc = null) {
+  localStoreRef = ls || null;
+  if (cc !== null) credentialCryptoRef = cc || null;
+}
 
 /**
  * web_fetch：抓取网页并转纯文本。

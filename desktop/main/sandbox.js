@@ -80,7 +80,7 @@ function checkCommandGuard(policy, command, platform = process.platform, execExi
 // 真机复盘（打包版）：zsh 等标准 shell 大量使用 `>/dev/null` 重定向（如 `cmd 2>/dev/null`），
 // profile 未放行 /dev/null 写入 → 「operation not permitted: /dev/null」，模型被迫换写法浪费轮次。
 // /dev/null 是字面黑洞设备，放行写入无任何数据外泄风险，两个档位统一 allow。
-function buildSeatbeltProfile(policy, cwd) {
+function buildSeatbeltProfile(policy, cwd, protectedPaths = []) {
   const tmpPaths = ['/private/tmp', '/private/var/tmp', '/tmp'];
   const tmpRules = tmpPaths.map((p) => `(subpath "${p}")`).join(' ');
   const tail = [
@@ -108,6 +108,15 @@ function buildSeatbeltProfile(policy, cwd) {
   const writeRule = safeCwd
     ? `(allow file-write* (subpath "${safeCwd}") ${tmpRules})`
     : `(allow file-write* ${tmpRules})`;
+  // 可写区内的只读 carve-out（对齐 Codex 的 .git / 自身配置目录保护）：
+  // Seatbelt 后匹配规则优先生效，故对本行之后的路径追加 deny 即可压住上面的 file-write* allow。
+  // 动机同 Linux 侧：项目目录整体可写会把 `.git` 变得可写，而改写 .git/hooks/pre-commit
+  // 会让用户下次手动 git commit 执行注入代码——沙箱约束不了用户之后的手动命令。
+  const protectedDeny = protectedPaths.length
+    ? `(deny file-write* ${protectedPaths
+      .map((p) => `(subpath "${String(p).replace(/"/g, '\\"')}")`)
+      .join(' ')})`
+    : '';
   return [
     '(version 1)',
     '(deny default)',
@@ -115,6 +124,7 @@ function buildSeatbeltProfile(policy, cwd) {
     // 收紧读取面会直接破坏可用性（Codex 在该档同样读全盘、只限写）。
     ...MACOS_PLATFORM_POLICY,
     writeRule,
+    protectedDeny,
     ...tail,
   ].filter(Boolean).join('\n');
 }
@@ -127,6 +137,42 @@ function sandboxAvailable() {
   } catch (e) {
     return false;
   }
+}
+
+// N3（2026-10-16）：Seatbelt **真实可用性**探测——「sandbox-exec 存在」≠「能 apply」。
+// 真因取证（本机二分复现）：在自身已处于 OS 沙箱内的进程（如被其他 Agent 平台沙箱包住的
+// 开发/审查环境）中，任何嵌套 sandbox_apply 都报 `sandbox_apply: Operation not permitted`
+//（macOS 不允许嵌套沙箱）；而「无实际限制」的 profile 会被短路成功，造成看似可用的假象。
+// 探测用一个带真实 deny 的最小 profile：成功 = 真实可用；Operation not permitted = 嵌套沙箱环境
+//（诚实上报，让调用方走 V03 的统一兜底而非运行时报晦涩错误）。
+let seatbeltProbe = null; // 进程级缓存：能力不随运行变化
+function resetSeatbeltProbe() { seatbeltProbe = null; }
+async function seatbeltUsable() {
+  if (seatbeltProbe) return seatbeltProbe;
+  if (process.platform !== 'darwin') {
+    seatbeltProbe = { ok: false, reason: '非 darwin 平台' };
+    return seatbeltProbe;
+  }
+  if (!sandboxAvailable()) {
+    seatbeltProbe = { ok: false, reason: 'sandbox-exec 不存在' };
+    return seatbeltProbe;
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      const { execFile } = require('child_process');
+      execFile(SANDBOX_EXEC,
+        ['-p', '(version 1)(deny default)(allow default)(deny network*)', '/bin/echo', 'mjcode-probe'],
+        { timeout: 8000 },
+        (err) => (err ? reject(err) : resolve()));
+    });
+    seatbeltProbe = { ok: true, reason: '' };
+  } catch (e) {
+    const msg = String(e?.message || e);
+    seatbeltProbe = /Operation not permitted/i.test(msg)
+      ? { ok: false, reason: '当前进程自身已处于 OS 沙箱内（macOS 不允许嵌套沙箱）：Seatbelt 隔离无法生效，MJCode 不应在其他 Agent 平台的沙箱环境中运行' }
+      : { ok: false, reason: `sandbox-exec 探测失败：${msg.slice(0, 160)}` };
+  }
+  return seatbeltProbe;
 }
 
 // 决策：本次 shell 是否应包沙箱
@@ -183,10 +229,28 @@ function osSandboxUsable(policy, cwd) {
   return { use: true, backend: b.backend };
 }
 
+// N3 四合一（方案 §8.2 能力矩阵）：结构化能力描述——后端标识 / 真实可用性 / 原因 / 嵌套沙箱标记。
+// 消费方：诊断页、UI 水位显示、运行时 gate（不再各自拼接碎片信息）。
+async function describeCapability() {
+  const b = detectBackend();
+  if (b.backend === 'seatbelt') {
+    const belt = await seatbeltUsable();
+    return {
+      backend: 'seatbelt',
+      available: belt.ok,
+      reason: belt.reason,
+      nestedSandbox: /嵌套沙箱/.test(belt.reason),
+    };
+  }
+  return { backend: b.backend, available: b.backend !== 'none', reason: b.reason, nestedSandbox: false };
+}
+
 module.exports = {
   buildSeatbeltProfile, sandboxAvailable, shouldSandbox, checkCommandGuard,
   FALLBACK_DANGEROUS, SANDBOX_EXEC,
   // 三平台分发（新增）
   detectBackend, osSandboxUsable,
+  // N3：Seatbelt 真实可用性探测（嵌套沙箱环境诚实上报）
+  seatbeltUsable, resetSeatbeltProbe, describeCapability,
   linuxBackend, windowsBackend,
 };

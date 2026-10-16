@@ -26,6 +26,15 @@ function check(name, ok, detail = '') {
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'components', 'ChatArea.jsx'), 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// RunFooter 文案已抽取到 zh-CN 语言包（MessageStream.tsx 内译函数别名为 tr），
+// 断言改为两段式：① 文案值在 zh-CN/<mod>.json 对应 key 上；② 组件源码引用该 key
+function zhValue(mod, keyPath) {
+  let o = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'i18n', 'locales', 'zh-CN', mod + '.json'), 'utf8'));
+  for (const seg of keyPath.split('.')) o = o == null ? undefined : o[seg];
+  return typeof o === 'string' ? o : '';
+}
+
 // 定位「运行保活」恢复块：从 registry 读取到 effect 依赖数组为止
 const blockStart = src.indexOf('const rs = thread?.id != null ? runRegistry.get(String(thread.id)) : null;');
 check('找到运行快照恢复块', blockStart > 0);
@@ -67,15 +76,24 @@ for (const [name, re] of [
 const appSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'App.jsx'), 'utf8');
 check('App.selectProject 仍会置空 activeThread（事故链条入口）',
   /setActiveThread\(null\)/.test(appSrc));
+// T2-2：send 流程（含自动建目录 onAutoProject）已拆出 hooks/useAgentRun.ts
+const runHookSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'hooks', 'useAgentRun.ts'), 'utf8');
 check('ChatArea 未选目录时仍走 onAutoProject（新建任务必触发）',
-  /onAutoProject\?\.\(effectiveProject\)/.test(src));
+  /onAutoProject\?\.\(effectiveProject\)/.test(runHookSrc));
 
-// ── 结束条本身：RunFooter 契约未变 ──
-check('RunFooter 仍在消息区底部渲染', /<RunFooter summary=\{runSummary\} \/>/.test(src));
-check('RunFooter 对 done 状态显示「运行结束」', /label: '运行结束'/.test(src));
-check('RunFooter 展示耗时（durationMs > 0）', /summary\.durationMs > 0 && <span>耗时/.test(src));
-check('RunFooter 展示共消耗 tokens', /共消耗 \{total\.toLocaleString\(\)\} tokens/.test(src));
-check('RunFooter 无 summary 时返回 null（空态不占位）', /if \(!summary\) return null;/.test(src));
+// ── 结束条本身：RunFooter 契约未变（T1-5 升级为 live/summary 双态「本轮概览」卡；
+//    T2-2 实现与渲染随消息流域拆出 MessageStream.tsx，ChatArea 负责传入运行数据 props）──
+const msSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'components', 'MessageStream.tsx'), 'utf8');
+check('RunFooter 仍在消息区底部渲染（live 态接运行数据）',
+  /<RunFooter[\s\S]{0,300}summary=\{runSummary\}/.test(msSrc) && /live=\{loading \? \{/.test(msSrc)
+  && /runUsage=\{runUsage\}/.test(src) && /runStartedAt=\{runStartRef\.current\}/.test(src));
+check('RunFooter 对 done 状态显示「运行结束」',
+  zhValue('message', 'statusDone').includes('运行结束') && /label: tr\(['"]message\.statusDone['"]\)/.test(msSrc));
+check('RunFooter 展示耗时（durationMs > 0）',
+  zhValue('message', 'duration').includes('耗时') && /summary\.durationMs > 0 && <span>\{tr\(['"]message\.duration['"]/.test(msSrc));
+check('RunFooter 展示共消耗 tokens',
+  zhValue('message', 'totalTokens').includes('共消耗') && /tr\(['"]message\.totalTokens['"], \{ n: total\.toLocaleString\(\) \}\)/.test(msSrc));
+check('RunFooter 无 summary 且非 live 时返回 null（空态不占位）', /if \(!summary && !live\) return null;/.test(msSrc));
 
 // ── 完成消息补挂路径仍在（解释了「有 meta 行却没有结束条」）──
 check('完成后切回会话仍补挂最终消息（meta 行的来源）',

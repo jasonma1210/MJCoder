@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useI18n } from '../i18n';
 
 const MAX_PREVIEW_LINES = 1000;
 
@@ -43,6 +44,7 @@ export function highlightLine(line) {
 // 代码视图：文件树点击文件的只读预览 + 一键跳转 IDE
 // 嵌入右侧常驻面板渲染（embedded=true 时不套遮罩与定位容器）
 export default function CodeView({ filePath, projectPath, embedded = false }) {
+  const { t } = useI18n();
   const [state, setState] = useState({ loading: true, content: '', totalLines: 0, error: '' });
   const [copied, setCopied] = useState(false);
   const [ideMsg, setIdeMsg] = useState('');
@@ -55,11 +57,11 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
         if (r && typeof r.content === 'string') {
           setState({ loading: false, content: r.content, totalLines: r.totalLines || 0, error: '' });
         } else {
-          setState({ loading: false, content: '', totalLines: 0, error: '文件读取失败' });
+          setState({ loading: false, content: '', totalLines: 0, error: t('codeView.readFailed') });
         }
       })
-      .catch((err) => setState({ loading: false, content: '', totalLines: 0, error: err.message || '文件读取失败' }));
-  }, [filePath]);
+      .catch((err) => setState({ loading: false, content: '', totalLines: 0, error: err.message || t('codeView.readFailed') }));
+  }, [filePath, t]);
 
   async function copyContent() {
     try {
@@ -67,7 +69,7 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (err) {
-      console.warn('[codeView] 复制失败:', err);
+      console.warn('[codeView] copy failed:', err);
     }
   }
 
@@ -75,10 +77,10 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
     setIdeMsg('');
     try {
       const r = await window.mjcode.openInIDE({ path: filePath });
-      if (r?.ok) setIdeMsg(r.ide === 'editor' ? `已在编辑器打开（${r.cmd}）` : '已用系统默认程序打开');
-      else setIdeMsg(r?.error || '打开失败');
+      if (r?.ok) setIdeMsg(r.ide === 'editor' ? t('codeView.openedInEditor', { cmd: r.cmd }) : t('codeView.openedWithSystem'));
+      else setIdeMsg(r?.error || t('codeView.openFailed'));
     } catch (err) {
-      setIdeMsg(err.message || '打开失败');
+      setIdeMsg(err.message || t('codeView.openFailed'));
     }
   }
 
@@ -98,23 +100,23 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
         {/* 标题栏 */}
         <div className="flex items-center gap-2 px-4 h-11 border-b border-border shrink-0">
           <span className="text-sm font-medium truncate flex-1 font-mono" title={filePath}>{relPath}</span>
-          <span className="text-xs text-text2">{state.totalLines} 行</span>
+          <span className="text-xs text-text2">{t('codeView.lineCount', { n: state.totalLines })}</span>
         </div>
 
         {/* 操作栏 */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
           <button onClick={openInIDE} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
-            在 IDE 中打开
+            {t('codeView.openInIde')}
           </button>
           <button onClick={copyContent} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
-            {copied ? '已复制' : '复制内容'}
+            {copied ? t('codeView.copied') : t('codeView.copyContent')}
           </button>
           {ideMsg && <span className="text-xs text-text2">{ideMsg}</span>}
         </div>
 
         {/* 内容 */}
         <div className="flex-1 min-h-0 overflow-auto p-4">
-          {state.loading && <p className="text-text2 text-sm">加载中...</p>}
+          {state.loading && <p className="text-text2 text-sm">{t('codeView.loading')}</p>}
           {state.error && <p className="text-danger text-sm">{state.error}</p>}
           {!state.loading && !state.error && (
             <pre className="text-xs leading-5 font-mono whitespace-pre">
@@ -128,7 +130,7 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
           )}
           {truncated && (
             <p className="text-text2 text-xs mt-3">
-              仅显示前 {MAX_PREVIEW_LINES} 行（共 {state.totalLines} 行），完整内容请在 IDE 中查看。
+              {t('codeView.truncated', { max: MAX_PREVIEW_LINES, total: state.totalLines })}
             </p>
           )}
         </div>

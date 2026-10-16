@@ -25,9 +25,12 @@ export default [
         Buffer: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly',
         setInterval: 'readonly', clearInterval: 'readonly', setImmediate: 'readonly',
         AbortController: 'readonly', AbortSignal: 'readonly', fetch: 'readonly', URL: 'readonly',
+        URLSearchParams: 'readonly',
         // 以下为 Node 17+/Electron 33 可用但 js.configs.recommended 未声明的全局
         structuredClone: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly',
         queueMicrotask: 'readonly', globalThis: 'readonly', performance: 'readonly',
+        // T3-1：protocol.handle 回应用 Response 对象（Node 18+/Electron 33 全局）
+        Response: 'readonly', Request: 'readonly', Headers: 'readonly', FormData: 'readonly',
       },
     },
     rules: {
@@ -53,6 +56,12 @@ export default [
       'require-atomic-updates': 'warn',
       'no-return-await': 'off', // 项目刻意使用 return await 保证栈可读
       'no-console': 'off', // 主进程日志是产品能力，不禁
+
+      // T2-3：God File 硬门禁——>1500 行直接红（lint 0 error 的「红」）。
+      // 800 行软档（warn 级）由 test/max-lines.test.js 基线清单实现「只减不增」，
+      // 原因：ESLint 同一规则无法对同一文件配两档 severity，error 档必须无豁免地
+      // 拦住所有新文件（存量 >1500 的两个文件见下方 overrides 豁免清单）。
+      'max-lines': ['error', { max: 1500, skipBlankLines: true, skipComments: true }],
     },
   },
   {
@@ -144,6 +153,45 @@ export default [
     rules: {
       'no-unused-vars': 'off',
       'no-empty': 'off',
+      // 测试夹具刻意包含 javascript: 字符串（安全用例的被拒输入）与
+      // 匹配源码文本的正则（含连续空格），这两条规则在 test/ 属误报
+      'no-script-url': 'off',
+      'no-regex-spaces': 'off',
+    },
+  },
+  {
+    // .mjs 按 Node 规范恒为 ESM：test/eval 下的 .mjs 使用 import/export，
+    // 必须覆盖第一块的 sourceType: 'commonjs'，否则解析即报 error。
+    files: ['test/**/*.mjs', 'eval/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        process: 'readonly', console: 'readonly', URL: 'readonly',
+        fetch: 'readonly', Buffer: 'readonly', AbortController: 'readonly',
+        setTimeout: 'readonly', clearTimeout: 'readonly',
+        __dirname: 'readonly', __filename: 'readonly', global: 'readonly',
+      },
+    },
+  },
+  {
+    // T2-3：max-lines 存量豁免清单（>1500 行，只减不增——test/max-lines.test.js 断言
+    // 本清单与 800 行基线同步收缩；文件拆薄后必须从这里删除，禁止新增条目）。
+    files: [
+      'agent-core/index.js',
+    ],
+    rules: {
+      'max-lines': 'off',
+    },
+  },
+  {
+    // T4-2：Chrome 接管扩展（MV3 service worker）——chrome.* 扩展 API 与浏览器全局。
+    // 只补 globals：其余规则沿用第一块（no-undef/max-lines 等照常生效）。
+    files: ['chrome-extension/**/*.js'],
+    languageOptions: {
+      globals: {
+        chrome: 'readonly', WebSocket: 'readonly', navigator: 'readonly',
+        window: 'readonly', document: 'readonly',
+      },
     },
   },
   {

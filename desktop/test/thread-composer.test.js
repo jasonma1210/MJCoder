@@ -6,6 +6,30 @@ const path = require('path');
 const SRC = path.join(__dirname, '../renderer/src');
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8');
 
+// ── T3-2 i18n 适配 helper ──
+// 组件源码里的中文 UI 文案已抽取到 zh-CN 语言包，断言改为两段式：
+// ① 文案值存在于 zh-CN/<mod>.json（递归深搜）；② 组件源码引用了对应 key（t / tGlobal）
+const ZH_DIR = path.join(SRC, 'i18n', 'locales', 'zh-CN');
+function zhKeys(mod, substr) {
+  const j = JSON.parse(fs.readFileSync(path.join(ZH_DIR, mod + '.json'), 'utf8'));
+  const hits = [];
+  (function walk(o, prefix) {
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string') { if (v.includes(substr)) hits.push(prefix + k); }
+      else if (v && typeof v === 'object') walk(v, prefix + k + '.');
+    }
+  })(j, '');
+  return hits;
+}
+function refsKey(src, mod, keys) {
+  return keys.some((k) => new RegExp(`t(Global)?\\(['"\`]${mod}\\.${k.replace(/\./g, '\\.')}['"\`]`).test(src));
+}
+function assertI18nCopy(src, mod, substr, msg) {
+  const keys = zhKeys(mod, substr);
+  assert.ok(keys.length > 0, `${msg}（zh-CN/${mod}.json 中找不到文案「${substr}」）`);
+  assert.ok(refsKey(src, mod, keys), `${msg}（组件未引用「${substr}」对应 key：${keys.join(', ')}）`);
+}
+
 let pass = 0;
 let total = 0;
 function check(name, fn) {
@@ -34,7 +58,8 @@ check('侧栏使用 ThreadList 且不再自绘平铺聊天列表', () => {
 check('线程按项目分组（projectPath 匹配）', () => {
   const tl = read('components/ThreadList.jsx');
   assert.match(tl, /threads\.filter\(\(t\) => \(t\.projectPath \|\| t\.cwd\) === p\.path\)/);
-  assert.match(tl, /未归属项目/, '应处理无项目归属的孤儿线程');
+  // T3-2 i18n：「未归属项目」区段文案已抽取到 zh-CN/threadList.json，改为两段式验证
+  assertI18nCopy(tl, 'threadList', '未归属项目', '应处理无项目归属的孤儿线程');
 });
 
 check('线程三色状态指示齐备（完成/待审批/运行中）', () => {
@@ -52,7 +77,9 @@ check('localStore 线程记录 projectPath 与 status', () => {
 
 check('线程列表支持按项目筛选', () => {
   assert.match(store, /listThreads\(projectPath\)/);
-  assert.match(mainSrc, /local:threads\/list[\s\S]{0,120}projectPath/);
+  // T2-1：本地数据 IPC 已拆出 main/ipc/localData.js，断言随实现走
+  const localDataSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/localData.js'), 'utf8');
+  assert.match(localDataSrc, /local:threads\/list[\s\S]{0,120}projectPath/);
   assert.match(api, /threads: \(projectPath\)/);
 });
 
@@ -63,51 +90,69 @@ check('preload 暴露线程状态通道', () => {
 
 check('Composer 任务控制台组件存在并含三控件', () => {
   const cc = read('components/ComposerControls.jsx');
-  assert.match(cc, /PERMISSION_OPTIONS/);
-  assert.match(cc, /SANDBOX_OPTIONS/);
+  // i18n 化后顶层常量改为渲染期函数（防冻结翻译），断言随实现更名同步
+  assert.match(cc, /getPermissionOptions/);
+  assert.match(cc, /getSandboxOptions/);
   assert.match(cc, /ModelSelector/);
 });
 
 check('模型选择已移入 Composer（顶栏不再重复）', () => {
   const headerBlock = app.match(/<header[\s\S]*?<\/header>/);
   assert.ok(!/ModelSelector/.test(headerBlock[0]), '顶栏仍含 ModelSelector，应移入 Composer');
-  assert.match(chat, /<ComposerControls/);
+  // T2-2：Composer 已拆出 components/Composer.tsx，断言随实现走
+  const composer = read('components/Composer.tsx');
+  assert.match(composer, /<ComposerControls/);
 });
 
 check('斜杠命令菜单存在且含 Codex 同款命令', () => {
-  assert.match(chat, /SLASH_COMMANDS/);
+  const composer = read('components/Composer.tsx');
+  assert.match(composer, /SLASH_COMMANDS/);
   for (const c of ['/plan', '/review', '/compact', '/status', '/init', '/clear']) {
-    assert.ok(chat.includes(c), `缺少斜杠命令 ${c}`);
+    assert.ok(composer.includes(c), `缺少斜杠命令 ${c}`);
   }
-  assert.match(chat, /slashOpen/, '需有斜杠菜单开合状态');
-  assert.match(chat, /ArrowDown/, '需支持方向键选择');
+  assert.match(composer, /slashOpen/, '需有斜杠菜单开合状态');
+  assert.match(composer, /ArrowDown/, '需支持方向键选择');
 });
 
 check('steer（Enter 当轮引导）已实现', () => {
-  assert.match(chat, /function steer\(/);
-  assert.match(chat, /if \(loading && onSteer\) \{ onSteer\(input\)/);
-  assert.match(chat, /运行中：Enter 当轮引导/);
+  // T2-2：steer/queueNext/send 流程已拆出 hooks/useAgentRun.ts
+  const composer = read('components/Composer.tsx');
+  const runHook = read('hooks/useAgentRun.ts');
+  assert.match(runHook, /function steer\(/);
+  assert.match(composer, /if \(loading && onSteer\) \{ onSteer\(input\)/);
+  // T3-2 i18n：运行中占位文案已抽取到 zh-CN/composer.json（placeholderRunning），改为两段式验证
+  assertI18nCopy(composer, 'composer', '运行中：Enter 当轮引导', '运行中占位未提示 Enter 当轮引导');
 });
 
 check('queue（Tab 排队下一轮）已实现', () => {
-  assert.match(chat, /function queueNext\(/);
-  assert.match(chat, /if \(e\.key === 'Tab' && loading && input\.trim\(\)\)/);
-  assert.match(chat, /setQueued\(\(q\) => \[\.\.\.q, t\]\)/);
-  assert.match(chat, /已排队/);
+  const composer = read('components/Composer.tsx');
+  const runHook = read('hooks/useAgentRun.ts');
+  assert.match(runHook, /function queueNext\(/);
+  assert.match(composer, /if \(e\.key === 'Tab' && loading && input\.trim\(\)\)/);
+  assert.match(runHook, /setQueued\(\(q\) => \[\.\.\.q, t\]\)/);
+  // T3-2 i18n：「已排队」徽标文案已抽取到 zh-CN/composer.json（queued/queuedTip），改为两段式验证
+  assertI18nCopy(composer, 'composer', '已排队', '排队徽标缺少「已排队」文案');
 });
 
 check('排队指令在本轮结束后自动接力', () => {
-  assert.match(chat, /if \(next\) setTimeout\(\(\) => send\(next, currentThread\), 0\)/);
+  const runHook = read('hooks/useAgentRun.ts');
+  assert.match(runHook, /if \(next\) setTimeout\(\(\) => send\(next, currentThread\), 0\)/);
 });
 
 check('发送时置线程状态为 running，完成后置 done', () => {
-  assert.match(chat, /onThreadStatus\?\.\('running'\)/);
-  assert.match(chat, /onThreadStatus\?\.\('done'\)/);
+  const runHook = read('hooks/useAgentRun.ts');
+  assert.match(runHook, /onThreadStatus\?\.\('running'\)/);
+  assert.match(runHook, /onThreadStatus\?\.\('done'\)/);
 });
 
 check('密钥缺失提示改为引导本机设置', () => {
-  assert.match(chat, /请在本机模型设置中重新填写 API Key/);
-  assert.ok(!/请重新登录后重试/.test(chat), '仍有旧的登录态提示');
+  // T2-2：send 错误路径已拆出 hooks/useAgentRun.ts
+  const runHook = read('hooks/useAgentRun.ts');
+  // i18n 化后源码只引用 key，原文案在 zh-CN 语言包中校验
+  assert.match(runHook, /runtime\.keyMissing/);
+  const pack = JSON.parse(fs.readFileSync(path.join(__dirname, '../renderer/src/i18n/locales/zh-CN/runtime.json'), 'utf8'));
+  assert.match(pack.keyMissing, /请在本机模型设置中重新填写 API Key/);
+  assert.ok(!/请重新登录后重试/.test(runHook), '仍有旧的登录态提示');
 });
 
 check('App 已向 ChatArea 传递控制台所需 props', () => {

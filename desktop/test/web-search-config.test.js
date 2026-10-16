@@ -102,19 +102,55 @@ function throwsWith(fn, re) {
 
   // ── 4. 配置持久化往返 ──
   const store = { prefs: {}, getPreference(k) { return this.prefs[k]; }, setPreference(k, v) { this.prefs[k] = v; } };
+  const cryptoStub = {
+    encrypt: (value) => `enc:${Buffer.from(value).toString('base64')}`,
+    decrypt: (value) => {
+      if (!String(value).startsWith('enc:')) throw new Error('bad ciphertext');
+      return Buffer.from(String(value).slice(4), 'base64').toString();
+    },
+  };
+  const legacyConfigSpy = [];
+  const originalSave = sp.saveSearchConfig;
+  sp.saveSearchConfig = (...args) => {
+    legacyConfigSpy.push(args);
+    if (!args[2]) args[2] = cryptoStub;
+    return originalSave(...args);
+  };
   sp.saveSearchConfig(store, [
     { id: 'tavily', enabled: true, apiKey: 'tvly-x', extra: {} },
     { id: 'nope', enabled: true, apiKey: 'x', extra: {} },   // 未知 id 应被剔除
     { id: 'duckduckgo', enabled: false, apiKey: '', extra: {} },
-  ]);
-  const cfg = sp.loadSearchConfig(store);
+  ], cryptoStub);
+  const cfg = sp.loadSearchConfig(store, cryptoStub);
+  sp.saveSearchConfig = originalSave;
   check('保存后读回 id 集合一致（未知提供方被剔除）',
     cfg.providers.length === 8 && cfg.providers.find((p) => p.id === 'tavily').enabled === true
-    && cfg.providers.find((p) => p.id === 'duckduckgo').enabled === false);
+    && cfg.providers.find((p) => p.id === 'duckduckgo').enabled === false,
+    JSON.stringify(cfg.providers.filter((p) => p.id === 'tavily' || p.id === 'duckduckgo')));
+  check('未提供加密器时拒绝明文 API Key 持久化', (() => {
+    const noCryptoStore = { prefs: {}, setPreference(k, v) { this.prefs[k] = v; } };
+    try {
+      originalSave(noCryptoStore, [{ id: 'tavily', enabled: true, apiKey: 'must-not-leak', extra: {} }]);
+      return false;
+    } catch (e) { return /拒绝明文持久化/.test(e.message) && !noCryptoStore.prefs['web_search.providers']; }
+  })());
   check('未配置过时全为未启用（默认状态）', sp.loadSearchConfig({}).providers.every((p) => p.enabled === false));
   check('localStore 缺失/损坏时不崩（按未配置处理）',
     sp.loadSearchConfig(null).providers.length === 8
     && sp.loadSearchConfig({ getPreference: () => '{broken json' }).providers.length === 8);
+
+  // P0-20：设置加密器后，local-data 偏好只落 keyEncrypted；读取可解密回 UI，旧明文自动迁移。
+  const secureStore = { prefs: {}, getPreference(k) { return this.prefs[k]; }, setPreference(k, v) { this.prefs[k] = v; } };
+  sp.saveSearchConfig(secureStore, [{ id: 'tavily', enabled: true, apiKey: 'secret-search-key', extra: {} }], cryptoStub);
+  const persistedSearch = JSON.parse(secureStore.prefs['web_search.providers']);
+  check('搜索 Key 加密落库且 JSON 不含明文', persistedSearch[0].keyEncrypted.startsWith('enc:')
+    && persistedSearch[0].apiKey === '' && !secureStore.prefs['web_search.providers'].includes('secret-search-key'));
+  check('搜索配置读取时从密文恢复 Key', sp.loadSearchConfig(secureStore, cryptoStub).providers.find((p) => p.id === 'tavily').apiKey === 'secret-search-key');
+  secureStore.prefs['web_search.providers'] = JSON.stringify([{ id: 'tavily', enabled: true, apiKey: 'legacy-plain-key', extra: {} }]);
+  const migratedSearch = sp.loadSearchConfig(secureStore, cryptoStub);
+  const migratedRaw = secureStore.prefs['web_search.providers'];
+  check('历史明文 Key 首次读取自动迁移成密文', migratedSearch.providers.find((p) => p.id === 'tavily').apiKey === 'legacy-plain-key'
+    && JSON.parse(migratedRaw)[0].apiKey === '' && JSON.parse(migratedRaw)[0].keyEncrypted.startsWith('enc:'));
 
   // ── 5. failover 语义 ──
   // 未启用任何一家 → 可行动提示（不再是干巴巴的 web_search_unconfigured）

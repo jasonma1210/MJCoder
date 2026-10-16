@@ -2,6 +2,7 @@
 // 离线模式下线程/消息/私有凭证/偏好/记忆全部本地可用，仅模型调用需要网络
 const fs = require('fs');
 const path = require('path');
+const { writeFileDurable } = require('./data/durableWrite');
 
 // P1-M：本地数据韧性——此前 local-data.json 一损坏就静默重置为空库，
 // 用户的全部线程/消息/凭证无声消失（且无任何提示）。三级防线：
@@ -30,6 +31,7 @@ class LocalStore {
     this.dataDir = dataDir;
     this.recoveredFromBackup = false; // 诊断：本次加载是否走了 .bak 恢复
     this.pendingBakRepair = false;     // 主文件已知损坏：下次 flush 跳过 .bak 覆盖（防好备份被坏文件污染）
+    this.corruptBlocked = false;       // V08：损坏且无备份 → 写入阻断态（load() 置位）
     // P0-1：消息热路径合并刷盘状态。此前每条消息 addMessage 都触发整库 writeFileSync，
     // Agent 工具循环高峰每秒多条消息，同步写会卡死主进程事件循环（连带冻结 IPC 流式转发与审批响应）。
     this._flushTimer = null; // 挂起的合并刷盘定时器
@@ -47,7 +49,10 @@ class LocalStore {
       this._flushTimer = null;
       if (this._dirty) {
         this._dirty = false;
-        this.flush();
+        // V08：flush 失败必须恢复脏标记——此前清 dirty 后失败仅记日志，
+        // 数据停留在内存且不再有重试机会，用户却可能已看到「已保存」。
+        const res = this.flush();
+        if (!res || !res.ok) this._dirty = true; // 保留脏状态，下次 scheduleFlush/flushSync 重试
       }
     }, delay);
     // unref：不阻止进程退出（退出路径由 flushSync 兜底）
@@ -55,12 +60,14 @@ class LocalStore {
   }
 
   // P0-1：强制落盘挂起的合并变更（退出前 / 测试断言前调用）
+  // V08：返回真实持久化结果（{ok,error}），调用方据此决定是否宣称「已保存」
   flushSync() {
-    if (!this._dirty && !this._flushTimer) return false;
+    if (!this._dirty && !this._flushTimer) return { ok: true, nothingPending: true };
     if (this._flushTimer) { clearTimeout(this._flushTimer); this._flushTimer = null; }
     this._dirty = false;
-    this.flush();
-    return true;
+    const res = this.flush();
+    if (!res || !res.ok) this._dirty = true;
+    return res;
   }
 
   load() {
@@ -88,7 +95,19 @@ class LocalStore {
       console.error('[localStore] 已从 .bak 恢复本地数据');
       return recovered;
     }
-    console.error('[localStore] local-data.json 损坏且无可用备份，已重置为空库——历史线程/消息/凭证丢失');
+    // V08 corrupt-blocked：损坏且无可用备份 = 该域不可信。保留损坏原件（证据/人工恢复源），
+    // 进入阻断态：内存用空库撑起 UI，但**一切写入被拒绝**——
+    // 此前「重置空库继续写」，用户在新空状态上的所有输入会在下次 flush 时覆盖损坏原件，
+    // 原数据彻底不可恢复，且用户毫无感知。fail-closed：先让用户确认/取回，再谈继续使用。
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(this.file, path.join(this.dataDir, `local-data.corrupt-${stamp}.json`));
+      console.error(`[localStore] 损坏原件已保留：local-data.corrupt-${stamp}.json`);
+    } catch (e) {
+      console.error('[localStore] 损坏原件保留失败（原件未动）:', e.message);
+    }
+    this.corruptBlocked = true;
+    console.error('[localStore] local-data.json 损坏且无可用备份：进入 corrupt-blocked（写入已阻断，等待用户恢复或确认重置）');
     return structuredClone(EMPTY);
   }
 
@@ -120,17 +139,38 @@ class LocalStore {
 
   // 原子写：写临时文件后 rename，避免崩溃损坏
   // P1-M：rename 前留 .bak（上一完好版本）；主文件已知损坏时跳过本次 .bak 覆盖
+  // P0-持久化（2026-10-16）：原实现 writeFileSync(tmp)+renameSync 无 fsync，
+  //   数据可能停留在 page cache，连正常退出都不抗掉电。改走 writeFileDurable
+  //   （fsync 文件 + fsync 目录）。tmp 由原语自行管理，本文件不再手工拼 tmp 路径。
+  // V08：返回 {ok,error} 真实结果；corrupt-blocked 态拒绝写盘（不覆盖损坏原件）。
   flush() {
+    if (this.corruptBlocked) {
+      return { ok: false, error: 'corrupt-blocked：本地数据文件损坏且无可用备份，写入已阻断（原件已保留，等待恢复或确认重置）' };
+    }
     try {
       if (fs.existsSync(this.file) && !this.pendingBakRepair) {
         try { fs.copyFileSync(this.file, this.bak); } catch (e) { console.warn('[localStore] .bak 备份失败:', e.message); }
       }
-      fs.writeFileSync(this.tmp, JSON.stringify(this.data));
-      fs.renameSync(this.tmp, this.file);
+      const res = writeFileDurable(this.file, JSON.stringify(this.data));
+      if (!res.ok) {
+        // 失败必须让调用方知道：凭证/消息写不进去若被静默，用户下次重启才发现
+        console.error('[localStore] 持久化失败:', res.error);
+        return { ok: false, error: res.error };
+      }
       this.pendingBakRepair = false;
       this.dailyBackup();
+      return { ok: true };
     } catch (e) {
-      console.error('[localStore] 持久化失败:', e.message);
+      console.error('[localStore] 持久化异常:', e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // V08：写入阻断守卫——corrupt-blocked 态下所有变更方法先行拒绝（fail-closed），
+  // 严禁「内存接受 + 逻辑成功」假象：调用方必须拿到失败并把 UI 呈现为未保存。
+  requireWritable() {
+    if (this.corruptBlocked) {
+      throw new Error('本地数据层处于 corrupt-blocked 状态（数据文件损坏且无可用备份），已拒绝写入。请从备份恢复或确认重置后再使用。');
     }
   }
 
@@ -164,6 +204,7 @@ class LocalStore {
 
   // projectPath：线程归属的项目目录，构成「项目 → 任务」二级结构（对标 Codex）
   createThread({ title, cwd, projectPath, providerId, providerName, modelName, status }) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const now = Date.now();
     const t = {
       id: this.nextId(), title: title || '新会话', cwd: cwd || '',
@@ -189,6 +230,7 @@ class LocalStore {
   }
 
   addMessage({ threadId, role, content, toolCalls, toolCallId, tokensInput, tokensOutput, modelName }) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const t = this.data.threads.find((x) => x.id === Number(threadId));
     if (!t) throw new Error('线程不存在');
     const m = {
@@ -218,6 +260,7 @@ class LocalStore {
   // /compact 落库（P2-6 收口）：压缩后用摘要历史整体替换该会话消息。
   // 此前压缩只改渲染层 state，重进会话即失效，上下文环重新变满。
   replaceMessages(threadId, list) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const t = this.data.threads.find((x) => x.id === Number(threadId));
     if (!t) return { ok: false, error: '线程不存在' };
     const arr = Array.isArray(list) ? list : [];
@@ -244,6 +287,7 @@ class LocalStore {
 
   // A1：会话重命名（前后端此前均缺；空标题拒绝）
   renameThread(threadId, title) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const t = this.data.threads.find((x) => x.id === Number(threadId));
     const clean = String(title || '').trim();
     if (!t || !clean) return { ok: false, error: '标题不能为空' };
@@ -270,6 +314,7 @@ class LocalStore {
   }
 
   purgeThread(threadId) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const id = Number(threadId);
     this.data.threads = this.data.threads.filter((x) => x.id !== id);
     this.data.messages = this.data.messages.filter((m) => m.threadId !== id);
@@ -293,6 +338,7 @@ class LocalStore {
   }
 
   addProvider({ name, base_url, keyEncrypted, modelId, source, fileKey }) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const p = {
       id: this.nextId(), name, base_url, keyEncrypted,
       // 多模型真值源（B 方案升级）；modelId 保留为「首模型」兼容字段（老代码/测试契约依赖）
@@ -315,6 +361,7 @@ class LocalStore {
 
   // 文件同步：整体覆盖名称/地址/Key/模型列表（文件是事实来源）；modelId 兼容字段随首模型
   updateFileProvider(providerId, { name, base_url, keyEncrypted, models } = {}) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const p = this.data.providers.find((x) => x.id === Number(providerId));
     if (!p) throw new Error('本地模型服务不存在');
     if (typeof name === 'string' && name.trim()) p.name = name.trim();
@@ -391,6 +438,7 @@ class LocalStore {
   }
 
   deleteProvider(providerId) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     this.data.providers = this.data.providers.filter((x) => x.id !== Number(providerId));
     this.flush();
     return { ok: true };
@@ -398,6 +446,7 @@ class LocalStore {
 
   // B2：供应商可编辑（name / base_url / 可选换 Key）——此前 base_url 与 Key 不可更新
   updateProvider(providerId, { name, base_url, keyEncrypted } = {}) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     const p = this.data.providers.find((x) => x.id === Number(providerId));
     if (!p) throw new Error('本地模型服务不存在');
     if (typeof name === 'string' && name.trim()) p.name = name.trim();
@@ -413,6 +462,7 @@ class LocalStore {
   }
 
   addProject({ path, name }) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     if (!path) return null;
     const now = Date.now();
     let p = this.data.projects.find((x) => x.path === path);
@@ -428,6 +478,7 @@ class LocalStore {
   }
 
   removeProject(projectPath) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     this.data.projects = this.data.projects.filter((x) => x.path !== projectPath);
     this.flush();
     return { ok: true };
@@ -450,6 +501,7 @@ class LocalStore {
   getPreference(key) { return this.data.preferences[key]; }
 
   setPreference(key, value) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     this.data.preferences[key] = value;
     this.flush();
     return { ok: true };
@@ -457,6 +509,7 @@ class LocalStore {
 
   // ── 记忆（两阶段 POC：stage1 原始留存，注入时按项目与使用计数选取）──
   addMemory({ projectPath, content }) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
     if (!content) return null;
     const m = { id: this.nextId(), projectPath: projectPath || '', content: String(content).slice(0, 2000), createdAt: Date.now(), usageCount: 0 };
     this.data.memories.push(m);

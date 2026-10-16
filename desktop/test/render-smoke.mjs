@@ -46,11 +46,10 @@ const stubEl = () => ({
   children: [], childNodes: [], innerHTML: '', textContent: '', value: '',
   getBoundingClientRect: () => ({ top: 0, left: 0, width: 100, height: 20, right: 100, bottom: 20 }),
 });
-// 关键：mj_token 必须给值。App 的 probing = !localStorage.getItem('mj_token')，
-// 返回 null 会让它停在「探测中」的占位页（95 字符），侧栏/对话区压根不渲染，
-// 白屏防线就形同虚设。
+// 关键：mj_onboarded 必须给 '1'。App 在未 onboard 时会渲染首启向导而非主界面，
+// 侧栏/对话区压根不渲染，白屏防线就形同虚设。（登录系统已移除，无 mj_token）
 const storage = {
-  getItem: (k) => (k === 'mj_token' ? 'smoke-token' : (k === 'mj_onboarded' ? '1' : null)),
+  getItem: (k) => (k === 'mj_onboarded' ? '1' : null),
   setItem: noop, removeItem: noop, clear: noop,
 };
 define('window', {
@@ -99,7 +98,7 @@ function compile(rel) {
     jsx: 'automatic',
     // 静态资源：logo.png 等以 dataurl 内联（组件里当 img src 用），
     // 样式文件以 empty 忽略（渲染冒烟不关心样式，只要 import 不炸）
-    loader: { '.jsx': 'jsx', '.js': 'jsx', '.mjs': 'jsx', '.png': 'dataurl', '.svg': 'dataurl', '.css': 'empty' },
+    loader: { '.jsx': 'jsx', '.tsx': 'tsx', '.js': 'jsx', '.mjs': 'jsx', '.png': 'dataurl', '.svg': 'dataurl', '.css': 'empty' },
     // themes.json 等走 esbuild 默认 json loader
     write: false,
     logLevel: 'silent',
@@ -136,12 +135,55 @@ function loadDefault(rel) {
 const React = rendererRequire('react');
 const { renderToStaticMarkup } = rendererRequire('react-dom/server');
 
+// ── T3-2 i18n 适配 ──
+// esbuild bundle:true 下每个 entry 各带一份 i18n 实例（模块单例不共享），
+// 语言包必须经 globalThis 注入让所有实例读到同一份；渲染统一包 LanguageProvider
+// （组件用 useI18n，缺 Provider 会抛——真机 main.jsx 已挂，此处对齐）。
+function loadPacksFromDisk() {
+  const packs = {};
+  for (const loc of ['zh-CN', 'en-US']) {
+    const dir = path.join(SRC, 'i18n', 'locales', loc);
+    const d = {};
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        if (f.endsWith('.json')) d[f.replace(/\.json$/, '')] = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      }
+    }
+    packs[loc] = d;
+  }
+  return packs;
+}
+globalThis.__MJ_I18N_PACKS__ = loadPacksFromDisk();
+
+// esbuild bundle:true 下 App 的 bundle 自带一份 i18n 实例（createContext 各自独立），
+// 测试侧 loadModule 的 LanguageProvider 与组件内 useI18n 不是同一 Context——
+// 必须用临时 wrapper entry 把 Provider 与目标组件编进同一个 bundle。
+let probeSeq = 0;
+function renderWithI18n(compRel, props) {
+  const tmpRel = `__i18n_probe_${++probeSeq}.jsx`;
+  const tmp = path.join(SRC, tmpRel);
+  const importPath = './' + compRel.replace(/\\/g, '/');
+  fs.writeFileSync(tmp, [
+    "import { LanguageProvider } from './i18n';",
+    `import Comp from '${importPath}';`,
+    'export default function Root(props) {',
+    '  return <LanguageProvider><Comp {...props} /></LanguageProvider>;',
+    '}',
+  ].join('\n'));
+  try {
+    const Root = loadDefault(tmpRel);
+    return renderToStaticMarkup(React.createElement(Root, props));
+  } finally {
+    fs.unlinkSync(tmp);
+    loaded.delete(tmpRel);
+  }
+}
+
 check('渲染冒烟：App 首帧可渲染（启动白屏防线）', () => {
-  const App = loadDefault('App.jsx');
   let html = '';
   // 渲染期不执行 useEffect，因此 ipc / fetch 等副作用不会触发；
   // 组件函数体本身（含 hook 依赖数组求值）会完整跑一遍 —— 白屏事故正出在这里
-  assert.doesNotThrow(() => { html = renderToStaticMarkup(React.createElement(App)); },
+  assert.doesNotThrow(() => { html = renderWithI18n('App.jsx', {}); },
     'App 首帧渲染抛错（真机即白屏）');
   assert.ok(html.length > 200, `渲染结果过短（${html.length} 字符），疑似未渲染出界面`);
   // 覆盖度自证：必须真的渲染到了 Composer（输入框）。
@@ -150,9 +192,8 @@ check('渲染冒烟：App 首帧可渲染（启动白屏防线）', () => {
   console.log(`       首帧 HTML ${html.length} 字符（含 Composer 输入框）`);
 });
 
-check('渲染冒烟：登录页 / 侧栏 / 设置弹窗可独立渲染', () => {
+check('渲染冒烟：侧栏 / 工作区条 / 审批卡可独立渲染', () => {
   const targets = [
-    ['components/LoginPage.jsx', {}],
     ['components/Sidebar.jsx', { threads: [], projects: [], activeThread: null, activeProject: null, onSelect: noop }],
     ['components/WorktreeBar.jsx', { worktree: null, onClosed: noop, onMsg: noop }],
     ['components/ApprovalCard.jsx', { req: null, onDecision: noop }],
@@ -160,7 +201,7 @@ check('渲染冒烟：登录页 / 侧栏 / 设置弹窗可独立渲染', () => {
   const failures = [];
   for (const [rel, props] of targets) {
     try {
-      renderToStaticMarkup(React.createElement(loadDefault(rel), props));
+      renderWithI18n(rel, props);
     } catch (e) {
       failures.push(`${rel} → ${String(e.message).split('\n')[0]}`);
     }
@@ -174,7 +215,6 @@ check('渲染冒烟：脏 localStorage（enabledSkills 非数组）不得让首�
   // 且每次重启都崩（持久化脏数据）。守卫修复后，脏数据必须回落默认技能列表。
   const dirtyStorage = {
     getItem: (k) => {
-      if (k === 'mj_token') return 'smoke-token';
       if (k === 'mj_onboarded') return '1';
       if (k === 'mj_enabled_skills') return '{"code_review":true}'; // 非数组脏数据
       return null;
@@ -184,9 +224,8 @@ check('渲染冒烟：脏 localStorage（enabledSkills 非数组）不得让首�
   define('localStorage', dirtyStorage);
   define('sessionStorage', dirtyStorage);
   try {
-    const App = loadDefault('App.jsx');
     let html = '';
-    assert.doesNotThrow(() => { html = renderToStaticMarkup(React.createElement(App)); },
+    assert.doesNotThrow(() => { html = renderWithI18n('App.jsx', {}); },
       'enabledSkills 脏数据导致首帧崩溃');
     assert.ok(html.length > 200, `渲染结果过短（${html.length} 字符）`);
   } finally {

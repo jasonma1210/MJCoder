@@ -326,14 +326,35 @@ function signWithDigest(manifest) {
 }
 
 // ── 提示注入检测（技能包 / 提示词模板包）────────────────────────────
-// P1-3 修复：规则与检测函数抽到共享模块 promptInjection.js，作为全项目唯一事实来源。
-// 事故背景：原先 13 条规则只存在于本文件，仅供「安装技能包时」扫描；
-// 而 agent-core 把 AGENTS.md 直接拼进 system prompt，完全绕过这套扫描
-// ——用户 clone 恶意仓库即中招。现在两侧同源，避免规则漂移。
-const { INJECTION_RULES, detectPromptInjection } = require('./promptInjection');
+// A1（2026-10-16）：规则与检测函数统一收敛到 shared/untrustedContent.mjs（跨宿主唯一事实来源）——
+// 主进程（安装闸门）、headless 引擎（AGENTS.md / 技能 / 记忆 / 工具结果四入口）共用同一份规则，
+// 从结构上消灭「两份规则各自漂移 + 用源码字符串断言维系一致」的旧模式。
+//
+// 主进程是 CJS，而 Electron 33 捆绑的 Node 20 无法同步 require ESM，故沿用动态 import + ready 门
+// （与 agentRunner 加载 shared-ipc/contract.mjs 同款）。未就绪即调用视为 **fail-closed 抛错**：
+// 宁可拒绝安装，也绝不放行未扫描的内容。
+let untrustedShared = null;
+let untrustedLoadError = null;
+const promptInjectionReady = import('../shared/untrustedContent.mjs')
+  .then((m) => { untrustedShared = m; })
+  .catch((e) => {
+    untrustedLoadError = e;
+    console.error('[pluginMarket] 注入规则模块加载失败（fail-closed，安装闸门将拒绝放行）:', e.message);
+  });
+
+function requireUntrusted() {
+  if (untrustedShared) return untrustedShared;
+  throw new Error(`注入规则模块不可用${untrustedLoadError ? `（${untrustedLoadError.message}）` : '（尚未加载完成，请先 await promptInjectionReady）'}`);
+}
+
+/** 同步检测入口（规则未就绪即抛错——fail-closed，绝不静默放行） */
+function detectPromptInjection(content, options) {
+  return requireUntrusted().detectPromptInjection(content, options);
+}
 
 // 扫描技能/提示词包：SKILL.md / PROMPTS.md / prompts/*.md
-function scanPromptPackage(pkgDir, options = {}) {
+async function scanPromptPackage(pkgDir, options = {}) {
+  await promptInjectionReady; // 安装闸门必须先等规则就绪（否则 requireUntrusted 会抛错）
   const targets = [];
   const push = (p) => { if (fs.existsSync(p)) targets.push(p); };
   push(path.join(pkgDir, 'SKILL.md'));
@@ -492,7 +513,7 @@ async function installFromSourceDir(srcDir, options = {}) {
   // 提示注入闸门（仅 skill / prompt）
   let injection = null;
   if (PROMPT_INJECTABLE_TYPES.includes(manifest.type) && !allowUnsafeInjection) {
-    injection = scanPromptPackage(srcDir);
+    injection = await scanPromptPackage(srcDir);
     if (injection.suspicious) {
       const detail = injection.files
         .map((f) => `${f.file}（${f.findings.map((x) => x.id).join(',')}）`)
@@ -617,7 +638,8 @@ module.exports = {
   PERMISSION_LEVELS,
   PLUGIN_TYPES,
   PROMPT_INJECTABLE_TYPES,
-  INJECTION_RULES,
+  // 规则表改为惰性取用共享模块（主进程不再存第二份副本）；未就绪访问即抛错（fail-closed）
+  get INJECTION_RULES() { return requireUntrusted().INJECTION_RULES; },
   ALLOWED_GIT_PROTOCOLS,
   normalizeName,
   isValidName,
@@ -636,6 +658,7 @@ module.exports = {
   verifySignature,
   signWithDigest,
   detectPromptInjection,
+  promptInjectionReady,
   scanPromptPackage,
   validateGitSource,
   isValidRef,

@@ -32,7 +32,12 @@ class CredentialCrypto {
     this._fileKey = crypto.randomBytes(32).toString('hex');
     fs.mkdirSync(this.userDataDir, { recursive: true });
     fs.writeFileSync(this._keyFile(), this._fileKey + '\n', { mode: 0o600 });
-    try { fs.chmodSync(this._keyFile(), 0o600); } catch { /* chmod 尽力而为（Windows 无此语义） */ }
+    try { fs.chmodSync(this._keyFile(), 0o600); } catch (e) {
+      // P0-16 修复（2026-10-16）：原为纯空吞。Windows 上 chmod 受限语义失败时，
+      // 密钥文件以默认权限暴露——这是所有 provider 凭证密文的解密钥匙，
+      // 权限失效必须显式留痕，否则用户无从得知。
+      console.error(`[credential] 密钥文件权限收紧失败（0600 未生效，密钥文件可能被同机其他账户读取）: ${e.message}`);
+    }
     return this._fileKey;
   }
 

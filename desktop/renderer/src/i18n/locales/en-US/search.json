@@ -1,0 +1,10 @@
+{
+  "tavily": { "label": "Tavily", "note": "Search API built for agents; returns clean article summaries. 1,000 free requests per month." },
+  "duckduckgo": { "label": "DuckDuckGo", "note": "No key needed, works out of the box (HTML parsing; average result quality, zero config and cost)." },
+  "searxng": { "label": "SearXNG (self-hosted)", "note": "Self-hosted metasearch. Enter your instance URL in the advanced field; the instance must enable JSON output." },
+  "brave": { "label": "Brave Search", "note": "Independent index; 2,000 free requests per month." },
+  "exa": { "label": "Exa", "note": "Semantic search, great for technical docs and papers." },
+  "bing": { "label": "Bing Search", "note": "Azure Cognitive Services; requires a subscription key." },
+  "google": { "label": "Google CSE", "note": "Requires a Programmable Search Engine ID (cx) in addition to the API key.", "engineId": "Search engine ID (cx)" },
+  "baidu": { "label": "Baidu", "note": "Parses web results without a key; Baidu's anti-bot measures may cause occasional failures (automatically falls back to the next provider)." }
+}

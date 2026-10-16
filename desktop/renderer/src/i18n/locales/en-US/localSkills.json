@@ -1,0 +1,11 @@
+{
+  "title": "Local Skills",
+  "count": "{enabled}/{total} enabled",
+  "builtinTitle": "Built-in Skills",
+  "fileTitle": "File Skills",
+  "noFiles": "No file skills yet. Place skill files at ~/.mjcode/skills/<name>/SKILL.md, or import from a folder.",
+  "importFromFolder": "Import from Folder",
+  "importSummary": "Found {found}, imported {installed}",
+  "importFailedSuffix": ", {failed} failed",
+  "importFailed": "Import failed"
+}

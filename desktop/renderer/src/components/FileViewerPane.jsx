@@ -1,5 +1,6 @@
 import FilePreview from './FilePreview';
 import { IconFile, IconX } from './icons';
+import { useI18n } from '../i18n';
 
 // 右侧「预览」标签：多文件标签页 + 应用内预览（对标 WorkBuddy 右侧文件预览栏）
 //
@@ -13,6 +14,7 @@ function baseName(p) {
 }
 
 export default function FileViewerPane({ files = [], active, projectPath, onSelect, onClose }) {
+  const { t } = useI18n();
   if (!files.length) return null;
   const shown = files.slice(-MAX_LABELS);
 
@@ -38,8 +40,8 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onClose?.(f); }}
-                title="关闭该标签"
-                aria-label={`关闭 ${baseName(f)}`}
+                title={t('filePreview.closeTabTitle')}
+                aria-label={t('filePreview.closeTab', { name: baseName(f) })}
                 className="shrink-0 text-text2 hover:text-text rounded p-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               >
                 <IconX size={10} />
@@ -51,7 +53,7 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
 
       {active
         ? <FilePreview filePath={active} projectPath={projectPath} />
-        : <div className="flex-1 flex items-center justify-center text-xs text-text2">请选择一个文件</div>}
+        : <div className="flex-1 flex items-center justify-center text-xs text-text2">{t('filePreview.selectFile')}</div>}
     </div>
   );
 }

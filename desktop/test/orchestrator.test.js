@@ -4,12 +4,13 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { openDb } = require('../main/db');
+const { openDbAsync } = require('../main/db');
 const { TaskStore } = require('../main/taskStore');
 const orchestrator = require('../main/orchestrator');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-orch-'));
-const store = new TaskStore(openDb(dir));
+// sql.js 驱动（零原生模块）：makeDeps 闭包经模块级 store 引用，IIFE 内 await 后赋值
+let store;
 
 const GOOD_DAG = JSON.stringify({
   tasks: [
@@ -32,6 +33,8 @@ function makeDeps({ chatOnce, events = [], runGroup }) {
 }
 
 (async () => {
+  store = new TaskStore(await openDbAsync(dir, { driver: 'sqljs' }));
+
   // 1. planGoal auto 元数据透传
   orchestrator.initOrchestrator(makeDeps({ chatOnce: async () => ({ content: GOOD_DAG }) }));
   const r1 = await orchestrator.planGoal({ goal: '目标一', cwd: '/tmp', auto: true, replanDepth: 0 });
