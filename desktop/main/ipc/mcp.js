@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const approval = require('../approval');
 const mcp = require('../mcpClient');
+const guard = require('./payloadGuard');
 const sandbox = require('../sandbox');
 const github = require('../github');
 const voice = require('../voice');
@@ -168,7 +169,16 @@ async function reconnectMcpServers() {
 }
 
 function register() {
-  ipcMain.handle('mcp:connect', async (_, payload) => connectMcpServer(payload));
+  ipcMain.handle('mcp:connect', async (_, payload) => {
+    // X14：connect 会把 name/command/args/env 落到 mcp-servers.json（env 明文），
+    // 形状必须先过关，避免把奇怪结构写进配置文件
+    try {
+      guard.assertStrings(payload, { name: 120, command: { max: 2000, optional: true }, url: { max: 2000, optional: true } });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    return connectMcpServer(payload);
+  });
 
   // T7：浏览器授权（三级回落在引擎内完成；只回状态与级别，绝不回传令牌）
   ipcMain.handle('mcp:authorize', async (_, { name, url, preset } = {}) => {
@@ -188,7 +198,16 @@ function register() {
     return { ok: true, authorized: !!(am && name && am.hasStoredAuth(String(name))) };
   });
 
-  ipcMain.handle('mcp:callTool', (_, payload) => callMcpTool(payload));
+  ipcMain.handle('mcp:callTool', (_, payload) => {
+    try {
+      // 形状以 callMcpTool 的入参为准：{ server, tool, arguments }
+      guard.assertStrings(payload, { server: 200, tool: 200 });
+      if (payload.arguments !== undefined) guard.assertObject({ arguments: payload.arguments });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    return callMcpTool(payload);
+  });
 
   ipcMain.handle('mcp:disconnect', async (_, { name }) => {
     // 断开 + 同步移除持久化配置（http 传输无子进程，close 为空操作）
@@ -198,14 +217,20 @@ function register() {
   });
 
   // ═══ P0-F：沙箱状态查询（UI 明示隔离能力与兜底状态）═══
+  // P0-6 修复（2026-10-17）：原实现用静态 detectBackend()（仅 fs.existsSync 判定
+  // sandbox-exec 存在）上报可用性，而执行路径（exec.js）用的是真实探测 seatbeltUsable()
+  // （实际 apply 一个带 deny network* 的 profile）。嵌套沙箱环境（本应用被其他 Agent
+  // 平台的沙箱包住、或 CI 容器）下 sandbox-exec 存在但无法 apply → UI 显示「已隔离就绪」，
+  // 实际执行时落 runFallback 以宿主权限直跑——用户基于错误的安全认知做出放行决策。
+  // 现改用 describeCapability()：与执行路径同源的真实能力探测，nestedSandbox 一并下发，
+  // UI 对「能力不可用」给出明确文案，不显示「已隔离」。
   ipcMain.handle('sandbox:status', async () => {
-    // 2026-10：三平台均已有 OS 级后端，状态不能再只看 macOS Seatbelt。
-    // Windows 的就绪态是异步的（要 net user 查专用用户），在此统一异步确认，
-    // 让 UI 能显示「为什么没隔离 + 下一步怎么做」，而不是一句笼统的「你的系统不支持」。
-    const detected = sandbox.detectBackend();
-    let available = detected.backend !== 'none';
-    let hint = detected.reason;
-    if (detected.backend === 'windows-restricted-user') {
+    const cap = await sandbox.describeCapability();
+    let available = cap.available;
+    let hint = cap.reason;
+    // Windows 后端的就绪态是异步的（net user 查专用用户），describeCapability 只做静态探测，
+    // 此处沿用异步确认（与 exec.js 的 windowsSandboxReady 同源，避免静态误报「已就绪」）
+    if (cap.backend === 'windows-restricted-user') {
       const st = await sandbox.windowsBackend.windowsSandboxReady();
       available = st.ready;
       hint = st.reason;
@@ -213,9 +238,10 @@ function register() {
     return {
       ok: true,
       platform: process.platform,
-      available,            // OS 级沙箱是否就绪（三平台：seatbelt / bubblewrap / windows-restricted-user）
-      backend: detected.backend,
-      hint,                 // 未就绪时的可行动提示（如「apt install bubblewrap」）
+      available,            // OS 级沙箱是否**真实**就绪（三平台：seatbelt / bubblewrap / windows-restricted-user）
+      backend: cap.backend,
+      hint,                 // 未就绪时的可行动提示（如「apt install bubblewrap」/ 嵌套沙箱说明）
+      nestedSandbox: cap.nestedSandbox, // 嵌套沙箱环境：macOS 不允许嵌套 apply，隔离无法生效
       fallbackActive: !available, // 无 OS 级沙箱时启用命令级硬拦截兜底
     };
   });

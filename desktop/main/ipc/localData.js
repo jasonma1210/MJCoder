@@ -9,6 +9,7 @@
 //   - localStore/credentialCrypto 在 whenReady 后才初始化，故用 getter。
 const { ipcMain, shell } = require('electron');
 const modelsFile = require('../modelsFile');
+const guard = require('./payloadGuard');
 
 let deps = null;
 
@@ -185,7 +186,12 @@ function register() {
     maybeSyncModelsFile(); // 文件保存即生效（mtime 变化才真正重解析）
     return deps.getLocalStore().listProviders();
   });
-  ipcMain.handle('local:providers/add', async (_, { name, base_url, api_key, model_id }) => {
+  ipcMain.handle('local:providers/add', async (_, payload) => {
+    // X14：写凭证的通道必须先在边界校验形状（历史上 `{}` 也能写出一条空 provider）
+    guard.assertStrings(payload, {
+      name: 120, base_url: 2000, api_key: { max: 4000, allowEmpty: true }, model_id: { max: 200, allowEmpty: true },
+    });
+    const { name, base_url, api_key, model_id } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     if (!deps.getCredentialCrypto()) throw new Error('本地数据层未初始化');
     const keyEncrypted = deps.getCredentialCrypto().encrypt(String(api_key || ''));
@@ -193,26 +199,42 @@ function register() {
     deps.localVault.set(p.id, { api_key: String(api_key || ''), base_url });
     return p;
   });
-  ipcMain.handle('local:providers/set-model', async (_, { id, model_id }) => {
+  ipcMain.handle('local:providers/set-model', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    guard.assertStrings(payload, { model_id: 200 });
+    const { id, model_id } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().setProviderModel(id, model_id);
   });
   // 多模型：本机 provider 模型条目可增可删（修复「单模型不可删、UI 假装无限添加」）
-  ipcMain.handle('local:providers/add-model', async (_, { id, model_id, display_name }) => {
+  ipcMain.handle('local:providers/add-model', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    guard.assertStrings(payload, { model_id: 200, display_name: { max: 200, optional: true } });
+    const { id, model_id, display_name } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().addProviderModel(id, { model_id, display_name });
   });
-  ipcMain.handle('local:providers/remove-model', async (_, { id, model_id }) => {
+  ipcMain.handle('local:providers/remove-model', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    guard.assertStrings(payload, { model_id: 200 });
+    const { id, model_id } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().removeProviderModel(id, model_id);
   });
-  ipcMain.handle('local:providers/delete', async (_, { id }) => {
+  ipcMain.handle('local:providers/delete', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    const { id } = payload;
     if (deps.getLocalStore()) deps.getLocalStore().deleteProvider(id);
     deps.localVault.delete(Number(id));
     return { ok: true };
   });
   // B2：供应商编辑（name/base_url/换 Key；Key 走凭证加密双轨落库）
-  ipcMain.handle('local:providers/update', async (_, { id, name, base_url, api_key }) => {
+  ipcMain.handle('local:providers/update', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    guard.assertStrings(payload, {
+      name: { max: 120, optional: true }, base_url: { max: 2000, optional: true }, api_key: { max: 4000, optional: true, allowEmpty: true },
+    });
+    const { id, name, base_url, api_key } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     if (!deps.getCredentialCrypto()) throw new Error('本地数据层未初始化');
     let keyEncrypted;
@@ -272,26 +294,72 @@ function register() {
     };
   });
 
-  ipcMain.handle('local:memories/add', async (_, { projectPath, content }) => {
-    // P2-1：写入收口 MemoryManager（SQLite）；不可用时回落旧 localStore 链路
+  // P1-16：MemoryManager 未就绪时的写入内存队列——就绪后（下一次记忆 IPC 调用）flush。
+  // 绝不落 localStore JSON：那正是「双轨分裂」的根——JSON 轨永不迁移、永不可读，
+  // 用户以为存了记忆，实际上召回与 UI 都只读 SQLite 轨。
+  // 队列只在进程存活期有效：未就绪即退出 = 从未真正开始使用记忆，无实际损失。
+  let memoryWriteQueue = [];
+  function flushMemoryQueue() {
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager || memoryWriteQueue.length === 0) return 0;
+    const pending = memoryWriteQueue;
+    memoryWriteQueue = [];
+    let n = 0;
+    for (const item of pending) {
+      try {
+        if (memoryManager.remember(item)) n += 1;
+      } catch (e) {
+        // 单条失败即丢弃（不重试爆栈）：该条已被调用方视为「已受理」
+        console.warn('[memory] 队列补写失败（丢弃该条）:', e.message);
+      }
+    }
+    if (n > 0) console.log(`[memory] 就绪后补写队列：${n} 条`);
+    return n;
+  }
+
+  ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion' } = {}) => {
+    // P0-2b/P1-16：写入收口 MemoryManager（SQLite）+ 显式来源（未知来源被 remember 拒绝）
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
-      const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source: 'ipc' });
-      return m ? { id: m.id, content: m.content } : null;
+      flushMemoryQueue(); // 就绪后补写积压（P1-16）
+      const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source });
+      return m ? { id: m.id, content: m.content } : { ok: false, error: '写入被拒绝：内容为空或来源不在白名单' };
     }
-    return deps.getLocalStore() ? deps.getLocalStore().addMemory({ projectPath, content }) : null;
+    memoryWriteQueue.push({ spaceId: projectPath || 'default', domain: 'global_knowledge', content, source });
+    return { queued: true };
   });
   ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query } = {}) => {
-    // P2-6：分层召回路由（importance×recency×相关性 Top-K）；不可用时回落旧链路
+    // P2-6：分层召回路由（importance×recency×相关性 Top-K）+ P0-2c 域/可信度过滤
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
+      flushMemoryQueue();
       return memoryManager.recallContents({ spaceId: projectPath, query, topK: limit || 5 });
     }
-    return deps.getLocalStore() ? deps.getLocalStore().listMemories(projectPath, limit) : [];
+    // P1-16：未就绪返回空——不再回落 localStore JSON 轨
+    return [];
   });
   // P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
   ipcMain.handle('memory:stats', async () => (deps.getMemoryManager() ? { ok: true, stats: deps.getMemoryManager().stats() } : { ok: false }));
   ipcMain.handle('memory:bgTasks', async (_, opts) => (deps.getMemoryScheduler() ? { ok: true, tasks: deps.getMemoryScheduler().listTasks(opts) } : { ok: false }));
+  // P0-2c/P1-17：记忆管理 IPC（设置页「记忆与后台作业」分区消费）——
+  // invalidate 早已在 memory/index.js 实现但无 IPC 出口；promote 对应「人工确认长期留存」。
+  ipcMain.handle('memory:list', async (_, { projectPath, limit = 50, offset = 0 } = {}) => {
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    return { ok: true, items: memoryManager.list({ spaceId: projectPath, limit, offset }) };
+  });
+  ipcMain.handle('memory:invalidate', async (_, { id, reason } = {}) => {
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    const m = memoryManager.invalidate(id, reason || '用户在设置页手动作废');
+    return m ? { ok: true, item: m } : { ok: false, error: '记忆不存在' };
+  });
+  ipcMain.handle('memory:promote', async (_, { id } = {}) => {
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    const m = memoryManager.promoteToLongTerm(id);
+    return m ? { ok: true, item: m } : { ok: false, error: '记忆不存在或已失效' };
+  });
 }
 
 function initLocalDataIpc(d) {
