@@ -64,6 +64,8 @@ const GUARDED_CHANNELS = [
   'local:memories/add',
   // main/ipc/mcp.js
   'mcp:disconnect',
+  // 2026-10-17：按名重连已保存服务（连接成功会回写 mcp-servers.json）
+  'mcp:reconnect',
   'mcp:setConfig',
   'github:createPr',
   // main/ipc/plugins.js

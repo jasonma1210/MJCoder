@@ -180,6 +180,34 @@ function register() {
     return connectMcpServer(payload);
   });
 
+  // 2026-10-17（用户实测反馈「ima 配置完成后 + 菜单里仍然显示需手动配置」）：
+  // 按名重连「已保存但当前未连接」的服务。
+  //
+  // 为什么必须由主进程按名取配置、而不是渲染层把 payload 传进来：
+  // mcp-servers.json 里的 env 含 API Key，跨 IPC 出口一律剥离（见 mcp:getConfig），
+  // 渲染层拿不到 env 就拼不出完整 payload。此处从磁盘读整条（含 env），
+  // env 全程留在主进程内，符合既有「凭证不出主进程」纪律。
+  ipcMain.handle('mcp:reconnect', async (_, payload) => {
+    try {
+      // X14：name 是用户数据（来自目录/配置），先过边界校验
+      guard.assertStrings(payload, { name: 120 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    const name = String(payload.name);
+    // 幂等：已连接就直接回当前状态，避免重复 spawn 出第二个子进程
+    const existing = mcp.getMcpServer(name);
+    if (existing) return { ok: true, toolCount: (existing.tools || []).length, already: true };
+    const saved = loadMcpConfig().find((s) => s && s.name === name);
+    if (!saved) {
+      // fail-closed：没有保存过的配置就如实报错，不要拿空 command 去 spawn
+      return { ok: false, error: `未找到已保存的 MCP 配置：${name}（请先在生态中心保存该服务）` };
+    }
+    const r = await connectMcpServer(saved);
+    deps.audit(`mcp:reconnect:${name}`, '', r && r.ok ? `tools=${r.toolCount || 0}` : `error: ${(r && r.error) || 'unknown'}`, r && r.ok ? 'connected' : 'error');
+    return r;
+  });
+
   // T7：浏览器授权（三级回落在引擎内完成；只回状态与级别，绝不回传令牌）
   ipcMain.handle('mcp:authorize', async (_, { name, url, preset } = {}) => {
     const am = getOauthManager();

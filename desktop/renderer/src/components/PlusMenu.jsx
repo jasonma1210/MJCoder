@@ -72,6 +72,9 @@ export default function PlusMenu({
   const [connectErr, setConnectErr] = useState('');
   const [cfgId, setCfgId] = useState(null); // 展开配置表单的连接器 id（就地引导：填缺的变量/授权令牌）
   const [cfgVals, setCfgVals] = useState({}); // { [id]: { VAR: value } }（初值来自本机已存 values）
+  // 已保存到 mcp-servers.json 的服务名（含目录外的自定义服务）——env 不跨 IPC，此处只有名字
+  const [savedServers, setSavedServers] = useState([]);
+  const [reconnecting, setReconnecting] = useState(null); // 正在按名重连的服务名
   const rootRef = useRef(null);
 
   // 打开时加载目录与本机资产（并行、各自容错）
@@ -107,6 +110,14 @@ export default function PlusMenu({
         }
         setCfgVals(seed);
       } catch (e) { /* 启用清单读取失败：连接器面板保持空 */ }
+      // 已保存的 MCP 服务（含目录外自定义服务）——2026-10-17 用户实测反馈：
+      // ima 在生态中心配置完成、也写进了 mcp-servers.json，但 + 菜单只按目录的
+      // install 信息推导状态，目录里 ima 是 install.type='manual'（无统一 npm 包），
+      // 于是永久显示「需手动配置」，用户看不到自己已经配好的服务。
+      try {
+        const cfg = await api.mcpGetConfig?.();
+        if (cfg?.ok && Array.isArray(cfg.servers)) setSavedServers(cfg.servers.map((s) => ({ name: String(s.name || '') })).filter((s) => s.name));
+      } catch (e) { /* 配置读取失败：退化为仅按目录展示 */ }
     })();
   }, [open]);
 
@@ -165,7 +176,20 @@ export default function PlusMenu({
     .filter((s) => matchSkillKey([s.dir, s.name], enabledSkillSet) && matchText(s.name, s.description, skillDisplayName(s)))
     .map((s) => ({ key: `disk:${s.dir}`, builtin: null, ...s }));
   const skillList = [...builtinList, ...diskList].filter((s) => matchText(s.name, s.description));
-  const connList = connectors.filter((c) => enabledConnSet.has(String(c.id)) && matchText(c.display_name, c.name, c.vendor, c.category));
+  // 已保存服务集合：判断「已配置」不依赖目录的 install 信息（ima 这类 manual 目录条目也适用）
+  const savedNameSet = new Set(savedServers.map((s) => String(s.name)));
+  // 目录外的本机服务（用户在生态中心手写的自定义 MCP）——单独成行，否则它们在 + 菜单里完全不可见
+  const catalogNameSet = new Set(connectors.map((c) => String(c.name)));
+  const localSavedRows = savedServers
+    .filter((s) => !catalogNameSet.has(String(s.name)))
+    .map((s) => ({
+      id: `local:${s.name}`, name: s.name, display_name: s.name,
+      description: tr('plusMenu.localSavedService'), __localSaved: true,
+    }));
+  const connList = [
+    ...localSavedRows.filter((c) => matchText(c.display_name, c.name, c.description)),
+    ...connectors.filter((c) => enabledConnSet.has(String(c.id)) && matchText(c.display_name, c.name, c.vendor, c.category)),
+  ];
   const resetKey = `${panel}|${kw}`;
   const lazyEmp = useLazyList(expertList.length, resetKey);
   const lazySkill = useLazyList(skillList.length, resetKey);
@@ -197,6 +221,27 @@ export default function PlusMenu({
       }
     } catch (err) {
       setConnectErr(err.message);
+    }
+  }
+
+  // 按名重连已保存的服务（env 在主进程侧从磁盘读，渲染层只传名字）
+  async function reconnectSaved(name) {
+    setConnectErr('');
+    setReconnecting(name);
+    try {
+      const r = await window.mjcode?.mcpReconnect?.({ name });
+      if (r?.ok) {
+        const cur = extras?.mcpServers || [];
+        if (!cur.includes(name)) onExtrasChange?.({ ...extras, mcpServers: [...cur, name] });
+        // 通知 App 重建工具集（既有通道：生态中心连接/断开也用同一个事件）
+        window.dispatchEvent(new Event('mjcode:mcp-tools-dirty'));
+      } else {
+        setConnectErr(r?.error || tr('plusMenu.connectFailed'));
+      }
+    } catch (err) {
+      setConnectErr(err.message);
+    } finally {
+      setReconnecting(null);
     }
   }
 
@@ -335,17 +380,24 @@ export default function PlusMenu({
         <SubPanel title={tr('plusMenu.connectors')} onBack={() => setPanel(null)} keyword={keyword} setKeyword={setKeyword} searchPlaceholder={tr('plusMenu.searchConnectors')}>
           {connectErr && <p className="text-danger text-xs px-3 py-2">{connectErr}</p>}
           <div ref={lazyConn.scrollRef} className="max-h-64 overflow-y-auto">
-            {/* 已启用的生态连接器：按目录启动信息生成连接计划（lib/ecosystemConnectorLaunch）——
-                能自动配置的直接连接；缺变量/授权的点击展开就地引导表单，填完即连并持久化
-                values（lib/ecosystemEnabled）；manual 类无启动信息，给出官方文档指引 + 跳生态中心。
-                关闭的连接器不出现在此列表，也不参与搜索（启用开关在生态中心）。 */}
+            {/* 连接器列表 = 本机已保存服务（目录外的自定义 MCP，置顶）+ 已启用的目录条目。
+                状态优先级（2026-10-17 用户实测 ima 反馈后修正）：
+                  connected（已连接）> configured（已保存到 mcp-servers.json）> 目录启动计划。
+                此前只看目录启动计划，而 ima 条目是 install.type='manual'（无统一 npm 包），
+                于是配好并用起来之后仍然永久显示「需手动配置」——用户以为自己白配了。
+                已配置项点击 = 按名重连（env 由主进程从磁盘读，不经 IPC）。 */}
             {connList.slice(0, lazyConn.page).map((c) => {
               const vals = cfgVals[c.id] || {};
               const plan = buildLaunchPlan(c, vals);
               const connected = connectedServers.includes(c.name);
               const inSession = extras?.mcpServers?.includes(c.name);
+              // 已写进 mcp-servers.json = 已配置（不依赖目录 install 信息；ima 这类 manual 条目也适用）
+              const configured = savedNameSet.has(String(c.name));
+              const busy = reconnecting === c.name;
               const cfgOpen = cfgId === c.id; // 命名避开 props 参数 open，防遮蔽
-              const status = connected ? tr('plusMenu.connected')
+              const status = busy ? tr('plusMenu.connecting')
+                : connected ? tr('plusMenu.connected')
+                : configured ? tr('plusMenu.configured')
                 : plan.kind === 'ready' ? tr('plusMenu.clickToConnect')
                 : plan.kind === 'needs-auth' ? tr('plusMenu.needsAuth')
                 : plan.kind === 'manual' ? tr('plusMenu.manualPending')
@@ -369,11 +421,13 @@ export default function PlusMenu({
                 <div key={c.id} className="border-b border-border last:border-0">
                   <button
                     onClick={() => {
-                      if (connected) return;
+                      if (connected || busy) return;
+                      // 已配置（含目录外自定义服务）：按名重连，不需要再走目录启动计划
+                      if (configured) { reconnectSaved(c.name); return; }
                       if (plan.kind === 'ready') { connectServer({ name: c.name, ...plan.payload }); return; }
                       setCfgId(cfgOpen ? null : c.id);
                     }}
-                    disabled={connected}
+                    disabled={connected || busy}
                     className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-hover disabled:opacity-60"
                   >
                     <IconPlug size={13} className={inSession ? 'text-accent shrink-0' : 'text-text2 shrink-0'} />
@@ -414,7 +468,7 @@ export default function PlusMenu({
                           />
                         </>
                       )}
-                      {plan.kind === 'manual' && (
+                      {plan.kind === 'manual' && !configured && (
                         <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.manualHint')}</p>
                       )}
                       {plan.kind !== 'manual' && (

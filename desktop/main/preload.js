@@ -189,6 +189,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   mcpListTools: () => ipcRenderer.invoke('mcp:listTools'),
   mcpGetConfig: () => ipcRenderer.invoke('mcp:getConfig'),
   mcpSetConfig: (payload) => ipcRenderer.invoke('mcp:setConfig', payload),
+  // 按名重连已保存的服务（env 由主进程从磁盘读取，不经此桥）
+  mcpReconnect: (payload) => ipcRenderer.invoke('mcp:reconnect', payload),
   // T7：OAuth 浏览器授权（令牌主进程闭环，此桥只回状态）
   mcpAuthorize: (payload) => ipcRenderer.invoke('mcp:authorize', payload),
   mcpAuthStatus: (payload) => ipcRenderer.invoke('mcp:authStatus', payload),
