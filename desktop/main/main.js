@@ -9,7 +9,8 @@ const guard = require('./ipc/payloadGuard');
 
 // ── D2（2026-10-16）：任务写通道（tasks:*）载荷契约 ──
 // 契约本身仍是 shared-ipc/taskPayloads.mjs（zod，动态 import + ready 门）；X14 批次把 tasks:*
-// 的 IPC 注册整体搬到 main/ipc/tasks.js（本文件顶到 1500 行 max-lines 硬门禁），
+// 的 IPC 注册整体搬到 main/ipc/tasks.js（拆分理由是模块边界，不是行数告急——见第 1133 行附近
+// 对 max-lines 口径的说明：该门禁按去空行注释的 code 行数算，raw 与它差约 400 行），
 // 校验入口 validateTaskPayload 随之搬走，此处不再保留副本。
 
 let mainWindow;
@@ -770,7 +771,7 @@ const prTools = {
 };
 
 // 定时任务专用 toolHandlers：与渲染层会话同源（复用主进程工具实现）
-// 定时任务 / Worker 共用的工具集：清单已在 main/scheduledTools.js（main.js 受 1500 行门禁约束）
+// 定时任务 / Worker 共用的工具集：清单已在 main/scheduledTools.js（按能力边界拆，与行数无关）
 const { scheduledToolHandlers: buildScheduledToolHandlers, scheduledCreate: scheduledCreateTool } = require('./scheduledTools');
 const scheduledToolHandlers = () => buildScheduledToolHandlers({
   scheduledAgentChat, webTools,
@@ -1130,7 +1131,12 @@ function setupTaskOrchestration(db) {
   }
 }
 
-// ── 任务编排 IPC（X14：整体搬出 main/ipc/tasks.js——本文件顶到 1500 行 max-lines 硬门禁）──
+// ── 任务编排 IPC（X14：整体搬出 main/ipc/tasks.js）──
+// 拆分理由：tasks 域有独立边界（11 条通道 + 载荷契约入口），且本批要在其中加校验。
+// **不要**把这理解成「本文件快撞 1500 行门禁了」——`max-lines` 的 max 是**去掉空行与注释**
+// 之后的 code 行数（eslint.config.mjs 里 skipBlankLines/skipComments 都为 true）：
+// 拆前 raw 1496 但 eslint 实计只有 1093，离 1500 还有 407 行余量。`wc -l` 与这个门禁
+// 不是同一把尺子，两者差 400 行上下（2026-10-17 实测）。
 // 行为不变；tasks:autoRun / tasks:plan 在模块内加了载荷边界校验，tasks:execute 复用
 // taskGroupRefSchema（与 tasks:cancel 同构）。编排状态与初始化仍在本文件，经 getter 注入。
 const { initTasksIpc } = require('./ipc/tasks');

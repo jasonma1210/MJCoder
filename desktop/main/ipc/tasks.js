@@ -1,7 +1,9 @@
 // 任务编排域 IPC（tasks:*）——从 main.js 原样搬移，只在 tasks:autoRun / tasks:plan 上加了边界校验。
 //
-// 为什么抽出来（X14）：main.js 顶到 1500 行 max-lines 硬门禁，而本批次要在 tasks:* 上加载荷校验，
-// 没有余量。这块与编排器 / Worker 池只有「调用」关系——编排状态与初始化仍留 main.js，
+// 为什么抽出来（X14）：tasks 域有独立边界（11 条通道 + 载荷契约入口），且本批次要在 tasks:* 上
+// 加载荷校验。**不是**因为「main.js 快撞 1500 行」——那个门禁按去空行注释的 code 行数算，
+// 搬前 raw 1496 而 eslint 实计只有 1093，仍有 407 行余量（见 main/main.js 顶部说明）。
+// 这块与编排器 / Worker 池只有「调用」关系——编排状态与初始化仍留 main.js，
 // 故用 getter 注入（与 main/ipc/localData.js、main/ipc/mcp.js 同款 initXxx(deps) 模式）。
 //
 // X14 载荷校验取舍：

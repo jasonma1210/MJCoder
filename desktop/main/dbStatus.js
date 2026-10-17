@@ -2,8 +2,8 @@
 //
 // 背景：`initTaskOrchestration` 的 catch 原来只 console.error 一行就把 taskStore 置空，
 // 界面上毫无提示——用户只会觉得「任务编排/记忆突然不能用了」。状态需要跨模块共享
-//（主进程 catch 写入、IPC 读出、编排工具拼进错误），故独立成模块，避免 main.js 继续膨胀
-//（main.js 已顶到 1500 行 max-lines 门禁）。
+//（主进程 catch 写入、IPC 读出、编排工具拼进错误），故独立成模块——状态需要单一持有者，
+// 与 main.js 的体量无关。
 let unavailable = null;
 // 降级但可用（库损坏后已重建/已从快照恢复）：任务编排能跑，但用户必须知道数据被动过
 let warning = '';

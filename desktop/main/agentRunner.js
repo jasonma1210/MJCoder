@@ -70,7 +70,7 @@ function makeEmitter(sender, runId) {
 // X8：IPC 入口专用——先等契约模块就绪（ESM 动态 import 的启动窗口）再进 startAgentRun。
 // agentRunnerReady() 在「加载成功」与「加载失败」两种情况下都会 resolve，
 // 失败由 startAgentRun 内的 contractFailed 分支给出可读错误。
-// 放在本文件而非 main.js，是为了避开 main.js 的 1500 行 max-lines 门禁。
+// 放在本文件而非 main.js：它属于「IPC 入口 + 契约就绪门」这条链路，与 main.js 的装配职责无关。
 async function startAgentRunWhenReady(payload, sender) {
   await contractReady;
   return startAgentRun(payload, sender);
