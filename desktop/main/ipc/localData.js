@@ -154,32 +154,70 @@ function register() {
 
   ipcMain.handle('local:threads/list', async (_, { projectPath } = {}) => (deps.getLocalStore() ? deps.getLocalStore().listThreads(projectPath) : []));
   ipcMain.handle('local:threads/create', async (_, payload) => {
+    // X14：会话标题/目录都可缺省（新建即空会话），但类型与长度必须守住——
+    // 路径允许空格，故用 assertStrings 而非 assertTokens
+    guard.assertStrings(payload || {}, {
+      title: { max: 200, optional: true, allowEmpty: true },
+      cwd: { max: 1024, optional: true, allowEmpty: true },
+      projectPath: { max: 1024, optional: true, allowEmpty: true },
+      providerName: { max: 200, optional: true, allowEmpty: true },
+      modelName: { max: 200, optional: true, allowEmpty: true },
+    });
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().createThread(payload || {});
   });
-  ipcMain.handle('local:threads/set-status', async (_, { id, status }) => {
+  ipcMain.handle('local:threads/set-status', async (_, payload) => {
+    guard.assertTokens(payload, { id: 128 });
+    guard.assertEnum(payload, 'status', ['running', 'idle', 'done', 'awaiting_approval']);
+    const { id, status } = payload;
     if (!deps.getLocalStore()) return null;
     return deps.getLocalStore().setThreadStatus(id, status);
   });
   ipcMain.handle('local:messages/add', async (_, payload) => {
+    // X14：消息是用户数据的核心，role 是闭集、content 允许为空（纯工具调用轮）
+    guard.assertTokens(payload || {}, { threadId: 128 });
+    guard.assertEnum(payload || {}, 'role', ['user', 'assistant', 'system', 'tool']);
+    guard.assertStrings(payload || {}, { content: { max: 2 * 1024 * 1024, optional: true, allowEmpty: true } });
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().addMessage(payload || {});
   });
   ipcMain.handle('local:messages/list', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().listMessages(threadId) : []);
   // /compact 落库：压缩摘要历史整体替换（P2-6 收口）
   ipcMain.handle('local:messages/replace', async (_, payload) => {
+    // /compact 会整体替换历史：threadId 必填，messages 必须是数组且有条数上限
+    guard.assertTokens(payload || {}, { threadId: 128 });
+    guard.assertArray(payload || {}, 'messages', { max: 5000 });
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().replaceMessages(payload?.threadId, payload?.messages || []);
   });
-  ipcMain.handle('local:threads/delete', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().archiveThread(threadId) : { ok: false });
+  ipcMain.handle('local:threads/delete', async (_, payload) => {
+    guard.assertTokens(payload, { threadId: 128 });
+    return deps.getLocalStore() ? deps.getLocalStore().archiveThread(payload.threadId) : { ok: false };
+  });
   // A1：会话重命名
-  ipcMain.handle('local:threads/rename', async (_, { threadId, title }) => deps.getLocalStore() ? deps.getLocalStore().renameThread(threadId, title) : { ok: false });
+  ipcMain.handle('local:threads/rename', async (_, payload) => {
+    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertStrings(payload, { title: 200 });
+    const { threadId, title } = payload;
+    return deps.getLocalStore() ? deps.getLocalStore().renameThread(threadId, title) : { ok: false };
+  });
   // A3：归档可见 —— 恢复 / 彻底删除 / 列表
   ipcMain.handle('local:threads/archived', async () => deps.getLocalStore() ? deps.getLocalStore().listArchivedThreads() : []);
-  ipcMain.handle('local:threads/restore', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().restoreThread(threadId) : { ok: false });
-  ipcMain.handle('local:threads/purge', async (_, { threadId }) => deps.getLocalStore() ? deps.getLocalStore().purgeThread(threadId) : { ok: false });
+  ipcMain.handle('local:threads/restore', async (_, payload) => {
+    guard.assertTokens(payload, { threadId: 128 });
+    return deps.getLocalStore() ? deps.getLocalStore().restoreThread(payload.threadId) : { ok: false };
+  });
+  ipcMain.handle('local:threads/purge', async (_, payload) => {
+    guard.assertTokens(payload, { threadId: 128 });
+    return deps.getLocalStore() ? deps.getLocalStore().purgeThread(payload.threadId) : { ok: false };
+  });
   // B1：孤儿会话归组
-  ipcMain.handle('local:threads/set-project', async (_, { threadId, projectPath }) => deps.getLocalStore() ? deps.getLocalStore().setThreadProject(threadId, projectPath) : { ok: false });
+  ipcMain.handle('local:threads/set-project', async (_, payload) => {
+    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertStrings(payload, { projectPath: { max: 1024, optional: true, allowEmpty: true } });
+    const { threadId, projectPath } = payload;
+    return deps.getLocalStore() ? deps.getLocalStore().setThreadProject(threadId, projectPath) : { ok: false };
+  });
 
   ipcMain.handle('local:providers/list', async () => {
     if (!deps.getLocalStore()) return [];
@@ -272,9 +310,20 @@ function register() {
 
   // B1：项目一等实体（本机持久化）
   ipcMain.handle('local:projects/list', async () => deps.getLocalStore() ? deps.getLocalStore().listProjects() : []);
-  ipcMain.handle('local:projects/add', async (_, { path, name }) => deps.getLocalStore() ? deps.getLocalStore().addProject({ path, name }) : null);
-  ipcMain.handle('local:projects/remove', async (_, { path }) => deps.getLocalStore() ? deps.getLocalStore().removeProject(path) : { ok: false });
-  ipcMain.handle('local:projects/rename', async (_, { path, name }) => deps.getLocalStore() ? deps.getLocalStore().renameProject(path, name) : { ok: false });
+  ipcMain.handle('local:projects/add', async (_, payload) => {
+    guard.assertStrings(payload, { path: 1024, name: { max: 200, optional: true, allowEmpty: true } });
+    const { path, name } = payload;
+    return deps.getLocalStore() ? deps.getLocalStore().addProject({ path, name }) : null;
+  });
+  ipcMain.handle('local:projects/remove', async (_, payload) => {
+    guard.assertStrings(payload, { path: 1024 });
+    return deps.getLocalStore() ? deps.getLocalStore().removeProject(payload.path) : { ok: false };
+  });
+  ipcMain.handle('local:projects/rename', async (_, payload) => {
+    guard.assertStrings(payload, { path: 1024, name: 200 });
+    const { path, name } = payload;
+    return deps.getLocalStore() ? deps.getLocalStore().renameProject(path, name) : { ok: false };
+  });
 
   ipcMain.handle('local:preferences/get', async (_, { key }) => deps.getLocalStore() ? deps.getLocalStore().getPreference(key) : undefined);
   ipcMain.handle('local:preferences/set', async (_, { key, value }) => deps.getLocalStore() ? deps.getLocalStore().setPreference(key, value) : { ok: false });

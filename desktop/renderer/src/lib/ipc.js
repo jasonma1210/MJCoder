@@ -59,6 +59,11 @@ function normalize(v) {
 export async function call(method, payload, { timeout = DEFAULT_TIMEOUT } = {}) {
   const api = mj();
   if (!api || typeof api[method] !== 'function') {
+    // X23：方法名拼错与「平台不支持」在运行时长得一样。开发期把拼写嫌疑显式打出来，
+    // 生产环境保持静默降级（不惊动用户）。桥面清单以 main/preload.js 为准。
+    if (import.meta?.env?.DEV) {
+      console.warn(`[ipc] bridge method not found: ${method} — check main/preload.js (typo guard: test/bridge-parity.test.mjs runs in CI)`);
+    }
     return { ok: false, data: null, error: tGlobal('runtime.capabilityUnavailable', { method }) };
   }
   try {

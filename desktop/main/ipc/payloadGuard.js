@@ -108,6 +108,16 @@ function assertArray(payload, key, { max, min = 0 } = {}, label = 'payload') {
   return payload;
 }
 
+/** 枚举字段（状态、角色这类闭集）：值必须命中白名单 */
+function assertEnum(payload, key, values, label = 'payload') {
+  assertObject(payload, label);
+  const value = payload[key];
+  if (!values.includes(value)) {
+    throw new PayloadError(`${key} 取值非法（收到 ${JSON.stringify(value)}，应为 ${values.join(' / ')}）`);
+  }
+  return payload;
+}
+
 module.exports = {
   PayloadError,
   assertObject,
@@ -115,4 +125,5 @@ module.exports = {
   assertIds,
   assertTokens,
   assertArray,
+  assertEnum,
 };
