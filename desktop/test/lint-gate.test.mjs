@@ -43,6 +43,11 @@ const bin = resolveEslintBin();
 
 if (!bin) {
   // 非「装了依赖」的环境：门禁无法判定，跳过而非误报（同时把原因打出来，避免静默失效）
+  //
+  // ⚠ 别只给 resolveEslintBin 加 `statSync(p).isFile()`：目录冒充 eslint 时 existsSync
+  // 为 true，加了类型校验会让它返回 null → 落到这里 → **SKIP + exit 0（该红变绿）**；
+  // 当前行为是 spawnSync 报 EACCES → exit 1（fail-closed）。要加类型校验，必须连带把
+  // 「路径存在但不是常规文件」单独判红，别只加那半行。
   console.log('[SKIP] ⚠ 未找到本地 eslint（node_modules/.bin/eslint），跳过 lint 门禁');
 } else {
   const res = spawnSync(bin, LINT_ARGS, {
