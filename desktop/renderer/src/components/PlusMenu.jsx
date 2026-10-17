@@ -125,7 +125,7 @@ export default function PlusMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => { if (!rootRef.current?.contains(e.target)) onClose?.(); };
-    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose?.(); } };
     // 非模态 popover 用捕获阶段监听，避免与 Composer 的 Esc 处理冲突
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey, true);
@@ -457,16 +457,36 @@ export default function PlusMenu({
                           />
                         </div>
                       ))}
-                      {plan.kind === 'needs-auth' && (
+                      {/* 需要授权的两种形态，必须分开渲染：
+                          ① 目录给了 header/url 模板 → 按模板变量逐个收（此前写死一个 Authorization 输入框，
+                             而真实模板变量叫 API_KEY / X-Api-Key / TUSHARE_TOKEN…，用户在 + 菜单里永远填不对）；
+                          ② 目录只声明了 auth_type、没给模板 → 才退回「粘贴整条令牌」。 */}
+                      {plan.kind === 'needs-auth' && (plan.missing || []).length > 0 && (
                         <>
                           <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.authHint')}</p>
-                          <input
-                            value={vals.Authorization || ''}
-                            onChange={(ev) => setVal('Authorization', ev.target.value)}
-                            placeholder={tr('plusMenu.authPlaceholder')}
-                            className="w-full h-7 px-2 rounded-md border border-border bg-bg text-xs outline-none focus:border-accent"
-                          />
+                          {plan.missing.map((m) => (
+                            <div key={m.name}>
+                              <label className="block text-caption text-text2 mb-0.5">
+                                {m.label || m.name}
+                                {m.docs_url && (
+                                  <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-1.5" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
+                                )}
+                              </label>
+                              <input
+                                value={vals[m.name] || ''}
+                                onChange={(ev) => setVal(m.name, ev.target.value)}
+                                placeholder={m.name}
+                                className="w-full h-7 px-2 rounded-md border border-border bg-bg text-xs outline-none focus:border-accent"
+                              />
+                            </div>
+                          ))}
                         </>
+                      )}
+                      {c.install?.auth_command && (
+                        <div className="rounded-md border border-border bg-surface2 px-2 py-1.5">
+                          <div className="text-caption text-text2 leading-relaxed">{tr('plusMenu.cliAuthRequired')}</div>
+                          <code className="block mt-1 text-caption text-text1 break-all select-all">{c.install.auth_command}</code>
+                        </div>
                       )}
                       {plan.kind === 'manual' && !configured && (
                         <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.manualHint')}</p>

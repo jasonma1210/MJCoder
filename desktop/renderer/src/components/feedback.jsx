@@ -57,6 +57,26 @@ export default function FeedbackHost() {
     return () => { confirmListener = null; toastListener = null; };
   }, []);
 
+  // C2（2026-10-17）：领取「上次渲染进程崩溃」的通知（主进程取完即清）。
+  // 放在提示系统里而不是 App：崩溃提示本质就是一条 toast，职责更贴；
+  // 且 App.jsx 已贴到 800 行门禁，不宜再塞逻辑。
+  // 必须排在上面的 effect 之后——它负责把 toastListener 挂上。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const notices = await window.mjcode?.getCrashNotice?.();
+        if (cancelled || !Array.isArray(notices) || notices.length === 0) return;
+        const isLoop = notices.some((n) => n && n.kind === 'loop');
+        toast({
+          message: isLoop ? tr('app.crashLoop', { n: notices.length }) : tr('app.crashRecovered'),
+          duration: 8000,
+        });
+      } catch { /* 崩溃提示失败绝不影响启动 */ }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function finish(ok) {
     if (!dialog) return;
     dialog.resolve(ok);
@@ -71,7 +91,7 @@ export default function FeedbackHost() {
   finishRef.current = finish;
   useEffect(() => {
     if (!dialog) return;
-    const onKey = (e) => { if (e.key === 'Escape') finishRef.current(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); finishRef.current(false); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [dialog]);

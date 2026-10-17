@@ -143,6 +143,13 @@ function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
       if (sid) sessionId = sid;
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // 通知（无 id）没有响应：JSON-RPC 规范里它的失败不影响主流程。
+        // 实测部分服务端对 notifications/initialized 直接回 404/405（只有真实请求才建会话），
+        // 若按错误抛出会把「通知被拒」误报成「连接失败」。
+        if (requestId === undefined) {
+          if (onLog) onLog(`通知返回 HTTP ${res.status}（按规范忽略）`);
+          return;
+        }
         throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
       }
       const ctype = String(res.headers.get('content-type') || '');
@@ -153,6 +160,7 @@ function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
       }
       // 单 JSON 响应
       const text = await res.text();
+      if (!text.trim()) return; // 通知（notifications/*）的 202 无 body：不是错误，别刷日志
       try { dispatchMessage(transport.serverRef, JSON.parse(text)); }
       catch (e) { if (onLog) onLog(`非 JSON 响应: ${text.slice(0, 120)}`); }
     },
@@ -163,29 +171,151 @@ function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
   return transport;
 }
 
-// 解析 SSE 流：data: 行 → JSON
-async function consumeSse(res, onData) {
+// 解析 SSE 流：事件 → JSON
+//
+// 2026-10-17 真机修复（远程 MCP 大面积连不上的根因）：
+//   SSE 规范允许三种行尾（LF / CRLF / CR），实测 DeepWiki 用 **CRLF**——原实现只按 '\n\n' 切分，
+//   CRLF 下事件分隔是 '\r\n\r\n'（序列为 \r \n \r \n，不含连续 '\n\n'），于是**永远切不开**：
+//   initialize 的响应到了却没人解析 → 卡满 30s 报「MCP initialize 超时」。
+//   而返回单 JSON 的服务端（24haowan）正常 ⇒ 现象恰好表现为「一部分能连、一部分连不上」。
+// 同时按规范处理一个事件内多行 data（用 '\n' 拼接后再 parse）与注释/event/id/retry 行。
+async function consumeSse(res, onData, onNamedEvent) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  const handleEvent = (raw) => {
+    let evtName = 'message';
+    const dataLines = [];
+    for (const line of raw.split('\n')) {
+      if (line.startsWith('event:')) { evtName = line.slice(6).trim() || 'message'; continue; }
+      if (!line.startsWith('data:')) continue; // id: / retry: / ':' 注释行一律跳过
+      dataLines.push(line.slice(5).replace(/^ /, '')); // 规范：冒号后首个空格是分隔符
+    }
+    if (!dataLines.length) return;
+    const data = dataLines.join('\n').trim();
+    // 命名事件（SSE 传输的 `endpoint`）的 data 是路径而非 JSON-RPC，交给调用方
+    if (evtName !== 'message' && typeof onNamedEvent === 'function') { onNamedEvent(evtName, data); return; }
+    if (!data || data === '[DONE]') return;
+    try { onData(JSON.parse(data)); } catch { /* 非 JSON 事件忽略 */ }
+  };
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    // 行尾归一后再切事件。归一化是幂等的；跨 chunk 被截断的 '\r' 会在下一轮重新归一，
+    // 最坏情况只是把一个事件提前切开一次，data 内容仍完整（已推演边界）。
+    buf = (buf + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const events = buf.split('\n\n');
     buf = events.pop();
-    for (const evt of events) {
-      for (const line of evt.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        try {
-          const msg = JSON.parse(data);
-          onData(msg);
-        } catch { /* 非 JSON 事件忽略 */ }
-      }
-    }
+    for (const evt of events) handleEvent(evt);
   }
+  if (buf.trim()) handleEvent(buf); // 流结束时没有尾随空行
+}
+
+// ── SSE 传输（旧版 HTTP+SSE，MCP 2024-11-05 的 http 形态）──
+//
+// 与 streamableHttp 的区别（为什么必须单独一个 transport）：
+//   · streamableHttp：一个 POST 携带一条消息，响应在同一次 POST 里回来（JSON 或 SSE 流）；
+//   · SSE：先 GET 建一条长连接，服务端用 `event: endpoint` 告知消息投递路径，
+//     之后客户端 POST 到该路径，**响应从那条长连接回来**。
+// 两者的 endpoint 发现与发送语义完全不同，共用一个 transport 会把两种情况都做错。
+//
+// 2026-10-17 新增：WorkBuddy 目录里有 11 条 `type: sse` 的服务，此前被直接跳过（导入时排除），
+// 用户点不到。这里补上，按官方实现顺序：GET → 等 endpoint → POST。
+function createSseTransport({ name, url, headers = {}, onLog, auth }) {
+  const base = String(url || '').trim();
+  if (!base) throw new Error('SSE 传输需要服务地址（url）');
+  let endpoint = '';
+  let closed = false;
+  let started = false;
+  let abortCtl = null;
+  let readyResolve = null;
+  let readyReject = null;
+  const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+  ready.catch(() => { /* 未消费的 rejection 会刷 unhandledRejection 日志，这里兜住 */ });
+
+  const withAuth = async (extra) => {
+    const h = { ...extra, ...headers };
+    if (auth && !headers.Authorization) {
+      const bearer = await auth.getHeader().catch(() => null);
+      if (bearer) h.Authorization = bearer;
+    }
+    return h;
+  };
+
+  const transport = {
+    kind: 'sse',
+    // 由 connectMcpServer 在 transportObj.serverRef 赋值后调用：
+    // 必须等到 serverRef 就绪才能 dispatch（否则事件到达时找不到分发表）
+    ensureStarted() {
+      if (started) return;
+      started = true;
+      abortCtl = new AbortController();
+      (async () => {
+        const res = await fetch(base, { headers: await withAuth({ Accept: 'text/event-stream' }), signal: abortCtl.signal });
+        if (res.status === 401) {
+          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
+          err.mcpAuthRequired = true;
+          throw err;
+        }
+        if (!res.ok) throw new Error(`SSE 建流失败：HTTP ${res.status}`);
+        if (!res.body || typeof res.body.getReader !== 'function') throw new Error('SSE 建流失败：响应不是流');
+        await consumeSse(
+          res,
+          (msg) => dispatchMessage(transport.serverRef, msg),
+          (evtName, data) => {
+            if (evtName !== 'endpoint') return;
+            // data 可能是相对路径（`/messages?sessionId=xxx`）——按建流地址解析成绝对 URL
+            try { endpoint = new URL(data, base).toString(); } catch { endpoint = data; }
+            if (onLog) onLog(`SSE endpoint: ${endpoint}`);
+            readyResolve();
+          },
+        );
+      })()
+        .catch((e) => {
+          closed = true;
+          if (!endpoint) readyReject(e);
+          else if (onLog) onLog(`SSE 流已断开：${e.message}`);
+        })
+        .finally(() => { closed = true; });
+    },
+    async send(payload, requestId) {
+      await ready; // endpoint 未就绪时先等（initialize 也走这条路）
+      if (closed) throw new Error('SSE 连接已断开，请重新连接该服务');
+      const isNotification = requestId === undefined;
+      const post = (h) => fetch(endpoint, {
+        method: 'POST',
+        headers: { ...h, 'Content-Type': 'application/json' },
+        body: payload,
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+      let res = await post(await withAuth({}));
+      if (res.status === 401 && auth) {
+        await res.text().catch(() => {});
+        const fresh = await auth.refresh().catch(() => null);
+        if (fresh) res = await post({ ...headers, Authorization: fresh });
+        if (res.status === 401) {
+          await res.text().catch(() => {});
+          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
+          err.mcpAuthRequired = true;
+          throw err;
+        }
+      }
+      // 规范：消息投递成功即 202；部分实现回 200/204，也算成功
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        if (isNotification) { if (onLog) onLog(`通知返回 HTTP ${res.status}（按规范忽略）`); return; }
+        throw new Error(`SSE 发送失败：HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
+      }
+      await res.text().catch(() => {});
+    },
+    close() {
+      closed = true;
+      try { abortCtl?.abort(); } catch { /* 已关闭 */ }
+    },
+    alive() { return started && !closed; },
+    stderrTail: '',
+  };
+  return transport;
 }
 
 // ── 连接（IPC 处理器与启动重连共用）──
@@ -210,7 +340,9 @@ async function connectMcpServer({
   try {
     transportObj = transport === 'http'
       ? createHttpTransport({ name, url, headers, onLog, auth })
-      : createStdioTransport({ name, command, args, env: env, onLog });
+      : transport === 'sse'
+        ? createSseTransport({ name, url, headers, onLog, auth })
+        : createStdioTransport({ name, command, args, env: env, onLog });
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -227,6 +359,8 @@ async function connectMcpServer({
     onNotify: null,
   };
   transportObj.serverRef = server; // 传输层回环到分发器
+  // SSE 需要主动建流（GET），且必须在 serverRef 就绪之后——否则 endpoint/消息事件到达时无处分发
+  transportObj.ensureStarted?.();
   // 握手阶段进程就没了（命令不存在 / 坏 shebang / 立刻崩）→ 立刻结算挂起的 RPC。
   // 不这么做的后果（2026-10-17 实测）：spawn ENOENT 明明几百毫秒就发生，但 initialize 要
   // 干等满 30s 超时，最后返回「MCP initialize 超时（30s）」——错误信息把「进程根本起不来」
@@ -270,9 +404,10 @@ async function connectMcpServer({
       capabilities: {},
       clientInfo: { name: 'mj-coder', version: '1.0' },
     });
-    if (transportObj.kind === 'stdio') {
-      transportObj.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
-    }
+    // 2026-10-17：streamableHttp 与 stdio 一样，initialize 之后必须发 initialized 通知。
+    // 此前只对 stdio 发：宽容的服务端（24haowan）不校验，严格的服务端会拒绝后续 tools/list。
+    Promise.resolve(transportObj.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })))
+      .catch((e) => { console.warn('[MCP] initialized 通知发送失败（不影响主流程）:', e.message); });
     const listRes = await mcpRpc(server, 'tools/list', {});
     server.tools = listRes?.tools || [];
     server.handshakeDone = true;

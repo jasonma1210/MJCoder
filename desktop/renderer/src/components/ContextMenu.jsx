@@ -26,7 +26,7 @@ export default function ContextMenu({ open, x = 0, y = 0, items = [], onClose })
   // 关闭：Esc / 点击别处 / 滚动 / 窗口尺寸变化
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } };
     const onDown = (e) => { if (!ref.current?.contains(e.target)) onClose?.(); };
     const onScroll = () => onClose?.();
     window.addEventListener('keydown', onKey);

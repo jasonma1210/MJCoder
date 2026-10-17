@@ -44,6 +44,10 @@ const { stricterApproval, stricterSandbox } = require('./approvalPolicy');
 // 用户最近一次选择的审批档。Worker 子任务经 deps.getApprovalMode() 读它来继承用户设置。
 // 不做持久化：这是「本会话的当前选择」，重启后回到默认档是正确行为。
 let currentUserApprovalMode = 'on-request';
+// 2026-10-17（P1-1）：按 runId 存本次运行的审批档。
+// 为什么需要它：审批档可**按会话覆盖**（渲染层 thread.approval_mode），所以「最后一次 run 的档」
+// 不能代表「发起这次编排的那次 run 的档」。编排组快照要用本 run 的档，就必须能按 runId 查。
+const runApprovalModes = new Map();
 
 function initAgentRunner(d) {
   deps = d;
@@ -87,7 +91,10 @@ function startAgentRun(payload, sender) {
   // 子任务此前硬编码 auto-safe ⇒ 用户选「全部询问」时，编排里每条命令仍自动放行，
   // 即产品对用户的设置撒谎。只取「用户设置」，不取 rolePreset 钳制后的值——
   // 钳制已在本文件内对前台生效，Worker 侧还会再叠一层 auto-safe 地板。
-  currentUserApprovalMode = payload.approvalMode || 'on-request';
+  // 本 run 的档：只用于本 run 内的审批判定与「回看最近一次」。**不要**给无人值守路径用，
+  // 那边一律走 main/approvalSettings.js 的 getUserApprovalMode()（用户设置）。
+  const runApprovalMode = payload.approvalMode || 'on-request';
+  currentUserApprovalMode = runApprovalMode;
   // X8：契约未就绪 = 边界不存在，一律拒绝（此前是「未就绪则跳过校验」，
   // 冷启动窗口内畸形载荷可穿透到引擎）。IPC 入口已先 await agentRunnerReady()，
   // 正常路径不会走到这里；保留这道判断是为了让**任何直连调用**也 fail-closed。
@@ -108,6 +115,7 @@ function startAgentRun(payload, sender) {
   const controller = new AbortController();
   const emit = makeEmitter(sender, runId);
   runs.set(runId, { controller, sender });
+  runApprovalModes.set(runId, runApprovalMode);
 
   // 后台执行：不 await（IPC handle 需立即返回，渲染层靠事件流驱动 UI）
   (async () => {
@@ -327,6 +335,7 @@ function startAgentRun(payload, sender) {
       }
     } finally {
       runs.delete(runId);
+      runApprovalModes.delete(runId);
       // T3-1：运行结束即释放该 run 的全部大载荷临时文件（用后即清）
       try { bigPayload.releaseRun(runId); } catch (e) { console.warn('[agentRunner] 大载荷清理失败:', e.message); }
     }
@@ -377,6 +386,9 @@ module.exports = {
   // 2026-10-16：重导出纪律函数与当前审批档 getter。
   // 实际实现已抽到 approvalPolicy.js（唯一事实源），此处重导出只为兼容既有引用方。
   stricterApproval, stricterSandbox,
+  // 仅表示「最近一次 startAgentRun 写入的档」，供状态回看；**不得**用于无人值守路径（P1-1）。
   getCurrentApprovalMode: () => currentUserApprovalMode,
+  // 无人值守/编排快照用：取「发起该 run 时用户选的档」，run 结束后返回 null（调用方回落设置）
+  getApprovalModeFor: (runId) => runApprovalModes.get(runId) || null,
   startAgentRunWhenReady,
 };

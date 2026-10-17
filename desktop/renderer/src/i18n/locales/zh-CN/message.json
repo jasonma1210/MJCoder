@@ -2,6 +2,8 @@
   "loadEarlier": "加载更早消息（还有 {n} 条）",
   "thisRound": "本轮",
   "thinking": "思考中…",
+  "thinkingElapsed": "· 已思考 {s}s",
+  "receivedChars": "· 已收 {n} 字",
   "jumpBottom": "回到底部",
   "copied": "已复制到剪贴板",
   "copyFailed": "复制失败",

@@ -70,7 +70,29 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     if (process.env.NODE_ENV === 'development') mainWindow.webContents.openDevTools();
   }
+  // 新窗口/弹窗：一律 deny 并交给系统浏览器（target=_blank、window.open）
   mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  // 2026-10-17 真机修复（用户实测：点 MCP 里需要跳转的条目，返回后变成「新建会话界面」）：
+  // setWindowOpenHandler 只拦 target=_blank / window.open，**拦不住同窗口导航**——
+  // `<a href="https://...">`（无 target）、`location.href=`、表单提交都会让渲染进程整页跳走，
+  // SPA 被卸载；返回/后退时应用重新加载，activeThread 回到 null，用户看到的就是新建会话。
+  // 这里做最后一道兜底：非应用自身的导航一律取消并交给系统浏览器。
+  // 渲染层（MessageStream 的 markdown 链接）已同步改为显式 openExternal，这里是防再犯。
+  const isInternalUrl = (raw) => {
+    try {
+      const u = new URL(raw);
+      if (app.isPackaged) return u.protocol === 'file:';
+      // 开发态：只放行本地 dev server（端口可能变，按 host 判断）
+      return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+    } catch {
+      return false;
+    }
+  };
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isInternalUrl(url)) return;
+    event.preventDefault();
+    try { shell.openExternal(url); } catch (e) { console.warn('[window] 外链打开失败:', e.message); }
+  });
   mainWindow.on('close', saveWindowState);
 }
 

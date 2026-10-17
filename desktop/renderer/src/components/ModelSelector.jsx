@@ -19,7 +19,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => { if (!rootRef.current?.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') { setOpen(false); setExpanded(null); } };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false); setExpanded(null); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {

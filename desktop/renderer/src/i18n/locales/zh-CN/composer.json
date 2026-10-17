@@ -48,7 +48,7 @@
   "lastFailedNote": "上一轮执行失败（可能是网络或服务波动），对话历史已保留",
   "retryTurn": "重试本轮",
   "workingWith": "与 {name} 协作中…",
-  "placeholderRunning": "运行中：Enter 当轮引导 / Tab 排队到下一轮…",
+  "placeholderRunning": "运行中：Enter 排队到下一轮（不会打断当前任务）…",
   "placeholderIdle": "输入你想做什么，@文件路径 引用项目文件，/ 唤起命令...",
   "comingSoon": "（即将支持）",
   "addTip": "添加（文件 / 模式 / 数字员工 / 技能 / 连接器 / 语音）",

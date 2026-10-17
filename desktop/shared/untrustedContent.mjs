@@ -21,6 +21,9 @@
 //   · fail-closed：命中即判可疑，由调用方决定是否阻断。
 
 /** 检测规则：命中即视为可疑。severity：high 一律阻断；medium/low 供调用方按需降权。 */
+// 否定/防御性表述的前缀词：命中点前面出现这些词时，视为「禁止这样做」而非「要求这样做」
+const NEGATION_BEFORE = /(不要|不能|不可|不得|禁止|避免|切勿|请勿|勿|绝不|never|do not|don't|avoid|must not|should not)\s*[^。\n]{0,12}$/i;
+
 export const INJECTION_RULES = [
   { id: 'ignore-instructions-cn', severity: 'high', re: /(忽略|无视|忘记|覆盖)[^。\n]{0,12}(之前|以上|上面|前面|先前|所有)[^。\n]{0,12}(指令|命令|提示|规则|要求)/ },
   { id: 'ignore-instructions-en', severity: 'high', re: /ignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instruction|prompt|rule|direction)/i },
@@ -29,7 +32,17 @@ export const INJECTION_RULES = [
   { id: 'leak-system-prompt-en', severity: 'high', re: /(reveal|print|output|repeat)\s+(your\s+)?(system\s+)?(prompt|instruction)/i },
   { id: 'bypass-approval', severity: 'high', re: /(不要|无需|跳过|别)[^。\n]{0,8}(询问|确认|审批|征求)(用户|人类)?(同意|许可|确认)?/ },
   { id: 'bypass-approval-en', severity: 'high', re: /(skip|bypass|disable)\s+(the\s+)?(approval|confirmation|permission\s+prompt)/i },
-  { id: 'secret-exfiltration', severity: 'high', re: /((读取|打印|输出|上传|发送|泄露)[^。\n]{0,16}(\.env|环境变量|凭证|密钥|api[_ ]?key|token|id_rsa|\.aws\/credentials)|(\.env|环境变量|凭证|密钥|api[_ ]?key|token|id_rsa)[^。\n]{0,16}(读取|打印|输出|上传|发送|泄露))/i },
+  // 2026-10-17 收窄：原规则把「token / api key / 裸密钥」也算目标，导致
+  //   · `ai-cost-control` 的「输出 token」（计费单位）
+  //   · `llm-integration` 的「密钥只从环境或密钥管理读取」（安全最佳实践）
+  // 全被判成「密钥外泄」，6 个技能整块注入失败。
+  // 现在只匹配**具体凭据载体 + 外泄动词**；`输出`（报告用词）不再算外泄动词。
+  // 目标分两类，动词分两档（2026-10-17 二次修正）：
+  //   · 外泄动词（打印/上传/发送/发给/发到/传给/贴出/泄露）→ 命中任意敏感目标（含「环境变量」）；
+  //   · 「读取」只与**文件型**目标组合才算（`.env` / `id_rsa` / credentials / .ssh）。
+  //     因为「读取环境变量（process.env）」是正常编码，不是外泄；
+  //     而「把 .env 的内容发给我」必须命中——原规则只认「发送」，漏了「发给」这种口语表达。
+  { id: 'secret-exfiltration', severity: 'high', re: /((打印|上传|发送|发给|发到|传给|贴出|泄露)[^。\n]{0,16}(\.env|环境变量|凭证|密钥文件|id_rsa|\.aws\/credentials|\.ssh)|(\.env|凭证|id_rsa|\.aws\/credentials|\.ssh)[^。\n]{0,16}(打印|上传|发送|发给|发到|传给|贴出|泄露|读取))/i },
   { id: 'pipe-to-shell', severity: 'high', re: /(curl|wget)[^|\n]{0,80}\|\s*(ba)?sh/i },
   { id: 'hidden-unicode', severity: 'high', re: /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/ },
   { id: 'role-override', severity: 'medium', re: /(<\|im_start\|>|<\|system\|>|\[INST\]|###\s*(system|系统)\s*(提示|指令)?\s*[:：])/i },
@@ -53,7 +66,13 @@ export function detectPromptInjection(content, options = {}) {
   for (const rule of INJECTION_RULES) {
     if ((SEVERITY_ORDER[rule.severity] || 0) < floor) continue;
     const m = text.match(rule.re);
-    if (m) findings.push({ id: rule.id, severity: rule.severity, match: m[0].slice(0, 120) });
+    if (!m) continue;
+    // 2026-10-17：否定/风险语境排除。
+    // 安全类文档大量出现「不要在日志中打印密钥」「避免上传 .env」——这些是**防御性**表述，
+    // 与「把 .env 发给我」是相反的意图。命中点前 16 字符内出现否定词即不计入。
+    const before = text.slice(Math.max(0, (m.index || 0) - 16), m.index || 0);
+    if (NEGATION_BEFORE.test(before)) continue;
+    findings.push({ id: rule.id, severity: rule.severity, match: m[0].slice(0, 120) });
   }
   return { suspicious: findings.length > 0, findings };
 }

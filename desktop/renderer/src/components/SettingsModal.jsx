@@ -94,7 +94,7 @@ export default function SettingsModal({
 
   // Esc 关闭设置：主窗口无系统标题栏，Esc 是唯一「不用找按钮」的退出路径
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -810,6 +810,91 @@ function Section({ title, children }) {
 // 默认一调用就报 web_search_unconfigured。
 // 交互：可同时启用多家（按序 failover，第一个成功者生效），也可只开一家；
 //       DuckDuckGo 无需 Key，开箱可用。Key 仅存本机 localStore，不落审计/日志。
+// T6（2026-10-17）：三层流式超时设置。
+// 为什么不写死一个数字：推理模型（mimo）思考 3 分钟很常见，而快端点 30s 就出结果——
+// 写死必然有一边被误杀。这里让用户按自己的供应商调。
+// 校验在主进程（streamSettings.clampMs）：越界会**收敛**，保存后重新拉一次"生效值"回显，
+// 这样用户能看见自己填的 5 秒被收到 10 秒，而不是以为没生效。
+function StreamTimeoutSection() {
+  const { t } = useI18n();
+  const [view, setView] = useState(null);
+  const [draft, setDraft] = useState({ firstByte: '', idle: '', total: '' });
+  const [flash, setFlash] = useState('');
+  const [error, setError] = useState('');
+
+  const applyView = (v) => {
+    setView(v);
+    setDraft({
+      firstByte: String(Math.round(v.effective.firstByteMs / 1000)),
+      idle: String(Math.round(v.effective.idleMs / 1000)),
+      total: String(Math.round(v.effective.totalMs / 1000)),
+    });
+  };
+
+  useEffect(() => {
+    window.mjcode?.getStreamTimeouts?.().then((v) => { if (v) applyView(v); }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    setError('');
+    try {
+      const value = {
+        firstByteMs: Math.round(Number(draft.firstByte) * 1000),
+        idleMs: Math.round(Number(draft.idle) * 1000),
+        totalMs: Math.round(Number(draft.total) * 1000),
+      };
+      await window.mjcode?.localSetPreference?.({ key: 'stream_timeouts', value });
+      const v = await window.mjcode?.getStreamTimeouts?.();
+      if (v) applyView(v);
+      setFlash(t('settings.streamSaved'));
+      setTimeout(() => setFlash(''), 2500);
+    } catch (e) { setError(e.message || String(e)); }
+  }
+
+  if (!view) return null;
+  const rows = [
+    { key: 'firstByte', ms: 'firstByteMs', labelKey: 'settings.streamFirstByte' },
+    { key: 'idle', ms: 'idleMs', labelKey: 'settings.streamIdle' },
+    { key: 'total', ms: 'totalMs', labelKey: 'settings.streamTotal' },
+  ];
+  return (
+    <Section title={t('settings.streamTimeoutTitle')}>
+      <p className="py-2 text-xs text-text2">{t('settings.streamTimeoutDesc')}</p>
+      {rows.map((r) => {
+        const b = view.bounds[r.ms];
+        const src = view.source[r.ms];
+        return (
+          <div key={r.key} className="py-3 border-b border-border last:border-0">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm">{t(r.labelKey)}</div>
+                <div className="text-xs text-text2">
+                  {t(`settings.streamSource_${src}`)} · {t('settings.streamRange', { min: Math.round(b.min / 1000), max: Math.round(b.max / 1000) })}
+                </div>
+              </div>
+              <input
+                type="number"
+                value={draft[r.key]}
+                min={Math.round(b.min / 1000)}
+                max={Math.round(b.max / 1000)}
+                onChange={(e) => { setDraft({ ...draft, [r.key]: e.target.value }); setFlash(''); }}
+                className="w-24 bg-surface border border-border rounded-lg px-2 py-1 text-sm text-text text-right"
+              />
+            </div>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-3 pt-3">
+        <button onClick={save} className="bg-accent-solid text-on-accent rounded-lg px-3 py-1.5 text-sm">
+          {t('settings.streamSave')}
+        </button>
+        {flash && <span className="text-xs text-text2">{flash}</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </div>
+    </Section>
+  );
+}
+
 function NetworkTab() {
   const { t } = useI18n();
   const [meta, setMeta] = useState([]);
@@ -842,6 +927,8 @@ function NetworkTab() {
 
   return (
     <>
+      {/* T6（2026-10-17）：三层流式超时——放在「网络」分区，因为它只在网络慢/供应商挂起时才有意义 */}
+      <StreamTimeoutSection />
       <Section title={t('settings.searchProvidersTitle')}>
         <p className="py-3 text-xs text-text2">
           {t('settings.searchProvidersDesc')}

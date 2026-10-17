@@ -1,4 +1,6 @@
 {
+  "crashRecovered": "界面刚刚自动重启过一次（渲染进程崩溃，已记录诊断并恢复会话）",
+  "crashLoop": "界面在短时间内反复崩溃（{n} 次），已停止自动重启以免损坏数据；请重启应用或查看诊断日志",
   "defaultProject": "默认项目",
   "detectingLocal": "正在检测本地服务…",
   "renameStorageNotReady": "本机存储未就绪，重命名未生效",

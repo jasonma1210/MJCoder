@@ -164,6 +164,8 @@ const degrade = require('./degrade');
 
 // ── 本地优先数据层（离线模式）──
 const { LocalStore } = require('./localStore');
+// P1-1：无人值守路径的审批/沙箱档来源（用户设置），与交互 run 的 payload 档严格分开
+const approvalSettings = require('./approvalSettings');
 const { CredentialCrypto } = require('./credentialCrypto');
 // 自定义模型配置文件（对标 WorkBuddy models.json）：~/.mjcode/models.json → providers 同步
 const modelsFile = require('./modelsFile');
@@ -262,6 +264,16 @@ registerDiagExportIpc();
 // T3-1：大消息 IPC 可靠传输——超限工具结果落临时文件+句柄分页（agentRunner 发送前卸载）；
 // 大文件预览改 mjpreview:// 流式协议（scheme 特权注册必须早于 app ready）
 const bigPayload = require('./bigPayload');
+// T1（2026-10-17）：流式三层守卫（首字节 / 空闲 / 单轮总时长）。
+// 替代原来的 AbortSignal.timeout(125000)——那是「总时长」语义，会把推理模型
+// （mimo 等思考阶段长时间无正文）误判成「无响应」并整轮杀掉。
+const { createStreamGuard, streamTimeoutMessage } = require('./streamGuard');
+// T6：三层超时可在设置页调整（用户设置 > 环境变量 > 默认），每次请求现读，改完立即生效
+const streamSettings = require('./streamSettings');
+const resolveStreamTimeouts = () => streamSettings.getStreamTimeouts();
+// T6：注入 localStore getter（此时 localStore 变量已声明，whenReady 后才赋值）
+streamSettings.initStreamSettings({ getLocalStore: () => localStore });
+const { createScheduledChannels } = require('./scheduledChannels');
 bigPayload.initBigPayload({ dataDir: app.getPath('userData') });
 bigPayload.registerBigPayloadIpc(ipcMain);
 const previewScheme = require('./previewScheme');
@@ -340,8 +352,26 @@ ipcMain.handle('model:getSecrets', async (_, { token }) => {
 // T2-1：窗口生命周期域已拆出 main/lifecycle/window.js（只搬移不改行为）——
 // 窗口状态持久化 / 主窗口创建 / 打包版 console tee。mainWindow 归属本文件，经 getter/setter 注入。
 const windowLifecycle = require('./lifecycle/window');
+// C2：进程级崩溃守卫（render-process-gone / child-process-gone / unresponsive）
+const { createCrashGuard } = require('./lifecycle/crashGuard');
 windowLifecycle.init({ getMainWindow: () => mainWindow, setMainWindow: (w) => { mainWindow = w; } });
 const { createWindow, setupFileLogging } = windowLifecycle;
+
+// C2（2026-10-17）：进程级崩溃的可观测性 + 自愈。
+// 此前全仓没有 render-process-gone / child-process-gone / unresponsive 监听：
+// JS 层异常有 window.onerror → diag:report 兜底，但渲染进程**整体崩掉**（OOM / GPU / 被杀）
+// 时渲染层自己报不了，主进程也没人听，现场只剩「白屏 + 无证据」。
+// 自动 reload 依赖 local-data.json 里的会话数据，重载不丢历史。
+const crashGuard = createCrashGuard({
+  reportError,
+  getMainWindow: () => mainWindow,
+});
+crashGuard.attach(app);
+// 渲染层启动时领取「上次崩过」的通知（取完即清）：App 首帧就会问，必须早注册
+ipcMain.handle('app:crash-notice', () => crashGuard.takeNotices());
+// T6：设置页读取三层超时（生效值 / 来源 / 可调区间 / 默认值）。
+// 写入复用既有 local:prefs/set（key = stream_timeouts），主进程每次请求现读，改完立即生效。
+ipcMain.handle('app:stream-timeouts', () => streamSettings.getStreamSettingsView());
 
 // 单实例锁：第二个实例启动时聚焦已有窗口
 if (!app.requestSingleInstanceLock()) {
@@ -355,6 +385,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     setupFileLogging();
     createWindow();
+    crashGuard.attachWindow(mainWindow); // C2：unresponsive / responsive 只存在于 BrowserWindow
     previewScheme.initPreviewScheme(); // T3-1：流式预览协议处理器（必须 ready 后注册）
     // P1-N：更新检查延迟 10s 自动触发（initUpdater 仍保留供手动检查即时初始化）
     updater.scheduleAutoUpdateCheck();
@@ -554,14 +585,28 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
       externalSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
   }
+  // T1：三层流式守卫（首字节 90s / 空闲 300s / 单轮总时长 15min）。
+  // 语义是「多久没有动静」而不是「总共花了多久」——只要还有数据在动就一直等，
+  // 真正的挂起才断。直连路径（无 externalSignal，用户手动对话）不设总时长上限：
+  // 那边可能本来就是正当的长回答，硬切会把文章砍半。
+  const streamTimeouts = resolveStreamTimeouts();
+  const streamGuard = createStreamGuard({
+    firstByteMs: streamTimeouts.firstByteMs,
+    idleMs: streamTimeouts.idleMs,
+    totalMs: externalSignal ? streamTimeouts.totalMs : 0,
+    onFire: () => controller.abort(),
+  });
+  streamGuard.start();
   try {
     const res = await fetch(`${root}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret.api_key}` },
       body: JSON.stringify(body),
-      // 超时必须「真中断」（上层 withTimeout 只放弃等待，连接挂着则 finally 的 slot.release 不执行 → fg 槽位泄漏）；仅 Agent 路径加兜底——timeout 是总时长语义，直连 chat 套上会硬切长回答
-      signal: externalSignal ? AbortSignal.any([controller.signal, AbortSignal.timeout(125000)]) : controller.signal,
+      // 超时必须「真中断」（上层 withTimeout 只放弃等待，连接挂着则 finally 的 slot.release 不执行 → fg 槽位泄漏）。
+      // 超时判定已交给 streamGuard（空闲语义），这里只负责把 abort 级联到 fetch。
+      signal: externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal,
     });
+    streamGuard.firstByte(); // 收到响应头：首字节达成，转入空闲计时
 
     if (!res.ok) {
       const err = await res.text();
@@ -577,6 +622,10 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // 任何字节到达都算「有动静」：正文 delta、reasoning_content、tool_calls 分片，
+      // 以及供应商的 SSE 注释心跳行（`: keep-alive`）——全部在这一层计入。
+      // 逐个字段判断容易漏（漏掉 reasoning 就会在 mimo 思考阶段被误判成挂起）。
+      streamGuard.touch();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -614,13 +663,21 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
     quota.reportSuccess(providerId || 'default');
     return { content: fullContent, tool_calls: toolCalls.filter(Boolean), usage, finish_reason: finishReason };
   } catch (err) {
-    // 只有「用户主动中止」才算 aborted；本地 125s 超时（TimeoutError/AbortError）必须走错误路径，否则超时被当成用户停止 → 上层永远拿不到失败信号
+    // 守卫触发的中断先判：必须给出「首字节没来 / 连续没动静 / 超过总上限」的可读原因，
+    // 而不是一个裸 AbortError（用户会误以为是模型回答出错）。
+    const fired = streamGuard.reason();
+    if (fired) {
+      quota.reportError(providerId || 'default');
+      throw new Error(streamTimeoutMessage(fired, streamGuard.config()));
+    }
+    // 只有「用户主动中止」才算 aborted；守卫触发的中断走上面的错误路径
     if (err.name === 'AbortError' && externalSignal?.aborted) {
       return { aborted: true, content: fullContent, usage };
     }
     quota.reportError(providerId || 'default');
     throw err;
   } finally {
+    streamGuard.stop();
     if (onExternalAbort && externalSignal?.removeEventListener) {
       externalSignal.removeEventListener('abort', onExternalAbort);
     }
@@ -644,25 +701,11 @@ ipcMain.handle('model:abort', async () => {
   return { ok: true, aborted: n, abortedRuns };
 });
 
-// 定时任务执行通道：非流式单轮直连（凭证解析与 model:chat 同源）
-// 模型由渲染层 scheduled:setModel 推送（跟随用户当前选择）；未推送时拒绝执行并给出明确错误
-async function scheduledChatOnce({ messages }, model) {
-  const secret = resolveSecret(model.providerId, !!model.isGlobal);
-  if (!secret || !secret.api_key) {
-    throw new Error('KEY_MISSING: 模型凭证未加载，请在模型设置中重新填写 API Key');
-  }
-  const root = (model.baseUrl || secret.base_url || '').replace(/\/+$/, '');
-  if (!root) throw new Error('BASE_URL_MISSING: 模型服务地址为空');
-  const res = await fetch(`${root}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret.api_key}` },
-    body: JSON.stringify({ model: model.model, messages, stream: false }),
-    signal: AbortSignal.timeout(180000),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const j = await res.json();
-  return j.choices?.[0]?.message?.content || '';
-}
+// 定时任务 / 子代理的非流式通道已抽到 main/scheduledChannels.js（2026-10-17）：
+// main.js 顶到 1500 行硬门禁，且它们与主交互链路（chatStreamOnce）是并列关系。
+// 非流式没有 idle 可言，那边只启用「首字节 + 单轮总时长」两层。
+const { scheduledChatOnce, scheduledAgentChat } = createScheduledChannels({ resolveSecret, quota });
+
 
 // ═══════════════════════════════════════════
 //  P0-D：定时任务 Agent 执行通道
@@ -687,49 +730,6 @@ async function loadAgentCore() {
   return agentCorePromise;
 }
 
-// 非流式 + 工具调用（OpenAI 兼容）：agent-core chatFn 契约
-async function scheduledAgentChat(payload) {
-  const secret = resolveSecret(payload.providerId, !!payload.isGlobal);
-  if (!secret || !secret.api_key) {
-    throw new Error('KEY_MISSING: 模型凭证未加载，请在模型设置中重新填写 API Key');
-  }
-  const root = (payload.baseUrl || secret.base_url || '').replace(/\/+$/, '');
-  if (!root) throw new Error('BASE_URL_MISSING: 模型服务地址为空');
-  // P3-2：fg 槽位预占——Worker / 编排 / 记忆后台 compress 均经此通道，统一占用 fg 槽位
-  const slot = await quota.acquire('fg', payload.providerId || 'default');
-  const body = { model: payload.model, messages: payload.messages, stream: false };
-  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-    body.tools = payload.tools;
-    body.tool_choice = 'auto';
-  }
-  try {
-    const res = await fetch(`${root}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.api_key}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(180000),
-    });
-    if (!res.ok) {
-      quota.reportError(payload.providerId || 'default');
-      throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    }
-    const j = await res.json();
-    quota.reportSuccess(payload.providerId || 'default');
-    const choice = j.choices?.[0] || {};
-    const m = choice.message || {};
-    return {
-      content: m.content || '',
-      tool_calls: (m.tool_calls || []).map((tc) => ({
-        id: tc.id, type: 'function',
-        function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '{}' },
-      })),
-      usage: j.usage ? { prompt_tokens: j.usage.prompt_tokens || 0, completion_tokens: j.usage.completion_tokens || 0 } : null,
-      finish_reason: choice.finish_reason || null,
-    };
-  } finally {
-    slot.release();
-  }
-}
 
 // ── GitHub PR 审查闭环工具（gh CLI）──
 // 读操作（list/view/diff）直连；写操作（review/comment）对外可见 → L3 审批（见 approval.js TOOL_LEVEL）
@@ -817,7 +817,12 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
       + `（并发上限由用户设置决定，不接受模型侧改写；动态宽度待决策器落地）`);
   }
   // R6：对话内编排的组绑定发起会话（threadId=conversationId，渲染层按会话归属显示）
-  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd, agentRunner.getCurrentApprovalMode()) });
+  // P1-1：组快照必须记「发起本次编排的 run 的档」。此前取全局「最后一次 run」的档——
+  // 会话级档可不同（thread.approval_mode 覆盖），会记成别的会话的档。run 已结束则回落用户设置。
+  const orchestratorRunId = runScope.getStore()?.runId || null;
+  const orchestratorApproval = agentRunner.getApprovalModeFor(orchestratorRunId)
+    || approvalSettings.getUserApprovalMode();
+  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd, orchestratorApproval) });
   if (!plan.ok) return { ok: false, error: `编排启动失败：${plan.error}` };
   // T1-3：spawn 上报（编排落地即逐任务发出，先于任何轮询）
   const reportSubagent = (evt) => {
@@ -847,6 +852,9 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
   }
   return { ok: true, groupId: plan.groupId, taskCount: plan.tasks.length, summary: humanizeGroupResult(waited.group) };
 }
+
+// P1-1：把 localStore getter 注入进去（localStore 在 whenReady 后才非 null，故传闭包）
+approvalSettings.initApprovalSettings({ getLocalStore: () => localStore });
 
 agentRunner.initAgentRunner({
   loadAgentCore,
@@ -951,9 +959,9 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
     signal,
     // P0-8c/P1-1：审批档与用户设置对齐——原为硬编码 'auto-safe'，用户选「全部询问」时被静默
     // 忽略（产品对用户设置撒谎）。与 workerPool.js:206 同源：取「用户当前档（或调用方显式传入）
-    // 与 auto-safe 地板」中更严者；stricterApproval/getCurrentApprovalMode 由 agentRunner 从
-    // approvalPolicy.js 重导出（唯一事实源）。
-    approvalMode: agentRunner.stricterApproval(schedModel.approvalMode || agentRunner.getCurrentApprovalMode(), 'auto-safe'),
+    // 与 auto-safe 地板」中更严者。2026-10-17（P1-1）：用户档来源改为 approvalSettings.getUserApprovalMode()
+    // （读持久化设置，而不是「最后一次交互 run 的档」）；stricterApproval 仍由 approvalPolicy.js 提供。
+    approvalMode: agentRunner.stricterApproval(schedModel.approvalMode || approvalSettings.getUserApprovalMode(), 'auto-safe'),
     sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
     conversationId: 'scheduled',
     maxRounds: 20,
@@ -1055,7 +1063,7 @@ function setupTaskOrchestration(db) {
       store: taskStore,
       maxConcurrent: Number(localStore?.getPreference('tasks.max_concurrent')) || 4,
       // 2026-10-16：子任务继承用户当前审批档（此前硬编码 auto-safe，用户设 always 时被静默忽略）
-      getApprovalMode: agentRunner.getCurrentApprovalMode,
+      getApprovalMode: () => approvalSettings.getUserApprovalMode(),
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
       createToolHandlers: ({ signal }) => ({
@@ -1145,7 +1153,7 @@ initTasksIpc({
   getTaskStore: () => taskStore,
   getLocalStore: () => localStore,
   // V04 治理快照的审批档来源：与模型侧 orchestrate_task 同源（都是用户当前设置）
-  getApprovalMode: () => agentRunner.getCurrentApprovalMode(),
+  getApprovalMode: () => approvalSettings.getUserApprovalMode(),
   emitTaskEvent,
   orchestrator,
   workerPool,
@@ -1311,7 +1319,7 @@ ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-req
     model,
     // P1-2：审批档入参钳制——取「调用方传入 与 用户当前档」中更严者（地板语义），
     // 渲染层被注入脚本传弱档（never）不再生效；敏感动作逐次确认不受档位影响（设计不变）
-    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', agentRunner.getCurrentApprovalMode()),
+    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', approvalSettings.getUserApprovalMode()),
     allowedApps: allowedApps || [appName],
     toolHandlers: {
       // chat 留主进程（凭证不出界）；原生执行面全部经子进程会话（T3-6）
@@ -1391,7 +1399,7 @@ ipcMain.handle('cua:replay', async (_, { recordingId, approvalMode = 'on-request
   const loop = new cuaRecorder.ReplayLoop({
     recording,
     // P1-2：同 cua:run——审批档入参钳制（更严者生效）
-    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', agentRunner.getCurrentApprovalMode()),
+    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', approvalSettings.getUserApprovalMode()),
     toolHandlers: {
       collectAx: (name) => cuaExec('collectAxTree', name || recording.appName),
       perform: (action, node) => cuaExec('performAction', action, node, { appName: recording.appName || node?.name || '' }),

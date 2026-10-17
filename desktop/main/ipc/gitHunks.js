@@ -36,7 +36,9 @@ function currentApprovalMode(fallbackGetter) {
   if (typeof fallbackGetter === 'function') {
     try { return fallbackGetter() || 'on-request'; } catch { /* 落到下一档 */ }
   }
-  try { return require('../agentRunner').getCurrentApprovalMode() || 'on-request'; } catch { return 'on-request'; }
+  // 2026-10-17（P1-1）：逐 hunk 暂存的档位判断属「无人值守纪律」一侧，读用户设置；
+  // 原先读 agentRunner 的「最后一次 run」档，会话级覆盖时会拿到别的会话的档。
+  try { return require('../approvalSettings').getUserApprovalMode() || 'on-request'; } catch { return 'on-request'; }
 }
 
 // 破坏性 git 操作（丢弃工作区改动 / 回退索引）的审批闸。

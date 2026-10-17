@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-10-16",
+  "generated_at": "2026-10-17T13:47:19.488Z",
   "description": "MJ Code 主流 MCP 连接器目录，共 80 条。收录标准：具备自动启动信息（npm/uvx/docker/remote，装上即可连），或虽需手动部署但已按官方规范声明所需凭证（manual + env_vars）。无法确认包名或凭据规格、点开也无处可填的条目已移除；自定义服务请用「自定义连接器」添加。",
   "categories": [
     "本地工具与文件系统",
@@ -3087,116 +3087,6 @@
       "maturity": "stable",
       "notes": "官方 npm 包 dingtalk-mcp 由 open-dingtalk 发布；也可改用钉钉 MCP 广场发放的 streamable-http 地址（https://mcp-gw.dingtalk.com/...，URL 内含 key）。ACTIVE_PROFILES 可只激活需要的域，减少暴露面。",
       "auth_mode": "paste_key"
-    },
-    {
-      "id": "mcp-ima",
-      "name": "ima-mcp",
-      "display_name": "腾讯 ima 知识库 MCP",
-      "vendor": "Tencent",
-      "official": false,
-      "category": "知识库与笔记",
-      "transport": "http",
-      "install": {
-        "type": "remote",
-        "url": "https://ima.qq.com/mcp"
-      },
-      "env_vars": [
-        {
-          "name": "IMA_CLIENT_ID",
-          "required": true,
-          "label": "ima Client ID",
-          "docs_url": "https://ima.qq.com/agent-interface"
-        },
-        {
-          "name": "IMA_API_KEY",
-          "required": true,
-          "label": "ima API Key",
-          "docs_url": "https://ima.qq.com/agent-interface"
-        }
-      ],
-      "description": "接入腾讯 ima 知识库：搜索、读取与写入个人/共享知识库笔记。",
-      "capabilities": [
-        "知识库搜索",
-        "读取笔记",
-        "写入笔记",
-        "共享知识库访问"
-      ],
-      "permissions": [
-        {
-          "level": "network",
-          "scope": "ima.qq.com"
-        }
-      ],
-      "auth_type": "api_key",
-      "official_url": "https://ima.qq.com",
-      "maturity": "community",
-      "notes": "官方远程端点 https://ima.qq.com/mcp（WorkBuddy 官方连接器同源，2026-10-17 实测可达，未带令牌返回 401 empty access token）。需在 ima 开放接口页（ima.qq.com/agent-interface）取得访问令牌后粘贴；若你的部署要求本地 stdio，可改用社区实现 ima-mcp-server（node server.mjs，env IMA_CLIENT_ID / IMA_API_KEY），在生态中心「本机服务」手写配置。",
-      "auth_mode": "paste_key",
-      "recommended": true
-    },
-    {
-      "id": "mcp-ardot-remote",
-      "name": "ardot",
-      "display_name": "腾讯 Ardot 云端 MCP（原型设计）",
-      "vendor": "Tencent",
-      "official": true,
-      "category": "设计与原型",
-      "transport": "http",
-      "install": {
-        "type": "remote",
-        "url": "https://ardot.tencent.com/mcp"
-      },
-      "env_vars": [],
-      "description": "Ardot 官方云端 MCP：读取并操作设计/原型文件，实现设计与代码双向联动，无需安装本机客户端。",
-      "capabilities": [
-        "读取设计文件",
-        "获取组件与页面结构",
-        "导出设计标注",
-        "设计稿转代码"
-      ],
-      "permissions": [
-        {
-          "level": "network",
-          "scope": "ardot.tencent.com"
-        }
-      ],
-      "auth_type": "oauth",
-      "official_url": "https://docs.ardot.tencent.com/ardot-mcp.html",
-      "maturity": "stable",
-      "notes": "首次连接需在客户端信任该 MCP 并完成腾讯登录授权（OAuth）；授权后可操作你有权限的设计文件。",
-      "auth_mode": "oauth"
-    },
-    {
-      "id": "mcp-ardot-local",
-      "name": "ardot-local",
-      "display_name": "腾讯 Ardot 本地 MCP（当前设计稿）",
-      "vendor": "Tencent",
-      "official": true,
-      "category": "设计与原型",
-      "transport": "http",
-      "install": {
-        "type": "remote",
-        "url": "http://127.0.0.1:50501/api/v1/mcp"
-      },
-      "env_vars": [],
-      "description": "通过 Ardot 客户端提供的本地 MCP 服务，直接操作本机当前打开的设计稿。",
-      "capabilities": [
-        "读取当前设计稿",
-        "操作画布与图层",
-        "导出切图与标注"
-      ],
-      "permissions": [
-        {
-          "level": "network",
-          "scope": "127.0.0.1"
-        }
-      ],
-      "auth_type": "none",
-      "official_url": "https://docs.ardot.tencent.com/ardot-mcp/desktop-mcp.html",
-      "maturity": "stable",
-      "notes": "需安装 Ardot 客户端并打开设计文件，客户端在 127.0.0.1:50501 后台提供服务（端口占用时自动换端口，连接失败请核对客户端显示的端口）。",
-      "auth_mode": "none",
-      "recommended": true
     }
   ]
 }

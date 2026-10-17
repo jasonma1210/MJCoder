@@ -501,8 +501,10 @@ const CWD_TOOLS = new Set([
 const SUBAGENT_TOOL_NAMES = ['read_file', 'list_dir', 'grep', 'glob', 'git_status', 'git_diff', 'git_log'];
 const SUBAGENT_TOOLS = BASE_TOOLS.filter((t) => SUBAGENT_TOOL_NAMES.includes(t.function.name));
 const SUBAGENT_DEFAULT_BUDGET = 50000;
-// P1-11：压缩救援调用的看门狗上限——压缩是上下文恢复路径，自身不能成为新的挂起点
-const COMPACT_RESCUE_TIMEOUT_MS = 30000;
+// P1-11：压缩救援调用的看门狗上限——压缩是上下文恢复路径，自身不能成为新的挂起点。
+// T1（2026-10-17）：30s 对推理模型必然超时（mimo 摘要 24k 字符的输入要先想很久），
+// 结果就是「压缩失败 → 回落硬截断 → 细节丢失 → 下一轮更慢」的恶性循环。给到 180s。
+const COMPACT_RESCUE_TIMEOUT_MS = 180000;
 
 // 子代理提前停止时的可行动提示（给父代理的模型看，不是给用户看的）。
 // 此前的失败模式：子代理被轮次/预算熔断后，finalText 里带着「发送『继续』让我接着执行」
@@ -652,6 +654,54 @@ export function alignCutToRoundBoundary(body, cut) {
   return k;
 }
 
+// 按「轮」分组（一条非 tool 消息 + 其后紧随的 tool 结果）。压缩与入口裁剪共用同一份实现，
+// 防两处规则漂移。组内绝不拆开 assistant(tool_calls) 与其 tool 结果——
+// 孤儿 tool 消息（assistant 已被裁掉）会被服务端直接 400。
+function groupRounds(body) {
+  const groups = [];
+  let end = body.length;
+  while (end > 0) {
+    let start = end - 1;
+    while (start > 0 && body[start - 1].role === 'tool') start -= 1;
+    if (start > 0 && body[start - 1].role === 'assistant') start -= 1;
+    while (start > 0 && body[start].role === 'tool') start -= 1; // 兜底：组首不得是 tool
+    groups.unshift({ start, end });
+    end = start;
+  }
+  return groups;
+}
+
+// T2（2026-10-17）：尾部保留区必须按「体积预算」算，不能按「条数」。
+//
+// 事故现场：`keepTail = 6` 是条数制，切点写成 `body.length - 6`。
+// 长任务里模型常在一轮内并发读 8 个文件 → 末尾连续 8 条 tool 消息，
+// 切点整体落在 tool 上 → alignCutToRoundBoundary 一路**向后**移到 body 末尾
+// → `cut >= body.length` → 压缩直接放弃、原样返回；而调用方照样清零预算窗口，
+// 于是每 5 轮空转一次（日志「压缩后继续」打了 3 次，prompt 体积 90074 → 91713 一分没降），
+// 最终 21 轮烧掉 1.6M tokens 触发熔断。
+//
+// 现在从尾部按轮累加 token，切点天然落在组边界（不会切在 tool 中间），
+// 且至少保留 minRounds 轮工作现场——再紧张也不裁到「模型不知道刚才在干什么」。
+function tailCutByBudget(body, keepTailTokens, minRounds = 2) {
+  const groups = groupRounds(body);
+  // 保留上限：最多留一半的轮。没有这条约束，紧窗口（或消息很短的会话）下
+  // token 预算 + minRounds 会把整段 body 都算进"尾部" → cut=0 → 压缩放弃，
+  // 又退回"压不动但清零窗口"的老路。至少要能裁掉前半段。
+  const maxKeptRounds = Math.max(1, Math.floor(groups.length / 2));
+  let cut = body.length;
+  let keptTokens = 0;
+  let keptRounds = 0;
+  for (let g = groups.length - 1; g >= 0; g -= 1) {
+    const grp = body.slice(groups[g].start, groups[g].end);
+    const t = estimateMessagesTokens(grp);
+    if (keptRounds >= minRounds && (keptTokens + t > keepTailTokens || keptRounds >= maxKeptRounds)) break;
+    cut = groups[g].start;
+    keptTokens += t;
+    keptRounds += 1;
+  }
+  return { cut, keptTokens, keptRounds };
+}
+
 // 固定头（压缩与入口裁剪共用）：**全部前导 system**（基础提示 + 渲染层插入的专家角色提示，
 // convo[1] 也可能是 system，只留 convo[0] 会把专家 system 静默丢弃 → 角色/技能约束全线失效）
 // + 第一条非 system 的 user 消息（用户原始需求）。
@@ -679,11 +729,13 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
   if (!opts.force && est <= contextWindow * 0.7) return convo;
 
   const aggressive = est > contextWindow * 0.85;
-  const keepTail = aggressive ? 3 : 6;
+  // T2：尾部保留区按体积预算（窗口的 25% / 激进档 15%），不再按条数。
+  // 条数制在「一轮并发多工具」时会退化成「整段保留 → 压缩放弃」。
+  const keepTailTokens = Math.floor(contextWindow * (aggressive ? 0.15 : 0.25));
   // 固定头必须含专家 system 与原始需求：压缩结果会回写 convo（C2），丢一次就永久丢。
   const { systems, firstUser, from } = splitFixedHead(convo);
   const body = convo.slice(from);
-  if (body.length <= keepTail) return convo;
+  if (body.length <= 2) return convo; // 不足两轮，没有「早期」可压
   // 滚动摘要（G1）：本函数写入的摘要带固定前缀，历史摘要必须**并进本次摘要的输入**、产出后只留一条。
   // 只丢旧摘要会丢历史（toCompact 不含 head）；只加不并则 head 无界增长——紧窗口下每轮都在追加
   // 摘要，上下文反而发散（实测 6k 窗口 41 轮：37 条摘要、末轮 4.56 倍窗口）。
@@ -693,8 +745,9 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
   // 摘要消息恒放在**前导 system 块内、首条 user 之前**：部分 OpenAI 兼容端点（DeepSeek 系）
   // 只认首部 system，messages 中部出现 system 会被忽略甚至报错。
   const withHead = (mid) => [...fixedSystems, ...(mid ? [mid] : []), ...(firstUser ? [firstUser] : [])];
-  const cut = alignCutToRoundBoundary(body, body.length - keepTail);
-  if (cut <= 0 || cut >= body.length) return convo; // 无法安全切分（全是工具消息），放弃压缩
+  // T2：按体积预算取尾部（切点恒落在轮边界），替代 `body.length - keepTail` 的条数制
+  const { cut } = tailCutByBudget(body, keepTailTokens, 2);
+  if (cut <= 0 || cut >= body.length) return convo; // 无可裁内容（只剩连续工具轮），放弃压缩
   const toCompact = body.slice(0, cut);
   const tail = body.slice(cut);
 
@@ -741,8 +794,11 @@ ${transcript}` }],
   } catch (err) {
     console.warn('[agent] 压缩失败，回落为截断最早消息:', err.message);
   }
-  // 兜底：直接丢弃最早的旧消息（切点同样对齐轮边界；激进档丢 3/4，常规档丢 1/2）
-  const drop = alignCutToRoundBoundary(body, Math.floor(toCompact.length * (aggressive ? 0.75 : 0.5)));
+  // 兜底：直接丢弃最早的旧消息。切点按「轮」比例（激进档保留 25%，常规保留 50%），
+  // 不用消息条数——条数制在「尾部连续 tool」时会切进工具轮中间，产生孤儿 tool 消息。
+  const groups = groupRounds(body);
+  const keepRounds = Math.max(1, Math.floor(groups.length * (aggressive ? 0.25 : 0.5)));
+  const drop = groups[Math.max(0, groups.length - keepRounds)].start;
   if (drop <= 0 || drop >= body.length) return convo;
   const next = normalizeMessages([...withHead(null), ...body.slice(drop)]);
   return estimateMessagesTokens(next) >= estimateMessagesTokens(convo) ? convo : next;
@@ -771,18 +827,9 @@ export function trimHistoryForRun(convo, { contextWindow, targetRatio = 0.45, ke
   const body = msgs.slice(from);
   if (body.length <= 1) return unchanged;
 
-  // 按「轮」分组（一条非 tool 消息 + 其后紧随的 tool 结果）。切点恒落在组边界，
+  // 按「轮」分组（与压缩共用 groupRounds）。切点恒落在组边界，
   // 组内绝不拆开 assistant(tool_calls) 与它的 tool 结果——孤儿 tool 消息会直接 400。
-  const groups = [];
-  let end = body.length;
-  while (end > 0) {
-    let start = end - 1;
-    while (start > 0 && body[start - 1].role === 'tool') start -= 1;
-    if (start > 0 && body[start - 1].role === 'assistant') start -= 1;
-    while (start > 0 && body[start].role === 'tool') start -= 1; // 兜底：组首不得是 tool
-    groups.unshift({ start, end });
-    end = start;
-  }
+  const groups = groupRounds(body);
 
   const headTokens = estimateMessagesTokens(head);
   const headRoom = headTokens + estimateTokens(TRIM_NOTICE(9999, 9999999)) + 4;
@@ -1052,7 +1099,15 @@ export async function chatWithRetry(chatFn, params, signal, opts = {}) {
 // 工具超时会计入重复失败熔断（failStreak），模型超时则如实终止运行并带明确原因。
 // 注意：JS 无法真正杀死已挂起的 Promise，超时后引擎不再等待该调用，
 // 底层操作（HTTP 连接/子进程）由各自的 signal/清理路径后台回收。
-export const DEFAULT_MODEL_TIMEOUT_MS = 120000;   // 单轮模型调用（含重试链）硬顶 120s
+// T1（2026-10-17 修订）：这一层**不再是主判据**，只是最后兜底。
+// 原实现拿它当「是不是卡死」的唯一标准，而它是 wall-clock 总时长语义——
+// 推理模型（mimo 等）在思考阶段长时间没有正文，只要总时长过 120s 就被杀，
+// 线上表现是「打字打到一半整轮作废」。真正的「有没有动静」判定下移到主进程
+// 的流式守卫（main/streamGuard.js：首字节 90s / 空闲 300s / 总时长 15min），
+// 它能看到每一个 chunk（含 reasoning_content 与 SSE 注释行）。
+// 这里的 16min 只用于防「chatFn 既不返回也不 abort」的极端情况，
+// 因此必须比主进程的 15min 更晚到点，才能让更具体的原因先报出来。
+export const DEFAULT_MODEL_TIMEOUT_MS = 960000;   // 单轮模型调用（含重试链）引擎级兜底 16min
 export const DEFAULT_TOOL_TIMEOUT_MS = 120000;    // 常规工具 120s
 // 按工具类型放宽/收紧的超时表：长命令与嵌套代理有自己的预算闸，看门狗只做最后防线
 export const TOOL_TIMEOUT_OVERRIDES = {
@@ -1068,7 +1123,10 @@ export function withTimeout(promise, ms, label) {
   let timer;
   return new Promise((resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${label}超时（>${ms}ms 无响应），已被看门狗终止——引擎不再等待该调用，底层操作后台自行回收`));
+      // 文案必须带「超时」二字：上层 catch 用 /超时|timeout/ 判定要不要先存断点。
+      // 同时说明这是兜底闸——真正的原因（首字节未到 / 连续无数据 / 总时长到顶）
+      // 由主进程流式守卫更早、更准确地报出，别让用户以为这是模型回答错了。
+      reject(new Error(`${label}超时：超过 ${Math.round(ms / 1000)}s 引擎级硬上限（兜底闸，正常不应触发；主进程的流式守卫会先给出「首字节未到 / 连续无数据 / 总时长到顶」的具体原因）——引擎不再等待该调用，底层操作后台自行回收`));
     }, ms);
     Promise.resolve(promise).then(resolve, reject);
   }).finally(() => clearTimeout(timer));
@@ -1614,10 +1672,40 @@ export async function runAgent({
     });
     if (gate === 'compact') {
       tokenRescues += 1;
-      console.warn(`[agent] 上下文达模型窗口 ${Math.round((ctxEst / ctxWindow) * 100)}%（${ctxEst}/${ctxWindow} tokens），压缩后继续（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次）`);
+      console.warn(`[agent] 上下文达模型窗口 ${Math.round((ctxEst / ctxWindow) * 100)}%（${ctxEst}/${ctxWindow} tokens），开始压缩（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次）`);
+      const beforeConvo = convo;
       convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
-      tokenWindowSpent = 0; // 新窗口：清零重算（usage 全程累计仍如实上报，不动）
-      continue;
+      if (convo !== beforeConvo) {
+        // 压缩真的改写了历史：口径失效，下一轮按新体积重估；窗口从零算
+        lastPromptTokens = null;
+        tokenWindowSpent = 0;
+        continue;
+      }
+      // T2（2026-10-17）：压不动时**绝不能**清零窗口继续跑。
+      // 旧实现不看压缩是否发生，照样 `tokenWindowSpent = 0` → 每 5 轮空转一次、
+      // 一分钱不省，直到把预算烧穿（线上 21 轮 1.6M tokens 就是这么来的）。
+      // 降级一：硬截断（丢早期轮，保留最近 3 轮工作现场）。
+      const trimmedRun = trimHistoryForRun(convo, { contextWindow: ctxWindow, targetRatio: 0.45, keepRecent: 3 });
+      if (trimmedRun.trimmed) {
+        console.warn(`[agent] 压缩无收益，改走硬截断：${trimmedRun.beforeTokens} → ${trimmedRun.afterTokens} tokens（丢弃 ${trimmedRun.dropped} 条早期消息）`);
+        convo = trimmedRun.convo;
+        lastPromptTokens = null;
+        tokenWindowSpent = 0;
+        continue;
+      }
+      // 降级二：连硬截断都无处可裁（历史里全是必留内容）——挂起让用户「继续」或新开会话，
+      // 而不是继续空转烧预算。kind 保持 'tokens'（新增取值会外溢到 workerPool 与收尾文案）。
+      budgetExhausted = true; budgetKind = 'tokens';
+      console.warn('[agent] 压缩与硬截断均无收益（历史已无早期内容可裁），挂起而非继续空转');
+      try {
+        suspendNoticed = !!onSuspend?.({
+          kind: 'tokens', summary: finalText, usage: { ...usage },
+          roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
+        });
+      } catch (e) {
+        console.warn('[agent] 断点保存钩子异常:', e.message);
+      }
+      break;
     }
     if (gate === 'new-window') {
       // 预算压力但上下文很小：只换窗口，**不压缩**——否则会把模型还需要的内容压成摘要，

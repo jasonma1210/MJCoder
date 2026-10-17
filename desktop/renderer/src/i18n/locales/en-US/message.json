@@ -2,6 +2,8 @@
   "loadEarlier": "Load earlier messages ({n} more)",
   "thisRound": "This turn",
   "thinking": "Thinking…",
+  "thinkingElapsed": "· {s}s elapsed",
+  "receivedChars": "· {n} chars received",
   "jumpBottom": "Back to bottom",
   "copied": "Copied to clipboard",
   "copyFailed": "Copy failed",

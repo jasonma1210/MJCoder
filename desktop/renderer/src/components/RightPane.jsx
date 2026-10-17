@@ -101,7 +101,7 @@ export default function RightPane({
   useEffect(() => {
     if (!addOpen) return undefined;
     const onDown = (e) => { if (!addRef.current?.contains(e.target)) setAddOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setAddOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); setAddOpen(false); } };
     document.addEventListener('mousedown', onDown, true);
     window.addEventListener('keydown', onKey);
     return () => {

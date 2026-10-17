@@ -53,9 +53,21 @@ export default function useAgentRun(d) {
   }
 
   // Esc 快捷停止生成
+  // 2026-10-17 真机修复：此前是「任何 Esc 都停」——关设置面板、关模型选择器、取消重命名、
+  // 在输入框里按 Esc 取消补全，都会顺带中止正在跑的任务。用户感知就是「还没处理完就断开」。
+  // 现在只处理「没有被任何组件消费」且「焦点不在可编辑控件」的 Esc：
+  //   · 弹层消费 Esc 时会 preventDefault（各组件已同步补上）；
+  //   · 输入框/文本域里的 Esc 属于「取消输入」，不该停任务。
   useEffect(() => {
     if (!loading) return;
-    const onKey = (e) => { if (e.key === 'Escape') stop(); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented) return;
+      const el = e.target;
+      const editing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (editing) return;
+      stop();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [loading]);

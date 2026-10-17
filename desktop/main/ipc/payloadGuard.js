@@ -69,10 +69,11 @@ function assertIds(payload, keys, label = 'payload') {
   assertObject(payload, label);
   for (const key of keys) {
     const value = payload[key];
-    if (value === undefined || value === null) throw new PayloadError(`${key} 必填`);
+    // 空串必须显式拒绝：`Number('')` 是 0，会被当成合法 id 0
+    if (value === undefined || value === null || value === '') throw new PayloadError(`${key} 必填`);
     const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
     if (typeof n !== 'number' || !Number.isFinite(n)) {
-      throw new PayloadError(`${key} 必须是数字（收到 ${typeOf(value)}）`);
+      throw new PayloadError(`${key} 必须是数字或纯数字字符串（收到 ${typeOf(value)}）`);
     }
   }
   return payload;

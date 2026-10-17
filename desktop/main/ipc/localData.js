@@ -177,7 +177,7 @@ function register() {
     return deps.getLocalStore().createThread(payload || {});
   });
   ipcMain.handle('local:threads/set-status', async (_, payload) => {
-    guard.assertTokens(payload, { id: 128 });
+    guard.assertIds(payload, ['id']);
     guard.assertEnum(payload, 'status', ['running', 'idle', 'done', 'awaiting_approval']);
     const { id, status } = payload;
     if (!deps.getLocalStore()) return null;
@@ -185,7 +185,7 @@ function register() {
   });
   ipcMain.handle('local:messages/add', async (_, payload) => {
     // X14：消息是用户数据的核心，role 是闭集、content 允许为空（纯工具调用轮）
-    guard.assertTokens(payload || {}, { threadId: 128 });
+    guard.assertIds(payload || {}, ['threadId']);
     guard.assertEnum(payload || {}, 'role', ['user', 'assistant', 'system', 'tool']);
     guard.assertStrings(payload || {}, { content: { max: 2 * 1024 * 1024, optional: true, allowEmpty: true } });
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
@@ -195,18 +195,18 @@ function register() {
   // /compact 落库：压缩摘要历史整体替换（P2-6 收口）
   ipcMain.handle('local:messages/replace', async (_, payload) => {
     // /compact 会整体替换历史：threadId 必填，messages 必须是数组且有条数上限
-    guard.assertTokens(payload || {}, { threadId: 128 });
+    guard.assertIds(payload || {}, ['threadId']);
     guard.assertArray(payload || {}, 'messages', { max: 5000 });
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
     return deps.getLocalStore().replaceMessages(payload?.threadId, payload?.messages || []);
   });
   ipcMain.handle('local:threads/delete', async (_, payload) => {
-    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertIds(payload, ['threadId']);
     return deps.getLocalStore() ? deps.getLocalStore().archiveThread(payload.threadId) : { ok: false };
   });
   // A1：会话重命名
   ipcMain.handle('local:threads/rename', async (_, payload) => {
-    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertIds(payload, ['threadId']);
     guard.assertStrings(payload, { title: 200 });
     const { threadId, title } = payload;
     return deps.getLocalStore() ? deps.getLocalStore().renameThread(threadId, title) : { ok: false };
@@ -214,16 +214,16 @@ function register() {
   // A3：归档可见 —— 恢复 / 彻底删除 / 列表
   ipcMain.handle('local:threads/archived', async () => deps.getLocalStore() ? deps.getLocalStore().listArchivedThreads() : []);
   ipcMain.handle('local:threads/restore', async (_, payload) => {
-    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertIds(payload, ['threadId']);
     return deps.getLocalStore() ? deps.getLocalStore().restoreThread(payload.threadId) : { ok: false };
   });
   ipcMain.handle('local:threads/purge', async (_, payload) => {
-    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertIds(payload, ['threadId']);
     return deps.getLocalStore() ? deps.getLocalStore().purgeThread(payload.threadId) : { ok: false };
   });
   // B1：孤儿会话归组
   ipcMain.handle('local:threads/set-project', async (_, payload) => {
-    guard.assertTokens(payload, { threadId: 128 });
+    guard.assertIds(payload, ['threadId']);
     guard.assertStrings(payload, { projectPath: { max: 1024, optional: true, allowEmpty: true } });
     const { threadId, projectPath } = payload;
     return deps.getLocalStore() ? deps.getLocalStore().setThreadProject(threadId, projectPath) : { ok: false };

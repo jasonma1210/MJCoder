@@ -156,7 +156,17 @@ export default function App() {
   }
 
   // 审批档位持久化（沙箱策略 + 审批模式）
-  useEffect(() => { localStorage.setItem('mj_approval_settings', JSON.stringify(approvalSettings)); }, [approvalSettings]);
+  useEffect(() => {
+    localStorage.setItem('mj_approval_settings', JSON.stringify(approvalSettings));
+    // P1-1：主进程的无人值守路径（定时任务 / 编排组快照 / CUA / Worker 兜底）必须读「用户设置」，
+    // 而设置原本只存在渲染层 localStorage ⇒ 主进程只能记住「最后一次 run 的档」，
+    // 会话级覆盖（thread.approval_mode）时就会拿到别的会话的档。这里同步一份到本地库偏好。
+    // 失败不影响交互路径（交互 run 的档由 agent:run 载荷直接携带）。
+    try {
+      Promise.resolve(window.mjcode?.localSetPreference?.({ key: 'approval_settings', value: approvalSettings }))
+        .catch(() => {});
+    } catch { /* 旧版 preload 无此桥方法：交互不受影响，仅无人值守回落默认档 */ }
+  }, [approvalSettings]);
 
   useEffect(() => {
     api.globalProviders()

@@ -1,4 +1,6 @@
 {
+  "crashRecovered": "The interface just restarted after a crash (renderer process exited; diagnostics recorded, session restored)",
+  "crashLoop": "The interface crashed repeatedly ({n} times); auto-restart stopped to protect your data — restart the app or check the diagnostics log",
   "defaultProject": "Default Project",
   "detectingLocal": "Detecting local service…",
   "renameStorageNotReady": "Local storage not ready; rename not applied",

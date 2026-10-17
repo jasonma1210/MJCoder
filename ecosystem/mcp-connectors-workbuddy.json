@@ -1,0 +1,6572 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-17T14:27:06.080Z",
+  "source": "workbuddy-connectors-marketplace",
+  "description": "从本机 WorkBuddy 连接器目录（~/.workbuddy/connectors-marketplace/connectors）导入的 MCP 服务定义，共 214 条。id 前缀 wb-。与 ecosystem/mcp-connectors.json（精选、≤90 条）分开存放，由 main/ecosystem.js 合并加载；主目录优先，按 url/name 去重。",
+  "connectors": [
+    {
+      "id": "wb-24haowan",
+      "name": "24haowan",
+      "display_name": "24haowan",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.24haowan.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.24haowan.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-24haowan-space",
+      "name": "24haowan-space",
+      "display_name": "24haowan-space",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://space.24haowan.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "space.24haowan.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-3chat-customer-growth",
+      "name": "3chat-customer-growth",
+      "display_name": "3chat-customer-growth",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://app.3chatai.cn/mcp",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "3Chat API KEY",
+          "required": true,
+          "docs_url": "https://group.3chatai.cn/t/topic/444"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "app.3chatai.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；登陆 3Chat -> 开放平台 -> OAuth -> 创建并获取 APP KEY",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-51shebao-hr-tools",
+      "name": "51shebao-hr-tools",
+      "display_name": "51shebao-hr-tools",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.51shebao.com/hr-mcp/mcp/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.51shebao.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-58pic-qiantu-ai",
+      "name": "qiantu-ai",
+      "display_name": "qiantu-ai",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.58pic.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.58pic.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-agent-earth",
+      "name": "agentearth",
+      "display_name": "agentearth",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://agentearth.ai/mcp-server/",
+        "headers": {
+          "X-Api-Key": "${AGENT_EARTH_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "AGENT_EARTH_API_KEY",
+          "label": "AgentEarth API Key",
+          "required": true,
+          "docs_url": "https://agentearth.ai/r/8oo9zmDn"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "agentearth.ai"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：AGENT_EARTH_API_KEY；粘贴 AgentEarth API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-aholo-lux3d",
+      "name": "lux3d-mcp",
+      "display_name": "lux3d-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.aholo3d.cn/lux3d-mcp/mcp",
+        "headers": {
+          "Authorization": "${LUX3D_CN_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "LUX3D_CN_API_KEY",
+          "label": "apiKey",
+          "required": true,
+          "docs_url": "https://labs.aholo3d.cn/api-keys"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.aholo3d.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：LUX3D_CN_API_KEY；填写在 labs.aholo3d.cn/api-keys 获取的国内 apiKey",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-ai-hive",
+      "name": "ai-hive",
+      "display_name": "ai-hive",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@infimind-next/ai-hive-mcp@0.3.3",
+        "args": [],
+        "auth_command": "npx -y @infimind-next/ai-hive-mcp@latest auth"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "oauth",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需先在终端执行授权：npx -y @infimind-next/ai-hive-mcp@latest auth",
+      "auth_mode": "oauth",
+      "recommended": false
+    },
+    {
+      "id": "wb-aiclass-teaching",
+      "name": "aiclass-teaching",
+      "display_name": "aiclass-teaching",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aiclass.qq.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aiclass.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-aidd-saas",
+      "name": "aidd-saas",
+      "display_name": "aidd-saas",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aidd-saas.txfc.cloud/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aidd-saas.txfc.cloud"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-aimoderator",
+      "name": "aimoderator",
+      "display_name": "aimoderator",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aimoderator.cn/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aimoderator.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-alphapai-lite-mcp",
+      "name": "alphapai-lite-mcp",
+      "display_name": "alphapai-lite-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://alphapai-idv.rabyte.cn/alpha/open-api/v1/personal/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "alphapai-idv.rabyte.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-archive-hospital-mcp",
+      "name": "archive-hospital-mcp",
+      "display_name": "archive-hospital-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://bingli.tengmed.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "bingli.tengmed.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-baidu-netdisk",
+      "name": "baidu-netdisk",
+      "display_name": "baidu-netdisk",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-pan.baidu.com/sse"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-pan.baidu.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-baixiao-mcp",
+      "name": "baixiao-mcp",
+      "display_name": "baixiao-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.know-pa.cn/mcp",
+        "headers": {
+          "Authorization": "Bearer ${BAIXIAO_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "BAIXIAO_API_KEY",
+          "label": "API 密钥",
+          "required": true,
+          "docs_url": "https://chat.know-pa.cn/settings/mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.know-pa.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：BAIXIAO_API_KEY；登录 chat.know-pa.cn → 设置 → MCP 接入 → 生成密钥",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-bazhuayu",
+      "name": "bazhuayu",
+      "display_name": "bazhuayu",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.bazhuayu.com?includeTools=search_templates,execute_task,get_task_status,export_data,search_tasks,start_or_stop_task"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.bazhuayu.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-biobuddy",
+      "name": "biobuddy",
+      "display_name": "biobuddy",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai4s.tencent.com/biobuddy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai4s.tencent.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-bizmuse-ai-music-video",
+      "name": "bizmuse-ai-music-video",
+      "display_name": "bizmuse-ai-music-video",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://bizmuse.ai/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "bizmuse.ai"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-bugly-token",
+      "name": "bugly",
+      "display_name": "bugly",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://bugly.tds.qq.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${BUGLY_ACCESS_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "BUGLY_ACCESS_TOKEN",
+          "label": "密钥",
+          "required": true,
+          "docs_url": "https://bugly.tds.qq.com/v2/user/token"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "bugly.tds.qq.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：BUGLY_ACCESS_TOKEN；在 Bugly 控制台 → 右上角头像 → 个人令牌→ 复制密钥",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-caihui-mcp",
+      "name": "caihui-mcp",
+      "display_name": "caihui-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.finchina.com/finchina-data-mcp-server/mcp",
+        "headers": {
+          "x-api-key": "${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "密钥",
+          "required": true,
+          "docs_url": "https://mcp.finchina.com/intro"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.finchina.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；请粘贴您的财汇MCP API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-camscanner-mcp",
+      "name": "connector:camscanner-mcp",
+      "display_name": "connector:camscanner-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai-tools.camscanner.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai-tools.camscanner.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-candao-age",
+      "name": "candao-age",
+      "display_name": "candao-age",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-server.can-dao.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-server.can-dao.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-canva",
+      "name": "canva-mcp",
+      "display_name": "canva-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.canva.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.canva.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-charge-order-query",
+      "name": "charge-order-query",
+      "display_name": "charge-order-query",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://415ddd85be03483c99813a871365bae8.app-tencent.workbuddy.link/sse"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "415ddd85be03483c99813a871365bae8.app-tencent.workbuddy.link"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-chuhaijiang",
+      "name": "chuhaijiang",
+      "display_name": "chuhaijiang",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.gateway.chuhaijiang.com/mcp/oauth"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.gateway.chuhaijiang.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-cisp-mcp",
+      "name": "cisp-mcp",
+      "display_name": "cisp-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://cisp.zenitera.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${CISP_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "CISP_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://cisp.zenitera.com/openapi"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "cisp.zenitera.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：CISP_API_KEY；请输入您的 API Key（sk-agw- 开头）",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-cloudbase",
+      "name": "cloudbase",
+      "display_name": "cloudbase",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@cloudbase/cloudbase-mcp@2.35.2",
+        "args": [],
+        "auth_command": "tcb login --flow web --yes"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "oauth",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需先在终端执行授权：tcb login --flow web --yes（需要先安装 tcb 命令行工具）",
+      "auth_mode": "oauth",
+      "recommended": false
+    },
+    {
+      "id": "wb-cloudmall-operations",
+      "name": "cloudmall-operations",
+      "display_name": "cloudmall-operations",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://admin.rmall-solution.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "admin.rmall-solution.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-connector-workshop",
+      "name": "connector-workshop",
+      "display_name": "connector-workshop",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://connector.smartbid.site/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "connector.smartbid.site"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-coros",
+      "name": "coros",
+      "display_name": "coros",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcpcn.coros.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcpcn.coros.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-dami-external-mcp",
+      "name": "dami-external-mcp",
+      "display_name": "dami-external-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai.tikclubs.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${MCP_API_KEY}",
+          "X-Tenant-ID": "53"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "MCP_API_KEY",
+          "label": "MCP API Key",
+          "required": true,
+          "docs_url": "https://vnfrxfa5wp.feishu.cn/wiki/UpXTwU4vJiWBPmk3iY5cY7HAnSg"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai.tikclubs.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：MCP_API_KEY",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-datahub",
+      "name": "datahub",
+      "display_name": "datahub",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-v2.bazhuayu.com/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-v2.bazhuayu.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-datayes-data",
+      "name": "datayes-data",
+      "display_name": "datayes-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://dataapi-mcp-server.datayes.com/datayes-data/mcp",
+        "headers": {
+          "Authorization": "Bearer ${DATAYES_TOKEN}",
+          "Accept": "application/json, text/event-stream"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "DATAYES_TOKEN",
+          "label": "访问令牌 (Token)",
+          "required": true,
+          "docs_url": "https://mcp.datayes.com/#/personal-center"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "dataapi-mcp-server.datayes.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：DATAYES_TOKEN；在 Datayes! MCP → 个人中心 → 个人信息 → Token 中复制",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-dcs-cloud",
+      "name": "dcs-cloud",
+      "display_name": "dcs-cloud",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "dcs-cloud-mcp-server@2.0.3",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "该服务在目录里声明了 DCS_PAT，但未给出注入方式（可能需在服务方控制台配置），连接前请先看其文档",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-deeplink",
+      "name": "deeplink",
+      "display_name": "deeplink",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.dichanai.com/mcp-server",
+        "headers": {
+          "Authorization": "Bearer ${DEEPLINK_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "DEEPLINK_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://mcp.dichanai.com/docs"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.dichanai.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：DEEPLINK_API_KEY；deeplink-sk- 开头，在深度智联平台个人中心自助创建",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-deli-mcp",
+      "name": "deli-mcp",
+      "display_name": "deli-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://platform.delilegal.com/api/v1/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "platform.delilegal.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-dingdanbao",
+      "name": "dingdanbao",
+      "display_name": "dingdanbao",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://wbmcp.shansugou.com/mcp",
+        "headers": {
+          "X-DDB-Username": "${DDB_USERNAME}",
+          "X-DDB-Password": "${DDB_PASSWORD}",
+          "X-DDB-Base-Url": "https://sanbao.shansugou.com"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "DDB_USERNAME",
+          "label": "订单豹账号",
+          "required": true,
+          "docs_url": "https://show.dingdanbao.com"
+        },
+        {
+          "name": "DDB_PASSWORD",
+          "label": "登录密码",
+          "required": true,
+          "docs_url": "https://show.dingdanbao.com"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "wbmcp.shansugou.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：DDB_USERNAME、DDB_PASSWORD；请输入登录账号；请输入登录密码",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-dknowc-mcp",
+      "name": "dknowc-mcp",
+      "display_name": "dknowc-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.dknowc.cn/s6/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.dknowc.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-dnb-global-data",
+      "name": "dnb-global-data",
+      "display_name": "dnb-global-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://plus.dnb.com/v2/mcp",
+        "headers": {
+          "Authorization": "Bearer ${DNB_ACCESS_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "DNB_ACCESS_TOKEN",
+          "label": "D&B Access Token",
+          "required": true,
+          "docs_url": "https://openapi.dnbcha.com/agent/globalsearch/login"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "plus.dnb.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：DNB_ACCESS_TOKEN；在邓白氏 Direct+ 开发者控制台或 邓白氏查全球登录页面生成 Access Token 后粘贴至此",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-dnb-longyicha-workbuddy",
+      "name": "dnb-longyicha-workbuddy",
+      "display_name": "dnb-longyicha-workbuddy",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.dnbservice.com.cn/v1/company"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.dnbservice.com.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-dramabuddy",
+      "name": "dramabuddy",
+      "display_name": "dramabuddy",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aicomic.yuewen.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aicomic.yuewen.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-duoguan-fengchao",
+      "name": "duoguan-fengchao",
+      "display_name": "duoguan-fengchao",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://fc.duoguan.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "fc.duoguan.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-dzh-mcp",
+      "name": "dzh-mcp",
+      "display_name": "dzh-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcpali.dzh.com.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcpali.dzh.com.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-easymofang",
+      "name": "easymofang",
+      "display_name": "easymofang",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://operate.yibainetwork.com/api/easy-operate/mcp",
+        "headers": {
+          "Authorization": "Bearer ${MOFANG_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "MOFANG_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://app.easymofang.com/open-platform"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "operate.yibainetwork.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：MOFANG_API_KEY；在易智魔方开放平台创建，以 sk- 开头的个人 Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-eccang-reconcile",
+      "name": "eccang-reconcile",
+      "display_name": "eccang-reconcile",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://datacenter.eccang.com/nexus/mcp/stream"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "datacenter.eccang.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-edgeone-pages",
+      "name": "edgeone-pages",
+      "display_name": "edgeone-pages",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "edgeone-pages-mcp-fullstack@0.0.41",
+        "args": [
+          "--region",
+          "china"
+        ],
+        "auth_command": "edgeone login"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "oauth",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需先在终端执行授权：edgeone login（需要先安装 edgeone 命令行工具）",
+      "auth_mode": "oauth",
+      "recommended": false
+    },
+    {
+      "id": "wb-edu-next",
+      "name": "edu-next",
+      "display_name": "edu-next",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://app.edunext.world/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "app.edunext.world"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-efunds",
+      "name": "efunds",
+      "display_name": "efunds",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://sc.efunds.com.cn/api/csai-mcp-service/mcp/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "sc.efunds.com.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-emes-ai",
+      "name": "emes-ai",
+      "display_name": "emes-ai",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://amos-dev.digihua.com:14000/mcp-platform/mcp/oauth/emes-ai"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "amos-dev.digihua.com:14000"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-es",
+      "name": "ES",
+      "display_name": "ES",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tcmcpserver.cloud.tencent.com/es/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tcmcpserver.cloud.tencent.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-ezjoin-meeting",
+      "name": "ezjoin-meeting",
+      "display_name": "ezjoin-meeting",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.ezyjoin.cn/api/mcp/message"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.ezyjoin.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-ezr-crm",
+      "name": "ezr-crm",
+      "display_name": "ezr-crm",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://skillsgateway-tp.ezrpro.com/ezr/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "skillsgateway-tp.ezrpro.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fadada-richee",
+      "name": "richee-mcp-server",
+      "display_name": "richee-mcp-server",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://claw.richee.cn/claw-api/mcp/workbuddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "claw.richee.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fanruan-growth-advisor",
+      "name": "fanruan-growth-advisor",
+      "display_name": "fanruan-growth-advisor",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.mossdo.com/api/v1/mcp",
+        "headers": {
+          "X-Moss-WorkBuddy": "1"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.mossdo.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fastmoss",
+      "name": "fastmoss",
+      "display_name": "fastmoss",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.fastmoss.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.fastmoss.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fazhi-law",
+      "name": "fazhi-law",
+      "display_name": "fazhi-law",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.fazhi.law/mcp?source=workbuddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.fazhi.law"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fbs-connector",
+      "name": "fbs-connector",
+      "display_name": "fbs-connector",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api2.u3w.com/fbs-mcp/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api2.u3w.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fenbeitong",
+      "name": "fenbeitong",
+      "display_name": "fenbeitong",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.fenbeitong.com/mcp/source/workbuddy",
+        "headers": {
+          "X-FBT-Channel": "workbuddy"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.fenbeitong.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fenbi-baokao-decision",
+      "name": "fenbi_mcp",
+      "display_name": "fenbi_mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://market-api.fenbi.com/workbuddy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "market-api.fenbi.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-finenter",
+      "name": "mcp-server-brm",
+      "display_name": "mcp-server-brm",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-server-global.comein.cn/mcp-servers/mcp-server-brm/sse"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-server-global.comein.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-flova",
+      "name": "flova",
+      "display_name": "flova",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://service.flova.tv/api/mcp/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "service.flova.tv"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-fuma-ai-callout",
+      "name": "fuma-ai-callout",
+      "display_name": "fuma-ai-callout",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://services.vcrm.vip:60610/mcp",
+        "headers": {
+          "access-token": "${ACCESS_TOKEN}",
+          "orgCode": "${ORG_CODE}",
+          "loginName": "${LOGIN_NAME}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "ACCESS_TOKEN",
+          "label": "凭证",
+          "required": true,
+          "docs_url": "https://docs.qq.com/doc/DTGtFdFVVZGJoYmdj"
+        },
+        {
+          "name": "ORG_CODE",
+          "label": "组织编码",
+          "required": true,
+          "docs_url": "https://docs.qq.com/doc/DTGtFdFVVZGJoYmdj"
+        },
+        {
+          "name": "LOGIN_NAME",
+          "label": "登录名",
+          "required": true,
+          "docs_url": "https://docs.qq.com/doc/DTGtFdFVVZGJoYmdj"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "services.vcrm.vip:60610"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：ACCESS_TOKEN、ORG_CODE、LOGIN_NAME；从福马AI后台获取；请输入 orgCode；请输入 loginName",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-fyopen-lawsearch",
+      "name": "fy-law-search-service",
+      "display_name": "fy-law-search-service",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.cjbdi.com:8443/354347/mcp_law_service"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.cjbdi.com:8443"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-gangtise-mcp",
+      "name": "gangtise-mcp",
+      "display_name": "gangtise-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://openapi.gangtise.com/application/open-mcp/",
+        "headers": {
+          "accessKey": "${GTS_ACCESS_KEY}",
+          "secretKey": "${GTS_SECRET_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "GTS_ACCESS_KEY",
+          "label": "Access Key",
+          "required": true,
+          "docs_url": "https://open-platform.gangtise.com/"
+        },
+        {
+          "name": "GTS_SECRET_KEY",
+          "label": "Secret Key",
+          "required": true,
+          "docs_url": "https://open-platform.gangtise.com/"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "openapi.gangtise.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：GTS_ACCESS_KEY、GTS_SECRET_KEY；请填入 Gangtise OpenAPI 开发者账号 Access Key；请填入 Gangtise OpenAPI 开发者账号 Secret Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-gaodun-job",
+      "name": "gaodun-job",
+      "display_name": "gaodun-job",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://apigateway.gaodun.com/dyson/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "apigateway.gaodun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-getnote",
+      "name": "getnote",
+      "display_name": "getnote",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://openapi.biji.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "openapi.biji.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-gfsecurities",
+      "name": "gfsecurities",
+      "display_name": "gfsecurities",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-api.gf.com.cn/server/mcp/gfzq/mcp",
+        "headers": {
+          "x-gf-channel": "workbuddy-area"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-api.gf.com.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-gildata",
+      "name": "gildata-finance-data",
+      "display_name": "gildata-finance-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.gildata.com/mcp-servers/aidata-assistant-srv-tool?token=${GILDATA_TOKEN}"
+      },
+      "env_vars": [
+        {
+          "name": "GILDATA_TOKEN",
+          "label": "Access Token",
+          "required": true,
+          "docs_url": "https://www.feishu.cn/docx/MeCmd4q0Yo7nmkx9D8IcMYbknob"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.gildata.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：GILDATA_TOKEN；请填写恒生聚源下发的 Access Token",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-gongxie-erp",
+      "name": "gongxie-erp",
+      "display_name": "gongxie-erp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.gxerp123.com/tgc/mcp",
+        "headers": {
+          "Authorization": "Bearer ${ERP_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "ERP_TOKEN",
+          "label": "ERP MCP Token",
+          "required": true,
+          "docs_url": ""
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.gxerp123.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：ERP_TOKEN；登录ERP后，在个人信息 → MCP接入中生成",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-gongyi-open-mcp",
+      "name": "gongyi-open-mcp",
+      "display_name": "gongyi-open-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ssl.gongyi.qq.com/gygw-web/api/open/tob/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ssl.gongyi.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-gt-generate-sql-data",
+      "name": "gt-generate-sql-data",
+      "display_name": "gt-generate-sql-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ywbmcp.gtshebei.com/mcp"
+      },
+      "env_vars": [],
+      "description": "云维保企业数据查询 MCP（OAuth 2.0）",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ywbmcp.gtshebei.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-h3c-cloudnet",
+      "name": "h3c-cloudnet",
+      "display_name": "h3c-cloudnet",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://oasis.h3c.com/mcp-server/api/sse",
+        "headers": {
+          "Authorization": "Bearer ${CLOUDNET_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "CLOUDNET_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://oasis.h3c.com/oasis6/static/#/net/set/apikey"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "oasis.h3c.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点；需要在连接器面板填写：CLOUDNET_API_KEY；在 Cloudnet 管理平台 → 网络管理 → 设置 → 开放平台 获取",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-h3yun-connector",
+      "name": "h3yun-connector",
+      "display_name": "h3yun-connector",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.h3yun.com/v1/agent/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.h3yun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-haier-assistant",
+      "name": "haier-smart-home-assistant",
+      "display_name": "haier-smart-home-assistant",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://web-hdsuec-agent.haier.net/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "web-hdsuec-agent.haier.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-hanyi-fonts",
+      "name": "hanyi-fonts",
+      "display_name": "hanyi-fonts",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://hanyi-mcp.hellofont.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "hanyi-mcp.hellofont.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-hefei-city-alerts",
+      "name": "hefei-city-alerts",
+      "display_name": "hefei-city-alerts",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://workbuddy.idata.ah.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "workbuddy.idata.ah.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-hose-ai-assistant",
+      "name": "hose-ai-assistant",
+      "display_name": "hose-ai-assistant",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aitrip.hosecloud.com/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aitrip.hosecloud.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-huita-ims",
+      "name": "huita-ims",
+      "display_name": "huita-ims",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.yunqi-zhilian.com/AIAgent/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.yunqi-zhilian.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-huize-insurance-product-recommendation",
+      "name": "product-recommendation",
+      "display_name": "product-recommendation",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://hzc-prosearch.hzins.com/product-recommendation/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "hzc-prosearch.hzins.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-infimind-ecommerce-content",
+      "name": "infimind-ecommerce-content",
+      "display_name": "infimind-ecommerce-content",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://imiva.ecpro.com/mcp/workbuddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "imiva.ecpro.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-intco-ai-platform",
+      "name": "intco-ai-platform",
+      "display_name": "intco-ai-platform",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai-platform.intcomedical.com.cn:11443/agt_c8c1aaea4a564b0eb1878929dfbf37d2/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai-platform.intcomedical.com.cn:11443"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-investoday-finance-data",
+      "name": "investoday-finance-data",
+      "display_name": "investoday-finance-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://data-api.investoday.net/data/mcp?source=work_buddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "data-api.investoday.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-ioa",
+      "name": "ioa-mcp",
+      "display_name": "ioa-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@ioacloud/ioacloud-mcp@1.0.31",
+        "args": [],
+        "auth_command": "ioacloud-cli login --yes"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "oauth",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需先在终端执行授权：ioacloud-cli login --yes（需要先安装 ioacloud-cli 命令行工具）",
+      "auth_mode": "oauth",
+      "recommended": false
+    },
+    {
+      "id": "wb-iyiou-connector",
+      "name": "iyiou-connector",
+      "display_name": "iyiou-connector",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.iyiou.com/data",
+        "headers": {
+          "X-Client-Id": "${CLIENT_ID}",
+          "X-Client-Secret": "${CLIENT_SECRET}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "CLIENT_ID",
+          "label": "客户端 ID",
+          "required": true,
+          "docs_url": "https://data.iyiou.com/ai"
+        },
+        {
+          "name": "CLIENT_SECRET",
+          "label": "客户端密钥",
+          "required": true,
+          "docs_url": "https://data.iyiou.com/ai"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.iyiou.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：CLIENT_ID、CLIENT_SECRET；请输入MCP接口分配的 Client ID；请输入MCP接口分配的 Client Secret",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-jiandaoyun",
+      "name": "jiandaoyun",
+      "display_name": "jiandaoyun",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.jiandaoyun.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.jiandaoyun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-jinshouzhi",
+      "name": "jinshouzhi",
+      "display_name": "jinshouzhi",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ad-goldfinger.app.fitgroup-fat.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ad-goldfinger.app.fitgroup-fat.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-jinshuju",
+      "name": "jinshuju",
+      "display_name": "jinshuju",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://jinshuju.net/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "jinshuju.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-jiucuodashi",
+      "name": "jiucuodashi",
+      "display_name": "jiucuodashi",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://workbuddy.jiucuodashi.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "workbuddy.jiucuodashi.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-jiushuyun",
+      "name": "jiushuyun",
+      "display_name": "jiushuyun",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://work.jiushuyun.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "work.jiushuyun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-joyread-english",
+      "name": "joyread-english",
+      "display_name": "joyread-english",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://joyread.smartbid.site/mcp",
+        "headers": {
+          "Authorization": "Bearer ${JOYREAD_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "JOYREAD_TOKEN",
+          "label": "访问令牌（可选）",
+          "required": true,
+          "docs_url": "https://joyread.smartbid.site/"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "joyread.smartbid.site"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：JOYREAD_TOKEN；联系绘本服务提供方获取；留空以访客模式体验",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-jufa-mcp-server",
+      "name": "jufa-mcp-server",
+      "display_name": "jufa-mcp-server",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "jufa-mcp-server@0.1.2",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "该服务在目录里声明了 JUFA_API_KEY，但未给出注入方式（可能需在服务方控制台配置），连接前请先看其文档",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-jumper-kpi",
+      "name": "jumper-kpi",
+      "display_name": "jumper-kpi",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://sit-aimcp.jumper-health.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "sit-aimcp.jumper-health.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-kiwi-sourcing",
+      "name": "kiwi-sourcing",
+      "display_name": "kiwi-sourcing",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@harrylabsj/kiwi@0.8.0",
+        "args": [
+          "mcp",
+          "serve",
+          "--principal",
+          "workbuddy:local",
+          "--agent",
+          "buyer-agent:workbuddy",
+          "--a2a-timeout-ms",
+          "15000"
+        ]
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-kling-ai-plugin",
+      "name": "kling-ai-plugin",
+      "display_name": "kling-ai-plugin",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://klingai.com/mcp/plugin"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "klingai.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-kuaicha-search",
+      "name": "kuaicha-search",
+      "display_name": "kuaicha-search",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://bizveris.kuaicha365.com/open/mcp?source=workbuddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "bizveris.kuaicha365.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-kuka-service",
+      "name": "kuka-service",
+      "display_name": "kuka-service",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "http://47.114.32.85:9010/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "47.114.32.85:9010"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-laiye-adp",
+      "name": "Laiye-ADP",
+      "display_name": "Laiye-ADP",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@laiye-adp/mcp@0.1.6",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "该服务在目录里声明了 ADP_API_KEY，但未给出注入方式（可能需在服务方控制台配置），连接前请先看其文档",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-lemon-agi",
+      "name": "lemon-agi",
+      "display_name": "lemon-agi",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://cloud.nhsoft.cn/agi/mcp",
+        "headers": {
+          "Authorization": "Bearer ${LEMON_AGI_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "LEMON_AGI_TOKEN",
+          "label": "Access Token",
+          "required": true,
+          "docs_url": "https://agi.lemengcloud.com/"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "cloud.nhsoft.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：LEMON_AGI_TOKEN；以 pt_ 开头的个人访问令牌，在乐檬 AGI 平台个人中心生成",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-liesun",
+      "name": "liesun",
+      "display_name": "liesun",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://liesun-api.mabangerp.com/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "liesun-api.mabangerp.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-lingxing-mcp",
+      "name": "lingxing-mcp",
+      "display_name": "lingxing-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://openmcp.lingxing.com/mcp-servers/lingxing-mcp",
+        "headers": {
+          "X-Mcp-Key": "${LINGXING_MCP_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "LINGXING_MCP_KEY",
+          "label": "X-Mcp-Key",
+          "required": true,
+          "docs_url": "https://www.lingxing.com/help/article/mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "openmcp.lingxing.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：LINGXING_MCP_KEY；在领星ERP AI助手的「管理MCP」页面复制鉴权密钥",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-lingyi-mcp",
+      "name": "lingyi-mcp",
+      "display_name": "lingyi-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://service.lingyishuke.com/api/v1/skill-provider/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "service.lingyishuke.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-linkfox",
+      "name": "linkfox",
+      "display_name": "linkfox",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-tool-gateway.linkfox.com/mcp/any-tool"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-tool-gateway.linkfox.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-listinggood",
+      "name": "listinggood",
+      "display_name": "listinggood",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://listinggood.cn/mcp",
+        "headers": {
+          "Authorization": "Bearer ${LISTINGGOOD_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "LISTINGGOOD_API_KEY",
+          "label": "ListingGood API Key",
+          "required": true,
+          "docs_url": "https://listinggood.cn/connect"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "listinggood.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：LISTINGGOOD_API_KEY；在 listinggood.cn/developers 注册后生成（免费工具可留空）",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-lxcloud",
+      "name": "lxcloud",
+      "display_name": "lxcloud",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.weiwenjia.com/mcp-servers/lxcloud"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.weiwenjia.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-magic-agent-token",
+      "name": "magic-agent-token",
+      "display_name": "magic-agent-token",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tmc.qidian.qq.com/magic-agent/mcp",
+        "headers": {
+          "Authorization": "Bearer ${MAGIC_AGENT_SECRET_KEY}",
+          "X-Biz-Id": "${MAGIC_AGENT_BIZ_ID}",
+          "X-Magic-MCP-Profile": "workbuddy-mcp"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "MAGIC_AGENT_SECRET_KEY",
+          "label": "成员密钥 SecretKey",
+          "required": true,
+          "docs_url": "https://tmc.qidian.qq.com/base/console/doc/33849"
+        },
+        {
+          "name": "MAGIC_AGENT_BIZ_ID",
+          "label": "业务空间 ID",
+          "required": true,
+          "docs_url": "https://tmc.qidian.qq.com/base/console/doc/33849"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tmc.qidian.qq.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：MAGIC_AGENT_SECRET_KEY、MAGIC_AGENT_BIZ_ID；粘贴企业管理员提供的成员密钥 SecretKey；填写本次使用的业务空间 ID",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-masocloud-barcode-generator",
+      "name": "barcode-generator",
+      "display_name": "barcode-generator",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://ai.masocloud.net/DoYsSV/maso/mcp/sse",
+        "headers": {
+          "src": "WorkBuddy"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai.masocloud.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-mastergo-vibe-mcp",
+      "name": "mastergo",
+      "display_name": "mastergo",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "@mastergo/vibe-mcp@1.0.31",
+        "args": [
+          "--url=http://localhost:50678"
+        ]
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-medgroup-drgdip-toolkit",
+      "name": "medgroup-drgdip-toolkit",
+      "display_name": "medgroup-drgdip-toolkit",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://medgroup.medchat.fun/mcp/oauth"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "medgroup.medchat.fun"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-menglar-ozon",
+      "name": "menglar-ozon",
+      "display_name": "menglar-ozon",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.menglar.com/gateway/ai/mcp/ozon-mcp-service/mcp",
+        "headers": {
+          "Authorization": "${ACCESS_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "ACCESS_TOKEN",
+          "label": "访问令牌",
+          "required": true,
+          "docs_url": "https://ozon.menglar.com/workbench/open-api/product"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.menglar.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：ACCESS_TOKEN；粘贴萌啦访问令牌",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-meo-xiaoyuan",
+      "name": "meo-xiaoyuan",
+      "display_name": "meo-xiaoyuan",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp_xy.tradechina.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://xyconsole.tradechina.com/key"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp_xy.tradechina.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；在出海精灵·小元 → Key与平台 → 复制API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-mergerinfo",
+      "name": "mergerinfo",
+      "display_name": "mergerinfo",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.mergerinfo.com/api/mcp",
+        "headers": {
+          "Authorization": "Bearer ${MERGERINFO_CONNECT_CODE}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "MERGERINFO_CONNECT_CODE",
+          "label": "MergerInfo 连接码",
+          "required": true,
+          "docs_url": "https://www.mergerinfo.com/settings/ai-connections"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.mergerinfo.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：MERGERINFO_CONNECT_CODE；留空可直接试用；会员请从会员区 → AI 连接 复制",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-miki-cursor-catalog",
+      "name": "miki-cursor",
+      "display_name": "miki-cursor",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.mikicursor.studio/api/workbuddy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.mikicursor.studio"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-mindbye-contract-review",
+      "name": "mindbye-contract-review",
+      "display_name": "mindbye-contract-review",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-server.mindbye.com/mcp-servers/contract-review-prod",
+        "headers": {
+          "X-Platform": "workbuddy"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-server.mindbye.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-moka",
+      "name": "moka",
+      "display_name": "moka",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.mokahr.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.mokahr.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-morningstar",
+      "name": "morningstar",
+      "display_name": "morningstar",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.morningstar.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.morningstar.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-mx-ds-mcp",
+      "name": "mx-ds-mcp",
+      "display_name": "mx-ds-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mxapi.eastmoney.com/mxds/v2/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mxapi.eastmoney.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-myunker-mcp",
+      "name": "myunker-mcp",
+      "display_name": "myunker-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.myscrm.cn/myy-mcp-server/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.myscrm.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-mzl-trademark",
+      "name": "mzl-trademark",
+      "display_name": "mzl-trademark",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.mozlen.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.mozlen.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-neo-crm",
+      "name": "neo-crm",
+      "display_name": "neo-crm",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.xiaoshouyi.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.xiaoshouyi.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-neo-eakey",
+      "name": "neo-eakey",
+      "display_name": "neo-eakey",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://buddy-ai.xiaoshouyi.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "buddy-ai.xiaoshouyi.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-neodata",
+      "name": "neodata",
+      "display_name": "neodata",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://neodata.tencent.com/proxy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "neodata.tencent.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-novai-studio",
+      "name": "novai-studio",
+      "display_name": "novai-studio",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://xinxingshuke.com/api/v1/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "xinxingshuke.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-opcmenu",
+      "name": "opcmenu",
+      "display_name": "opcmenu",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.opcmenu.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.opcmenu.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-opendata",
+      "name": "opendata",
+      "display_name": "opendata",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.isjike.com/mcp-servers/opendata/sse",
+        "headers": {
+          "Authorization": "Bearer ${REGION_INSIGHT_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "REGION_INSIGHT_API_KEY",
+          "label": "MCP Key",
+          "required": true,
+          "docs_url": "https://data.isjike.com/get-mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.isjike.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点；需要在连接器面板填写：REGION_INSIGHT_API_KEY；粘贴从及刻开放平台页面获取的 MCP Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-orientfutures-mobile-knowledge-base",
+      "name": "orientfutures_mobile_knowledge_base",
+      "display_name": "orientfutures_mobile_knowledge_base",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://commosmart.orientfutures.com/mcp/knowledge-base"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "commosmart.orientfutures.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-paper-retrieval",
+      "name": "paper-retrieval",
+      "display_name": "paper-retrieval",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai-research.dazd.cn/api/paperRetrieval/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai-research.dazd.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-patsnap-search",
+      "name": "patsnap-search",
+      "display_name": "patsnap-search",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://connect.zhihuiya.com/2b0355/logic-mcp?apikey=${PATSNAP_API_KEY}"
+      },
+      "env_vars": [
+        {
+          "name": "PATSNAP_API_KEY",
+          "label": "智慧芽 API Key",
+          "required": true,
+          "docs_url": "https://open.zhihuiya.com/dashboard/api-keys"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "connect.zhihuiya.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：PATSNAP_API_KEY；粘贴你的智慧芽 API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-picset-commerce-images",
+      "name": "picset-commerce-images",
+      "display_name": "picset-commerce-images",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://picsetai.cn/functions/v1/agent-mcp-v1/mcp",
+        "headers": {
+          "Authorization": "Bearer ${PICSET_AGENT_SK}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "PICSET_AGENT_SK",
+          "label": "Picset AI Secret Key",
+          "required": true,
+          "docs_url": "https://picsetai.cn/profile?scene=workbuddy&ch=image"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "picsetai.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：PICSET_AGENT_SK；在 Picset AI 用户中心创建，格式如 sk_live_...",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-picset-video-generation",
+      "name": "picset-video-generation",
+      "display_name": "picset-video-generation",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://picsetai.cn/functions/v1/agent-video-mcp-v1/mcp",
+        "headers": {
+          "Authorization": "Bearer ${PICSET_AGENT_SK}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "PICSET_AGENT_SK",
+          "label": "Picset AI Secret Key",
+          "required": true,
+          "docs_url": "https://picsetai.cn/profile?scene=workbuddy&ch=video"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "picsetai.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：PICSET_AGENT_SK；在 Picset AI 用户中心创建，格式如 sk_live_...",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-pkulaw",
+      "name": "pkulaw",
+      "display_name": "pkulaw",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://apim-gateway.pkulaw.com/mcp-law-agg/1.0.0/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "apim-gateway.pkulaw.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-plaud",
+      "name": "plaud",
+      "display_name": "plaud",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.plaud.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.plaud.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-primematrix-company",
+      "name": "primematrix-company",
+      "display_name": "primematrix-company",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.yidian.cn/mcp/company",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://mcp.yidian.cn/api-keys"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.yidian.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；登录质数幻方官网 → MCP 产品 → 密钥 → 生成并复制密钥",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-proboost",
+      "name": "proboost-tiktok-amazon-patent-mcp",
+      "display_name": "proboost-tiktok-amazon-patent-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.microdata-inc.com/mcp-servers/oauth/proboost-tiktok-amazon-patent-mcp/sse?invite=WORKBUDDY"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.microdata-inc.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-property-saas",
+      "name": "property-saas",
+      "display_name": "property-saas",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://h63.xa33.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "h63.xa33.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qcc-company",
+      "name": "qcc-company",
+      "display_name": "qcc-company",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://agent.qcc.com/mcp/company/stream"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "agent.qcc.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qcc-legal",
+      "name": "qcc-legal",
+      "display_name": "qcc-legal",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://agent.qcc.com/mcp/legal/stream"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "agent.qcc.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qibook-mcp",
+      "name": "qibook-mcp",
+      "display_name": "qibook-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://datamcp.qibook.com/mcp/basic-ent-tools"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "datamcp.qibook.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qingflow",
+      "name": "qingflow",
+      "display_name": "qingflow",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.qingflow.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.qingflow.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qisemierp",
+      "name": "qisemierp",
+      "display_name": "qisemierp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-internal.qisemiyun.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-internal.qisemiyun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qixinhuiyan-mcp",
+      "name": "qixin",
+      "display_name": "qixin",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.qixin.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.qixin.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-qiyuan-robot-executor",
+      "name": "qiyuan-robot",
+      "display_name": "qiyuan-robot",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://47.100.55.122/robot-mcp/mcp",
+        "headers": {
+          "Authorization": "Bearer ${QIYUAN_ROBOT_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "QIYUAN_ROBOT_TOKEN",
+          "label": "连接令牌",
+          "required": true,
+          "docs_url": ""
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "47.100.55.122"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：QIYUAN_ROBOT_TOKEN；请输入管理员提供的令牌",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-qveris",
+      "name": "qveris",
+      "display_name": "qveris",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.qveris.cn/mcp",
+        "headers": {
+          "Authorization": "Bearer ${QVERIS_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "QVERIS_API_KEY",
+          "label": "QVeris API Key",
+          "required": true,
+          "docs_url": "https://qveris.cn/hosted-mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.qveris.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：QVERIS_API_KEY；在 QVeris 控制台 → API 密钥中创建",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-qzd-connector",
+      "name": "qzd",
+      "display_name": "qzd",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://testzsai.cecjx.com/mcp/",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "Api Key",
+          "required": true,
+          "docs_url": "https://testzsai.cecjx.com/zsai/user/my_apikey"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "testzsai.cecjx.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；在个人中心 → API密钥中生成",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-replygen",
+      "name": "replygen",
+      "display_name": "replygen",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ruida.shopgen.net/v1/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ruida.shopgen.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-reportgem-research",
+      "name": "reportgem",
+      "display_name": "reportgem",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.reportgem.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.reportgem.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-salesnail-instructor",
+      "name": "salesnail-instructor",
+      "display_name": "salesnail-instructor",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://sn.long-arena.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "sn.long-arena.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-salestouch",
+      "name": "salestouch",
+      "display_name": "salestouch",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://touch.long-arena.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "touch.long-arena.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-shanglv-mcp-gateway",
+      "name": "shanglv-mcp-gateway",
+      "display_name": "shanglv-mcp-gateway",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-gateway.yql.net/mcp/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-gateway.yql.net"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-shangyitong",
+      "name": "vzoom-syt-mcp",
+      "display_name": "vzoom-syt-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://shangyitong.vzoom.com/nsyt-server/api/mcp/data",
+        "headers": {
+          "Authorization": "Bearer ${SHANGYITONG_MCP_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "SHANGYITONG_MCP_TOKEN",
+          "label": "MCP Token",
+          "required": true,
+          "docs_url": "https://shangyitong.vzoom.com/nsyt-pc/#/mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "shangyitong.vzoom.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：SHANGYITONG_MCP_TOKEN；登录商易通开放平台后，粘贴以 mcp_ 开头的 Token",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-sharecrm",
+      "name": "ShareCRM",
+      "display_name": "ShareCRM",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://open.fxiaoke.com/mcp/connector?id=workbuddy"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "open.fxiaoke.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-shopee-market-intelligence",
+      "name": "shopee-mcp",
+      "display_name": "shopee-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.menglar.com/gateway/ai/mcp/shopee-service/mcp?key=${ACCESS_TOKEN}"
+      },
+      "env_vars": [
+        {
+          "name": "ACCESS_TOKEN",
+          "label": "Menglar API Key",
+          "required": true,
+          "docs_url": ""
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.menglar.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：ACCESS_TOKEN；ACMA:xxxxxxxxxx",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-shuidi-credit",
+      "name": "shuidi-credit",
+      "display_name": "shuidi-credit",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aidata.shuidi.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aidata.shuidi.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-shuidi-discovery",
+      "name": "shuidi-discovery",
+      "display_name": "shuidi-discovery",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aidaas.shuidi.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aidaas.shuidi.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-sif-mcp",
+      "name": "sif-mcp",
+      "display_name": "sif-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.sif.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${SIF_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "SIF_API_KEY",
+          "label": "Sif MCP 密钥",
+          "required": true,
+          "docs_url": "https://www.sif.com/mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.sif.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：SIF_API_KEY；sifmcp 开头的完整密钥（在 sif.com → MCP 控制台 → 密钥管理获取）",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-smartsalary",
+      "name": "smartsalary",
+      "display_name": "smartsalary",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ai.smartsalary.cn/smartsalary-mcp/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ai.smartsalary.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-sq-company-dynamic",
+      "name": "sq-company-dynamic",
+      "display_name": "sq-company-dynamic",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.chanyedata.com/mcp/c3f5924cc60dbe1729f5cc332e627304/mcp",
+        "headers": {
+          "Authorization": "${API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://ai.chanyedata.com/ai-quantitative/#/?ref=Wb7Kx2Qm"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.chanyedata.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：API_KEY；前往 ai.chanyedata.com 个人中心获取 API Key（无需 Bearer 前缀）",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-sugon-scinsight-agent",
+      "name": "sugon-scinsight-agent",
+      "display_name": "sugon-scinsight-agent",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://sci.ksai.scnet.cn:58043/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "sci.ksai.scnet.cn:58043"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-sumscope-data",
+      "name": "sumscope-data",
+      "display_name": "sumscope-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://data-api.qeubee.cn/sumscope/common/mcp/stream",
+        "headers": {
+          "X-Access-Key": "${X_ACCESS_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "X_ACCESS_KEY",
+          "label": "X_ACCESS_KEY",
+          "required": true,
+          "docs_url": "https://www.sumscope.com/app/apply.html"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "data-api.qeubee.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：X_ACCESS_KEY；请联系您的qeubee客户经理或线上客服获取X_ACCESS_KEY（格式ak-qb-xxx）",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-sungo-device-registry",
+      "name": "sungo-device-registry",
+      "display_name": "sungo-device-registry",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.sungossytest.com/api/db/mcp",
+        "headers": {
+          "Authorization": "Bearer ${SUNGO_TIC_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "SUNGO_TIC_KEY",
+          "label": "API 密钥",
+          "required": true,
+          "docs_url": "https://www.sungossytest.com/api/db/mcp/key"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.sungossytest.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：SUNGO_TIC_KEY；wb_ 开头，在密钥页领取",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-syspetro-service-22065846",
+      "name": "syspetro-service-22065846",
+      "display_name": "syspetro-service-22065846",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://marketplace.syspetro.com/syspetro-mcp-marketplace/mcp/service_22065846?authkey=${SYSPETRO_MCP_API_KEY}"
+      },
+      "env_vars": [
+        {
+          "name": "SYSPETRO_MCP_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://marketplace.syspetro.com/syspetro-mcp-marketplace/workbuddy/auth-key?mcp=PropMcp&service_id=df63863d-9b67-4135-a033-13525533e92b&sso=1"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "marketplace.syspetro.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点；需要在连接器面板填写：SYSPETRO_MCP_API_KEY；粘贴从 Syspetro MCP 市场获取的 API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-tanyuan-assistant",
+      "name": "tanyuan-assistant",
+      "display_name": "tanyuan-assistant",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.tanyuan.qq.com/wb/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.tanyuan.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tapnow",
+      "name": "tapnow",
+      "display_name": "tapnow",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.tapnow.media/api/agent-gateway/mcp/workbuddy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.tapnow.media"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tct-business-expert",
+      "name": "tct-business-expert",
+      "display_name": "tct-business-expert",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tctmcp.zhaogang.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tctmcp.zhaogang.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tdengine",
+      "name": "tdengine",
+      "display_name": "tdengine",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "${TDENGINE_API_SCHEMA}://${TDENGINE_API_HOST}:${TDENGINE_API_PORT}/api/v1/mcp/stream",
+        "headers": {
+          "Authorization": "Bearer ${TDENGINE_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "TDENGINE_API_KEY",
+          "label": "TDengine API Key",
+          "required": true,
+          "docs_url": "https://idmpdocs.taosdata.com/administration/profile-settings"
+        },
+        {
+          "name": "TDENGINE_API_SCHEMA",
+          "label": "协议",
+          "required": true,
+          "docs_url": "https://idmpdocs.taosdata.com/administration/profile-settings"
+        },
+        {
+          "name": "TDENGINE_API_HOST",
+          "label": "TDengine 平台地址",
+          "required": true,
+          "docs_url": "https://idmpdocs.taosdata.com/administration/profile-settings"
+        },
+        {
+          "name": "TDENGINE_API_PORT",
+          "label": "端口",
+          "required": true,
+          "docs_url": "https://idmpdocs.taosdata.com/administration/profile-settings"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：TDENGINE_API_KEY、TDENGINE_API_SCHEMA、TDENGINE_API_HOST、TDENGINE_API_PORT；在个人设置（点击头像）→ API Key 中生成；localhost；6042",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-tdx-connector",
+      "name": "tdx-finance",
+      "display_name": "tdx-finance",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://txmcp.tdx.com.cn:3001/txmcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "txmcp.tdx.com.cn:3001"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-teacher-assistant",
+      "name": "teacher-assistant",
+      "display_name": "teacher-assistant",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://aiteach.qq.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "aiteach.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tec-do",
+      "name": "tec-do",
+      "display_name": "tec-do",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tec-chi-external-skill-mcp.tec-do.cn/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tec-chi-external-skill-mcp.tec-do.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-dlc",
+      "name": "tencent-DLC",
+      "display_name": "tencent-DLC",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tcmcpserver.cloud.tencent.com/dlc/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tcmcpserver.cloud.tencent.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-health-nges",
+      "name": "nges",
+      "display_name": "nges",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://test.nges.qq.com/mcp/aggregate"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "test.nges.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-map",
+      "name": "tencent-map",
+      "display_name": "tencent-map",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.map.qq.com/sse?key=${TENCENT_MAP_KEY}&format=0"
+      },
+      "env_vars": [
+        {
+          "name": "TENCENT_MAP_KEY",
+          "label": "Key",
+          "required": true,
+          "docs_url": "https://lbs.qq.com/dev/console/quick-register"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.map.qq.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点；需要在连接器面板填写：TENCENT_MAP_KEY",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-map-guide",
+      "name": "tencent-map-guide",
+      "display_name": "tencent-map-guide",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.map.qq.com/mcpgw/oauth/toolgroup",
+        "headers": {
+          "McpGw-Tools-ID": "500038"
+        }
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.map.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-marketing-solution",
+      "name": "tencent-marketing",
+      "display_name": "tencent-marketing",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://miaowen.qq.com/miaowen_mcp_service/v1.0/workbuddy/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "miaowen.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-survey",
+      "name": "tencent-survey",
+      "display_name": "tencent-survey",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://wj.qq.com/api/v2/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "wj.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-tchouse-c",
+      "name": "tchouse-c",
+      "display_name": "tchouse-c",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://tcmcpserver.cloud.tencent.com/tchousec/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "tcmcpserver.cloud.tencent.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-weiyun",
+      "name": "weiyun",
+      "display_name": "weiyun",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://www.weiyun.com/api/v3/mcpserver"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "www.weiyun.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tencent-yaoxiang-bi",
+      "name": "eyao-data-gateway",
+      "display_name": "eyao-data-gateway",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://data.eyao.qq.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "data.eyao.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tiktok",
+      "name": "tiktok-mcp",
+      "display_name": "tiktok-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "business-api.tiktok.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-today-watermark-camera",
+      "name": "today-watermark-camera",
+      "display_name": "today-watermark-camera",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://workbuddy.xhey.top/workbuddy-adapter/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "workbuddy.xhey.top"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tongzhou-fin-research",
+      "name": "tongzhou-fin-research",
+      "display_name": "tongzhou-fin-research",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-gateway.textmind-gz.com/mcp/tongzhou-research"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-gateway.textmind-gz.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tplus-api",
+      "name": "tplus-api",
+      "display_name": "tplus-api",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcphub.chanapp.chanjet.com/151/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcphub.chanapp.chanjet.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-tushare",
+      "name": "tushare",
+      "display_name": "tushare",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.tushare.pro/mcp/?token=${TUSHARE_TOKEN}"
+      },
+      "env_vars": [
+        {
+          "name": "TUSHARE_TOKEN",
+          "label": "Tushare Token",
+          "required": true,
+          "docs_url": "https://tushare.pro/weborder/#/login?reg=wb"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.tushare.pro"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：TUSHARE_TOKEN；在 Tushare 个人中心 → 账号与TOKEN",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-tyc-mcp",
+      "name": "tyc-mcp",
+      "display_name": "tyc-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.tianyancha.com/v1"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.tianyancha.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-variflight-mcp",
+      "name": "variflight-mcp",
+      "display_name": "variflight-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://c-gw.variflight.com/chat_message/mcp/api/legacy",
+        "headers": {
+          "Authorization": "Bearer ${VARIFLIGHT_MCP_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "VARIFLIGHT_MCP_KEY",
+          "label": "用户 MCP Key",
+          "required": true,
+          "docs_url": "https://cmcp.variflight.com/"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "c-gw.variflight.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：VARIFLIGHT_MCP_KEY；登录飞常准 MCP 开放平台后，粘贴以 sk-user- 开头的用户 Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-verya-knowledgebase",
+      "name": "knowledgebase",
+      "display_name": "knowledgebase",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.hcses.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.hcses.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-viaim",
+      "name": "viaim",
+      "display_name": "viaim",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://yun.viaim.cn/center/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "yun.viaim.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-weisheng-scrm",
+      "name": "weisheng-scrm",
+      "display_name": "weisheng-scrm",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "mcp-server-weisheng-scrm@0.0.7",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "该服务在目录里声明了 SCRM_APP_KEY，但未给出注入方式（可能需在服务方控制台配置），连接前请先看其文档",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-westock-mcp",
+      "name": "westock-mcp",
+      "display_name": "westock-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://stockbuddy.qq.com/cgi/cgi-bin/openai/mcp/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "stockbuddy.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-wind-finance",
+      "name": "wind-finance",
+      "display_name": "wind-finance",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.wind.com.cn/vserver_workbuddy/mcp/",
+        "headers": {
+          "Authorization": "Bearer ${WIND_API_KEY}",
+          "Accept": "application/json, text/event-stream"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "WIND_API_KEY",
+          "label": "Wind API Key（个人密钥）",
+          "required": true,
+          "docs_url": "https://aifinmarket.wind.com.cn/#/user/overview"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.wind.com.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：WIND_API_KEY；请输入您的个人 Wind API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-wisenote",
+      "name": "wisenote",
+      "display_name": "wisenote",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://100wiser.com/workbuddy/wisenote/meeting/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "100wiser.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-wk-workbuddy",
+      "name": "wk-mcp",
+      "display_name": "wk-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.wkinfo.com.cn/mcp-servers/integrated/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.wkinfo.com.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-wm-weight-manage",
+      "name": "wm-weight-manage",
+      "display_name": "wm-weight-manage",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ichoice.myweimai.com/weimai-gpt/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ichoice.myweimai.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-workrally1",
+      "name": "workrally",
+      "display_name": "workrally",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://workrally.qq.com/zenstudio/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "workrally.qq.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-wscnmcp-token",
+      "name": "华尔街见闻MCP",
+      "display_name": "华尔街见闻MCP",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://xgb-mcp-api.xuangubao.cn/mcp",
+        "headers": {
+          "Authorization": "Bearer ${WSCN_API_KEY}",
+          "X-WMCP-Client": "wbwscn"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "WSCN_API_KEY",
+          "label": "Access Token",
+          "required": true,
+          "docs_url": "https://wallstreetcn.com/org-mcp/token"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "xgb-mcp-api.xuangubao.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：WSCN_API_KEY；请填写华尔街见闻下发的Access Token",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-xhcj-mcp-announcements-news-policy",
+      "name": "xhcj-mcp-announcements-news-policy",
+      "display_name": "xhcj-mcp-announcements-news-policy",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.cnfic.com.cn/mcp-servers/xhcj-mcp-announcements-news-policy",
+        "headers": {
+          "Authorization": "Bearer ${XHCJ_API_KEY}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "XHCJ_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://docs.qq.com/doc/DQndiT2RJZUF1RXpQ"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.cnfic.com.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：XHCJ_API_KEY；请填写新华财经下发的API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-xiaoe-cloud-cli",
+      "name": "xiaoe-cloud-cli",
+      "display_name": "xiaoe-cloud-cli",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://agent.xiaoe-tech.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "agent.xiaoe-tech.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xiaolv-law-search",
+      "name": "xiaolv-law-search",
+      "display_name": "xiaolv-law-search",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.aixllaw.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.aixllaw.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xiehui-fr",
+      "name": "xiehui-fr",
+      "display_name": "xiehui-fr",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://xiehui.fr/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "xiehui.fr"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xingtu-claw-risk",
+      "name": "xingtu-claw-risk",
+      "display_name": "xingtu-claw-risk",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://claw-mcp.tcredit.com/mcp/sse"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "claw-mcp.tcredit.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xinke-laile-analytics-enterprise",
+      "name": "xinke-laile-enterprise",
+      "display_name": "xinke-laile-enterprise",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://api.huokexitong.com/mcp",
+        "headers": {
+          "Authorization": "Bearer ${XIANSUO_MCP_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "XIANSUO_MCP_TOKEN",
+          "label": "MCP 访问 Token",
+          "required": true,
+          "docs_url": "https://web.huokexitong.com/user/mcp-connections"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "api.huokexitong.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：XIANSUO_MCP_TOKEN；xsmcp_...",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-xmed-figure-mcp",
+      "name": "xmed-figure-mcp",
+      "display_name": "xmed-figure-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://x-med-kyy-mcp.dazd.cn/kyy_visualization_mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "x-med-kyy-mcp.dazd.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xmind",
+      "name": "xmind",
+      "display_name": "xmind",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://app.xmind.cn/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "app.xmind.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-xrxs",
+      "name": "xrxs",
+      "display_name": "xrxs",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp-xrxs.xinrenxinshi.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp-xrxs.xinrenxinshi.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-yichayun-trade-data",
+      "name": "yichayun-trade-data",
+      "display_name": "yichayun-trade-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.trade-ai.com/mcp/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.trade-ai.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-yingmi-mcp",
+      "name": "yingmi-mcp",
+      "display_name": "yingmi-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://stargate.yingmi.com/mcp/v2?apiKey=${YINGMI_API_KEY}"
+      },
+      "env_vars": [
+        {
+          "name": "YINGMI_API_KEY",
+          "label": "API Key",
+          "required": true,
+          "docs_url": "https://qieman.com/mcp"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "stargate.yingmi.com"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：YINGMI_API_KEY；粘贴从盈米 MCP 页面获取的 API Key",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-youshu-bd-mate",
+      "name": "youshu-bd-mate",
+      "display_name": "youshu-bd-mate",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://open.yscredit.com/ys-mcp/report"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "open.yscredit.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-yuandian-mcp",
+      "name": "yuandian_mcp",
+      "display_name": "yuandian_mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://open.chineselaw.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "open.chineselaw.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-yuntu-ft-workbench",
+      "name": "云图外贸工作台",
+      "display_name": "云图外贸工作台",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://ft.tzyuntu.cn/api/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "ft.tzyuntu.cn"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-yunzhi-mcp",
+      "name": "yunzhi-mcp",
+      "display_name": "yunzhi-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.yz168.cc/mcp/",
+        "headers": {
+          "SiteID": "${SITE_ID}",
+          "Authorization": "Bearer ${MCP_TOKEN}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "SITE_ID",
+          "label": "站点 ID (SiteID)",
+          "required": true,
+          "docs_url": "http://help.yz168.com/NewsDetail/8492403.html"
+        },
+        {
+          "name": "MCP_TOKEN",
+          "label": "MCP 令牌 (Token)",
+          "required": true,
+          "docs_url": "http://help.yz168.com/NewsDetail/8492403.html"
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.yz168.cc"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "需要在连接器面板填写：SITE_ID、MCP_TOKEN；例如 80559，在云指建站后台「MCP」中查看；在云指建站后台「MCP」-> 访问Token页生成的 Bearer Token",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-yzf-general-mcp-server",
+      "name": "yzf-general-mcp-server",
+      "display_name": "yzf-general-mcp-server",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://super-ai-app.yunzhangfang.com/api/mcp/general/stream"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "super-ai-app.yunzhangfang.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-zfs-fssc-ai",
+      "name": "zfs-fssc-ai",
+      "display_name": "zfs-fssc-ai",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "sse",
+      "install": {
+        "type": "remote",
+        "url": "https://mcpdemo.ztccloud.com.cn/sse",
+        "headers": {
+          "X-Zfs-Login-Key": "${ZFS_LOGIN_KEY}",
+          "X-Zfs-Login-Password": "${ZFS_PASSWORD}"
+        }
+      },
+      "env_vars": [
+        {
+          "name": "ZFS_LOGIN_KEY",
+          "label": "财务云账号",
+          "required": true,
+          "docs_url": ""
+        },
+        {
+          "name": "ZFS_PASSWORD",
+          "label": "财务云密码",
+          "required": true,
+          "docs_url": ""
+        }
+      ],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcpdemo.ztccloud.com.cn"
+        }
+      ],
+      "auth_type": "api_key",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "SSE 传输（GET 建流 + POST 投递）；若连接失败请优先检查该服务是否已下线 SSE 端点；需要在连接器面板填写：ZFS_LOGIN_KEY、ZFS_PASSWORD；请输入您的账号；请输入您的财务云登录密码",
+      "auth_mode": "paste_key",
+      "recommended": false
+    },
+    {
+      "id": "wb-zhangsanfeng",
+      "name": "zhangsanfeng",
+      "display_name": "zhangsanfeng",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.zhangsanfeng.vip/"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.zhangsanfeng.vip"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-zw3d-mcp",
+      "name": "zw3d-mcp",
+      "display_name": "zw3d-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "npm",
+        "pkg": "zw3d-mcp@1.0.2",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-zwcad-mcp",
+      "name": "zwcad-mcp",
+      "display_name": "zwcad-mcp",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "stdio",
+      "install": {
+        "type": "uvx",
+        "pkg": "zwcad-mcp",
+        "args": []
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "",
+      "auth_mode": "none",
+      "recommended": false
+    },
+    {
+      "id": "wb-zxygj-business-data",
+      "name": "zxygj-business-data",
+      "display_name": "zxygj-business-data",
+      "vendor": "WorkBuddy 目录",
+      "official": false,
+      "category": "导入连接器（WorkBuddy）",
+      "transport": "http",
+      "install": {
+        "type": "remote",
+        "url": "https://mcp.zxygj.com/mcp"
+      },
+      "env_vars": [],
+      "description": "",
+      "capabilities": [],
+      "permissions": [
+        {
+          "level": "network",
+          "scope": "mcp.zxygj.com"
+        }
+      ],
+      "auth_type": "none",
+      "official_url": "",
+      "maturity": "imported",
+      "notes": "目录未声明鉴权方式；若连接返回 401，说明该服务需要令牌，请按其文档获取后填入 Authorization",
+      "auth_mode": "none",
+      "recommended": false
+    }
+  ]
+}

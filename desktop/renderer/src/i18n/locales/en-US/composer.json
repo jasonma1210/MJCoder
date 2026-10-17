@@ -48,7 +48,7 @@
   "lastFailedNote": "Last run failed (likely a network or service hiccup); conversation history kept",
   "retryTurn": "Retry this turn",
   "workingWith": "Working with {name}…",
-  "placeholderRunning": "Running: Enter steers this turn / Tab queues for the next…",
+  "placeholderRunning": "Running: Enter queues for the next turn (won't interrupt)…",
   "placeholderIdle": "What do you want to do? Use @file paths to reference project files, / for commands...",
   "comingSoon": "(coming soon)",
   "addTip": "Add (files / mode / digital worker / skills / connectors / voice)",

@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from './feedback';
 import { useI18n } from '../i18n'; // T3-2：i18n
-import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconPlus, IconSpinner } from './icons';
+import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconFile, IconPlus, IconSpinner } from './icons';
 import { ToolTraceGroup } from './tools/ToolTrace';
 
 // T2-2：消息流域（自主进程 ChatArea.jsx 原样搬移，行为不变）——
@@ -40,6 +40,20 @@ function useMessageWindow({ messages, streamingText, toolCallsCount }) {
   return { scrollRef, handleScroll, showJumpBottom, jumpToBottom };
 }
 
+// T1（2026-10-17）：运行计时——每秒重渲染一次，只在运行时跑。
+// 目的：长思考期间界面不能只有一行静止的「思考中…」，否则用户会以为卡死并按下 Esc，
+// 把本来正常跑着的任务杀掉（这是线上真实发生过的连锁）。
+function useElapsedSeconds(startedAt?: number, active?: boolean) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active || !startedAt) return undefined;
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [active, startedAt]);
+  if (!startedAt) return 0;
+  return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+}
+
 export default function MessageStream({
   messages, windowStart, onLoadEarlier,
   loading, toolCalls, reasoningText, streamingText,
@@ -48,6 +62,9 @@ export default function MessageStream({
   onOpenFile,
 }) {
   const { t } = useI18n();
+  // T1：让用户"看见它在动"——秒数与字数都从流式内容长度直接算，不额外走 IPC
+  const elapsedSec = useElapsedSeconds(runStartedAt, loading);
+  const receivedChars = (reasoningText ? reasoningText.length : 0) + (streamingText ? streamingText.length : 0);
   const { scrollRef, handleScroll, showJumpBottom, jumpToBottom } = useMessageWindow({ messages, streamingText, toolCallsCount: toolCalls.length });
   // 布局要点：消息区必须 min-h-0。
   // flex 子项默认 min-height:auto，内容多高容器就被撑多高，overflow-y-auto 失效，
@@ -101,7 +118,11 @@ export default function MessageStream({
         {/* T1-5：推理模型思考流——Markdown 渐进渲染（与正文一致的排版），默认展开可折叠 */}
         {loading && reasoningText && (
           <details className="mb-3 max-w-3xl" open>
-            <summary className="text-xs text-text2 cursor-pointer select-none">{t('message.thinking')}</summary>
+            <summary className="text-xs text-text2 cursor-pointer select-none">
+              {t('message.thinking')}
+              {elapsedSec > 0 && <span className="ml-2 text-text2/70">{t('message.thinkingElapsed', { s: elapsedSec })}</span>}
+              {receivedChars > 0 && <span className="ml-2 text-text2/70">{t('message.receivedChars', { n: receivedChars })}</span>}
+            </summary>
             <div className="mt-1 text-xs text-text2 max-h-40 overflow-y-auto">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{reasoningText}</ReactMarkdown>
             </div>
@@ -118,6 +139,7 @@ export default function MessageStream({
           <div className="flex items-center gap-1.5 text-text2 text-sm">
             <IconSpinner size={14} className="animate-spin" />
             {t('message.thinking')}
+            {elapsedSec > 0 && <span className="text-text2/70">{t('message.thinkingElapsed', { s: elapsedSec })}</span>}
           </div>
         )}
         </div>
@@ -399,6 +421,28 @@ function markdownComponents(onOpenFile?: (p: string) => void) {
           <button type="button" onClick={() => onOpenFile(h)} className="text-accent underline hover:opacity-80">
             {children}
           </button>
+        );
+      }
+      // 外部链接一律交给系统浏览器。
+      // 2026-10-17 真机修复（用户实测：「点 MCP 里需要跳转的条目，回来变成新建会话界面」）：
+      // 此前这里原样输出 <a href>，而 Electron 窗口没有任何 will-navigate 拦截——
+      // 点击会在**应用窗口内整页导航**，SPA 被卸载；返回/后退时重新加载，
+      // activeThread 回到初始 null，用户看到的就是"新建会话"。
+      // MCP 工具返回的内容里常带授权/文档链接（鉴权类尤其），所以这个坑在 MCP 场景下高频触发。
+      if (/^(https?:|mailto:)/i.test(h)) {
+        return (
+          <a
+            href={h}
+            {...rest}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              try { window.mjcode?.openExternal?.({ url: h }); } catch { /* 桥不可用则退回浏览器默认行为 */ }
+            }}
+          >
+            {children}
+          </a>
         );
       }
       return <a href={href} {...rest}>{children}</a>;

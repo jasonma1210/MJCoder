@@ -4,6 +4,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   // App / Features
   getFlags: () => ipcRenderer.invoke('app:flags'),
   getUserDataPath: () => ipcRenderer.invoke('app:userDataPath'),
+  // C2：上次渲染进程崩溃的通知（取完即清；正常情况下是空数组）
+  getCrashNotice: () => ipcRenderer.invoke('app:crash-notice'),
+  // T6：三层流式超时的生效值 / 来源 / 可调区间（写入走 localSetPreference）
+  getStreamTimeouts: () => ipcRenderer.invoke('app:stream-timeouts'),
   // X4：本地库状态（失败时状态条显式提示，不静默）
   dbStatus: () => ipcRenderer.invoke('db:status'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),

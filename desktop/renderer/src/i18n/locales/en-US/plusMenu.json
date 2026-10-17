@@ -47,5 +47,6 @@
   "openEcosystem": "Open Ecosystem",
   "manualHint": "No auto-launch info for this connector — see the official docs and configuration guide in the sidebar “Ecosystem”.",
   "connectorsFooter": "Only enabled connectors appear here; enable them in the sidebar “Ecosystem”. Custom servers are managed under “Ecosystem → Local servers”",
-  "back": "Back"
+  "back": "Back",
+  "cliAuthRequired": "This service needs a one-time sign-in from your terminal. Run the command below, then click Connect:"
 }

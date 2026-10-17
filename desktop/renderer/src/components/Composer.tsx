@@ -413,12 +413,18 @@ export default function Composer({
             }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
-              // 运行中：Enter = 当轮引导（steer），不新起一轮
-              if (loading && onSteer) { onSteer(input); setInput(''); return; }
+              // 2026-10-17 用户实测修复：运行中按 Enter 必须**入队**，不能打断当前任务。
+              // 此前这里走 onSteer，而 steer() 第一行就是 stop() —— 表现正是
+              // 「上一个任务直接断开，下一个任务开始执行」。
+              // 入队后由 QueuedTasks 卡片提供三个动作：立即执行（先 stop 再发）/ 编辑回填 / 删除。
+              if (loading) {
+                const put = onQueue || onSteer; // 兼容未接 queue 的调用方（欢迎页与对话页共享本组件）
+                if (put) { put(input); setInput(''); return; }
+              }
               onSend();
             }
             if (e.key === 'Tab' && loading && input.trim()) {
-              // 运行中：Tab = 排队到下一轮（queue）
+              // 运行中：Tab 与 Enter 同义（都入队），保留为习惯用法
               e.preventDefault();
               onQueue?.(input);
               setInput('');

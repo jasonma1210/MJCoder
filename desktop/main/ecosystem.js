@@ -58,13 +58,42 @@ function loadDigitalEmployees(ecosystemDir) {
 }
 
 // ── MCP 连接器 ──
-function loadMcpConnectors(ecosystemDir) {
-  const file = path.join(ecosystemDir, 'mcp-connectors.json');
+//
+// 两个来源，合并加载（2026-10-17）：
+//   · mcp-connectors.json           精选目录（≤90 条，有「防膨胀」门禁，中文描述/分类精修）
+//   · mcp-connectors-workbuddy.json 从本机 WorkBuddy 连接器目录导入（id 前缀 wb-，可随时用
+//                                   scripts/import-workbuddy-connectors.mjs 重建）
+// 去重规则：**精选优先**。按安装地址（remote url / 包名）判断同一服务，其次按 name。
+// 为什么分文件而不是全塞进主目录：主目录有「条目数 ≤ 90」的收敛不变式（connector-catalog 守护），
+// 那是防止目录再次膨胀成「一堆点不动的条目」的设计，不该为了导入而破坏。
+function readConnectorFile(file, source) {
   if (!fs.existsSync(file)) return [];
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     const list = Array.isArray(data) ? data : (data.connectors || data.items || []);
-    return list.map((c) => ({
+    return Array.isArray(list) ? list.map((c) => ({ ...c, source })) : [];
+  } catch (err) {
+    console.error(`[ecosystem] MCP 连接器加载失败（${path.basename(file)}）:`, err.message);
+    return [];
+  }
+}
+
+function loadMcpConnectors(ecosystemDir) {
+  const merged = [
+    ...readConnectorFile(path.join(ecosystemDir, 'mcp-connectors.json'), 'curated'),
+    ...readConnectorFile(path.join(ecosystemDir, 'mcp-connectors-workbuddy.json'), 'workbuddy'),
+  ];
+  const seenUrl = new Set();
+  const seenName = new Set();
+  const out = [];
+  for (const c of merged) {
+    const url = c?.install?.url ? String(c.install.url).replace(/\/+$/, '').toLowerCase() : '';
+    const nm = String(c.name || '').toLowerCase();
+    if (url && seenUrl.has(url)) continue;
+    if (!url && nm && seenName.has(nm)) continue;
+    if (url) seenUrl.add(url);
+    if (nm) seenName.add(nm);
+    out.push({
       ...c,
       id: c.id || slug(c.name || ''),
       official: !!c.official,
@@ -75,11 +104,9 @@ function loadMcpConnectors(ecosystemDir) {
       env_vars: Array.isArray(c.env_vars) ? c.env_vars : [],
       capabilities: Array.isArray(c.capabilities) ? c.capabilities : [],
       maturity: c.maturity || 'community',
-    }));
-  } catch (err) {
-    console.error('[ecosystem] MCP 连接器加载失败:', err.message);
-    return [];
+    });
   }
+  return out;
 }
 
 // ── Skill 索引（落盘的 SKILL.md 由 skills.js 负责加载；这里读 JSON 元数据做产品内展示/关联）──

@@ -281,7 +281,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
   useEffect(() => {
     if (!assignOpen) return;
     const onDown = (e) => { if (!assignRef.current?.contains(e.target)) setAssignOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setAssignOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); setAssignOpen(false); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -325,7 +325,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
           onBlur={commit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commit();
-            if (e.key === 'Escape') setEditing(false);
+            if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
           }}
           className="flex-1 min-w-0 bg-bg border border-accent rounded px-1 py-0.5 text-xs outline-none"
           maxLength={100}
