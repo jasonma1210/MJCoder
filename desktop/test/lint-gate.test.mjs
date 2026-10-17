@@ -64,17 +64,25 @@ if (!bin) {
     //
     // status === null 的两种成因必须分开说，否则又是同一种「方向跑偏」：
     //   A 进程跑起来后被信号杀     → res.signal = 'SIGKILL' 等
-    //   B 进程根本没被创建（坏 shebang / 无执行权限 / 二进制与平台不匹配）
-    //                              → res.signal = null，res.error.code = 'ENOENT' | 'EACCES'
+    //   B 进程根本没被创建          → res.signal = null，res.error.code 见下
     // 注意：本处用 spawnSync 直连可执行文件、不经 shell，所以**永远看不到 127**——
     // 127 是 shell 的「command not found」，spawnSync 只会给 status=null + error.code。
+    //
+    // 覆盖边界（重要）：**自动化只覆盖 exit 0 那一支**。1 / 2 / null 三支是 2026-10-17
+    // 用 /tmp 假 bin 人工沙箱验证的（exit 1 / exit 2 / kill -9 / 坏 shebang / 目录冒充），
+    // 没做成自动化——构造它们要 chmod、坏 shebang，在 Windows runner 上语义完全不同，
+    // 会变成平台相关的 flaky 门禁，比没有更糟（教人习惯性忽略红灯）。
+    // 所以：**这几支若被人改动，测试不会红**。别据「lint-gate 绿」推断五支都验过。
     const execDiag = res.signal
       ? `被信号终止（signal=${res.signal}）`
       : res.error?.code
-        // 实测（2026-10-17）：坏 shebang 与「文件不存在」都报 ENOENT（缺的是解释器），
-        // 无执行权限报 EACCES。本用例前面已 existsSync 过 bin，所以 ENOENT 基本等同于
-        // 「shebang 指向的解释器不存在」——别照字面理解成「eslint 没装」。
-        ? `进程未能执行（${res.error.code}）—— ENOENT 多为 shebang 解释器缺失，EACCES 为无执行权限`
+        // 实测（2026-10-17，/tmp 探针）：
+        //   ENOENT → 坏 shebang 或文件不存在（缺的都是解释器）
+        //   EACCES → 无执行权限；**目录**冒充 eslint 也是这个码
+        //   ENOEXEC→ 空文件 / 截断 / 架构不匹配（「npm ci 被中断」就是这形态）
+        // 注：上面 resolveEslintBin 的 existsSync **只保证路径存在、不校验类型**，
+        // 所以拿到 ENOENT 别照字面理解成「eslint 没装」。
+        ? `进程未能执行（${res.error.code}）—— ENOENT=解释器缺失，EACCES=无执行权限，ENOEXEC=文件损坏/架构不匹配`
         : '状态未知（无 signal 也无 error）';
     const why = status === 1
       ? '1 = 确有 lint error（见下方条目，改代码即可）'
