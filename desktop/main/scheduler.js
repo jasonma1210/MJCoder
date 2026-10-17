@@ -450,6 +450,13 @@ function registerIpc() {
     return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil });
   });
   ipcMain.handle('scheduled:delete', async (_, { id } = {}) => {
+    // X14：id 决定删掉哪条任务及其运行历史——非字符串会 filter 掉全部（id 不匹配任何记录），
+    // 用户看到的是「点了删除但任务还在」
+    try {
+      guard.assertStrings({ id }, { id: 120 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     store.tasks = store.tasks.filter((t) => t.id !== id);
     store.runs = store.runs.filter((r) => r.task_id !== id);
     running.delete(id);
@@ -457,12 +464,34 @@ function registerIpc() {
     notify();
     return { ok: true };
   });
-  ipcMain.handle('scheduled:run', async (_, { id } = {}) => runTask(id, 'manual'));
+  ipcMain.handle('scheduled:run', async (_, { id } = {}) => {
+    // X14：手动触发会真的跑一轮 Agent（花 token、可能写文件）——形状先在边界守
+    try {
+      guard.assertStrings({ id }, { id: 120 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    return runTask(id, 'manual');
+  });
   ipcMain.handle('scheduled:runs', async (_, { id } = {}) => ({
     ok: true,
     runs: store.runs.filter((r) => r.task_id === id).slice(0, MAX_RUNS_PER_TASK),
   }));
   ipcMain.handle('scheduled:setModel', async (_, model = null) => {
+    // X14：model 会作为定时任务/编排的执行模型（含凭证解析用的 providerId/baseUrl）——
+    // 允许 null（清空），非 null 时必须是对象且关键字段是短字符串
+    if (model !== null && model !== undefined) {
+      try {
+        guard.assertObject(model, 'model');
+        guard.assertStrings(model, {
+          model: { max: 200, optional: true, allowEmpty: true },
+          baseUrl: { max: 2000, optional: true, allowEmpty: true },
+          cwd: { max: 1024, optional: true, allowEmpty: true },
+        });
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
     setModel(model);
     return { ok: true };
   });

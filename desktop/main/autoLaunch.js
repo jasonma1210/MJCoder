@@ -2,6 +2,7 @@
 // ① main.js 逼近 1500 行 max-lines 硬门禁；② app.setLoginItemSettings 属系统能力，
 // 与调度器解耦，本地偏好持久化经注入的 store（与 main.js 的 localStore 同源）。
 const { ipcMain, app } = require('electron');
+const guard = require('./ipc/payloadGuard');
 
 const PREF_KEY = 'scheduler.auto_launch';
 
@@ -15,7 +16,15 @@ function initAutoLaunchIpc({ getStore } = {}) {
     }
   });
   ipcMain.handle('app:autoLaunchSet', async (_, p = {}) => {
-    const enabled = !!p.enabled;
+    // X14：原实现 `!!p.enabled` 会把字符串 'false' / 非空对象判成 true —— 用户点「关闭」
+    // 反而把开机自启打开（且界面显示已关闭）。显式要求布尔值，形状不合法即拒绝。
+    try {
+      guard.assertObject(p);
+      if (typeof p.enabled !== 'boolean') throw new Error('enabled 必须是布尔值');
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    const enabled = p.enabled;
     try {
       app.setLoginItemSettings({ openAtLogin: enabled });
     } catch (e) {

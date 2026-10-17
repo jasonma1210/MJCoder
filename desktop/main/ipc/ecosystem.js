@@ -15,6 +15,7 @@ const skillCompat = require('../skillCompat');
 const ideLib = require('../ide');
 const ecosystemLib = require('../ecosystem');
 const searchProviders = require('../webSearchProviders');
+const guard = require('./payloadGuard');
 
 const COLLAB_DIR = () => path.join(app.getPath('home'), '.mjcode', 'collab');
 const ECOSYSTEM_DIR = () => path.join(app.getPath('userData'), 'ecosystem');
@@ -52,6 +53,9 @@ function register() {
   if (deps.featureFlags.collab) {
     ipcMain.handle('collab:open', async (_, { docId } = {}) => {
       try {
+        // X14：docId 决定落盘快照文件名（~/.mjcode/collab/<docId>.ydoc），非字符串会变成
+        // "[object Object].ydoc" 这种孤儿文件；允许缺省（旧调用方），但类型与长度必须守
+        guard.assertStrings({ docId }, { docId: { max: 200, optional: true, allowEmpty: true } });
         const lc = getLocalCollab();
         lc.open(String(docId || ''));
         return { ok: true, docId };
@@ -81,6 +85,12 @@ function register() {
 
     ipcMain.handle('collab:applyUpdate', async (_, { docId, update } = {}) => {
       try {
+        // X14：update 是服务端下发的 Yjs 增量（base64），直接 base64 解码后合并进本地文档——
+        // 非字符串会在 Buffer.from 里静默变成垃圾，长度失控则一次 IPC 撑爆内存
+        guard.assertStrings(
+          { docId, update },
+          { docId: { max: 200, optional: true, allowEmpty: true }, update: { max: 8 * 1024 * 1024, optional: true, allowEmpty: true } },
+        );
         return { ok: true, ...getLocalCollab().applyServerUpdate(String(docId || ''), update) };
       } catch (err) {
         return { ok: false, error: err.message };
@@ -96,6 +106,8 @@ function register() {
   // ── SKILL.md 兼容层 IPC（生态互通：生态目录安装 + 外部技能仓库导入）──
   ipcMain.handle('skills:installEcosystem', async (_, { id } = {}) => {
     try {
+      // X14：id 用于在生态目录里查找并复制技能目录——非字符串会一路穿到路径拼接
+      guard.assertStrings({ id }, { id: 200 });
       const dirs = ecosystemDirCandidates();
       if (dirs.length === 0) return { ok: false, error: '未找到生态技能目录（skills.json）' };
       const r = skillCompat.installCatalogSkill(dirs, deps.getSkillsDir(), id);
@@ -108,6 +120,9 @@ function register() {
 
   ipcMain.handle('skills:importFromDir', async (_, { dir } = {}) => {
     try {
+      // X14：dir 是「从这个目录批量导入技能」的根——直接扫目录并复制进 skills 目录，
+      // 路径含空格是常态（用 assertStrings 而非 assertTokens），但类型与非空必须守
+      guard.assertStrings({ dir }, { dir: 1024 });
       const scan = skillCompat.importSkillsFromDir(dir);
       if (!scan.ok) return scan;
       const installed = [];
@@ -127,6 +142,8 @@ function register() {
   // ── IDE 跳转（代码视图一键跳转既有编辑器）──
   ipcMain.handle('app:openInIDE', async (_, { path: p } = {}) => {
     try {
+      // X14：路径会作为 argv 交给编辑器进程——既有的存在性/类型检查保留，边界再补类型与长度上限
+      guard.assertStrings({ path: p }, { path: 2048 });
       if (!p || typeof p !== 'string') return { ok: false, error: '缺少文件路径' };
       if (p.includes('..') && !path.isAbsolute(p)) return { ok: false, error: '非法路径' };
       const platform = process.platform;
@@ -210,6 +227,9 @@ function register() {
   }));
   ipcMain.handle('websearch:setConfig', async (_, { providers } = {}) => {
     try {
+      // X14：providers 里带搜索 API Key（加密落库）——非数组会被 saveSearchConfig 静默当成
+      // 「清空配置」，那是用户视角的配置丢失；显式缺省（undefined）仍按既有语义处理
+      if (providers !== undefined) guard.assertArray({ providers }, 'providers', { max: 50 });
       // Key 属敏感凭证：审计只记启用了哪些提供方，绝不落 Key 本体
       const r = searchProviders.saveSearchConfig(deps.getLocalStore(), providers, deps.getCredentialCrypto?.());
       const enabled = r.providers.filter((p) => p.enabled).map((p) => p.id);

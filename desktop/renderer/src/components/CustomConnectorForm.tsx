@@ -63,7 +63,7 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
 
   async function openConfig() {
     if (!configPath) return;
-    try { await window.mjcode?.openPath?.(configPath); } catch (e) { /* 打不开不影响主流程 */ }
+    try { await window.mjcode?.openPath?.({ path: configPath }); } catch (e) { /* 打不开不影响主流程 */ }
   }
 
   const busy = status === 'saving';

@@ -209,7 +209,14 @@ function register() {
     return callMcpTool(payload);
   });
 
-  ipcMain.handle('mcp:disconnect', async (_, { name }) => {
+  ipcMain.handle('mcp:disconnect', async (_, { name } = {}) => {
+    // X14：name 同时用于断开子进程与重写 mcp-servers.json（filter 掉该条）——
+    // 非字符串会让 filter 静默放行全部，用户以为断开了、重启后全部重连
+    try {
+      guard.assertStrings({ name }, { name: 200 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     // 断开 + 同步移除持久化配置（http 传输无子进程，close 为空操作）
     mcp.disconnectMcpServer(name);
     saveMcpConfig(loadMcpConfig().filter((s) => s.name !== name));
@@ -258,6 +265,18 @@ function register() {
   });
 
   ipcMain.handle('github:createPr', async (_, payload = {}) => {
+    // X14：title/body/base 会作为 argv/--body 交给 gh（createPullRequest 内已做 String() 化），
+    // 但长度失控会把整段内容塞进命令行；cwd 决定在哪个仓库开 PR，同样守一下形状
+    try {
+      guard.assertStrings(payload, {
+        cwd: { max: 4096, optional: true, allowEmpty: true },
+        title: { max: 300, optional: true, allowEmpty: true },
+        body: { max: 60000, optional: true, allowEmpty: true },
+        base: { max: 200, optional: true, allowEmpty: true },
+      });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     const available = await github.ghAvailable();
     if (!available) {
       return { ok: false, error: '未检测到 GitHub CLI（gh）。请先安装 https://cli.github.com 并执行 gh auth login' };
@@ -304,6 +323,13 @@ function register() {
   //  校验：数组元素必须含 name；stdio 必须有 command；http 必须有 url；
   //  非法条目静默丢弃（不阻断整批保存），返回 {ok, saved, dropped} 让 UI 明示。
   ipcMain.handle('mcp:setConfig', async (_, payload) => {
+    // X14：servers 非数组时下面的 `: []` 分支会把整份 mcp-servers.json 覆盖成空数组
+    //（用户视角：所有 MCP 配置无声消失）。显式传 [] 仍是合法的「清空」，但类型必须守。
+    try {
+      guard.assertArray(payload || {}, 'servers', { max: 200 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     const list = Array.isArray(payload?.servers) ? payload.servers : [];
     const valid = [];
     let dropped = 0;

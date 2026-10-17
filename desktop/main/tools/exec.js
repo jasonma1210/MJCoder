@@ -20,6 +20,8 @@ const { audit } = require('../audit/auditLog');
 const { approvalReasonOf, denialText } = require('../approvalChannel');
 const { ipcGovernance } = require('./execGovernance'); // P0-5：直连 IPC 治理参数强制覆写
 const { registerGitHunkIpc, registerDestructiveGitIpc } = require('../ipc/gitHunks'); // hunk 级接受/拒绝 + 破坏性 git 操作（带审批）
+// X14：直连写通道的载荷边界（两种返回约定见 main/ipc/toolPayload.js 顶部）
+const { payloadShapeError } = require('../ipc/toolPayload');
 
 let deps = null;
 // P1-4：审批等待统一入口——返回 { decision, reason }，拒绝点把理由拼进工具结果与审计行
@@ -663,6 +665,11 @@ function registerIpc() {
 
   // 用系统默认应用打开文件或目录（目录 → Finder / 资源管理器）
   ipcMain.handle('shell:openPath', async (_, { path: p, cwd } = {}) => {
+    // X14：p 会交给 shell.openPath（系统级打开）——路径允许空格，但类型与长度必须守
+    const bad = payloadShapeError({ path: p, cwd }, {
+      path: 4096, cwd: { max: 4096, optional: true, allowEmpty: true },
+    }, { kind: 'envelope' });
+    if (bad) return bad;
     const target = resolveToolPath(p, cwd);
     try {
       if (!fs.existsSync(target)) return { ok: false, error: `路径不存在：${target}` };
@@ -678,6 +685,10 @@ function registerIpc() {
   // 打开外链：只允许 http/https（shell.openExternal 能拉起任意协议处理器，
   // 传入 file:// 或自定义 scheme 等于把「打开任意本地程序」的能力暴露给渲染层）
   ipcMain.handle('shell:openExternal', async (_, { url } = {}) => {
+    // X14：url 会交给 shell.openExternal（能拉起任意协议处理器）——协议白名单在下面，
+    // 此处先守「必须是字符串且不超长」，避免超长串进 URL 解析器
+    const bad = payloadShapeError({ url }, { url: { max: 4000, optional: true, allowEmpty: true } }, { kind: 'envelope' });
+    if (bad) return bad;
     const raw = String(url || '').trim();
     let parsed;
     try { parsed = new URL(raw); } catch (e) { return { ok: false, error: '链接格式不正确' }; }
@@ -746,8 +757,18 @@ function registerIpc() {
   registerDestructiveGitIpc(ipcMain, deps, runGit);
   ipcMain.handle('tool:gitLog', (_, p) => toolGitLog(p));
   ipcMain.handle('tool:gitBranch', (_, p) => toolGitBranch(p));
-  ipcMain.handle('tool:gitCommit', (_, p) => toolGitCommit(ipcGovernance(p)));
-  ipcMain.handle('tool:gitAdd', (_, p) => toolGitAdd(ipcGovernance(p)));
+  // X14：gitCommit / gitAdd —— 治理参数先覆写，再校验工具真正会看到的载荷
+  ipcMain.handle('tool:gitCommit', (_, p) => {
+    const payload = ipcGovernance(p);
+    const bad = payloadShapeError(payload, { message: 20000, cwd: { max: 4096, optional: true, allowEmpty: true } });
+    return bad || toolGitCommit(payload);
+  });
+  ipcMain.handle('tool:gitAdd', (_, p) => {
+    const payload = ipcGovernance(p);
+    // files：字符串（空格分隔）或数组两种形态，别的一律拒绝（'[object Object]' 会被当成路径）
+    const bad = payloadShapeError(payload, { cwd: { max: 4096, optional: true, allowEmpty: true } }, { arrayKey: 'files' });
+    return bad || toolGitAdd(payload);
+  });
   // DiffReviewPanel：接受（add）/ 拒绝（checkout -- / restore --staged）
 }
 

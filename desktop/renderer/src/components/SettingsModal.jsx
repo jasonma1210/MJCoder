@@ -863,7 +863,7 @@ function NetworkTab() {
                   </div>
                   <div className="text-xs text-text2">{t(`search.${m.id}.note`)}</div>
                   {m.docsUrl && (
-                    <a href={m.docsUrl} onClick={(e) => { e.preventDefault(); window.mjcode?.openExternal?.(m.docsUrl); }}
+                    <a href={m.docsUrl} onClick={(e) => { e.preventDefault(); window.mjcode?.openExternal?.({ url: m.docsUrl }); }}
                       className="text-xs text-accent hover:underline">{m.docsUrl}</a>
                   )}
                 </div>

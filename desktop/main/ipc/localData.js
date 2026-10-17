@@ -103,6 +103,9 @@ function rewriteModelsFileRaw(nextRaw, { reason }) {
 function register() {
   ipcMain.handle('local:models-file/remove-model', async (_, { fileKey, modelId } = {}) => {
     try {
+      // X14：fileKey/modelId 用来在 models.json 里定位条目并整个文件重写——非字符串会写成
+      // "[object Object]" 且匹配不到任何条目，用户看到的是「删了但没删掉」
+      guard.assertStrings({ fileKey, modelId }, { fileKey: 200, modelId: 300 });
       const raw = modelsFile.readModelsFile();
       const r = modelsFile.removeModelFromRaw(raw, fileKey, modelId);
       if (!r.ok) return r;
@@ -113,6 +116,8 @@ function register() {
   });
   ipcMain.handle('local:models-file/remove-provider', async (_, { fileKey } = {}) => {
     try {
+      // X14：同 remove-model——fileKey 决定整组服务是否被从 models.json 抹掉
+      guard.assertStrings({ fileKey }, { fileKey: 200 });
       const raw = modelsFile.readModelsFile();
       const r = modelsFile.removeProviderFromRaw(raw, fileKey);
       if (!r.ok) return r;
@@ -123,6 +128,11 @@ function register() {
   });
   ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name } = {}) => {
     try {
+      // X14：新增模型条目直接写盘；model_id 必填非空（空 id 会生成一条无法调用的模型），
+      // display_name 允许缺省或留空（addModelToRaw 内回落成 model_id）
+      guard.assertStrings({ fileKey, model_id, display_name }, {
+        fileKey: 200, model_id: 300, display_name: { max: 200, optional: true, allowEmpty: true },
+      });
       const raw = modelsFile.readModelsFile();
       const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name);
       if (!r.ok) return r;
@@ -286,7 +296,14 @@ function register() {
     return deps.getLocalStore().updateProvider(id, { name, base_url, keyEncrypted });
   });
   // B2：测试连接（对 base_url 的 /models 发起探测，返回延迟；Key 仅在主进程内存解析）
-  ipcMain.handle('model:testConnection', async (_, { id, base_url }) => {
+  ipcMain.handle('model:testConnection', async (_, { id, base_url } = {}) => {
+    // X14：base_url 会被拼成 `${url}/models` 直接发请求——非字符串会拼出 "[object Object]/models"，
+    // 用户看到的是一个莫名其妙的网络错误；id 允许缺省（只测地址、不测 Key 的场景）
+    try {
+      guard.assertStrings({ base_url }, { base_url: { max: 2000, optional: true, allowEmpty: true } });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     const vault = deps.localVault.get(Number(id));
     const url = (base_url || vault?.base_url || '').replace(/\/+$/, '');
     if (!url) return { ok: false, error: '缺少接口地址' };
@@ -326,7 +343,16 @@ function register() {
   });
 
   ipcMain.handle('local:preferences/get', async (_, { key }) => deps.getLocalStore() ? deps.getLocalStore().getPreference(key) : undefined);
-  ipcMain.handle('local:preferences/set', async (_, { key, value }) => deps.getLocalStore() ? deps.getLocalStore().setPreference(key, value) : { ok: false });
+  ipcMain.handle('local:preferences/set', async (_, { key, value } = {}) => {
+    // X14：key 是偏好表的键（决定写哪一行），非字符串会落成 "[object Object]" 键——数据还在，
+    // 但读端永远读不回来；value 的形状由各偏好项自己约定，边界不校验
+    try {
+      guard.assertStrings({ key }, { key: 200 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    return deps.getLocalStore() ? deps.getLocalStore().setPreference(key, value) : { ok: false };
+  });
 
   // 服务端地址读写（设置-通用）：写偏好（三级解析之首）；读返回当前生效地址与来源
   ipcMain.handle('local:server/base', async (_, { base } = {}) => {
@@ -368,6 +394,17 @@ function register() {
 
   ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion' } = {}) => {
     // P0-2b/P1-16：写入收口 MemoryManager（SQLite）+ 显式来源（未知来源被 remember 拒绝）
+    // X14：content 进 SQLite 且会被召回进模型上下文，projectPath 是记忆空间分区键——
+    // 形状与长度在边界守（source 的白名单仍由 remember 判，属业务语义）
+    try {
+      guard.assertStrings({ projectPath, content, source }, {
+        projectPath: { max: 1024, optional: true, allowEmpty: true },
+        content: 50000,
+        source: { max: 100, optional: true },
+      });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
       flushMemoryQueue(); // 就绪后补写积压（P1-16）

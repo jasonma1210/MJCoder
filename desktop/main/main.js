@@ -4,22 +4,13 @@ const fsp = require('fs/promises');
 const fs = require('fs');
 const { writeFileDurable } = require('./data/durableWrite');
 const { AsyncLocalStorage } = require('async_hooks');
+// X14：写通道载荷边界校验（形状与上限，不判业务语义）——只在 main.js 直连的写通道上用
+const guard = require('./ipc/payloadGuard');
 
 // ── D2（2026-10-16）：任务写通道（tasks:*）载荷契约 ──
-// tasks:* 是改任务状态 / 恢复暂停组 / 删除任务组的**写通道**；此前直接解构载荷，
-// 畸形输入会走到 store 层才失败或误入分支。现把形状固化为 zod schema，进业务逻辑前校验。
-// 主进程 CJS 无法同步 require ESM（Electron 33 / Node 20），故沿用动态 import + ready 门。
-let taskPayloads = null;
-const taskPayloadsReady = import('../shared-ipc/taskPayloads.mjs')
-  .then((m) => { taskPayloads = m; })
-  .catch((e) => { console.error('[tasks] 载荷契约加载失败（写通道将拒绝请求，fail-closed）:', e.message); });
-
-/** 校验 tasks:* 写通道载荷。契约不可用或载荷不合法时返回 {ok:false}，调用方据此拒绝执行。 */
-async function validateTaskPayload(schemaName, payload) {
-  await taskPayloadsReady;
-  if (!taskPayloads) return { ok: false, error: 'tasks 写通道载荷契约不可用（fail-closed）' };
-  return taskPayloads.parseIpcPayload(taskPayloads[schemaName], payload);
-}
+// 契约本身仍是 shared-ipc/taskPayloads.mjs（zod，动态 import + ready 门）；X14 批次把 tasks:*
+// 的 IPC 注册整体搬到 main/ipc/tasks.js（本文件顶到 1500 行 max-lines 硬门禁），
+// 校验入口 validateTaskPayload 随之搬走，此处不再保留副本。
 
 let mainWindow;
 
@@ -274,7 +265,16 @@ bigPayload.registerBigPayloadIpc(ipcMain);
 const previewScheme = require('./previewScheme');
 previewScheme.registerPreviewSchemePrivileges();
 ipcMain.handle('checkpoint:get', (_, threadKey) => checkpointStore.getCheckpoint(threadKey));
-ipcMain.handle('checkpoint:clear', (_, threadKey) => ({ ok: checkpointStore.clearCheckpoint(threadKey) }));
+ipcMain.handle('checkpoint:clear', (_, threadKey) => {
+  // X14：threadKey 直接当断点存储的键（对象/数组会变成 "[object Object]" 这类键，
+  // 清掉的不是用户以为的那个会话）；可缺省（清全部调用方不传），故 optional + 长度上限
+  try {
+    guard.assertStrings({ threadKey }, { threadKey: { max: 256, optional: true, allowEmpty: true } });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  return { ok: checkpointStore.clearCheckpoint(threadKey) };
+});
 // Phase 3-4：token 仪表盘数据源（最近一次运行的逐轮用量快照）
 ipcMain.handle('agent:token/state', () => agentRunner.getTokenState());
 // P3-4：本地后端探测（Ollama）——启动时一次 + 每 5 分钟复探；结果进快照供渲染层展示
@@ -815,7 +815,7 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
       + `（并发上限由用户设置决定，不接受模型侧改写；动态宽度待决策器落地）`);
   }
   // R6：对话内编排的组绑定发起会话（threadId=conversationId，渲染层按会话归属显示）
-  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
+  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd, agentRunner.getCurrentApprovalMode()) });
   if (!plan.ok) return { ok: false, error: `编排启动失败：${plan.error}` };
   // T1-3：spawn 上报（编排落地即逐任务发出，先于任何轮询）
   const reportSubagent = (evt) => {
@@ -987,6 +987,11 @@ let memoryScheduler = null; // P2-5：记忆后台任务调度器
 // X4：库状态交由 main/dbStatus.js 持有（失败原因 → 状态条 + 工具错误）
 dbStatus.register(ipcMain, () => !!taskStore);
 
+// V04：编排建组的「宿主治理快照」（审批档取用户当前设置、沙箱按 cwd 有无推导、不接受模型参数）
+// 单一事实来源在 main/approvalPolicy.js（纯函数，零依赖）——模型侧 orchestrate_task 工具与
+// tasks:* IPC（main/ipc/tasks.js）各自 import，避免两份实现漂移。
+const { hostPolicySnapshot } = require('./approvalPolicy');
+
 function emitTaskEvent(evt) {
   // 事件桥接：编排器监听组终态/暂停事件，驱动 auto 组自动重规划
   try { orchestrator.onTaskEvent(evt); } catch (e) { console.error('[orchestrator] 事件处理异常:', e.message); }
@@ -1125,122 +1130,18 @@ function setupTaskOrchestration(db) {
   }
 }
 
-// ── 任务编排 IPC ──
-  // V04：编排建组时固化「宿主治理快照」——审批档取用户当前设置，沙箱按宿主推导（cwd 有无），
-  // 一律不接受模型参数（max_agents 已被忽略，治理字段同理）；快照随组持久化，Worker 执行时读取。
-  function hostPolicySnapshot(cwd) {
-    return {
-      approvalMode: agentRunner.getCurrentApprovalMode(),
-      sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
-    };
-  }
-
-  ipcMain.handle('tasks:autoRun', async (_, { goal, cwd, conversationId } = {}) => {
-    if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
-    // 一键自动：拆解（失败自动修复重试）→ 直接执行；组失败后由 orchestrator 自动重规划
-    // R6：组绑定发起会话（threadId）——渲染层任务面板按会话归属显示
-    return orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
-  });
-  ipcMain.handle('tasks:plan', async (_, { goal, cwd, conversationId } = {}) => {
-    if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
-    return orchestrator.planGoal({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd) });
-  });
-ipcMain.handle('tasks:execute', async (_, { groupId } = {}) => {
-  if (!taskStore) return { ok: false, error: '任务编排子系统不可用' };
-  try {
-    const g = await workerPool.runGroup(groupId);
-    return { ok: true, group: g };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-ipcMain.handle('tasks:list', async (_, opts) => (taskStore ? { ok: true, groups: taskStore.listGroups(opts) } : { ok: false, error: '不可用' }));
-ipcMain.handle('tasks:get', async (_, { groupId } = {}) => (taskStore ? { ok: true, group: taskStore.getGroup(groupId) } : { ok: false, error: '不可用' }));
-ipcMain.handle('tasks:cancel', async (_, payload) => {
-  if (!taskStore) return { ok: false, error: '不可用' };
-  const v = await validateTaskPayload('taskGroupRefSchema', payload);
-  if (!v.ok) return v;
-  const { groupId } = v.data;
-  try {
-    // v1：仅允许取消未在执行的组（ready/paused）；running 组等收尾或用任务级重试干预
-    const g = taskStore.getGroup(groupId);
-    if (!g) return { ok: false, error: '任务组不存在' };
-    if (g.status === 'running') return { ok: false, error: '组执行中，暂不支持取消；请等待收尾后处理' };
-    return { ok: true, group: taskStore.setGroupStatus(groupId, 'cancelled') };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-// 强制关闭正在执行的子任务（Agent 面板入口）：中止运行且不重试
-ipcMain.handle('tasks:abortTask', async (_, payload) => {
-  if (!taskStore) return { ok: false, error: '不可用' };
-  const v = await validateTaskPayload('taskRefSchema', payload);
-  if (!v.ok) return v;
-  const { groupId, taskId } = v.data;
-  const done = workerPool.abortTask(groupId, taskId);
-  return done ? { ok: true } : { ok: false, error: '该任务不在执行中（可能已完成或尚未开始）' };
-});
-// 组级强停（对话中止联动 / 胶囊面板「全部停止」）
-ipcMain.handle('tasks:abortGroup', async (_, payload) => {
-  if (!taskStore) return { ok: false, error: '不可用' };
-  const v = await validateTaskPayload('taskGroupRefSchema', payload);
-  if (!v.ok) return v;
-  const n = workerPool.abortGroup(v.data.groupId);
-  return { ok: true, aborted: n };
-});
-ipcMain.handle('tasks:retryTask', async (_, payload) => {
-  if (!taskStore) return { ok: false, error: '不可用' };
-  // D2：进业务逻辑前先校验载荷（不合法即拒绝，不触碰任何任务状态）
-  const v = await validateTaskPayload('taskRetryPayloadSchema', payload);
-  if (!v.ok) return v;
-  const { groupId, taskId, confirmReview } = v.data;
-  try {
-    const t = taskStore.getTask(groupId, taskId);
-    if (!t) return { ok: false, error: '子任务不存在' };
-    if (t.status !== 'failed') return { ok: false, error: `仅失败任务可重试（当前：${t.status}）` };
-    // A5（2026-10-16）：重试前置「副作用核对」。
-    // 该任务上次运行若在产生副作用后被中断（写文件 / 发请求 / 装包），其副作用状态记为
-    // uncertain（见 taskStore.markEffectUncertain）——重试会**再执行一次**同一批操作，
-    // 可能重复写入或重复提交。因此存在未确认副作用时必须由用户显式确认（confirmReview=true）。
-    const uncertain = typeof taskStore.listUncertainEffects === 'function'
-      ? taskStore.listUncertainEffects(groupId)
-      : [];
-    if (taskStore.needsRetryReview(groupId, taskId, confirmReview)) {
-      return {
-        ok: false,
-        requiresReview: true,
-        groupId,
-        taskId,
-        uncertainEffects: uncertain,
-        message: '该任务上次运行留下了未确认的副作用（可能已写入文件或发出请求）。'
-          + '重试会再次执行同一批操作，请先核对工作区改动后再确认。',
-      };
-    }
-    taskStore.setTaskStatus(groupId, taskId, 'queued');
-    const g = taskStore.getGroup(groupId);
-    if (g.status === 'paused') taskStore.setGroupStatus(groupId, 'running'); // paused → running（重试续跑）
-    workerPool.schedule();
-    return { ok: true, group: taskStore.getGroup(groupId) };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-ipcMain.handle('tasks:deleteGroup', async (_, payload) => {
-  if (!taskStore) return { ok: false, error: '不可用' };
-  const v = await validateTaskPayload('taskGroupRefSchema', payload);
-  if (!v.ok) return v;
-  const { groupId } = v.data;
-  // R6（用户实测反馈）：任务组可删除——终态/暂停组从面板消失，不留僵尸记录
-  const r = taskStore.deleteGroup(groupId);
-  if (r.ok) emitTaskEvent({ type: 'group_deleted', groupId });
-  return r;
-});
-ipcMain.handle('tasks:config', async (_, payload) => {
-  const v = await validateTaskPayload('taskConfigPayloadSchema', payload);
-  if (!v.ok) return v;
-  const n = workerPool.setMaxConcurrent(v.data.maxConcurrent);
-  localStore?.setPreference('tasks.max_concurrent', n);
-  return { ok: true, maxConcurrent: n };
+// ── 任务编排 IPC（X14：整体搬出 main/ipc/tasks.js——本文件顶到 1500 行 max-lines 硬门禁）──
+// 行为不变；tasks:autoRun / tasks:plan 在模块内加了载荷边界校验，tasks:execute 复用
+// taskGroupRefSchema（与 tasks:cancel 同构）。编排状态与初始化仍在本文件，经 getter 注入。
+const { initTasksIpc } = require('./ipc/tasks');
+initTasksIpc({
+  getTaskStore: () => taskStore,
+  getLocalStore: () => localStore,
+  // V04 治理快照的审批档来源：与模型侧 orchestrate_task 同源（都是用户当前设置）
+  getApprovalMode: () => agentRunner.getCurrentApprovalMode(),
+  emitTaskEvent,
+  orchestrator,
+  workerPool,
 });
 
 // ═══════════════════════════════════════════
@@ -1338,6 +1239,22 @@ ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-req
   if (activeCuaLoop || activeReplayLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
   if (!objective || !appName) return { ok: false, error: 'objective 与 appName 必填' };
   if (process.platform !== 'darwin') return { ok: false, error: '界面自动化仅支持 macOS' };
+  // X14：objective/appName 会进模型上下文并被审计落盘，allowedApps 是执行白名单——
+  // 形状与长度先在边界守住（非字符串 allowedApps 会让 ComputerUseLoop 以为带了白名单）。
+  // 注意 providerId 不在此列：本机 provider 是数字 id、服务端是 's...' 前缀串，两种形态都合法。
+  try {
+    guard.assertStrings({ objective, appName, model, baseUrl, conversationId, recordingName }, {
+      objective: 20000,
+      appName: 200,
+      model: { max: 200, optional: true, allowEmpty: true },
+      baseUrl: { max: 2000, optional: true, allowEmpty: true },
+      conversationId: { max: 200, optional: true, allowEmpty: true },
+      recordingName: { max: 200, optional: true, allowEmpty: true },
+    });
+    if (allowedApps !== undefined) guard.assertArray({ allowedApps }, 'allowedApps', { max: 50 });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
   // T3-6：原生执行会话（每 run 一个子进程，惰性 spawn，finally dispose）
   const cuaSession = cuaProcess.isAvailable() ? cuaProcess.createSession() : null;
   const cuaExec = (name, ...args) => (cuaSession ? cuaSession.call(name, ...args) : cua[name](...args));
@@ -1446,6 +1363,12 @@ ipcMain.handle('cua:stop', async () => {
 ipcMain.handle('cua:replay', async (_, { recordingId, approvalMode = 'on-request' } = {}) => {
   if (activeCuaLoop || activeReplayLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
   if (process.platform !== 'darwin') return { ok: false, error: '界面自动化仅支持 macOS' };
+  // X14：recordingId 会拼成录制文件路径（cuaRecorder 内部另有净化），边界先守类型与长度
+  try {
+    guard.assertStrings({ recordingId }, { recordingId: { max: 200, optional: true, allowEmpty: true } });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
   const loaded = cuaRecorder.loadRecording(String(recordingId || ''), { dir: cuaRecordingsDir() });
   if (!loaded.ok) return { ok: false, error: loaded.error };
   const recording = loaded.recording;
@@ -1488,6 +1411,12 @@ ipcMain.handle('cua:recordings:list', async () => ({
   recordings: cuaRecorder.listRecordings({ dir: cuaRecordingsDir() }),
 }));
 ipcMain.handle('cua:recordings:delete', async (_, { recordingId } = {}) => {
+  // X14：删除录制会真的 unlink 用户文件，recordingId 走文件路径拼接——先守形状与长度
+  try {
+    guard.assertStrings({ recordingId }, { recordingId: { max: 200, optional: true, allowEmpty: true } });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
   const r = cuaRecorder.deleteRecording(String(recordingId || ''), { dir: cuaRecordingsDir() });
   return r.ok ? { ok: true } : { ok: false, error: r.error };
 });

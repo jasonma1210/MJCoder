@@ -13,6 +13,7 @@ const skillsLib = require('../skills');
 const pluginMarket = require('../pluginMarket');
 const registryLib = require('../registry');
 const pluginDiscovery = require('../pluginDiscovery');
+const guard = require('./payloadGuard');
 
 let deps = null;
 
@@ -184,6 +185,9 @@ function register() {
       if (_ignoredUnsigned || _ignoredInjection) {
         console.warn('[market:installGit] 已忽略来自渲染层的安全降级参数（allowUnsigned/allowUnsafeInjection）：签名与注入检测策略只能由主进程环境变量决定');
       }
+      // X14：url 交给 git clone（installFromGit 内已 String() 化），ref 会拼进 clone 命令——
+      // 形状与长度在边界守；业务语义（仓库是否可达、是否有签名）仍交给下游策略判定
+      guard.assertStrings(safePayload, { url: 2000, ref: { max: 200, optional: true, allowEmpty: true } });
       const r = await pluginMarket.installFromGit(String(safePayload.url || ''), {
         pluginsRoot: PLUGINS_ROOT(),
         registry: getPluginRegistry(),
@@ -232,6 +236,9 @@ function register() {
   // 启停插件（停用后运行期权限闸门直接拒绝）
   ipcMain.handle('market:setEnabled', async (_, payload = {}) => {
     try {
+      // X14：name 是注册表主键（决定启停哪一条记录）——非字符串会命中不到任何插件，
+      // 返回 ok:true 却什么都没变（用户以为已停用，运行期权限闸门仍按「启用」放行）
+      guard.assertStrings(payload, { name: 200 });
       const reg = getPluginRegistry();
       const r = reg.setEnabled(String(payload.name || ''), !!payload.enabled);
       if (r.ok) deps.audit('plugin.enabled_changed', payload.name, `enabled=${!!payload.enabled}`);
@@ -244,6 +251,9 @@ function register() {
   // 卸载插件
   ipcMain.handle('market:uninstall', async (_, payload = {}) => {
     try {
+      // X14：name 决定删除哪个插件目录（uninstall 会递归删 ~/.mjcode/plugins/<name>），
+      // 形状与长度先在边界守；路径合法性仍由 pluginMarket.uninstall 自己判
+      guard.assertStrings(payload, { name: 200 });
       const r = pluginMarket.uninstall(getPluginRegistry(), String(payload.name || ''));
       if (r.ok) deps.audit('plugin.uninstalled', payload.name, '用户卸载插件');
       return r;

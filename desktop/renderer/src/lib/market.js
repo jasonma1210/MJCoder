@@ -32,12 +32,12 @@ export const market = {
   // 读取单个插件的权限面板详情
   inspect: (name) => call('marketInspect', (msg) => ({ ok: false, error: msg }), { name }),
   // 启停插件（停用后运行时权限闸门直接拒绝）
-  setEnabled: (payload) => call('marketSetEnabled', (msg) => ({ ok: false, error: msg })),
+  setEnabled: (payload) => call('marketSetEnabled', (msg) => ({ ok: false, error: msg }), payload),
   // 卸载插件
-  uninstall: (payload) => call('marketUninstall', (msg) => ({ ok: false, error: msg })),
+  uninstall: (payload) => call('marketUninstall', (msg) => ({ ok: false, error: msg }), payload),
 
   // 运行时权限实扣查询：某插件是否被授予某级别
-  checkPermission: (payload) => call('marketCheckPermission', (msg) => ({ ok: false, error: msg, allow: false })),
+  checkPermission: (payload) => call('marketCheckPermission', (msg) => ({ ok: false, error: msg, allow: false }), payload),
 
   // 技能列表：市场安装的技能包已并入现有技能列表（由主控在 skills:list 侧接线）
   listSkills: () => call('listSkills', (msg) => ({ ok: false, error: msg, skills: [] })),

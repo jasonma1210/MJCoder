@@ -10,6 +10,11 @@ const path = require('path');
 const fsp = require('fs/promises');
 const workspace = require('../workspace');
 const worktree = require('../worktree');
+const guard = require('./payloadGuard');
+
+// X14：粘贴落盘的单文件上限（base64 字符数 ≈ 文件字节数 ×4/3）。无路径附件（粘贴图片等）
+// 只能走 IPC 传全文，不设上限等于让一次 IPC 把关不严的内存放大到渲染层与主进程两侧。
+const MAX_UPLOAD_BASE64 = 128 * 1024 * 1024;
 
 let deps = null;
 
@@ -51,6 +56,9 @@ function register() {
 
   ipcMain.handle('project:create', async (_, { name } = {}) => {
     try {
+      // X14：name 参与创建 ~/Documents/.MJCoder 下的项目目录——允许缺省（自动命名），
+      // 但类型与长度必须守（工作区层会按它拼路径）
+      guard.assertStrings({ name }, { name: { max: 120, optional: true, allowEmpty: true } });
       const proj = await workspace.createProject({
         docsDir: app.getPath('documents'), homeDir: app.getPath('home'), name,
       });
@@ -78,8 +86,14 @@ function register() {
   });
 
   // ── Git Worktree 隔离工作区（对标 Codex Worktree 模式）──
-  ipcMain.handle('worktree:create', async (_, { path: projectPath, taskTitle }) => {
+  ipcMain.handle('worktree:create', async (_, { path: projectPath, taskTitle } = {}) => {
     try {
+      // X14：projectPath 会作为 git worktree add 的仓库根、taskTitle 进新分支名——
+      // 路径允许空格（assertStrings 而非 assertTokens），类型与长度在边界守
+      guard.assertStrings(
+        { path: projectPath, taskTitle },
+        { path: 4096, taskTitle: { max: 200, optional: true, allowEmpty: true } },
+      );
       return { ok: true, ...(await worktree.createWorktree(projectPath, taskTitle)) };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -112,16 +126,26 @@ function register() {
     }
   });
 
-  ipcMain.handle('worktree:remove', async (_, { path: worktreePath }) => {
+  ipcMain.handle('worktree:remove', async (_, { path: worktreePath } = {}) => {
     try {
+      // X14：移除 worktree 会删目录——路径形状在边界守，是否真的是本仓库的 worktree
+      // 仍由 worktree.removeWorktree 判（业务语义）
+      guard.assertStrings({ path: worktreePath }, { path: 4096 });
       return { ok: true, ...(await worktree.removeWorktree(worktreePath)) };
     } catch (e) {
       return { ok: false, error: e.message };
     }
   });
 
-  ipcMain.handle('backup:create', async (_, { cwd, files }) => {
+  ipcMain.handle('backup:create', async (_, { cwd, files } = {}) => {
     try {
+      // X14：cwd/files 决定把哪些文件复制进快照目录——files 既有「单文件字符串」也有「批量数组」
+      // 两种调用形态，别的一律拒绝；批量上限防一次 IPC 触发上万次 copyFile
+      guard.assertStrings({ cwd }, { cwd: 4096 });
+      if (files !== undefined && files !== null && typeof files !== 'string' && !Array.isArray(files)) {
+        throw new Error('files 必须是字符串或数组');
+      }
+      if (Array.isArray(files)) guard.assertArray({ files }, 'files', { max: 5000 });
       const list = (Array.isArray(files) ? files : [files]).filter(Boolean);
       if (!cwd || list.length === 0) return { ok: false, error: '缺少项目目录或文件列表' };
       const snapshotId = `snap-${Date.now()}`;
@@ -148,8 +172,10 @@ function register() {
     }
   });
 
-  ipcMain.handle('backup:restore', async (_, { snapshotId }) => {
+  ipcMain.handle('backup:restore', async (_, { snapshotId } = {}) => {
     try {
+      // X14：snapshotId 拼成快照目录路径（下方另有字符白名单净化）——边界先守类型与长度
+      guard.assertStrings({ snapshotId }, { snapshotId: 100 });
       const dir = path.join(backupRoot(), String(snapshotId).replace(/[^a-zA-Z0-9-]/g, ''));
       const meta = JSON.parse(await fsp.readFile(path.join(dir, '.meta.json'), 'utf8'));
       let restored = 0;
@@ -171,8 +197,13 @@ function register() {
   });
 
   // A12：粘贴/无路径文件落盘（渲染层 ArrayBuffer → userData/uploads）
-  ipcMain.handle('files:saveUpload', async (_, { name, dataBase64 }) => {
+  ipcMain.handle('files:saveUpload', async (_, { name, dataBase64 } = {}) => {
     try {
+      // X14：落盘前先守形状与体积上限（无路径附件只能整段走 IPC，历史上没有上限）
+      guard.assertStrings(
+        { name, dataBase64 },
+        { name: { max: 200, optional: true, allowEmpty: true }, dataBase64: MAX_UPLOAD_BASE64 },
+      );
       const dir = path.join(app.getPath('userData'), 'uploads');
       await fsp.mkdir(dir, { recursive: true });
       const safeName = String(name || 'file').replace(/[/\\:*?"<>|]/g, '_').slice(0, 120);

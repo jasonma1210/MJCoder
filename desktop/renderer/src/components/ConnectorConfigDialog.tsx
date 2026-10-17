@@ -75,7 +75,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
   const setVal = (name: string, v: string) => setValues((prev) => ({ ...prev, [name]: v }));
 
   function openDocs() {
-    if (docsUrl && window.mjcode?.openExternal) window.mjcode.openExternal(docsUrl);
+    if (docsUrl && window.mjcode?.openExternal) window.mjcode.openExternal({ url: docsUrl });
   }
 
   // 提交：逐项落盘后按最新计划连接（needs-auth 走 remotePayload 组装）
@@ -169,7 +169,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
         setCfgErr(t('ecosystem.dialog.openMcpJsonFailed', { error: t('ecosystem.dialog.noConfigPath') }));
         return;
       }
-      const r = (await window.mjcode?.openPath?.(p)) as { ok?: boolean; error?: string } | undefined;
+      const r = (await window.mjcode?.openPath?.({ path: p })) as { ok?: boolean; error?: string } | undefined;
       if (r && r.ok === false) setCfgErr(t('ecosystem.dialog.openMcpJsonFailed', { error: String(r.error || '') }));
     } catch (e) {
       setCfgErr(t('ecosystem.dialog.openMcpJsonFailed', { error: e instanceof Error ? e.message : String(e) }));
@@ -269,7 +269,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
                         {f.required && <span className="ml-1 text-caption text-danger">{t('ecosystem.dialog.required')}</span>}
                       </label>
                       {f.docs_url && (
-                        <button onClick={() => window.mjcode?.openExternal?.(f.docs_url)}
+                        <button onClick={() => window.mjcode?.openExternal?.({ url: f.docs_url })}
                           className="text-xs text-accent hover:underline inline-flex items-center gap-1">
                           <IconGlobe size={11} /> {t('ecosystem.dialog.getCredential')}
                         </button>

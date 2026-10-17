@@ -11,6 +11,17 @@ const { spawn } = require('child_process');
 const { needsApproval, approvalTarget } = require('../approval');
 const { denialText, approvalReasonOf } = require('../approvalChannel');
 const { audit } = require('../audit/auditLog');
+const { payloadShapeError } = require('./toolPayload');
+
+// X14：hunk 三通道（{cwd, patch}）与破坏性通道（{cwd, files, conversationId}）的边界校验。
+// 失败按工具结果形状返回而不是抛（渲染层/Diff 面板一律按 { stdout, stderr, error } 消费）；
+// 共享出口见 main/ipc/toolPayload.js。
+
+// hunk 三通道的载荷形状：patch 从 stdin 送进 `git apply`，cwd 是它的执行目录
+const HUNK_INPUT_SPEC = { cwd: { max: 4096, optional: true }, patch: { max: 4 * 1024 * 1024 } };
+function hunkInputError(cwd, patch) {
+  return payloadShapeError({ cwd, patch }, HUNK_INPUT_SPEC);
+}
 
 // 从 patch 头里取受影响文件与 hunk 数（审计与审批摘要共用；取不到就给占位，不抛）
 function patchMeta(patch) {
@@ -93,21 +104,21 @@ function registerGitHunkIpc(ipcMain, deps) {
     audit(action, file, `hunk ${hunks} 个${extra ? `；${extra}` : ''}；actor=diff-panel`, 'auto');
   };
   // 拒绝单个代码块（对标 Codex 三级还原中的最小粒度）
-  ipcMain.handle('tool:gitApplyHunk', async (_, { cwd, patch }) => {
-    if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
+  ipcMain.handle('tool:gitApplyHunk', async (_, { cwd, patch } = {}) => {
+    const bad = hunkInputError(cwd, patch); if (bad) return bad;
     auditHunk('git_apply_hunk', patch, '拒绝');
     return gitApplyStdin(['--reverse', '--unidiff-zero'], cwd, patch);
   });
   // 接受单个代码块（对标 Codex 的 Per hunk stage）：只进索引，工作区不动
-  ipcMain.handle('tool:gitApplyHunkCached', async (_, { cwd, patch }) => {
-    if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
+  ipcMain.handle('tool:gitApplyHunkCached', async (_, { cwd, patch } = {}) => {
+    const bad = hunkInputError(cwd, patch); if (bad) return bad;
     auditHunk('git_apply_hunk_cached', patch, '接受');
     return gitApplyStdin(['--cached', '--unidiff-zero'], cwd, patch);
   });
   // 取消暂存单个代码块（对标 Codex 的 Per hunk unstage）：反向作用于索引，工作区改动保留。
   // 「已暂存」视图里唯一有意义的块级动作——接受错了要能一块一块退回来，而不是整文件重来。
-  ipcMain.handle('tool:gitApplyHunkUnstage', async (_, { cwd, patch }) => {
-    if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
+  ipcMain.handle('tool:gitApplyHunkUnstage', async (_, { cwd, patch } = {}) => {
+    const bad = hunkInputError(cwd, patch); if (bad) return bad;
     auditHunk('git_apply_hunk_unstage', patch, '取消暂存');
     return gitApplyStdin(['--cached', '--reverse', '--unidiff-zero'], cwd, patch);
   });
@@ -119,8 +130,16 @@ function registerDestructiveGitIpc(ipcMain, deps, runGit) {
   const toList = (files) => (Array.isArray(files)
     ? files.map(String)
     : String(files || '').split(/\s+/).filter(Boolean));
+  // X14：三条破坏性通道同形（{cwd, files, conversationId}）——files 允许字符串（单文件）
+  // 或数组（批量放弃），数组才限条数；conversationId 会进审批规则库，故同样限长。
+  const DESTRUCTIVE_INPUT_SPEC = {
+    cwd: { max: 4096, optional: true, allowEmpty: true },
+    conversationId: { max: 200, optional: true, allowEmpty: true },
+  };
 
   ipcMain.handle('tool:gitCheckout', async (_, { cwd, files, conversationId } = {}) => {
+    const bad = payloadShapeError({ cwd, files, conversationId }, DESTRUCTIVE_INPUT_SPEC, { arrayKey: 'files' });
+    if (bad) return bad;
     const list = toList(files);
     if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
     const g = await guardDestructive(deps, 'git_checkout', { cwd, files: list.join(' ') }, conversationId);
@@ -129,6 +148,8 @@ function registerDestructiveGitIpc(ipcMain, deps, runGit) {
   });
 
   ipcMain.handle('tool:gitRestoreStaged', async (_, { cwd, files, conversationId } = {}) => {
+    const bad = payloadShapeError({ cwd, files, conversationId }, DESTRUCTIVE_INPUT_SPEC, { arrayKey: 'files' });
+    if (bad) return bad;
     const list = toList(files);
     if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
     const g = await guardDestructive(deps, 'git_restore_staged', { cwd, files: list.join(' ') }, conversationId);
@@ -141,6 +162,8 @@ function registerDestructiveGitIpc(ipcMain, deps, runGit) {
   // 用户点一次「放弃修改」要连点两次确认。合成一条命令 = 一次审批、一次执行、原子性更好。
   // 批量放弃也走这条通道，避免「逐个文件 checkout」把审批卡刷成 N 张。
   ipcMain.handle('tool:gitDiscardFiles', async (_, { cwd, files, conversationId } = {}) => {
+    const bad = payloadShapeError({ cwd, files, conversationId }, DESTRUCTIVE_INPUT_SPEC, { arrayKey: 'files' });
+    if (bad) return bad;
     const list = toList(files);
     if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
     const g = await guardDestructive(deps, 'git_checkout', { cwd, files: list.join(' ') }, conversationId);

@@ -62,7 +62,41 @@ function stricterSandbox(userPolicy, rolePolicy) {
   return SANDBOX_ORDER[b] < SANDBOX_ORDER[a] ? b : a;
 }
 
+/**
+ * V04：编排建组时固化的「宿主治理快照」——审批档由调用方取用户当前设置，沙箱按宿主推导
+ * （有项目目录 workspace-write / 无目录 read-only），一律不接受模型参数（max_agents 等治理
+ * 字段已被忽略）；快照随组持久化，Worker 执行时直接读。
+ *
+ * 为什么放在这里而不是 main.js / ipc/tasks.js：同一纪律不能有两份实现。head 里记录的事故
+ * 正是「Worker 路径拿不到 → 就地硬编码 auto-safe → 产品对用户设置撒谎」，与本函数要防的
+ * 是同一类漂移。审批档由调用方传入（本文件保持纯函数、零依赖，避免 require agentRunner 成环）。
+ *
+ * 边界说明（别过度声称）：本函数是「**编排建组快照**」的唯一来源，不是「cwd→沙箱档」这条推导的
+ * 唯一出处——`runScheduledAgentTask`（main.js）、`toolShell`/`runWriteTool`（tools/exec.js）、
+ * `workerPool` 里各有**逐次运行的默认值**回落（角色不同：那些是「本次执行的默认档」，本函数是
+ * 「建组时固化、随组持久化」的快照）。要收敛成一处公用辅助函数是可以做的，但会牵动四条安全敏感
+ * 路径，需单独评估，别顺手改。
+ *
+ * X14 移动事故（2026-10-18）：`tasks:*` 搬进 ipc/tasks.js 时本函数跟着搬走，却漏改
+ * main.js 里 `toolOrchestrateTask` 的调用点 → 模型一调 orchestrate_task 就 ReferenceError
+ * （`node --check` 查不出跨作用域引用，只有 eslint no-undef / 真跑用例能抓）。
+ * 现在两处调用点各自 import 本文件：main.js 传 `agentRunner.getCurrentApprovalMode()`，
+ * ipc/tasks.js 传 `deps.getApprovalMode()`。
+ *
+ * @param {string} cwd 工作目录（决定沙箱档）
+ * @param {string} approvalMode 调用方取到的用户当前审批档
+ * @returns {{approvalMode: string, sandboxPolicy: string}}
+ */
+function hostPolicySnapshot(cwd, approvalMode) {
+  return {
+    // 归一化：非法/未知档位收敛到默认档，绝不让一个不存在的档位随组快照落盘（见 V12 注释）
+    approvalMode: normalizeApprovalMode(approvalMode),
+    sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
+  };
+}
+
 module.exports = {
+  hostPolicySnapshot,
   stricterApproval,
   stricterSandbox,
   normalizeApprovalMode,
