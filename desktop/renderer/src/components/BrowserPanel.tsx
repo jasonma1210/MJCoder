@@ -1,0 +1,142 @@
+import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
+import { IconChevronLeft, IconChevronRight, IconExternalLink, IconRefresh } from './icons';
+import { useI18n } from '../i18n';
+
+// 内置浏览器（对标 WorkBuddy 预览栏「浏览器」 / Codex Review Pane 网页视图）。
+//
+// 实现取舍：用渲染层 <webview> 标签（主进程 webPreferences.webviewTag=true 已开启），
+// 而非再开一个 BrowserWindow——复用同一窗口上下文，面板最大化/收起/拖拽宽度天然与右栏一致，
+// 也不引入第二套 IPC。webview 在独立 guest 进程渲染，与主渲染进程上下文隔离。
+//
+// TS 注意：<webview> 不在 React JSX.IntrinsicElements 里，这里用 ref 容器 + 命令式
+// createElement('webview') 规避类型问题；guest 专有方法（loadURL/goBack…）用本地类型收窄。
+
+// 默认首页：隐私友好、无账号强制；用户可在地址栏输入任意网址
+const HOME_URL = 'https://www.bing.com';
+
+// webview guest 暴露的宿主方法（Electron WebViewElement 的子集，本地收窄避免 any 蔓延）
+interface WebviewGuest {
+  loadURL: (url: string) => void;
+  reload: () => void;
+  goBack: () => void;
+  goForward: () => void;
+  canGoBack: () => boolean;
+  canGoForward: () => boolean;
+}
+
+// webview 导航类事件：url 直接挂在事件对象上（非 CustomEvent.detail）
+interface WebviewUrlEvent extends Event {
+  url: string;
+}
+
+export default function BrowserPanel() {
+  const { t } = useI18n();
+  const hostRef = useRef<HTMLDivElement>(null);
+  const guestRef = useRef<WebviewGuest | null>(null);
+  const [url, setUrl] = useState(HOME_URL);
+  const [input, setInput] = useState(HOME_URL);
+  const [loading, setLoading] = useState(false);
+  const [canBack, setCanBack] = useState(false);
+  const [canFwd, setCanFwd] = useState(false);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    const el = document.createElement('webview');
+    el.setAttribute('src', HOME_URL);
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.border = '0';
+    el.style.display = 'block';
+    const refreshNav = () => {
+      const g = el as unknown as WebviewGuest;
+      try { setCanBack(g.canGoBack()); setCanFwd(g.canGoForward()); } catch { /* guest 未就绪 */ }
+    };
+    const onNavigate = (e: Event) => {
+      const u = (e as WebviewUrlEvent).url || '';
+      if (!u) return;
+      setUrl(u);
+      setInput(u);
+      refreshNav();
+    };
+    el.addEventListener('did-navigate', onNavigate);
+    el.addEventListener('did-navigate-in-page', onNavigate);
+    el.addEventListener('did-start-loading', () => setLoading(true));
+    el.addEventListener('did-stop-loading', () => { setLoading(false); refreshNav(); });
+    el.addEventListener('dom-ready', refreshNav);
+    // 应用内浏览：新窗口（target=_blank / window.open）落在同一 guest，不跳出到系统浏览器
+    el.addEventListener('new-window', (e: Event) => {
+      const u = (e as WebviewUrlEvent).url;
+      if (u) (el as unknown as WebviewGuest).loadURL(u);
+    });
+    host.appendChild(el);
+    guestRef.current = el as unknown as WebviewGuest;
+    return () => {
+      guestRef.current = null;
+      if (el.parentNode) el.parentNode.removeChild(el);
+    };
+  }, []);
+
+  function navigate(raw?: string) {
+    const target = (raw ?? input).trim();
+    if (!target) return;
+    const withProto = /^https?:\/\//i.test(target) ? target : `https://${target}`;
+    setInput(withProto);
+    setUrl(withProto);
+    try { guestRef.current?.loadURL(withProto); } catch { /* 无视：guest 可能尚未就绪 */ }
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); navigate(); }
+  }
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* 地址栏 + 导航控制（与浏览器一致的顶部工具条） */}
+      <div className="shrink-0 flex items-center gap-1 px-2 h-9 border-b border-border">
+        <button
+          onClick={() => guestRef.current?.goBack()}
+          disabled={!canBack}
+          className="p-1 rounded-lg text-text2 hover:text-text disabled:opacity-30 disabled:cursor-not-allowed"
+          title={t('rightPane.browserBack')} aria-label={t('rightPane.browserBack')}
+        >
+          <IconChevronLeft size={15} />
+        </button>
+        <button
+          onClick={() => guestRef.current?.goForward()}
+          disabled={!canFwd}
+          className="p-1 rounded-lg text-text2 hover:text-text disabled:opacity-30 disabled:cursor-not-allowed"
+          title={t('rightPane.browserForward')} aria-label={t('rightPane.browserForward')}
+        >
+          <IconChevronRight size={15} />
+        </button>
+        <button
+          onClick={() => guestRef.current?.reload()}
+          className="p-1 rounded-lg text-text2 hover:text-text"
+          title={t('rightPane.browserReload')} aria-label={t('rightPane.browserReload')}
+        >
+          <IconRefresh size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={t('rightPane.browserUrlPlaceholder')}
+          spellCheck={false}
+          className="flex-1 min-w-0 mx-1 px-2 h-7 rounded-lg bg-surface text-xs outline-none placeholder:text-text2"
+          title={url}
+        />
+        <button
+          onClick={() => { try { window.mjcode?.openExternal?.({ url }); } catch { /* 无 IPC 时降级忽略 */ } }}
+          className="p-1 rounded-lg text-text2 hover:text-text"
+          title={t('rightPane.browserOpenExternal')} aria-label={t('rightPane.browserOpenExternal')}
+        >
+          <IconExternalLink size={14} />
+        </button>
+      </div>
+      {/* webview 挂载点：命令式创建，避免 JSX 对 webview 元素的类型排斥 */}
+      <div ref={hostRef} className="flex-1 min-h-0 bg-white" />
+    </div>
+  );
+}

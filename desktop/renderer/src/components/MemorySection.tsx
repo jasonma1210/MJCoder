@@ -1,0 +1,264 @@
+// P0-2c / P1-17 / P3-4：记忆与后台作业设置分区。
+// 背景：memory:stats / memory:bgTasks 两个 IPC 早已注册（main/ipc/localData.js），
+// 渲染层零调用——后台压缩是否在跑、记忆有多少、有没有被熔断，用户完全无法观测
+// （方案 §2 回路 3「静默成本」）。本组件把这三类数据接上，并提供记忆管理能力：
+//   ① 自动沉淀开关（memory.autoCapture，P0-2a 默认关闭的用户侧入口）；
+//   ② 统计 + 后台任务列表（15s 轮询）；
+//   ③ 当前项目记忆列表 + 单条作废（memory:invalidate）+ 人工确认长期留存（memory:promote）。
+import { useState, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
+import { useI18n } from '../i18n';
+import { confirm } from './feedback';
+
+// 与 SettingsModal 内部 Section 同款卡片容器（该组件为文件私有，此处独立复刻避免循环依赖）
+const Section = ({ title, children }: { title: string; children: ReactNode }) => (
+  <div className="mb-8">
+    <h2 className="text-base font-semibold mb-3">{title}</h2>
+    <div className="bg-surface border border-border rounded-2xl px-5">{children}</div>
+  </div>
+);
+
+interface MemoryItem {
+  id: string;
+  spaceId: string;
+  domain: string;
+  tier: number;
+  content: string;
+  summary: string | null;
+  importance: number;
+  source: string;
+  trust: number;
+  isValid: boolean;
+  usageCount: number;
+  reHitCount: number;
+  updatedAt: number;
+  createdAt: number;
+}
+
+interface BgTaskRow {
+  id: string;
+  type: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface MemoryStats {
+  total: number;
+  byDomainTier: Array<{ domain: string; tier: number; n: number }>;
+  bgTasks: Array<{ status: string; n: number }>;
+}
+
+// 后台任务状态 → i18n key（type 为技术标识，原样展示）
+const BG_STATUS_KEYS: Record<string, string> = {
+  queued: 'settings.memoryBgQueued',
+  running: 'settings.memoryBgRunning',
+  done: 'settings.memoryBgDone',
+  failed: 'settings.memoryBgFailed',
+};
+
+// 域 → i18n key
+const DOMAIN_KEYS: Record<string, string> = {
+  private: 'settings.memoryDomainPrivate',
+  session: 'settings.memoryDomainSession',
+  global_knowledge: 'settings.memoryDomainGlobal',
+  entity: 'settings.memoryDomainEntity',
+  reflection: 'settings.memoryDomainReflection',
+};
+
+function fmtTime(ts: number, locale: string) {
+  if (!ts) return '';
+  try { return new Date(ts).toLocaleString(locale); } catch { return String(ts); }
+}
+
+export default function MemorySection({ projectPath = '' }: { projectPath?: string }) {
+  const { t, locale } = useI18n();
+  const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [tasks, setTasks] = useState<BgTaskRow[]>([]);
+  const [items, setItems] = useState<MemoryItem[]>([]);
+  const [autoCapture, setAutoCapture] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  // 操作反馈（ UpdateSection 同款：命令式 toast 的 TS 签名要求 actionLabel/onAction，
+  // 本组件用本地 notice 行承载，避免为过个提示传空动作）
+  const [notice, setNotice] = useState('');
+
+  const reload = useCallback(async () => {
+    if (!projectPath) return;
+    try {
+      const [st, bg, list, pref] = await Promise.all([
+        window.mjcode?.memoryStats?.() as Promise<{ ok?: boolean; stats?: MemoryStats }> | undefined,
+        window.mjcode?.memoryBgTasks?.({ limit: 20 }) as Promise<{ ok?: boolean; tasks?: BgTaskRow[] }> | undefined,
+        window.mjcode?.memoryList?.({ projectPath, limit: 50 }) as Promise<{ ok?: boolean; items?: MemoryItem[] }> | undefined,
+        window.mjcode?.localGetPreference?.({ key: 'memory.autoCapture' }) as Promise<unknown> | undefined,
+      ]);
+      setUnavailable(!!st && st.ok === false);
+      if (st?.ok && st.stats) setStats(st.stats);
+      if (bg?.ok) setTasks(bg.tasks || []);
+      if (list?.ok) setItems(list.items || []);
+      setAutoCapture(pref === true);
+    } catch (err) {
+      console.warn('[settings] memory section load failed:', err);
+    }
+  }, [projectPath]);
+
+  // 15s 轮询：后台任务状态是「活」的数据（压缩可能正在跑/失败重试）
+  useEffect(() => {
+    if (!projectPath) return;
+    let cancelled = false;
+    const tick = () => { if (!cancelled) reload(); };
+    tick();
+    const timer = setInterval(tick, 15000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [projectPath, reload]);
+
+  async function toggleAutoCapture() {
+    const next = !autoCapture;
+    try {
+      await window.mjcode?.localSetPreference?.({ key: 'memory.autoCapture', value: next });
+      setAutoCapture(next);
+      setNotice(next ? t('settings.memoryAutoOn') : t('settings.memoryAutoOff'));
+    } catch (err) {
+      console.warn('[settings] memory autoCapture toggle failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  async function invalidateItem(id: string) {
+    const ok = await confirm({
+      title: t('settings.memoryDeleteTitle'),
+      message: t('settings.memoryDeleteMsg'),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      // 原因文案由主进程侧默认值承载（localData.js 的 memory:invalidate 处理器），
+      // 渲染层不传中文载荷（i18n 门禁：IPC 载荷文案归主进程）
+      const r = await window.mjcode?.memoryInvalidate?.({ id }) as { ok?: boolean } | undefined;
+      if (r?.ok) { setNotice(t('settings.memoryDeleted')); await reload(); }
+      else setNotice(t('settings.memoryOpFailed'));
+    } catch (err) {
+      console.warn('[settings] memory invalidate failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  async function promoteItem(id: string) {
+    try {
+      const r = await window.mjcode?.memoryPromote?.({ id }) as { ok?: boolean } | undefined;
+      if (r?.ok) { setNotice(t('settings.memoryPromoted')); await reload(); }
+      else setNotice(t('settings.memoryOpFailed'));
+    } catch (err) {
+      console.warn('[settings] memory promote failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  const domainCount = (domain: string) => (stats?.byDomainTier || [])
+    .filter((r) => r.domain === domain).reduce((s, r) => s + r.n, 0);
+  const bgCount = (status: string) => (stats?.bgTasks || []).find((r) => r.status === status)?.n || 0;
+
+  return (
+    <Section title={t('settings.memoryTitle')}>
+      {!projectPath && (
+        <p className="py-4 text-xs text-text2">{t('settings.memoryNeedProject')}</p>
+      )}
+      {projectPath && (
+        <>
+          {notice && (
+            <p className="pt-3 text-xs text-text2">{notice}</p>
+          )}
+          {/* ① 自动沉淀开关（P0-2a：默认关闭；开启后每轮对话结束才写入模型结论档记忆） */}
+          <div className="py-4 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{t('settings.memoryAutoCaptureLabel')}</div>
+              <p className="text-xs text-text2 mt-1">{t('settings.memoryAutoCaptureDesc')}</p>
+            </div>
+            <button onClick={toggleAutoCapture}
+              className={`text-xs px-3 py-1.5 rounded-lg border shrink-0 ${autoCapture ? 'bg-accent-solid text-on-accent border-accent' : 'border-border hover:bg-hover'}`}>
+              {autoCapture ? t('settings.memoryAutoOn') : t('settings.memoryAutoOff')}
+            </button>
+          </div>
+
+          {/* ② 统计 + 后台任务（接上零消费的 memory:stats / memory:bgTasks） */}
+          <div className="py-4 border-t border-border">
+            <div className="text-sm font-medium mb-2">{t('settings.memoryStatsTitle')}</div>
+            {unavailable ? (
+              <p className="text-xs text-text2">{t('settings.memoryUnavailable')}</p>
+            ) : (
+              <div className="text-xs text-text2 flex flex-wrap gap-x-4 gap-y-1">
+                <span>{t('settings.memoryTotal')}: {stats?.total ?? 0}</span>
+                {Object.keys(DOMAIN_KEYS).map((d) => (
+                  <span key={d}>{t(DOMAIN_KEYS[d])}: {domainCount(d)}</span>
+                ))}
+                <span>{t('settings.memoryBgQueued')}: {bgCount('queued')}</span>
+                <span>{t('settings.memoryBgRunning')}: {bgCount('running')}</span>
+                <span>{t('settings.memoryBgDone')}: {bgCount('done')}</span>
+                <span>{t('settings.memoryBgFailed')}: {bgCount('failed')}</span>
+              </div>
+            )}
+          </div>
+          <div className="py-4 border-t border-border">
+            <div className="text-sm font-medium mb-2">{t('settings.memoryBgTasksTitle')}</div>
+            {tasks.length === 0 ? (
+              <p className="text-xs text-text2">{t('settings.memoryBgEmpty')}</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {tasks.map((task) => (
+                  <div key={task.id} className="text-xs text-text2 flex items-start justify-between gap-3">
+                    <span className="font-mono">{task.type}</span>
+                    <span className="flex-1 truncate">
+                      {t(BG_STATUS_KEYS[task.status] || 'settings.memoryBgQueued')}
+                      {task.error ? ` — ${task.error}` : ''}
+                    </span>
+                    <span className="shrink-0">{fmtTime(task.updated_at, locale)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ③ 当前项目记忆列表 + 单条作废 / 长期留存 */}
+          <div className="py-4 border-t border-border">
+            <div className="text-sm font-medium mb-2">{t('settings.memoryListTitle')}</div>
+            {items.length === 0 ? (
+              <p className="text-xs text-text2">{t('settings.memoryListEmpty')}</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {items.map((item) => (
+                  <div key={item.id} className="border border-border rounded-xl px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs text-text2 mb-1">
+                      <span className="border border-border rounded px-1.5 py-0.5">
+                        {t(DOMAIN_KEYS[item.domain] || 'settings.memoryDomainSession')}
+                      </span>
+                      <span>{t('settings.memoryTrust')} {Math.round(item.trust * 100)}%</span>
+                      <span>{t('settings.memoryImportance')} {item.importance.toFixed(2)}</span>
+                      {item.tier >= 3 && (
+                        <span className="border border-border rounded px-1.5 py-0.5">{t('settings.memoryLongTerm')}</span>
+                      )}
+                      <span className="ml-auto shrink-0">{fmtTime(item.updatedAt, locale)}</span>
+                    </div>
+                    <p className="text-xs whitespace-pre-wrap break-all">{(item.summary || item.content).slice(0, 160)}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <button onClick={() => invalidateItem(item.id)}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
+                        {t('settings.memoryDelete')}
+                      </button>
+                      {item.tier < 3 && (
+                        <button onClick={() => promoteItem(item.id)}
+                          className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
+                          {t('settings.memoryPromote')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
