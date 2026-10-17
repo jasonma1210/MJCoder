@@ -926,7 +926,7 @@ agentRunner.initAgentRunner({
     codeExec: codeTools.toolCodeExec,
   }),
 });
-ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRun(payload || {}, event.sender));
+ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRunWhenReady(payload || {}, event.sender));
 ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun(runId) }));
 
 // 定时任务 Agent 入口：scheduler.runTask 到点调用

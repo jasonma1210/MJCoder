@@ -69,6 +69,18 @@ const valid = (type, data) => ({ runId: R, type, data });
   check('非法 sandboxPolicy 被拒', !validateAgentRunPayload({ ...goodPayload, sandboxPolicy: 'no-sandbox' }).ok);
   check('负 tokenBudget 被拒', !validateAgentRunPayload({ ...goodPayload, tokenBudget: -1 }).ok);
 
+  // ── X8：契约未就绪不再放行（源码级反回归）──
+  // 事故形态：`if (contract) { validate }` 在 ESM 动态 import 未完成的窗口里
+  // 直接跳过校验，畸形载荷可穿透；且这条分支「看起来」是防御代码，很难在评审里发现。
+  const fs = await import('node:fs');
+  const pathMod = await import('node:path');
+  const MAIN = pathMod.join(pathMod.dirname(pathMod.dirname(new URL(import.meta.url).pathname)), 'main');
+  const runnerSrc = fs.readFileSync(pathMod.join(MAIN, 'agentRunner.js'), 'utf8');
+  check('agentRunner 不含「契约未就绪则放行」的旧分支', !/if \(contract\) \{\s*const v = contract\.validateAgentRunPayload/.test(runnerSrc));
+  check('未就绪时明确拒绝（fail-closed 文案）', /IPC 契约尚未就绪，已拒绝启动/.test(runnerSrc));
+  const mainSrc = fs.readFileSync(pathMod.join(MAIN, 'main.js'), 'utf8');
+  check('agent:run 经 startAgentRunWhenReady（先等契约就绪）', /agent:run', \(event, payload\) => agentRunner\.startAgentRunWhenReady/.test(mainSrc));
+
   console.log(`\nipc-contract: ${pass}/${pass + fail} 通过`);
   if (fail) process.exitCode = 1;
 })();

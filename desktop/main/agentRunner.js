@@ -67,6 +67,15 @@ function makeEmitter(sender, runId) {
   };
 }
 
+// X8：IPC 入口专用——先等契约模块就绪（ESM 动态 import 的启动窗口）再进 startAgentRun。
+// agentRunnerReady() 在「加载成功」与「加载失败」两种情况下都会 resolve，
+// 失败由 startAgentRun 内的 contractFailed 分支给出可读错误。
+// 放在本文件而非 main.js，是为了避开 main.js 的 1500 行 max-lines 门禁。
+async function startAgentRunWhenReady(payload, sender) {
+  await contractReady;
+  return startAgentRun(payload, sender);
+}
+
 // 启动一次交互式 Agent 运行。立即返回 runId；循环在后台执行，事件经 agent:event 推送。
 function startAgentRun(payload, sender) {
   if (!deps) return { ok: false, error: 'AgentRunner 未初始化' };
@@ -79,10 +88,15 @@ function startAgentRun(payload, sender) {
   // 即产品对用户的设置撒谎。只取「用户设置」，不取 rolePreset 钳制后的值——
   // 钳制已在本文件内对前台生效，Worker 侧还会再叠一层 auto-safe 地板。
   currentUserApprovalMode = payload.approvalMode || 'on-request';
+  // X8：契约未就绪 = 边界不存在，一律拒绝（此前是「未就绪则跳过校验」，
+  // 冷启动窗口内畸形载荷可穿透到引擎）。IPC 入口已先 await agentRunnerReady()，
+  // 正常路径不会走到这里；保留这道判断是为了让**任何直连调用**也 fail-closed。
+  if (!contract) {
+    return { ok: false, error: 'IPC 契约尚未就绪，已拒绝启动（fail-closed）。请稍后重试或重启应用。' };
+  }
   // T0-2：启动载荷边界校验（fail-closed）——缺 messages/model 或 model 扁平形
-  // 直接拒绝启动并给出期望形状（历史上这类畸形 payload 会深入引擎才炸 TypeError，
-  // 排查成本极高）。契约未就绪的启动窗口内放行（见模块头注释）。
-  if (contract) {
+  // 直接拒绝启动并给出期望形状（畸形 payload 若放过会深入引擎才炸 TypeError）。
+  {
     const v = contract.validateAgentRunPayload(payload);
     if (!v.ok) {
       console.warn(`[agentRunner] 启动被 IPC 契约拒绝：${v.error}`);
@@ -163,6 +177,13 @@ function startAgentRun(payload, sender) {
     if (payload.rolePreset) {
       engineParams.approvalMode = stricterApproval(engineParams.approvalMode, payload.rolePreset.approvalMode);
       engineParams.sandboxPolicy = stricterSandbox(engineParams.sandboxPolicy, payload.rolePreset.sandboxPolicy);
+      // T4-3 技能接线：数字员工 starter_skills → 本地 SKILL.md 内容（按名装载）注入引擎；
+      // 内容安全处置统一在引擎侧不可信内容管道（guardUntrusted），此处只按名装载
+      if (Array.isArray(payload.rolePreset.skillNames) && payload.rolePreset.skillNames.length
+          && typeof deps.loadSkillContents === 'function') {
+        const employeeSkills = deps.loadSkillContents(payload.rolePreset.skillNames);
+        engineParams.skills = [...engineParams.skills, ...employeeSkills];
+      }
     }
     try {
       const handlers = deps.createToolHandlers({
@@ -200,11 +221,14 @@ function startAgentRun(payload, sender) {
         // P0-B：任务清单 → 渲染层实时展示（让长任务进度对用户可见）
         onTodos: (info) => emit('todos', info),
         // Phase 3-1：token 预算熔断 → 保存断点（threadKey = conversationId）+ 通知渲染层
+        // kind 必须落盘：恢复文案要按「预算触顶 / 模型超时」分流，不透传会让超时被说成预算触顶
+        // （用户会去调大 token 预算，改错方向）。默认 'tokens' 保持既有行为不变。
         onSuspend: (info) => {
           let saved = false;
           try {
             const cp = require('./checkpointStore');
             saved = cp.saveCheckpoint(String(payload.conversationId || 'local'), {
+              kind: info?.kind || 'tokens',
               summary: String(info?.summary || '').slice(-4000),
               usage: info?.usage || null,
               rounds: info?.roundsUsed || 0,
@@ -354,4 +378,5 @@ module.exports = {
   // 实际实现已抽到 approvalPolicy.js（唯一事实源），此处重导出只为兼容既有引用方。
   stricterApproval, stricterSandbox,
   getCurrentApprovalMode: () => currentUserApprovalMode,
+  startAgentRunWhenReady,
 };
