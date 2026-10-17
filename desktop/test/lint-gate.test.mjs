@@ -61,11 +61,26 @@ if (!bin) {
     // 退出码语义必须区分，否则排查方向会跑偏（实测踩过：沙箱 broker socket 故障让 eslint 返回 2，
     // 差点被当成「代码里还有 lint error」。2 在 ESLint 里是配置/用法错误，与 lint 失败是两回事）
     // status 可能是 null（被信号终止），故模板串里只输出一次，避免「退出码 null … 退出码 null」
+    //
+    // status === null 的两种成因必须分开说，否则又是同一种「方向跑偏」：
+    //   A 进程跑起来后被信号杀     → res.signal = 'SIGKILL' 等
+    //   B 进程根本没被创建（坏 shebang / 无执行权限 / 二进制与平台不匹配）
+    //                              → res.signal = null，res.error.code = 'ENOENT' | 'EACCES'
+    // 注意：本处用 spawnSync 直连可执行文件、不经 shell，所以**永远看不到 127**——
+    // 127 是 shell 的「command not found」，spawnSync 只会给 status=null + error.code。
+    const execDiag = res.signal
+      ? `被信号终止（signal=${res.signal}）`
+      : res.error?.code
+        // 实测（2026-10-17）：坏 shebang 与「文件不存在」都报 ENOENT（缺的是解释器），
+        // 无执行权限报 EACCES。本用例前面已 existsSync 过 bin，所以 ENOENT 基本等同于
+        // 「shebang 指向的解释器不存在」——别照字面理解成「eslint 没装」。
+        ? `进程未能执行（${res.error.code}）—— ENOENT 多为 shebang 解释器缺失，EACCES 为无执行权限`
+        : '状态未知（无 signal 也无 error）';
     const why = status === 1
       ? '1 = 确有 lint error（见下方条目，改代码即可）'
       : status === 2
         ? '2 = ESLint 配置/用法错误或运行环境故障（**不是** lint error：先查 eslint.config.mjs、依赖安装、沙箱/网络，别急着改代码）'
-        : '既非 0 也非 1/2（可能被信号终止或进程异常，先看下方输出与信号）';
+        : `既非 0 也非 1/2：${execDiag}`;
     throw new Error(
       `eslint 退出码 ${status}：${why}\n(${errors.length} 条 error)\n`
       + (errors.length ? errors.slice(0, 30).join('\n') : stdout.slice(0, 4000)),
