@@ -3095,9 +3095,10 @@
       "vendor": "Tencent",
       "official": false,
       "category": "知识库与笔记",
-      "transport": "stdio",
+      "transport": "http",
       "install": {
-        "type": "manual"
+        "type": "remote",
+        "url": "https://ima.qq.com/mcp"
       },
       "env_vars": [
         {
@@ -3129,7 +3130,7 @@
       "auth_type": "api_key",
       "official_url": "https://ima.qq.com",
       "maturity": "community",
-      "notes": "先安装 ima 桌面客户端并微信登录，在 ima 开放接口页（ima.qq.com/agent-interface）创建凭证获取 Client ID / API Key；server 本体为社区实现（ima-mcp-server），需本机以 node 运行，暂无统一 npm 包名，故标 manual。",
+      "notes": "官方远程端点 https://ima.qq.com/mcp（WorkBuddy 官方连接器同源，2026-10-17 实测可达，未带令牌返回 401 empty access token）。需在 ima 开放接口页（ima.qq.com/agent-interface）取得访问令牌后粘贴；若你的部署要求本地 stdio，可改用社区实现 ima-mcp-server（node server.mjs，env IMA_CLIENT_ID / IMA_API_KEY），在生态中心「本机服务」手写配置。",
       "auth_mode": "paste_key",
       "recommended": true
     },
