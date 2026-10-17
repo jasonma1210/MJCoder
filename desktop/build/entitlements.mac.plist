@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS 硬运行时（hardened runtime）权限声明。
+  仅在启用签名/公证后生效（electron-builder 的 mac.entitlements / entitlementsInherit 指向本文件）；
+  未签名构建不读取它，因此现在加入不会改变现有产物。
+
+  三项目前都是「必须」：
+    allow-jit                      → V8 JIT（Electron 渲染与 Node 运行时都依赖）
+    allow-unsigned-executable-memory → 部分 wasm/动态代码路径（sql.js 等）
+    disable-library-validation     → 允许加载非同一 Team ID 签名的动态库
+                                     （Electron 应用加载本地原生模块的通行做法）
+
+  留痕：此文件补齐了《签名公证更新演练Runbook.md》里引用的路径，
+  此前 build/ 目录不存在，照该 Runbook 加 notarize 配置会因找不到 entitlments 而打包失败
+  （技术设计文档 X22）。
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

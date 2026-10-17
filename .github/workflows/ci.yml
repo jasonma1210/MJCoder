@@ -132,8 +132,11 @@ jobs:
     env:
       # electron-builder 走 GitHub Releases 时需要 token；不注入则 --publish always 必失败
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      # 签名证书按平台分流：mac 的 p12 与 win 的 pfx 不能共用一个变量名，
+      # 否则三平台矩阵并行时互相覆盖，只能有一个平台真正签上（技术设计文档 X19）。
+      # 兼容旧配置：未配置分平台变量时回落到原来的 CSC_LINK / CSC_KEY_PASSWORD。
+      CSC_LINK: ${{ matrix.os == 'macos-latest' && (secrets.CSC_LINK_MAC || secrets.CSC_LINK) || matrix.os == 'windows-latest' && (secrets.CSC_LINK_WIN || secrets.CSC_LINK) || '' }}
+      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && (secrets.CSC_KEY_PASSWORD_MAC || secrets.CSC_KEY_PASSWORD) || matrix.os == 'windows-latest' && (secrets.CSC_KEY_PASSWORD_WIN || secrets.CSC_KEY_PASSWORD) || '' }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

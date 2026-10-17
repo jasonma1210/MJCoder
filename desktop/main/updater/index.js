@@ -45,6 +45,23 @@ function init(deps) {
     }
   });
 
+  // P0-3：补上更新回路缺失的一环——此前全仓零调用 downloadUpdate、无 updater:download IPC，
+  // 用户看到 available 后没有任何按钮触发下载，updater:install 因前置状态永不满足而成死代码。
+  // autoDownload 已为 false：下载必须由用户显式点击「下载更新」触发。
+  // download-progress 事件在 initUpdater 内已推送（downloading + percent），此处接上即可。
+  ipcMain.handle('updater:download', async () => {
+    if (!app.isPackaged) return { ok: false, error: '仅打包后可下载更新' };
+    const up = initUpdater();
+    if (!up) return { ok: false, error: '更新器初始化失败' };
+    try {
+      await up.downloadUpdate();
+      return { ok: true };
+    } catch (err) {
+      const { kind, hint } = classifyUpdateError(err);
+      return { ok: false, error: err.message, kind, hint, downloadUrl: MANUAL_DOWNLOAD_URL };
+    }
+  });
+
   ipcMain.handle('updater:install', async () => {
     if (!app.isPackaged) return { ok: false, error: '仅打包后可安装更新' };
     const up = initUpdater();
@@ -83,6 +100,14 @@ function initUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
   if (UPDATE_CHANNEL && UPDATE_CHANNEL !== 'latest') {
     try { autoUpdater.channel = UPDATE_CHANNEL; } catch (e) { console.warn('[updater] 更新通道设置失败:', e.message); }
+    // 非 latest 通道必须允许预发布：GitHub provider 默认只认正式 Release，
+    // 只设 channel 而不设 allowPrerelease 时，beta 通道实际上永远「已是最新」（技术设计文档 X22）。
+    try { autoUpdater.allowPrerelease = true; } catch (e) { console.warn('[updater] allowPrerelease 设置失败:', e.message); }
+  }
+  // 降级只在显式开启时允许：默认 false，避免某个通道的旧 metadata 把用户静默回退。
+  // 需要回滚演练时设 MJ_ALLOW_DOWNGRADE=1（卸载重装之外的第二条路径）。
+  if (process.env.MJ_ALLOW_DOWNGRADE === '1') {
+    try { autoUpdater.allowDowngrade = true; } catch (e) { console.warn('[updater] allowDowngrade 设置失败:', e.message); }
   }
   const send = (status, data = {}) => {
     const mainWindow = getMainWindow();
