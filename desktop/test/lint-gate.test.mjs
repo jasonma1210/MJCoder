@@ -58,8 +58,15 @@ if (!bin) {
     if (status === 0) return;
     // 逐条列出 error 行，把「哪一行」直接摊在测试输出里——跑一次就能定位，不必再手动复跑
     const errors = stdout.split('\n').filter((l) => /\serror\s/.test(l));
+    // 退出码语义必须区分，否则排查方向会跑偏（实测踩过：沙箱 broker socket 故障让 eslint 返回 2，
+    // 差点被当成「代码里还有 lint error」。2 在 ESLint 里是配置/用法错误，与 lint 失败是两回事）
+    const why = status === 1
+      ? '1 = 确有 lint error（见下方条目，改代码即可）'
+      : status === 2
+        ? '2 = ESLint 配置/用法错误或运行环境故障（**不是** lint error：先查 eslint.config.mjs、依赖安装、沙箱/网络，别急着改代码）'
+        : `既非 0 也非 1/2（可能被信号终止或环境异常），退出码 ${status}`;
     throw new Error(
-      `eslint 退出码 ${status}（${errors.length} 条 error）。修好后本门禁即绿：\n`
+      `eslint 退出码 ${status}：${why}\n(${errors.length} 条 error)\n`
       + (errors.length ? errors.slice(0, 30).join('\n') : stdout.slice(0, 4000)),
     );
   });
