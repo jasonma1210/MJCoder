@@ -23,11 +23,24 @@ class CredentialCrypto {
 
   _keyFile() { return path.join(this.userDataDir, 'credential.key'); }
 
+  // P2-17：凭证操作审计——详情绝不包含密钥材料本身，只记操作与结果。
+  // 审计模块依赖 electron，惰性 require + 失败静默（纯 Node 测试环境不可用时不阻塞）。
+  _auditCredential(action, detail, result = 'recorded') {
+    try {
+      const { audit } = require('./audit/auditLog');
+      audit(action, 'credential.key', detail, result);
+    } catch { /* 审计不可用不阻塞凭证主流程 */ }
+  }
+
   _loadFileKey() {
     if (this._fileKey) return this._fileKey;
     try {
       const saved = fs.readFileSync(this._keyFile(), 'utf8').trim();
-      if (/^[0-9a-f]{64}$/.test(saved)) { this._fileKey = saved; return this._fileKey; }
+      if (/^[0-9a-f]{64}$/.test(saved)) {
+        this._fileKey = saved;
+        this._auditCredential('credential_read', '读取本地凭证加密密钥文件（file-key 轨）');
+        return this._fileKey;
+      }
     } catch { /* 首次运行无密钥文件 */ }
     this._fileKey = crypto.randomBytes(32).toString('hex');
     fs.mkdirSync(this.userDataDir, { recursive: true });
@@ -37,7 +50,10 @@ class CredentialCrypto {
       // 密钥文件以默认权限暴露——这是所有 provider 凭证密文的解密钥匙，
       // 权限失效必须显式留痕，否则用户无从得知。
       console.error(`[credential] 密钥文件权限收紧失败（0600 未生效，密钥文件可能被同机其他账户读取）: ${e.message}`);
+      this._auditCredential('credential_write', '生成本地凭证加密密钥文件：0600 权限未生效', 'error');
+      return this._fileKey;
     }
+    this._auditCredential('credential_write', '生成本地凭证加密密钥文件（file-key 轨，0600）');
     return this._fileKey;
   }
 

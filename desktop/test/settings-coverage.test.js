@@ -51,7 +51,9 @@ function listFiles(dir = SRC, out = []) {
     if (e.name === 'node_modules' || e.name === 'styles' || e.name.startsWith('.')) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) listFiles(full, out);
-    else if (/\.(jsx?|mjs)$/.test(e.name)) out.push(full);
+    // 2026-10-17：纳入 .ts/.tsx —— 渲染层新增逻辑（如 hooks/usePendingExpert.ts）
+    // 若不在扫描范围，「写入的键必须有人读取」会误判为假开关（与 ui-conventions 口径对齐）
+    else if (/\.(jsx?|tsx?|mjs)$/.test(e.name)) out.push(full);
   }
   return out;
 }
@@ -107,12 +109,16 @@ check('设置页顶部避开 macOS 交通灯（hiddenInset 窗口）', () => {
   assertI18nCopy(settings, 'settings', '关闭设置', '设置页缺少明确关闭出口');
 });
 
-check('设置页关闭按钮按平台环境定义', () => {
-  // macOS：交通灯语义 → 左上红点（bg-danger）；Windows/Linux：窗口按钮语义 → 右上 X。
-  // 实现依据 navigator.userAgent 平台分支，两套样式都必须存在且共用同一 aria-label。
-  assert.match(settings, /isMac[\s\S]*?navigator\.userAgent/, '缺少平台检测（navigator.userAgent）');
-  assert.match(settings, /isMac \?[\s\S]*?bg-danger[\s\S]*?<IconX size=\{16\} \/>/,
-    '缺少平台分支关闭按钮（mac 红点 / 其他系统 X）');
+check('设置页关闭入口唯一且可点（不再自绘交通灯）', () => {
+  // 2026-10-17 变更：原按平台分两套（mac 左上红点模拟交通灯 / 其他系统右上 X）。
+  // 红点与真实系统交通灯语义重复、两平台行为也不一致，已统一为右上 X。
+  // 守护目标不变：必须存在可点击的关闭按钮、共用同一 aria-label，且不能出现第二个入口。
+  assert.match(settings, /onClick=\{onClose\}[\s\S]{0,240}?aria-label=\{t\('settings\.closeSettings'\)\}/,
+    '设置页缺少明确关闭按钮');
+  assert.ok(!/w-3 h-3 rounded-full bg-danger/.test(settings),
+    '不应再自绘仿交通灯红点（与系统控件语义重复）');
+  const closeCount = (settings.match(/onClick=\{onClose\}/g) || []).length;
+  assert.equal(closeCount, 1, `关闭入口应唯一，实际 ${closeCount} 个`);
 });
 
 check('设置项没有假开关（写入的键必须有人读取）', () => {
@@ -203,8 +209,13 @@ check('文件预览覆盖代码 / Markdown / 图片 / PDF', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main', 'tools', 'exec.js'), 'utf8');
   assert.match(previewSrc, /PREVIEW_MAX_BYTES/, '主进程缺少预览体积上限');
   assert.match(main, /ipcMain\.handle\('file:preview'/, '缺少 file:preview IPC');
+  // 2026-10-17：预览不再是独立 tab（已并入「文件」组合面板：左预览 + 右文件树）——
+  // 断言改为守护链路完整性：右栏接上文件面板，且该面板同时挂着文件树与预览容器。
   const rightPane = read('components/RightPane.jsx');
-  assert.match(rightPane, /id: 'preview'/, '右侧面板缺少预览标签');
+  assert.match(rightPane, /filesPanel/, '右侧面板未接文件面板');
+  const filesPanel = read('components/FilesPanel.tsx');
+  assert.match(filesPanel, /FileViewerPane/, '文件面板缺少预览容器');
+  assert.match(filesPanel, /FileTree/, '文件面板缺少文件树');
 });
 
 check('拖拽入参覆盖整个对话区（不只输入框那一小块）', () => {

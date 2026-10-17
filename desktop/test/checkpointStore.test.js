@@ -42,17 +42,57 @@ check('最早条目被 LRU 淘汰（k0 不在）', cp.getCheckpoint('k0') === nu
 check('未淘汰条目仍在（k1）', cp.getCheckpoint('k1')?.summary === 's1');
 check('条目总数不超过上限', Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'agent-checkpoints.json'), 'utf8'))).length === cp.MAX_ENTRIES);
 
-// ── 损坏文件 fail-open：损坏后读写均不崩溃 ──
+// ── 损坏文件 fail-closed：不静默丢弃（P1-15）──
 fs.writeFileSync(path.join(dir, 'agent-checkpoints.json'), '{broken json!!', 'utf8');
 check('损坏文件 get 返回 null（不抛异常）', cp.getCheckpoint('thread-x') === null);
+check('损坏文件留 .corrupt 副本（可恢复，不静默丢弃）',
+  fs.readdirSync(dir).some((f) => /^agent-checkpoints\.json\.corrupt-\d+$/.test(f)),
+  fs.readdirSync(dir).join(','));
+const loadErr = cp.getLoadError();
+check('损坏文件错误态可查询（UI/诊断可见）',
+  !!loadErr && typeof loadErr.reason === 'string' && loadErr.reason.length > 0
+  && !!loadErr.backup && !!loadErr.file && typeof loadErr.at === 'string');
 check('损坏文件 save 自动重建', cp.saveCheckpoint('thread-y', { summary: 'after-corruption' }) === true
   && cp.getCheckpoint('thread-y')?.summary === 'after-corruption');
+check('恢复成功后错误态清除', cp.getLoadError() === null);
+
+// ── P1-15：原子写（tmp+fsync+rename，无残留 tmp）──
+check('原子写：目录内无残留 .tmp 文件',
+  !fs.readdirSync(dir).some((f) => f.endsWith('.tmp')), fs.readdirSync(dir).join(','));
+check('原子写：文件权限 0600',
+  (fs.statSync(path.join(dir, 'agent-checkpoints.json')).mode & 0o777) === 0o600,
+  `mode=${(fs.statSync(path.join(dir, 'agent-checkpoints.json')).mode & 0o777).toString(8)}`);
 
 // ── 文件持久化跨实例生效（模拟应用重启）──
 delete require.cache[require.resolve('../main/checkpointStore')];
 const cp2 = require('../main/checkpointStore');
 cp2.initCheckpointStore(dir);
 check('重新初始化（模拟重启）后断点仍可读回', cp2.getCheckpoint('thread-y')?.summary === 'after-corruption');
+
+// ── 断点 kind 链路（C5/D1）：超时断点必须能按原因分流恢复文案 ──
+// 事故形态：engines 存断点时带 kind，agentRunner 落盘不透传 → 恢复文案把「模型调用超时」
+// 说成「token 预算触顶」，用户去调大 token 预算（改错方向）。
+const FS = require('fs');
+const DESKTOP = path.join(__dirname, '..');
+const agentRunnerSrc = FS.readFileSync(path.join(DESKTOP, 'main', 'agentRunner.js'), 'utf8');
+const useRunSrc = FS.readFileSync(path.join(DESKTOP, 'renderer', 'src', 'hooks', 'useAgentRun.ts'), 'utf8');
+
+check('saveCheckpoint 保留未声明字段（kind 确实落盘，非仅内存）', (() => {
+  cp.saveCheckpoint('thread-kind', { kind: 'timeout', summary: '最后输出', rounds: 7 });
+  const fromDisk = JSON.parse(FS.readFileSync(path.join(dir, 'agent-checkpoints.json'), 'utf8'));
+  return cp.getCheckpoint('thread-kind')?.kind === 'timeout' && fromDisk['thread-kind']?.kind === 'timeout';
+})());
+check('agentRunner.onSuspend 透传 kind（缺省 tokens，不改变既有行为）', (() => {
+  const fn = agentRunnerSrc.slice(agentRunnerSrc.indexOf('onSuspend: (info) =>'));
+  return /kind:\s*info\?\.kind \|\| 'tokens'/.test(fn.slice(0, 600));
+})());
+check('渲染层恢复分支按 kind 分流（engine-exit / timeout / 预算）', (() => {
+  const branches = (useRunSrc.match(/cp\.kind === 'timeout'/g) || []).length;
+  return branches === 1
+    && /cp\.kind === 'engine-exit'/.test(useRunSrc)
+    && /任务中断原因：模型调用超时/.test(useRunSrc)
+    && /任务暂停原因：单任务 token 预算触顶/.test(useRunSrc);
+})());
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
 process.exit(fail === 0 ? 0 : 1);

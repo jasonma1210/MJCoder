@@ -151,13 +151,19 @@ check('历史重放的 tool 卡片与运行中卡片一致', () => {
   // 两处展示逻辑若不同步，用户会看到「重进线程后错误信息消失」。
   // T1-2 后运行态与历史态共用 ToolTraceGroup 组件（同一渲染实现 = 一致性的结构性保证），
   // 字段分型（stdout/stderr/error）收敛在 ToolTrace.tsx 单一实现内。
-  // T2-2：运行态/历史态轨迹均经 MessageStream.tsx 挂载 ToolTraceGroup（运行态本轮 + 历史态轮次内）
+  // 2026-10-17（排版调整）：运行态不再单独挂在消息流最底部，而是把 liveCalls 并入「最后一轮」
+  // 由 RoundBlock 与答复正文之上的 ToolTraceGroup 统一渲染——用户要求轨迹出现在回复第一行。
   const chat = read('components/MessageStream.tsx');
-  // T3-2 i18n：label="本轮" 已改为 label={t('message.thisRound')}，
-  // 两段式：结构上仍走 ToolTraceGroup + 「本轮」文案存在于 zh-CN/message.json
-  assert.match(chat, /<ToolTraceGroup calls=\{toolCalls\} label=\{t\('message\.thisRound'\)\} defaultOpen \/>/, '运行态未走 ToolTraceGroup');
-  assertI18nCopy(chat, 'message', '本轮', '运行态工具轨迹缺少「本轮」标签');
-  assert.match(chat, /<ToolTraceGroup calls=\{calls\} toolResults=\{toolResults\}/, '历史重放未走 ToolTraceGroup');
+  assert.match(chat, /renderMessages\(visibleMessages,[^)]*toolCalls\)/,
+    '运行态轨迹未并入最后一轮（应经 renderMessages 的 liveCalls 参数传入）');
+  assert.match(chat, /extraCalls=\{i === rounds\.length - 1 \? liveCalls : \[\]\}/,
+    'RoundBlock 未接收最后一轮的 liveCalls');
+  assert.doesNotMatch(chat, /<ToolTraceGroup calls=\{toolCalls\}/,
+    '仍存在独立的运行态轨迹块（已并入最后一轮，不应在消息流底部重复渲染）');
+  assert.match(chat, /<ToolTraceGroup calls=\{calls\} toolResults=\{toolResults\}/,
+    '历史重放未走 ToolTraceGroup（运行态与历史态必须同一实现）');
+  assert.match(chat, /label=\{t\('toolTrace\.roundExecTrace'\)\}/,
+    '轨迹组缺少归属标签（用户需要知道这是「本轮执行轨迹」）');
   const toolTrace = read('components/tools/ToolTrace.tsx');
   for (const field of ['stdout', 'stderr', 'error']) {
     assert.ok(toolTrace.includes(field), `ToolTrace 缺少 ${field} 分型展示`);

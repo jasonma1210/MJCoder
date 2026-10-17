@@ -42,6 +42,8 @@ initToolExec({
   getAlwaysRules: () => [],
   conversationRules: [],
   getDefaultCwd: () => DEFAULT_CWD,
+  // P0-1：exec.js 去掉 ?. 后 registerChild 为必需接线（缺失即抛错）——本测试不验证取消链路，注入 no-op
+  registerChild: () => {},
 });
 
 (async () => {

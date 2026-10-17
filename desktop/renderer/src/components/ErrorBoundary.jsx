@@ -34,7 +34,7 @@ export default class ErrorBoundary extends React.Component {
             <button onClick={() => this.setState({ error: null })}
               className="border border-border rounded-lg px-4 py-2 text-sm hover:bg-hover">{tGlobal('errorBoundary.retry')}</button>
             <button onClick={() => window.location.reload()}
-              className="bg-accent text-white rounded-lg px-4 py-2 text-sm">{tGlobal('errorBoundary.reload')}</button>
+              className="bg-accent-solid text-on-accent rounded-lg px-4 py-2 text-sm">{tGlobal('errorBoundary.reload')}</button>
           </div>
         </div>
       );

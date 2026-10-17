@@ -141,14 +141,18 @@ check('Diff 解析已按 hunk 拆分', () => {
 });
 
 check('hunk 级还原走 git apply --reverse', () => {
-  // T2-1：git 工具 IPC 已拆出 main/tools/exec.js，断言随实现走
-  const toolSrc = fs.readFileSync(path.join(__dirname, '../main/tools/exec.js'), 'utf8');
-  assert.match(toolSrc, /ipcMain\.handle\('tool:gitApplyHunk'/);
-  assert.match(toolSrc, /\['apply', '--reverse'/);
+  // 2026-10-17：hunk 级 IPC 已从 exec.js 拆到 main/ipc/gitHunks.js（exec.js 顶到 800 行门禁），
+  // 断言随实现走——守护目标不变：拒绝必须走 `--reverse`，接受必须走 `--cached`。
+  const hunkSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/gitHunks.js'), 'utf8');
+  assert.match(hunkSrc, /ipcMain\.handle\('tool:gitApplyHunk'/);
+  assert.match(hunkSrc, /gitApplyStdin\(\['--reverse'/);
+  assert.match(hunkSrc, /gitApplyStdin\(\['--cached'/);
   assert.match(preload, /gitApplyHunk/);
+  assert.match(preload, /gitApplyHunkCached/);
   // T3-2 i18n：「还原此块」按钮文案已抽取到 zh-CN/diff.json（revertHunk），改为两段式验证
   assertI18nCopy(diffPanel, 'diff', '还原此块', 'Diff 面板缺少 hunk 级还原按钮文案');
   assert.match(diffPanel, /rejectHunk/);
+  assert.match(diffPanel, /acceptHunk/, 'Diff 面板缺少 hunk 级接受实现');
 });
 
 check('上一轮筛选只看 Agent 改动的文件', () => {

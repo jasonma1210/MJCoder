@@ -1,5 +1,7 @@
 // T2-6 门禁：诊断包一键导出（main/diagExport.js + main/zipStore.js）
 // 核心纪律断言：包内**绝不出现** API Key / 密文 / env / Authorization——用假密钥值全包 grep。
+// P0-7（2026-10-17）扩充：非结构化文本密钥扫描 / models.json 白名单 / userData 路径脱敏 /
+// 导出前内容清单。
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -18,9 +20,11 @@ function check(name, fn) {
 }
 
 // ── 假 userData / home + electron stub ──
+// userData 刻意挂在 home 之下（与真实平台一致：~/Library/Application Support/...），
+// 以便验证 meta.json 的 HOME 相对路径脱敏。
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-diagexport-'));
 const tmpHome = path.join(tmp, 'home');
-const userData = path.join(tmp, 'userData');
+const userData = path.join(tmpHome, 'Library', 'Application Support', 'MJCode');
 fs.mkdirSync(path.join(userData, 'traces'), { recursive: true });
 fs.mkdirSync(path.join(userData, 'diagnostics'), { recursive: true });
 fs.mkdirSync(path.join(userData, 'logs'), { recursive: true });
@@ -29,11 +33,21 @@ fs.mkdirSync(path.join(tmpHome, '.mjcode'), { recursive: true });
 const FAKE_KEY = 'sk-FAKE-SECRET-1234567890';
 const FAKE_ENV_VALUE = 'FAKE-ENV-SECRET-abcdefgh';
 const FAKE_AUTH_HEADER = 'Bearer FAKE-AUTH-SECRET-xyz';
+// P0-7：非结构化文本里嵌的密钥（命令原文/上游响应体形态）——必须被正则扫描替换
+const EMBEDDED_SK = 'sk-abcdefghijklmnopqrst1234';
+const EMBEDDED_BEARER = 'Bearer sk-live-abcdef1234567890';
+const EMBEDDED_GHP = 'ghp_abcdefghijklmnopqrstuvwx';
+const EMBEDDED_AKIA = 'AKIAIOSFODNN7EXAMPLE';
 
-fs.writeFileSync(path.join(userData, 'audit-log.jsonl'), '{"action":"shell","target":"ls"}\n');
-fs.writeFileSync(path.join(userData, 'diagnostics', 'crash-2026-10-15.jsonl'), '{"kind":"uncaughtException","stack":"boom"}\n');
-fs.writeFileSync(path.join(userData, 'traces', 'run-1.jsonl'), '{"evt":"run_start"}\n');
-fs.writeFileSync(path.join(userData, 'logs', 'main-2026-10-15.log'), '[log] hello\n');
+fs.writeFileSync(path.join(userData, 'audit-log.jsonl'),
+  `{"action":"shell","target":"curl -H \\"Authorization: ${EMBEDDED_BEARER}\\" https://api.example.com"}\n`
+  + `{"action":"shell","target":"export KEY=${EMBEDDED_SK} && ./deploy.sh"}\n`);
+fs.writeFileSync(path.join(userData, 'diagnostics', 'crash-2026-10-15.jsonl'),
+  `{"kind":"uncaughtException","stack":"fetch failed https://x (token ${EMBEDDED_GHP})"}\n`);
+fs.writeFileSync(path.join(userData, 'traces', 'run-1.jsonl'),
+  `{"evt":"run_start","req":{"auth":"${EMBEDDED_AKIA}"}}\n`);
+fs.writeFileSync(path.join(userData, 'logs', 'main-2026-10-15.log'),
+  `[model] 401 response body: {"error":"invalid key ${EMBEDDED_SK}"}\n`);
 fs.writeFileSync(path.join(userData, 'local-data.json'), JSON.stringify({
   providers: [{ id: 1, name: 'p', base_url: 'https://x', keyEncrypted: 'enc:'+FAKE_KEY, api_key: FAKE_KEY, model_id: 'm' }],
   threads: [{ id: 't1', title: '用户会话标题不应进包' }],
@@ -44,8 +58,12 @@ fs.writeFileSync(path.join(userData, 'local-data.json'), JSON.stringify({
 fs.writeFileSync(path.join(userData, 'mcp-servers.json'), JSON.stringify([
   { name: 'srv', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: { MY_KEY: FAKE_ENV_VALUE }, headers: { Authorization: FAKE_AUTH_HEADER } },
 ]));
+// models.json：黑名单时代的漏网形态——accessKeyId / secretKey 变体键名（白名单必须剔除）
 fs.writeFileSync(path.join(tmpHome, '.mjcode', 'models.json'), JSON.stringify({
-  providers: [{ key: 'g1', name: 'g', base_url: 'https://g', api_key: FAKE_KEY, models: [{ model_id: 'm1' }] }],
+  providers: [
+    { key: 'g1', name: 'g', base_url: 'https://g', api_key: FAKE_KEY, accessKeyId: 'AKIA-LEAK-ID-123', secretKey: EMBEDDED_SK, models: [{ model_id: 'm1' }] },
+    { name: 'g2', url: 'https://g2', channel: 'deepseek', apiKey: FAKE_KEY, models: ['m2', { id: 'm3', name: '模型三' }] },
+  ],
 }));
 
 const electronStub = {
@@ -57,7 +75,10 @@ const mainRequire = createRequire(path.join(DESKTOP, 'main', 'noop.js'));
 require.cache[mainRequire.resolve('electron')] = { id: 'electron', filename: 'electron', loaded: true, exports: electronStub };
 
 const { writeZip, readZip, crc32 } = require(path.join(DESKTOP, 'main/zipStore.js'));
-const { collectEntries, redact, registerDiagExportIpc, exportDiagnosticsZip } = require(path.join(DESKTOP, 'main/diagExport.js'));
+const {
+  collectEntries, redact, registerDiagExportIpc, exportDiagnosticsZip,
+  redactSecrets, redactModels, redactUserDataPath, previewDiagPackage,
+} = require(path.join(DESKTOP, 'main/diagExport.js'));
 
 check('zipStore：写读 round-trip 与 CRC 正确', () => {
   const entries = [
@@ -106,6 +127,76 @@ check('exportDiagnosticsZip：落盘可读 zip 且 meta 带版本', () => {
 check('IPC diag:export 注册且失败不抛', async () => {
   registerDiagExportIpc();
   assert.ok(electronStub._handlers.has('diag:export'), '未注册 diag:export');
+});
+
+// ── P0-7 新增断言 ──
+
+check('P0-7-a：redactSecrets 正则替换四类密钥形态', () => {
+  const out = redactSecrets(`a ${EMBEDDED_SK} b ${EMBEDDED_BEARER} c ${EMBEDDED_GHP} d ${EMBEDDED_AKIA} e`);
+  assert.ok(!out.includes(EMBEDDED_SK) && !out.includes(EMBEDDED_BEARER)
+    && !out.includes(EMBEDDED_GHP) && !out.includes(EMBEDDED_AKIA), '密钥未被替换');
+  assert.ok(out.includes('***REDACTED***'), '未见替换标记');
+  // 正常文本不误伤
+  assert.equal(redactSecrets('sk-short 与 BearerX 普通日志'), 'sk-short 与 BearerX 普通日志');
+});
+
+check('P0-7-a：审计/崩溃/trace/日志里的嵌入密钥全部被扫描剔除', () => {
+  const all = collectEntries(userData).map((e) => e.data.toString()).join('\n');
+  for (const secret of [EMBEDDED_SK, EMBEDDED_BEARER, EMBEDDED_GHP, EMBEDDED_AKIA]) {
+    assert.ok(!all.includes(secret), `非结构化内容泄漏密钥 ${secret}`);
+  }
+  assert.ok(all.includes('***REDACTED***'), '包内未见密钥替换痕迹');
+});
+
+check('P0-7-b：models.json 白名单——变体键名（accessKeyId/secretKey/apiKey）剔除，业务字段保留', () => {
+  const raw = JSON.stringify({
+    providers: [
+      { name: 'g', base_url: 'https://g', apiKey: 'sk-leak-abcdefghijklmnop', accessKeyId: 'AKIA-LEAK', secretKey: 'topsecret', models: [{ model_id: 'm1' }] },
+      { name: 'g2', url: 'https://g2', channel: 'deepseek', api_key: 'sk-leak2', models: ['m2'] },
+    ],
+  });
+  const out = JSON.parse(JSON.stringify(redactModels(JSON.parse(raw))));
+  const flat = JSON.stringify(out);
+  assert.ok(!flat.includes('sk-leak'), 'apiKey/api_key 漏网');
+  assert.ok(!flat.includes('AKIA-LEAK'), 'accessKeyId 漏网');
+  assert.ok(!flat.includes('topsecret'), 'secretKey 漏网');
+  assert.ok(out.providers[0].name === 'g' && out.providers[0].base_url === 'https://g'
+    && out.providers[0].models[0].model_id === 'm1', '白名单业务字段被误删');
+  assert.ok(out.providers[1].channel === 'deepseek' && out.providers[1].url === 'https://g2', 'channel/url 应在白名单内');
+});
+
+check('P0-7-b：导出包的 config/models.json 只含白名单字段', () => {
+  const models = collectEntries(userData).find((e) => e.name === 'config/models.json').data.toString();
+  assert.ok(!models.includes(FAKE_KEY) && !models.includes(EMBEDDED_SK) && !models.includes('AKIA-LEAK-ID-123'), 'models.json 泄漏密钥');
+  assert.ok(models.includes('"name": "g"') && models.includes('"base_url": "https://g"') && models.includes('m1'), '白名单字段缺失');
+  assert.ok(models.includes('deepseek'), 'channel 字段应保留');
+});
+
+check('P0-7-c：meta.json userData 路径脱敏为 HOME 相对表达', () => {
+  assert.equal(redactUserDataPath(userData), `~${path.sep}Library${path.sep}Application Support${path.sep}MJCode`);
+  const meta = JSON.parse(collectEntries(userData).find((e) => e.name === 'meta.json').data.toString());
+  assert.ok(!meta.userData.includes(userData), 'meta.json 仍含绝对 userData 路径');
+  assert.ok(meta.userData.startsWith('~'), 'meta.json userData 未脱敏为 HOME 相对表达');
+  // 不在 HOME 下的路径原样保留（无权推断）
+  assert.equal(redactUserDataPath('/opt/other'), '/opt/other');
+});
+
+check('P0-7-c：diag:preview 返回将包含的内容清单', () => {
+  const p = previewDiagPackage(userData);
+  assert.ok(p.ok && Array.isArray(p.entries) && p.entries.length > 0, '清单为空');
+  const names = p.entries.map((e) => e.name);
+  assert.ok(names.includes('meta.json') && names.includes('audit/audit-log.jsonl'), '清单缺条目');
+  assert.ok(p.entries.every((e) => typeof e.bytes === 'number' && e.bytes >= 0), '条目缺体积');
+  assert.ok(p.totalBytes >= p.entries.reduce((n, e) => n + e.bytes, 0), '总体积不一致');
+});
+
+check('P0-7-c：diag:export 回带 contents 清单', () => {
+  registerDiagExportIpc();
+  const h = electronStub._handlers.get('diag:export');
+  return h({}).then((r) => {
+    assert.ok(r.ok && Array.isArray(r.contents) && r.contents.includes('meta.json'), 'export 未回带内容清单');
+    fs.rmSync(r.file, { force: true });
+  });
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

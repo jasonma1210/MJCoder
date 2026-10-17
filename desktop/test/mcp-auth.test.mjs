@@ -34,6 +34,8 @@ const b64url = (buf) => Buffer.from(buf).toString('base64url');
 const S = {
   serveMetadata: true,   // false → 发现链断裂（测 preset 回落 / 如实披露）
   noDcr: false,          // true → AS 元数据不带 registration_endpoint
+  metadataResource: null,// 非空 → 受保护资源元数据改声明该 resource（测 RFC 8707 规范标识）
+  requireResourceMatch: false, // true → /token 严格校验 resource === 元数据规范标识（Ardot 真机行为）
   validTokens: new Set(),// /mcp 接受的 Bearer 值集合
   allowAnonymous: false, // true → 无 token 也放行握手（deepwiki 类免授权 http 服务）
   refreshSeq: 0,
@@ -63,7 +65,7 @@ function startMockServer() {
 
         if (req.method === 'GET' && u.pathname === '/.well-known/oauth-protected-resource') {
           if (!S.serveMetadata) return json(404, { error: 'not found' });
-          return json(200, { resource: `${base}/mcp`, authorization_servers: [base] });
+          return json(200, { resource: S.metadataResource || `${base}/mcp`, authorization_servers: [base] });
         }
         if (req.method === 'GET' && u.pathname === '/.well-known/oauth-authorization-server') {
           if (!S.serveMetadata) return json(404, { error: 'not found' });
@@ -98,6 +100,11 @@ function startMockServer() {
           const f = Object.fromEntries(new URLSearchParams(body).entries());
           S.captured.tokenGrants.push(f.grant_type);
           if (f.grant_type === 'authorization_code') {
+            // Ardot 真机行为镜像（2026-10-17 实测）：resource 指示与 RS 规范标识不符时，
+            // 在 code 校验之前直接 400 invalid_target（RFC 8707）
+            if (S.requireResourceMatch && f.resource !== `${base}/mcp`) {
+              return json(400, { error: 'invalid_target' });
+            }
             const okCode = f.code === 'AUTH-CODE';
             const okVerifier = f.code_verifier
               && b64url(crypto.createHash('sha256').update(f.code_verifier).digest()) === S.captured.storedChallenge;
@@ -166,11 +173,29 @@ function startMockServer() {
       && /^http:\/\/127\.0\.0\.1:\d+\/callback$/.test(S.captured.registrationBody?.redirect_uris?.[0] || ''),
       JSON.stringify(S.captured.registrationBody?.redirect_uris || ''));
     check('授权 URL 带 PKCE S256 与 resource 参数（RFC 7636/8707）',
-      /code_challenge_method=S256/.test(capturedAuthUrl) && S.captured.lastResource === base,
+      /code_challenge_method=S256/.test(capturedAuthUrl)
+      && S.captured.lastResource === `${base}/mcp`, // resource 必须取 RS 元数据声明的规范标识（含路径），不得用 origin
       `resource=${S.captured.lastResource}`);
     check('令牌端点校验 code_verifier 与 challenge 匹配', S.captured.verifierOk === true);
     check('授权后 hasStoredAuth 为真', am.hasStoredAuth('notion') === true);
     check('授权完成即关闭授权窗口', closedWindows === 1);
+  }
+
+  // ── 1b. resource 规范标识（RFC 8707）——Ardot「登录成功后 400 invalid_target」回归 ──
+  // 真机实测（2026-10-17）：Ardot RS 元数据声明 resource=https://ardot.tencent.com/mcp（含路径），
+  // resource 传 origin（丢路径）时 token 交换在 code 校验之前被拒：400 invalid_target。
+  {
+    S.requireResourceMatch = true; // 镜像 Ardot 的严格校验
+    const r = await am.authorize('ardot-ok', { url: mcpUrl });
+    check('resource 取 RS 元数据声明值（含路径）→ 严格校验下授权成功', r.ok === true, r.error || '');
+    // 反例：元数据声明 origin（与 RS 规范标识不符）→ token 400 invalid_target，
+    // 且错误码必须透传进用户可见信息（此前只显示「令牌端点返回 400」）
+    S.metadataResource = base;
+    const r2 = await am.authorize('ardot-bad', { url: mcpUrl });
+    check('resource 与 RS 规范标识不符 → invalid_target 且错误码透传',
+      r2.ok === false && /invalid_target/.test(r2.error || ''), r2.error || '');
+    S.requireResourceMatch = false;
+    S.metadataResource = null;
   }
 
   // ── 2. 加密落盘：文件无明文令牌，可解密还原 ──

@@ -130,7 +130,94 @@ const DANGEROUS_PATTERNS = [
   /\bschtasks\b[^|;&]*\/create\b/i,
   /\bicacls\b[^|;&]*\/grant\b/i,
   /\btakeown\b/i,
+
+  // ── 非黑名单写法的破坏性命令（P2-8，2026-10-17）──
+  // 缺口实证：以上规则都盯着「删除命令本身」（rm / del / Remove-Item），而
+  //   python3 -c "import shutil; shutil.rmtree('/Users/x')"
+  //   node -e "require('fs').rmSync('/Users/x', {recursive:true})"
+  //   ruby -e "require('fileutils'; FileUtils.rm_rf('/Users/x')"
+  // 这类「语言运行时一行式删除」此前一条不命中，在默认 on-request 档零审批直跑。
+  // 判定口径：语言运行时 + -c/-e 代码参数 + 代码体内的破坏性文件 API 名。
+  // 分隔符刻意放到整行（[^\n]*）：破坏性 API 常与 import 同处一个 -c 代码串里，
+  // 中间必然带分号（引号内的 ; 不是命令分隔符，正则不做引号感知）；代价是
+  // 「python3 -c "print('rmtree')"」这类误报——按「宁可误报不可漏报」原则接受
+  // （误报成本是一次审批，漏判成本是用户数据被静默删除）。
+  /\b(python[0-9.]*|node|ruby|perl)\b[^\n]*\s-[ce]\b[^\n]*\b(rmtree|rm_rf|rmSync|rmdirSync|unlinkSync?|shutil\.rm|fs\.rm|remove_dir|remove_entry|deleteTree)\b/i,
+
+  // find 的删除面：-delete 直接删；-exec rm/rmdir 借道执行
+  /\bfind\b[^|;&]*\s-delete\b/,
+  /\bfind\b[^|;&]*-exec\s+(rm|rmdir|shred)\b/,
+
+  // 归档工具的清空面：tar --delete 会原地改写归档（数据破坏且不可逆）
+  /\btar\b[^|;&]*--delete\b/,
 ];
+
+// ── Code Mode 危险代码面（P2-8：自 approval.js 内联实现收敛至此）──
+// 两条通道：① 起进程/执行系统命令的 Node API 面（child_process / exec / spawn，
+// 含解构别名前的字面名——宁可误报）；② 代码字符串里内嵌的危险 shell 命令
+// （复用上面的 DANGEROUS_PATTERNS，rm -rf / sudo / curl|sh 出现在任何字符串
+// 字面量里都会命中）。
+const CODE_DANGER_PATTERNS = [
+  /\bchild_process\b/,
+  /\bexec(?:Sync)?\s*\(/,
+  /\bspawn(?:Sync)?\s*\(/,
+  /\bexecFile\b/,
+];
+
+/**
+ * 判断一段代码（Code Mode）是否命中危险面。
+ * @param {string} code
+ * @returns {boolean}
+ */
+function isDangerousCode(code) {
+  const s = String(code || '');
+  if (CODE_DANGER_PATTERNS.some((p) => p.test(s))) return true;
+  return DANGEROUS_PATTERNS.some((p) => p.test(s));
+}
+
+// ── CUA 界面动作强确认类目（P1-2：自 computerUse.js 收敛至此）──
+// 背景：此前 CUA 的关键词矩阵（computerUse.js 的 CONFIRM_RE/CONFIRM_ZH 与
+// STRONG_CONFIRM_CATEGORIES）与审批中心是两套独立实现，一侧加规则另一侧不知道——
+// 敏感动作可能在一条路径上漏问。现统一到此：CUA 循环的确认判定与审批中心的
+// cua_action 分级共用同一份类目（按 kind 分域取用）。
+// 命中即逐次确认，且不可被会话级/永久放行覆盖（L1 纪律）。
+const CUA_STRONG_CONFIRM_CATEGORIES = [
+  { id: 'captcha', label: '验证码', re: /(captcha|验证码)/i },
+  { id: 'payment', label: '支付/转账', re: /(支付|付款|结账|结算|下单|购买|转账|充值)|\b(pay|checkout|purchase|transfer|billing)\b/i },
+  { id: 'delete', label: '删除', re: /(删除|删掉|移除|清空|清除)|\b(delete|remove|erase|trash|wipe)\b/i },
+  { id: 'send', label: '发送邮件/消息', re: /(发送|发邮件|发消息|发短信)|(\bsend\b)/i },
+];
+
+// CUA 通用敏感词（非强确认的补充面）：确认类动作——原 computerUse.js 的
+// CONFIRM_RE/CONFIRM_ZH 中不属于四个强确认类目的关键词（confirm / 确认）。
+// 语义：按审批档询问（on-request/always 逐次、auto-safe 放行），不强制逐次、
+// 决策可被会话级放行——与强确认白名单刻意分层。
+const CUA_GENERAL_SENSITIVE_RE = /(\bconfirm\b|确认)/i;
+
+/**
+ * 判定界面动作上下文（输入文本/按键/目标名称等拼接）是否命中强确认类目。
+ * @param {string} text 动作上下文拼接文本
+ * @returns {{strong: boolean, category: string, label: string, reason: string}}
+ */
+function cuaStrongConfirm(text) {
+  const ctx = String(text ?? '');
+  if (!ctx.trim()) return { strong: false, category: '', label: '', reason: '' };
+  for (const c of CUA_STRONG_CONFIRM_CATEGORIES) {
+    if (c.re.test(ctx)) {
+      return { strong: true, category: c.id, label: c.label, reason: `命中强确认白名单：${c.label}` };
+    }
+  }
+  return { strong: false, category: '', label: '', reason: '' };
+}
+
+/**
+ * 判定界面动作上下文是否命中通用敏感词（确认类，非强确认）。
+ * @param {string} text 动作上下文拼接文本
+ * @returns {boolean}
+ */
+function cuaGeneralSensitive(text) {
+  return CUA_GENERAL_SENSITIVE_RE.test(String(text ?? ''));
+}
 
 // ── 判定工具 ──
 
@@ -160,4 +247,11 @@ module.exports = {
   DANGEROUS_PATTERNS,
   isDangerousCommand,
   matchDangerousPattern,
+  // P2-8：Code Mode 危险代码面（自 approval.js 收敛）
+  CODE_DANGER_PATTERNS,
+  isDangerousCode,
+  // P1-2：CUA 界面动作强确认类目（自 computerUse.js 收敛）
+  CUA_STRONG_CONFIRM_CATEGORIES,
+  cuaStrongConfirm,
+  cuaGeneralSensitive,
 };

@@ -46,12 +46,18 @@ check('右侧常驻面板组件存在', () => {
   assert.ok(fs.existsSync(path.join(SRC, 'components/RightPane.jsx')));
 });
 
-check('App 已挂载 RightPane 且传入三块面板内容', () => {
+check('App 已挂载 RightPane 且传入各面板内容', () => {
   assert.match(app, /import RightPane/);
   assert.match(app, /diffPanel=\{<DiffReviewPanel/);
-  assert.match(app, /filesPanel=\{[\s\S]*?FileTree/);
-  // 「代码」标签升级为「预览」：多文件标签 + 代码/Markdown/图片/PDF/音视频应用内预览
-  assert.match(app, /previewPanel=\{[\s\S]*?FileViewerPane/);
+  // 2026-10-17：文件面板升级为「搜索文件名 + 左侧预览 + 右侧文件树」组合面板（FilesPanel 独立组件）——
+  // 文件树与预览容器收敛进该组件，断言随之下移到组件层（守护的同一条链路不变：
+  // 右栏必须有文件树入口，且预览容器必须挂在可达路径上）。
+  assert.match(app, /filesPanel=\{[\s\S]*?<FilesPanel/);
+  assert.match(app, /terminalPanel=\{<TerminalPanel/);
+  assert.match(app, /subtasksPanel=\{[\s\S]*?<TaskSummaryPanel/);
+  const filesPanel = read('components/FilesPanel.tsx');
+  assert.match(filesPanel, /from '\.\/FileTree'/, '文件面板未挂文件树');
+  assert.match(filesPanel, /from '\.\/FileViewerPane'/, '文件面板未挂预览容器');
 });
 
 check('Diff 面板不再使用全屏遮罩', () => {

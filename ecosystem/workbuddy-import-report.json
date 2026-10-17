@@ -1,0 +1,1656 @@
+{
+  "dryRun": false,
+  "packages": [
+    {
+      "pkg": "agent-harness-architect",
+      "found": 1
+    },
+    {
+      "pkg": "agent-harness-expert",
+      "found": 4
+    },
+    {
+      "pkg": "agent-orchestrator",
+      "found": 1
+    },
+    {
+      "pkg": "ai-content-creator-team",
+      "found": 1
+    },
+    {
+      "pkg": "ai-data-copilot",
+      "found": 1
+    },
+    {
+      "pkg": "ai-engineer",
+      "found": 4
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "found": 9
+    },
+    {
+      "pkg": "aihot",
+      "found": 1
+    },
+    {
+      "pkg": "chaogeek-kongming",
+      "found": 3
+    },
+    {
+      "pkg": "chuangye-manor",
+      "found": 7
+    },
+    {
+      "pkg": "content-creator",
+      "found": 5
+    },
+    {
+      "pkg": "cross-border-ecommerce-expert",
+      "found": 1
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "found": 5
+    },
+    {
+      "pkg": "design-engine",
+      "found": 3
+    },
+    {
+      "pkg": "design-md-architect",
+      "found": 3
+    },
+    {
+      "pkg": "design-to-code",
+      "found": 1
+    },
+    {
+      "pkg": "equity-research",
+      "found": 16
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "found": 14
+    },
+    {
+      "pkg": "frontend-developer",
+      "found": 6
+    },
+    {
+      "pkg": "fullstack-forge-team",
+      "found": 1
+    },
+    {
+      "pkg": "game-designer",
+      "found": 4
+    },
+    {
+      "pkg": "gstack",
+      "found": 3
+    },
+    {
+      "pkg": "investment-masters-team",
+      "found": 1
+    },
+    {
+      "pkg": "k12-courseware-designer",
+      "found": 1
+    },
+    {
+      "pkg": "long-manuscript-expert",
+      "found": 1
+    },
+    {
+      "pkg": "modern-webapp",
+      "found": 4
+    },
+    {
+      "pkg": "opc-team",
+      "found": 9
+    },
+    {
+      "pkg": "product-management",
+      "found": 7
+    },
+    {
+      "pkg": "product-strategy-team",
+      "found": 1
+    },
+    {
+      "pkg": "senior-developer",
+      "found": 3
+    },
+    {
+      "pkg": "software-architect",
+      "found": 1
+    },
+    {
+      "pkg": "startup-team",
+      "found": 1
+    },
+    {
+      "pkg": "tax-compliance-team",
+      "found": 1
+    },
+    {
+      "pkg": "test-results-analyst",
+      "found": 1
+    },
+    {
+      "pkg": "trading-agent",
+      "found": 1
+    },
+    {
+      "pkg": "tripstar-agent",
+      "found": 9
+    },
+    {
+      "pkg": "ui-designer",
+      "found": 3
+    },
+    {
+      "pkg": "user-experience-architect",
+      "found": 1
+    },
+    {
+      "pkg": "video-gen-team",
+      "found": 2
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "found": 6
+    },
+    {
+      "pkg": "wechat-official-account-expert",
+      "found": 4
+    },
+    {
+      "pkg": "xiaohongshu-operations-expert",
+      "found": 4
+    },
+    {
+      "pkg": "zero-cost-monetization-mentor",
+      "found": 1
+    }
+  ],
+  "installed": [],
+  "skippedExisting": [
+    {
+      "pkg": "agent-harness-architect",
+      "id": "agent-harness-architect",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "agent-harness-expert",
+      "id": "agent-harness-architect",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "agent-harness-expert",
+      "id": "agentic-ai-research",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "agent-harness-expert",
+      "id": "coding-prompt",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "agent-harness-expert",
+      "id": "wiki-creator",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "agent-orchestrator",
+      "id": "github",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-content-creator-team",
+      "id": "ai-content-production",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-data-copilot",
+      "id": "data-analysis-engine",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-engineer",
+      "id": "agent-browser-core",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-engineer",
+      "id": "agent-team-orchestration",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-engineer",
+      "id": "deep-research",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ai-engineer",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "cloudq",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "aicoding-team-bootstrap",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "diagrams-generator",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "docx",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "pdf",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "pptx",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "tcloud-arch-diagram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "tech-research-advisor",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aicoding-architecture-expert-team",
+      "id": "xlsx",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "aihot",
+      "id": "aihot",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chaogeek-kongming",
+      "id": "agentic-opc-workflow",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chaogeek-kongming",
+      "id": "cognitive-disarmament",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chaogeek-kongming",
+      "id": "socratic-alignment",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "knowledge-business",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "knowledge-growth",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "knowledge-gtm",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "knowledge-org",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "knowledge-sequence",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "manor-host",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "chuangye-manor",
+      "id": "manor-judge",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "content-creator",
+      "id": "anti-distill",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "content-creator",
+      "id": "humanizer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "content-creator",
+      "id": "minimax-docx",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "content-creator",
+      "id": "novel-writer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "content-creator",
+      "id": "novel-writing",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "cross-border-ecommerce-expert",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "id": "analytics-reporting",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "id": "data-quality-assessment",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "id": "data-visualization",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "id": "kpi-design",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "data-analytics-reporter",
+      "id": "metric-diagnostics",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-engine",
+      "id": "design-systems",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-engine",
+      "id": "prototype-templates",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-engine",
+      "id": "quality-review",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-md-architect",
+      "id": "design-reference",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-md-architect",
+      "id": "frontend-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-md-architect",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "design-to-code",
+      "id": "design-to-code-workflows",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "catalyst-calendar",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "company-tearsheet",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "comps-valuation",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "dcf-model-builder",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "earnings-analysis",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "earnings-preview",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "event-scenario-analyzer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "idea-generation",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "initiating-coverage",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "long-short-pitch",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "memo-builder",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "model-update",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "morning-note",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "portfolio-risk",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "sector-overview",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "equity-research",
+      "id": "thesis-tracker",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "android-native-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "brand-guidelines",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "capability-evolver",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "deep-research",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "frontend-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "github",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "minimax-docx",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "notebooklm-studio",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "skyline",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "tdesign-miniprogram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-backend-experts",
+      "id": "wechat-miniprogram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "brand-guidelines",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "frontend-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "github",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "frontend-developer",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "fullstack-forge-team",
+      "id": "forge-orchestrator",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "game-designer",
+      "id": "android-native-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "game-designer",
+      "id": "anti-distill",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "game-designer",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "game-designer",
+      "id": "wechat-miniprogram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "gstack",
+      "id": "design-html",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "gstack",
+      "id": "qa",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "gstack",
+      "id": "review",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "investment-masters-team",
+      "id": "neodata-financial-search",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "k12-courseware-designer",
+      "id": "k12-courseware-craft",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "long-manuscript-expert",
+      "id": "long-manuscript-core",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "modern-webapp",
+      "id": "agent-browser",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "modern-webapp",
+      "id": "lucide-icons",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "modern-webapp",
+      "id": "modern-web-app",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "modern-webapp",
+      "id": "ui-ux-pro-max",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-asset-ops",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-business-model-design",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-conversion-loop",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-dashboard-review",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-mvp-designer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-niche-positioning",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-orchestrator",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-resource-audit",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "opc-team",
+      "id": "opc-value-proposition",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "competitive-analysis",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "feature-spec",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "metrics-tracking",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "product-management-workflows",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "roadmap-management",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "stakeholder-comms",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-management",
+      "id": "user-research-synthesis",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "product-strategy-team",
+      "id": "product-playbook",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "senior-developer",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "senior-developer",
+      "id": "frontend-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "senior-developer",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "software-architect",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "startup-team",
+      "id": "startup-orchestrator",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tax-compliance-team",
+      "id": "tax-compliance-engine",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "test-results-analyst",
+      "id": "github",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "trading-agent",
+      "id": "trading-analysis",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "12306-train-assistant",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "airbnb",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "aviation-weather",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "flight-tracker",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "flights",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "flyai",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "globepilot-ai-agent-2",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "meituan-coupon-workbuddy",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "tripstar-agent",
+      "id": "travel-planning",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ui-designer",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ui-designer",
+      "id": "frontend-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "ui-designer",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "user-experience-architect",
+      "id": "browser-use",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "video-gen-team",
+      "id": "video-content-collector",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "video-gen-team",
+      "id": "video-renderer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "brand-guidelines",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "fullstack-dev",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "impeccable",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "skyline",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "tdesign-miniprogram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "we-chat-mini-program-developer",
+      "id": "wechat-miniprogram",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "wechat-official-account-expert",
+      "id": "anti-distill",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "wechat-official-account-expert",
+      "id": "humanizer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "wechat-official-account-expert",
+      "id": "mp-draft-push",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "wechat-official-account-expert",
+      "id": "wechat-article-search",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "xiaohongshu-operations-expert",
+      "id": "anti-distill",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "xiaohongshu-operations-expert",
+      "id": "humanizer",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "xiaohongshu-operations-expert",
+      "id": "marketing-skills",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "xiaohongshu-operations-expert",
+      "id": "xiaohongshu",
+      "reason": "技能已存在"
+    },
+    {
+      "pkg": "zero-cost-monetization-mentor",
+      "id": "zero-cost-playbook",
+      "reason": "技能已存在"
+    }
+  ],
+  "catalogAdded": [],
+  "employeesUpdated": [
+    {
+      "employee": "de-software-engineer",
+      "skill": "tech-research-advisor",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "xlsx",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "memo-builder",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "memo-builder",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "model-update",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "model-update",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "morning-note",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "morning-note",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "portfolio-risk",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "portfolio-risk",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "sector-overview",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "sector-overview",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "thesis-tracker",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "thesis-tracker",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "android-native-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "brand-guidelines",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "browser-use",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "capability-evolver",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "deep-research",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "frontend-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "fullstack-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "impeccable",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "minimax-docx",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "minimax-docx",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "notebooklm-studio",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "notebooklm-studio",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "skyline",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "skyline",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "tdesign-miniprogram",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "tdesign-miniprogram",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "wechat-miniprogram",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "wechat-miniprogram",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "forge-orchestrator",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "neodata-financial-search",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "agent-browser",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "lucide-icons",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "modern-web-app",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "ui-ux-pro-max",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "browser-use",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "frontend-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "fullstack-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "fullstack-dev",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "trading-analysis",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "skyline",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "tdesign-miniprogram",
+      "result": "skipped-cap"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "wechat-miniprogram",
+      "result": "skipped-cap"
+    }
+  ],
+  "gapFilled": [
+    {
+      "employee": "de-product-manager",
+      "skill": "competitor-analysis"
+    }
+  ],
+  "gapFailed": [
+    {
+      "employee": "de-software-engineer",
+      "skill": "unit-test-gen",
+      "error": "生态目录中未找到技能: unit-test-gen"
+    },
+    {
+      "employee": "de-software-engineer",
+      "skill": "commit-message",
+      "error": "生态目录中未找到技能: commit-message"
+    },
+    {
+      "employee": "de-frontend-engineer",
+      "skill": "component-doc-gen",
+      "error": "生态目录中未找到技能: component-doc-gen"
+    },
+    {
+      "employee": "de-devops-sre",
+      "skill": "deploy-plan",
+      "error": "生态目录中未找到技能: deploy-plan"
+    },
+    {
+      "employee": "de-devops-sre",
+      "skill": "incident-postmortem",
+      "error": "生态目录中未找到技能: incident-postmortem"
+    },
+    {
+      "employee": "de-devops-sre",
+      "skill": "perf-audit",
+      "error": "生态目录中未找到技能: perf-audit"
+    },
+    {
+      "employee": "de-qa-engineer",
+      "skill": "unit-test-gen",
+      "error": "生态目录中未找到技能: unit-test-gen"
+    },
+    {
+      "employee": "de-security-engineer",
+      "skill": "secrets-scan",
+      "error": "生态目录中未找到技能: secrets-scan"
+    },
+    {
+      "employee": "de-security-engineer",
+      "skill": "dependency-audit",
+      "error": "生态目录中未找到技能: dependency-audit"
+    },
+    {
+      "employee": "de-mobile-engineer",
+      "skill": "unit-test-gen",
+      "error": "生态目录中未找到技能: unit-test-gen"
+    },
+    {
+      "employee": "de-data-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-data-analyst",
+      "skill": "sql-optimize",
+      "error": "生态目录中未找到技能: sql-optimize"
+    },
+    {
+      "employee": "de-data-engineer",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-data-engineer",
+      "skill": "sql-optimize",
+      "error": "生态目录中未找到技能: sql-optimize"
+    },
+    {
+      "employee": "de-ml-engineer",
+      "skill": "unit-test-gen",
+      "error": "生态目录中未找到技能: unit-test-gen"
+    },
+    {
+      "employee": "de-ml-engineer",
+      "skill": "perf-audit",
+      "error": "生态目录中未找到技能: perf-audit"
+    },
+    {
+      "employee": "de-ai-governance-analyst",
+      "skill": "compliance-checklist",
+      "error": "生态目录中未找到技能: compliance-checklist"
+    },
+    {
+      "employee": "de-ai-governance-analyst",
+      "skill": "threat-model",
+      "error": "生态目录中未找到技能: threat-model"
+    },
+    {
+      "employee": "de-product-manager",
+      "skill": "prd-draft",
+      "error": "生态目录中未找到技能: prd-draft"
+    },
+    {
+      "employee": "de-ux-designer",
+      "skill": "design-system-doc",
+      "error": "生态目录中未找到技能: design-system-doc"
+    },
+    {
+      "employee": "de-ux-designer",
+      "skill": "usability-checklist",
+      "error": "生态目录中未找到技能: usability-checklist"
+    },
+    {
+      "employee": "de-product-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-product-analyst",
+      "skill": "sql-optimize",
+      "error": "生态目录中未找到技能: sql-optimize"
+    },
+    {
+      "employee": "de-technical-writer",
+      "skill": "doc-gen",
+      "error": "生态目录中未找到技能: doc-gen"
+    },
+    {
+      "employee": "de-motion-designer",
+      "skill": "asset-optimize",
+      "error": "生态目录中未找到技能: asset-optimize"
+    },
+    {
+      "employee": "de-seo-content-marketer",
+      "skill": "content-outline",
+      "error": "生态目录中未找到技能: content-outline"
+    },
+    {
+      "employee": "de-seo-content-marketer",
+      "skill": "keyword-research",
+      "error": "生态目录中未找到技能: keyword-research"
+    },
+    {
+      "employee": "de-growth-marketer",
+      "skill": "content-outline",
+      "error": "生态目录中未找到技能: content-outline"
+    },
+    {
+      "employee": "de-social-media-operator",
+      "skill": "content-outline",
+      "error": "生态目录中未找到技能: content-outline"
+    },
+    {
+      "employee": "de-sales-development-rep",
+      "skill": "lead-scoring",
+      "error": "生态目录中未找到技能: lead-scoring"
+    },
+    {
+      "employee": "de-sales-development-rep",
+      "skill": "email-draft",
+      "error": "生态目录中未找到技能: email-draft"
+    },
+    {
+      "employee": "de-market-research-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-customer-support",
+      "skill": "kb-search",
+      "error": "生态目录中未找到技能: kb-search"
+    },
+    {
+      "employee": "de-customer-support",
+      "skill": "reply-draft",
+      "error": "生态目录中未找到技能: reply-draft"
+    },
+    {
+      "employee": "de-technical-support",
+      "skill": "kb-search",
+      "error": "生态目录中未找到技能: kb-search"
+    },
+    {
+      "employee": "de-technical-support",
+      "skill": "reply-draft",
+      "error": "生态目录中未找到技能: reply-draft"
+    },
+    {
+      "employee": "de-customer-success-manager",
+      "skill": "health-score",
+      "error": "生态目录中未找到技能: health-score"
+    },
+    {
+      "employee": "de-customer-success-manager",
+      "skill": "reply-draft",
+      "error": "生态目录中未找到技能: reply-draft"
+    },
+    {
+      "employee": "de-ticket-triage",
+      "skill": "intent-classify",
+      "error": "生态目录中未找到技能: intent-classify"
+    },
+    {
+      "employee": "de-ticket-triage",
+      "skill": "ticket-routing",
+      "error": "生态目录中未找到技能: ticket-routing"
+    },
+    {
+      "employee": "de-recruiter",
+      "skill": "jd-optimize",
+      "error": "生态目录中未找到技能: jd-optimize"
+    },
+    {
+      "employee": "de-recruiter",
+      "skill": "resume-screen",
+      "error": "生态目录中未找到技能: resume-screen"
+    },
+    {
+      "employee": "de-recruiter",
+      "skill": "interview-brief",
+      "error": "生态目录中未找到技能: interview-brief"
+    },
+    {
+      "employee": "de-talent-sourcer",
+      "skill": "jd-optimize",
+      "error": "生态目录中未找到技能: jd-optimize"
+    },
+    {
+      "employee": "de-talent-sourcer",
+      "skill": "talent-map",
+      "error": "生态目录中未找到技能: talent-map"
+    },
+    {
+      "employee": "de-hr-generalist",
+      "skill": "policy-qa",
+      "error": "生态目录中未找到技能: policy-qa"
+    },
+    {
+      "employee": "de-hr-generalist",
+      "skill": "onboarding-checklist",
+      "error": "生态目录中未找到技能: onboarding-checklist"
+    },
+    {
+      "employee": "de-learning-designer",
+      "skill": "course-outline",
+      "error": "生态目录中未找到技能: course-outline"
+    },
+    {
+      "employee": "de-learning-designer",
+      "skill": "quiz-gen",
+      "error": "生态目录中未找到技能: quiz-gen"
+    },
+    {
+      "employee": "de-performance-coach",
+      "skill": "feedback-draft",
+      "error": "生态目录中未找到技能: feedback-draft"
+    },
+    {
+      "employee": "de-performance-coach",
+      "skill": "goal-setting",
+      "error": "生态目录中未找到技能: goal-setting"
+    },
+    {
+      "employee": "de-accounting-analyst",
+      "skill": "variance-analysis",
+      "error": "生态目录中未找到技能: variance-analysis"
+    },
+    {
+      "employee": "de-accounting-analyst",
+      "skill": "financial-model-check",
+      "error": "生态目录中未找到技能: financial-model-check"
+    },
+    {
+      "employee": "de-tax-specialist",
+      "skill": "reconciliation",
+      "error": "生态目录中未找到技能: reconciliation"
+    },
+    {
+      "employee": "de-tax-specialist",
+      "skill": "policy-qa",
+      "error": "生态目录中未找到技能: policy-qa"
+    },
+    {
+      "employee": "de-legal-counsel",
+      "skill": "contract-review",
+      "error": "生态目录中未找到技能: contract-review"
+    },
+    {
+      "employee": "de-legal-counsel",
+      "skill": "compliance-checklist",
+      "error": "生态目录中未找到技能: compliance-checklist"
+    },
+    {
+      "employee": "de-contract-manager",
+      "skill": "contract-review",
+      "error": "生态目录中未找到技能: contract-review"
+    },
+    {
+      "employee": "de-contract-manager",
+      "skill": "template-extract",
+      "error": "生态目录中未找到技能: template-extract"
+    },
+    {
+      "employee": "de-compliance-auditor",
+      "skill": "compliance-checklist",
+      "error": "生态目录中未找到技能: compliance-checklist"
+    },
+    {
+      "employee": "de-compliance-auditor",
+      "skill": "control-testing",
+      "error": "生态目录中未找到技能: control-testing"
+    },
+    {
+      "employee": "de-operations-manager",
+      "skill": "process-mapping",
+      "error": "生态目录中未找到技能: process-mapping"
+    },
+    {
+      "employee": "de-operations-manager",
+      "skill": "kpi-dashboard",
+      "error": "生态目录中未找到技能: kpi-dashboard"
+    },
+    {
+      "employee": "de-supply-chain-planner",
+      "skill": "demand-forecast",
+      "error": "生态目录中未找到技能: demand-forecast"
+    },
+    {
+      "employee": "de-supply-chain-planner",
+      "skill": "inventory-analysis",
+      "error": "生态目录中未找到技能: inventory-analysis"
+    },
+    {
+      "employee": "de-procurement-specialist",
+      "skill": "vendor-eval",
+      "error": "生态目录中未找到技能: vendor-eval"
+    },
+    {
+      "employee": "de-procurement-specialist",
+      "skill": "cost-breakdown",
+      "error": "生态目录中未找到技能: cost-breakdown"
+    },
+    {
+      "employee": "de-project-manager",
+      "skill": "status-report",
+      "error": "生态目录中未找到技能: status-report"
+    },
+    {
+      "employee": "de-project-manager",
+      "skill": "risk-log",
+      "error": "生态目录中未找到技能: risk-log"
+    },
+    {
+      "employee": "de-inventory-analyst",
+      "skill": "inventory-analysis",
+      "error": "生态目录中未找到技能: inventory-analysis"
+    },
+    {
+      "employee": "de-inventory-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-clinical-data-analyst",
+      "skill": "stats-report",
+      "error": "生态目录中未找到技能: stats-report"
+    },
+    {
+      "employee": "de-clinical-data-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-medical-coding",
+      "skill": "coding-validation",
+      "error": "生态目录中未找到技能: coding-validation"
+    },
+    {
+      "employee": "de-medical-coding",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-health-edu-content-designer",
+      "skill": "content-outline",
+      "error": "生态目录中未找到技能: content-outline"
+    },
+    {
+      "employee": "de-health-edu-content-designer",
+      "skill": "fact-check",
+      "error": "生态目录中未找到技能: fact-check"
+    },
+    {
+      "employee": "de-instructional-designer",
+      "skill": "course-outline",
+      "error": "生态目录中未找到技能: course-outline"
+    },
+    {
+      "employee": "de-instructional-designer",
+      "skill": "quiz-gen",
+      "error": "生态目录中未找到技能: quiz-gen"
+    },
+    {
+      "employee": "de-tutoring-assistant",
+      "skill": "quiz-gen",
+      "error": "生态目录中未找到技能: quiz-gen"
+    },
+    {
+      "employee": "de-tutoring-assistant",
+      "skill": "explain-concept",
+      "error": "生态目录中未找到技能: explain-concept"
+    },
+    {
+      "employee": "de-credit-risk-analyst",
+      "skill": "risk-model-review",
+      "error": "生态目录中未找到技能: risk-model-review"
+    },
+    {
+      "employee": "de-credit-risk-analyst",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    },
+    {
+      "employee": "de-fraud-analyst",
+      "skill": "rule-tuning",
+      "error": "生态目录中未找到技能: rule-tuning"
+    },
+    {
+      "employee": "de-fraud-analyst",
+      "skill": "case-investigation",
+      "error": "生态目录中未找到技能: case-investigation"
+    },
+    {
+      "employee": "de-compliance-monitor",
+      "skill": "screening-run",
+      "error": "生态目录中未找到技能: screening-run"
+    },
+    {
+      "employee": "de-compliance-monitor",
+      "skill": "control-testing",
+      "error": "生态目录中未找到技能: control-testing"
+    },
+    {
+      "employee": "de-quant-research-analyst",
+      "skill": "backtest-review",
+      "error": "生态目录中未找到技能: backtest-review"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "client-profiling",
+      "error": "生态目录中未找到技能: client-profiling"
+    },
+    {
+      "employee": "de-financial-advisor",
+      "skill": "product-comparison",
+      "error": "生态目录中未找到技能: product-comparison"
+    },
+    {
+      "employee": "de-visualize",
+      "skill": "data-quality-check",
+      "error": "生态目录中未找到技能: data-quality-check"
+    }
+  ]
+}

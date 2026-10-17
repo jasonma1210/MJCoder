@@ -117,7 +117,17 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
   check('压缩：首次 chat 为摘要请求（无 tools）', chatCalls[0]?.tools === undefined && chatCalls[0]?.messages?.length === 1);
   check('压缩：主请求消息数大幅缩减', chatCalls[1]?.messages?.length < bigHistory.length + 1,
     `${chatCalls[1]?.messages?.length} < ${bigHistory.length + 1}`);
-  check('压缩：保留 system + 摘要 + 尾部', chatCalls[1]?.messages?.[0]?.role === 'system' && String(chatCalls[1]?.messages?.[1]?.content || '').includes('压缩摘要'));
+  // 入口裁剪（C3）会先插一条 system 占位，故摘要不再固定在下标 1——改为「system 全在前导块内、
+  // 摘要存在、首条非 system 是用户原始需求」：比锁死下标更强（同时守住「无中部 system」）。
+  check('压缩：保留 system + 摘要 + 尾部', (() => {
+    const msgs = chatCalls[1]?.messages || [];
+    const firstNonSystem = msgs.findIndex((m) => m.role !== 'system');
+    return msgs[0]?.role === 'system'
+      && firstNonSystem > 0
+      && msgs.slice(0, firstNonSystem).every((m) => m.role === 'system')
+      && msgs.some((m) => m.role === 'system' && String(m.content).includes('压缩摘要'))
+      && /第0轮问题/.test(String(msgs[firstNonSystem]?.content || ''));
+  })());
   check('压缩后正常完成', compactedDone?.t === '基于摘要的回复');
 
   // ── 测试 4：AGENTS.md 注入 system prompt ──

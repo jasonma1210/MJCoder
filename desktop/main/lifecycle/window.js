@@ -45,9 +45,24 @@ function createWindow() {
     y: state?.y,
     minWidth: 1200, minHeight: 700,
     title: 'MJ Coder', backgroundColor: '#0d0d0d', titleBarStyle: 'hiddenInset',
-    webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), nodeIntegration: false, contextIsolation: true },
+    // 首帧闪烁修复（2026-10-17）：默认 show:true 时窗口先以纯色底显示，
+    // 浅色主题用户会先看到一帧深色再跳到白底（比黑屏更刺眼）。
+    // 改为等 ready-to-show（渲染进程首帧已绘制）再显示，外观由启动页接管。
+    show: false,
+    webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), nodeIntegration: false, contextIsolation: true, webviewTag: true },
   });
   setMainWindow(mainWindow);
+
+  // 揭示时机：ready-to-show 为准；极端情况（渲染进程异常）该事件可能不触发，
+  // 用 1.5s 兜底强制显示——宁可闪一下，也不能出现「窗口不出现」。
+  let revealed = false;
+  const reveal = () => {
+    if (revealed) return;
+    revealed = true;
+    try { mainWindow.show(); } catch (e) { console.warn('[window] show failed:', e.message); }
+  };
+  mainWindow.once('ready-to-show', reveal);
+  setTimeout(reveal, 1500);
   // 生产构建走 file:// 加载打包产物；开发走 vite dev server
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'renderer', 'dist', 'index.html'));

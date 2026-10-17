@@ -185,7 +185,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
   return (
     <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onClick={onClose}>
       <div
-        className="w-[480px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded-2xl bg-bg border border-border p-5"
+        className="w-[480px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded-2xl bg-raise border border-border p-5"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label={connector.display_name || connector.name}
@@ -214,11 +214,11 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
             )}
             {oauthState === 'authorized' ? (
               <div className="flex items-center justify-between gap-3">
-                {statusBadge || <span className="text-[11px] text-text2">{t('ecosystem.dialog.enableNote')}</span>}
+                {statusBadge || <span className="text-xs text-text2">{t('ecosystem.dialog.enableNote')}</span>}
                 <button
                   onClick={submitConnect}
                   disabled={status === 'connecting'}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40"
+                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconPlug size={13} />
                   {status === 'connecting' ? t('ecosystem.dialog.connecting') : t('ecosystem.dialog.testConnect')}
@@ -228,7 +228,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
               <button
                 onClick={startOAuth}
                 disabled={oauthState === 'authorizing' || oauthState === 'checking'}
-                className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40"
+                className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
               >
                 <IconGlobe size={13} />
                 {oauthState === 'authorizing' ? t('ecosystem.dialog.authorizing') : t('ecosystem.dialog.oauthAuthorize')}
@@ -266,11 +266,11 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs text-text2">
                         {f.label}
-                        {f.required && <span className="ml-1 text-[10px] text-danger">{t('ecosystem.dialog.required')}</span>}
+                        {f.required && <span className="ml-1 text-caption text-danger">{t('ecosystem.dialog.required')}</span>}
                       </label>
                       {f.docs_url && (
                         <button onClick={() => window.mjcode?.openExternal?.(f.docs_url)}
-                          className="text-[11px] text-accent hover:underline inline-flex items-center gap-1">
+                          className="text-xs text-accent hover:underline inline-flex items-center gap-1">
                           <IconGlobe size={11} /> {t('ecosystem.dialog.getCredential')}
                         </button>
                       )}
@@ -302,7 +302,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
                     </span>
                   )
                   : (
-                    <span className="text-[11px] text-text2">
+                    <span className="text-xs text-text2">
                       {emptyRequired.length > 0
                         ? t('ecosystem.dialog.fillRequired', { n: emptyRequired.length })
                         : t('ecosystem.dialog.enableNote')}
@@ -311,7 +311,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
                 <button
                   onClick={saveConfig}
                   disabled={emptyRequired.length > 0}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40"
+                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconCheck size={13} /> {t('ecosystem.dialog.saveConfig')}
                 </button>
@@ -329,11 +329,11 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
             {/* 连接动作区 */}
             {plan.kind !== 'manual' && (
               <div className="flex items-center justify-between gap-3 pt-1">
-                {statusBadge || <span className="text-[11px] text-text2">{t('ecosystem.dialog.enableNote')}</span>}
+                {statusBadge || <span className="text-xs text-text2">{t('ecosystem.dialog.enableNote')}</span>}
                 <button
                   onClick={submitConnect}
                   disabled={!canConnect || status === 'connecting'}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40"
+                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconPlug size={13} />
                   {status === 'connecting' ? t('ecosystem.dialog.connecting') : t('ecosystem.dialog.testConnect')}
@@ -350,7 +350,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
             className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border hover:bg-hover text-xs text-text2">
             <IconEdit size={13} /> {t('ecosystem.dialog.openMcpJson')}
           </button>
-          {cfgErr && <p className="text-[11px] text-danger mt-1.5 break-all">{cfgErr}</p>}
+          {cfgErr && <p className="text-xs text-danger mt-1.5 break-all">{cfgErr}</p>}
         </div>
       </div>
     </div>

@@ -9,5 +9,7 @@
   "threadsSection": "会话",
   "addProject": "添加项目",
   "archived": "已归档",
-  "settings": "设置"
+  "settings": "设置",
+  "collapseTitle": "收起左侧栏（⌘B）",
+  "collapse": "收起左侧栏"
 }

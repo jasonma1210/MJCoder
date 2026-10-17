@@ -126,7 +126,17 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
   check('压缩：首次 chat 为摘要请求（无 tools）', chatCalls[0]?.tools === undefined && chatCalls[0]?.messages?.length === 1);
   check('压缩：主请求消息数大幅缩减', chatCalls[1]?.messages?.length < bigHistory.length + 1,
     `${chatCalls[1]?.messages?.length} < ${bigHistory.length + 1}`);
-  check('压缩：保留 system + 摘要 + 尾部', chatCalls[1]?.messages?.[0]?.role === 'system' && String(chatCalls[1]?.messages?.[1]?.content || '').includes('压缩摘要'));
+  // 入口裁剪（C3）会先插一条 system 占位，故摘要不再固定在下标 1——改为「system 全在前导块内、
+  // 摘要存在、首条非 system 是用户原始需求」：比锁死下标更强（同时守住「无中部 system」）。
+  check('压缩：保留 system + 摘要 + 尾部', (() => {
+    const msgs = chatCalls[1]?.messages || [];
+    const firstNonSystem = msgs.findIndex((m) => m.role !== 'system');
+    return msgs[0]?.role === 'system'
+      && firstNonSystem > 0                                  // 前导 system 块存在
+      && msgs.slice(0, firstNonSystem).every((m) => m.role === 'system') // 无中部 system
+      && msgs.some((m) => m.role === 'system' && String(m.content).includes('压缩摘要'))
+      && /第0轮问题/.test(String(msgs[firstNonSystem]?.content || '')); // 用户原始需求仍在
+  })());
   check('压缩后正常完成', compactedDone?.t === '基于摘要的回复');
 
   // ── 测试 4：AGENTS.md 注入 system prompt ──
@@ -536,7 +546,13 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
     const answered = new Set(out.filter((m) => m.role === 'tool').map((m) => m.tool_call_id));
     const unanswered = out.some((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.some((tc) => !answered.has(tc.id)));
     check('压缩结果无未应答 tool_calls', !unanswered);
-    check('压缩保留 system 与摘要', out[0].role === 'system' && String(out[1].content).includes('压缩摘要内容'));
+    // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）。
+    // 摘要消息插在 system 块内、首条 user 之前（DeepSeek 系只认首部 system），故下标为
+    // [system, 摘要(system), user, ...tail] —— 用固定下标钉住「system 块连续 + user 紧随其后」。
+    check('压缩保留 system + 摘要 + 首条 user（原始需求被钉住）',
+      out[0].role === 'system'
+      && String(out[1].content).includes('压缩摘要内容')
+      && out[2]?.role === 'user' && String(out[2].content).includes('开始'));
 
     // 14.3 双档阈值：85% 以上激进档（更短尾部 + 压力告警），70%~85% 常规档
     reset();
@@ -546,8 +562,10 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       smallWindow,
       async () => chatScript.shift(),
     );
+    // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）
     check('激进档尾部更短且注入压力告警',
-      outAggressive.length <= 1 + 1 + 3 && String(outAggressive[1].content).includes('上下文压力告警'),
+      // 固定头（system + 首条 user）+ 摘要 + 3 条尾部
+      outAggressive.length <= 2 + 1 + 3 && String(outAggressive[1].content).includes('上下文压力告警'),
       `len=${outAggressive.length}`);
     reset();
     chatScript = [{ content: '常规摘要', usage: { prompt_tokens: 10, completion_tokens: 5 } }];
@@ -556,8 +574,10 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       { ...model, model: { ...model.model, context_window: 1300 } },
       async () => chatScript.shift(),
     );
+    // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）
+    // 固定头 = 前导 system(1) + 首条 user(1) + 摘要(1)；尾部 6 条（user 原始需求不再被裁掉）
     check('常规档保留 6 条尾部且无压力告警',
-      outNormal.length === 1 + 1 + 6 && !String(outNormal[1].content).includes('上下文压力告警'),
+      outNormal.length === 2 + 1 + 6 && !String(outNormal[1].content).includes('上下文压力告警'),
       `len=${outNormal.length}`);
     check('激进档比常规档裁得更多', outAggressive.length < outNormal.length);
 
@@ -638,26 +658,31 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
     check('续期指令经 system 消息旁路注入', systemNotice);
     check('旁路注入后任务正常完成', noticeDone === '全部完成');
 
-    // 14.7 token 预算双闸：超限先自动压缩续跑，仍超限才收尾（TC-QA-014）
+    // 14.7 token 预算双闸（2026-10-17 语义修正）
+    // 旧语义：预算达 70% → 无论上下文多小都强制压缩续跑。
+    // 真机事故（用户实测「取 10 条最新新闻」）：27k 上下文被压成 376 tokens 摘要，新闻原文丢失，
+    // 模型只能重搜 → 再撞闸再压 → 「后台一直在压缩、还没有任何输出」。
+    // 新语义：预算压力 + 上下文不够大（< 窗口 35%）→ **只开新预算窗口，不压缩**，本轮结果照常消费。
     reset();
     chatScript = [
       { content: '第一步', tool_calls: [{ id: 'b1', function: { name: 'shell', arguments: '{"command":"echo 1"}' } }], usage: { prompt_tokens: 70, completion_tokens: 40 } },
-      { content: '压缩摘要', usage: { prompt_tokens: 10, completion_tokens: 5 } },
       { content: '第二步', tool_calls: [{ id: 'b2', function: { name: 'shell', arguments: '{"command":"echo 2"}' } }], usage: { prompt_tokens: 70, completion_tokens: 40 } },
+      { content: '（默认回复）', usage: { prompt_tokens: 20, completion_tokens: 10 } },
     ];
     let tokenDone = null;
+    const tokenBudgets = [];
     await runAgent({
       messages: [{ role: 'user', content: '烧 token 的活' }, ...filler],
       model, cwd: '/tmp/project', maxRounds: 10, tokenBudget: 100,
       toolHandlers: makeToolHandlers(),
       onMessage: () => {},
+      onBudget: (s) => tokenBudgets.push(s),
       onDone: (t) => { tokenDone = t; },
     });
-    check('token 超限先自动压缩（出现摘要请求）',
-      chatCalls[1]?.tools === undefined && chatCalls[1]?.messages?.length === 1, `chat 轮数=${chatCalls.length}`);
-    // 真机复盘：单次救援对长任务不够 → 最多救援 3 次。第 2 次超限应触发第 2 次救援继续跑，
-    // 而非立即熔断（彻底熔断的多救援回归见 agent-engine.test.mjs 测试 N）。
-    check('第二次超限触发第 2 次救援（出现第 2 个摘要请求）', chatCalls[3]?.tools === undefined, `chat 轮数=${chatCalls.length}`);
+    check('预算压力下不压缩小上下文（无摘要请求）',
+      chatCalls.every((c) => (c.messages || []).length > 1), `chat 轮数=${chatCalls.length}`);
+    check('预算窗口重置即触发救援计数（rescues ≥1）',
+      Math.max(...tokenBudgets.map((s) => s.rescues || 0)) >= 1, `rescues=${tokenBudgets.map((s) => s.rescues).join(',')}`);
     check('救援后续跑直至正常收尾（不再单次救援即熔断）',
       tokenDone === '（默认回复）' && !String(tokenDone).includes('token 预算已用尽'), String(tokenDone).slice(-50));
 

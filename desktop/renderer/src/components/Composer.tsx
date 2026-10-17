@@ -1,6 +1,6 @@
 // @ts-nocheck -- T2-2 存量代码原样搬移（零行为变更）；渐进 TS 路线下补全类型属后续任务（T0-3 门禁只约束新文件扩展名）
 import { useState, useEffect, useRef } from 'react';
-import { IconArrowUp, IconBot, IconFile, IconFolder, IconGitBranch, IconMic, IconPlug, IconPlus, IconSpinner, IconSquare, IconX, IconZap } from './icons';
+import { IconArrowUp, IconBot, IconEdit, IconEye, IconFile, IconFolder, IconGitBranch, IconMic, IconPlug, IconPlus, IconSpinner, IconSquare, IconTrash, IconX, IconZap } from './icons';
 import ContextRing from './ContextRing';
 import InlineAlert from './InlineAlert';
 import PlusMenu from './PlusMenu';
@@ -26,7 +26,7 @@ const SLASH_COMMANDS = [
 export default function Composer({
   input, setInput, onSend, onStop, onPickFiles, loading, selectedModel, project,
   onOpenProjectPicker, agentsMd, providers, onSelectModel, approval, onApprovalChange,
-  onSteer, onQueue, onClear, queuedCount, queued = [], onQueueRemove, contextUsage, onCompact, compacting,
+  onSteer, onQueue, onClear, queued = [], onQueueRemove, onQueueRunNow, onQueueEdit, contextUsage, onCompact, compacting,
   onPlanMode, planMode, modeMsg,
   // 大任务拆分 / 未选项目只读边界 / 失败重试：三者状态归 ChatArea 所有，经 props 传入。
   // 位置纪律：这些 JSX 曾直接引用父组件的局部变量（decomposing / plan / planReport /
@@ -40,6 +40,8 @@ export default function Composer({
   runMode, onModeChange, worktreeInfo,
   extras, onExtrasChange, plusOpen, onPlusOpenChange, voice, onDropFiles, messages = [], connectedServers = [],
   enabledSkills = [],
+  // 附件 chips（拖入/粘贴/「添加到对话框」）：状态归 ChatArea（useAgentRun.send 统一转 @路径 上下文）
+  attachments = [], onRemoveAttachment, onOpenAttachment,
 }) {
   const { t } = useI18n();
   const [slashOpen, setSlashOpen] = useState(false);
@@ -61,7 +63,9 @@ export default function Composer({
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = 'auto';
-    const lineHeight = 20;
+    // 行高必须与 textarea 的 text-sm（14px / 21px）一致：估算偏小会导致最多 8 行时
+    // 高度算少几像素、末行被容器裁掉
+    const lineHeight = 21;
     ta.style.height = `${Math.min(ta.scrollHeight, lineHeight * 8 + 16)}px`;
     ta.style.overflowY = ta.scrollHeight > lineHeight * 8 + 16 ? 'auto' : 'hidden';
   }, [input]);
@@ -185,12 +189,12 @@ export default function Composer({
       {hasTaskBadges && (
       <div className="flex items-center gap-3 px-4 pb-2 text-xs text-text2">
         {planMode && (
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-info-bg text-info shrink-0" title={t('composer.planModeTip')}>
+          <span className="text-xs px-1.5 py-0.5 rounded bg-info-bg text-info shrink-0" title={t('composer.planModeTip')}>
             {t('composer.planMode')}
           </span>
         )}
         {expert && (
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.expertTip', { mission: expert.mission || '' })}>
             <IconBot size={11} />
             {expert.title_cn || expert.name}
@@ -200,7 +204,7 @@ export default function Composer({
           </span>
         )}
         {(extras?.skillIds || []).length > 0 && (
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.skillsTip', {
               skills: extras.skillIds.join('、'), // i18n-literal
             })}>
@@ -212,7 +216,7 @@ export default function Composer({
           </span>
         )}
         {(extras?.mcpServers || []).length > 0 && (
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.connectorsTip', {
               names: extras.mcpServers.join('、'), // i18n-literal
             })}>
@@ -233,7 +237,7 @@ export default function Composer({
       )}
 
       {modeMsg && (
-        <div className="mb-1.5 text-[11px] text-text2 px-4 truncate" title={modeMsg}>{modeMsg}</div>
+        <div className="mb-1.5 text-xs text-text2 px-4 truncate" title={modeMsg}>{modeMsg}</div>
       )}
 
       {/* A5：录音条（波形 + 计时 + 停止） */}
@@ -299,12 +303,12 @@ export default function Composer({
                     //   不传 forcedThread 即回落到当前 thread（send 内部 forcedThread || thread）
                     onSend?.(task.prompt, undefined, { skipDecompose: true, planStep: ps });
                   }}
-                  className="h-7 shrink-0 inline-flex items-center justify-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">{t('composer.runStep')}</button>
+                  className="h-7 shrink-0 inline-flex items-center justify-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">{t('composer.runStep')}</button>
               </div>
             ))}
           </div>
           <div className="flex items-center justify-between mt-2 gap-2">
-            <span className="text-[11px] text-text2">{t('composer.stepNote')}</span>
+            <span className="text-xs text-text2">{t('composer.stepNote')}</span>
             <button onClick={() => { onPlanChange?.(null); onSend?.(input, undefined, { skipDecompose: true }); }}
               className="text-xs text-text2 hover:text-text underline shrink-0">{t('composer.runWithoutSplit')}</button>
           </div>
@@ -335,7 +339,7 @@ export default function Composer({
                     onPlanReportChange?.(null);
                     requestAnimationFrame(() => taRef.current?.focus());
                   }}
-                  className="h-7 inline-flex items-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">{t('composer.fillAndSend')}</button>
+                  className="h-7 inline-flex items-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">{t('composer.fillAndSend')}</button>
                 <button onClick={() => onPlanReportChange?.(null)} className="text-xs text-text2 hover:text-text underline">{t('composer.notNow')}</button>
               </div>
             </>
@@ -347,12 +351,12 @@ export default function Composer({
 
       {/* P0-B：未选项目时明示只读边界（沙箱已强制 read-only，此处告知用户） */}
       {!loading && !cwd && (
-        <p className="mb-1.5 mx-1 text-[11px] text-warn">{t('composer.noProjectReadonly')}</p>
+        <p className="mb-1.5 mx-1 text-xs text-warn">{t('composer.noProjectReadonly')}</p>
       )}
       {/* P0-A：失败可重试（瞬时错误重试耗尽后，一键重放上一轮输入） */}
       {lastFailed && !loading && (
         <div className="mb-1.5 mx-1 flex items-center justify-between gap-2">
-          <span className="text-[11px] text-text2 truncate">{t('composer.lastFailedNote')}</span>
+          <span className="text-xs text-text2 truncate">{t('composer.lastFailedNote')}</span>
           <button
             onClick={() => { const failedText = lastFailed.text; onLastFailedChange?.(null); onSend?.(failedText); }}
             className="shrink-0 h-7 inline-flex items-center px-3 rounded-lg border border-border text-xs hover:bg-hover"
@@ -360,9 +364,19 @@ export default function Composer({
         </div>
       )}
 
+      {/* 排队任务卡片：运行中发出的消息不立刻执行，排在这里等下一轮。
+          三个动作 —— 立即执行（打断当前轮）/ 编辑（移回输入框）/ 删除。
+          放在输入框上方而不是工具栏徽标里：用户需要看见「我发的那条现在在哪」。 */}
+      <QueuedTasks
+        queued={queued}
+        onRunNow={onQueueRunNow}
+        onEdit={onQueueEdit}
+        onRemove={onQueueRemove}
+      />
+
       {/* 任务控制台（A12：拖拽悬停转 accent + 遮罩；preventDefault 阻断 Electron 默认导航） */}
       <div
-        className={`bg-surface border rounded-2xl p-3 focus-within:border-accent relative ${dragOver ? 'border-accent border-dashed' : 'border-border'}`}
+        className={`bg-surface border rounded-2xl p-3 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20 relative ${dragOver ? 'border-accent border-dashed' : 'border-border'}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false); }}
         onDrop={handleDrop}
@@ -371,6 +385,15 @@ export default function Composer({
           <div className="absolute inset-0 rounded-2xl bg-accent-bg flex items-center justify-center text-xs text-accent z-10 pointer-events-none">
             {t('composer.dropComposer')}
           </div>
+        )}
+        {/* 附件 chips 行（图片 hover 出小图预览；文档点击 → 右侧预览栏；× 移除） */}
+        {attachments.length > 0 && (
+          <AttachmentChips
+            items={attachments}
+            projectPath={project?.path || ''}
+            onRemove={onRemoveAttachment}
+            onOpen={onOpenAttachment}
+          />
         )}
         <textarea
           ref={taRef}
@@ -420,7 +443,7 @@ export default function Composer({
                 <span className="font-mono text-accent shrink-0">{c.key}</span>
                 <span className="text-text2 truncate">{t(c.hintKey)}</span>
                 {c.pending && (
-                  <span className="text-[10px] text-text2 ml-auto shrink-0">{t('composer.comingSoon')}</span>
+                  <span className="text-caption text-text2 ml-auto shrink-0">{t('composer.comingSoon')}</span>
                 )}
               </button>
             ))}
@@ -485,18 +508,14 @@ export default function Composer({
             />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* C9：排队指令可查看、可单条移除（此前只有计数徽标） */}
-            {queuedCount > 0 && (
-              <QueuedList queued={queued} onRemove={onQueueRemove} />
-            )}
             {loading ? (
               <button onClick={onStop} title={t('composer.stopGenTip')} aria-label={t('composer.stopGen')}
-                className="bg-danger text-white rounded-full w-8 h-8 flex items-center justify-center">
+                className="bg-danger-solid text-on-accent rounded-full w-8 h-8 flex items-center justify-center">
                 <IconSquare size={14} />
               </button>
             ) : (
-              <button onClick={() => onSend()} disabled={!input.trim()} title={t('composer.send')} aria-label={t('composer.send')}
-                className="bg-accent text-white rounded-full w-8 h-8 flex items-center justify-center disabled:opacity-50">
+              <button onClick={() => onSend()} disabled={!input.trim() && !(attachments || []).length} title={t('composer.send')} aria-label={t('composer.send')}
+                className="bg-accent-solid text-on-accent rounded-full w-8 h-8 flex items-center justify-center disabled:opacity-50">
                 <IconArrowUp size={16} />
               </button>
             )}
@@ -507,31 +526,141 @@ export default function Composer({
   );
 }
 
-// C9：排队指令列表（点击徽标展开，支持单条移除）
-function QueuedList({ queued = [], onRemove }) {
+// 附件 chip（对标 WorkBuddy 输入框附件条）：
+//  - 图片 chip：hover 弹出小图预览（previewFile 惰性取 dataUrl，首次加载后缓存）；移开即收
+//  - 文档 chip：不做悬浮预览；点击 → 右侧预览栏打开（与消息内文件 chip 同一落点）
+//  - × 移除；发送时由 useAgentRun.send 统一转为 `@路径` 上下文行（不污染输入框文本）
+function AttachmentChips({ items = [], projectPath, onRemove, onOpen }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  if (!items.length) return null;
   return (
-    <div className="relative shrink-0">
-      <button onClick={() => setOpen((v) => !v)}
-        className="text-[11px] text-text2 hover:text-text"
-        title={t('composer.queuedTip', { n: queued.length })}>
-        {t('composer.queued', { n: queued.length })}
-      </button>
-      {open && (
-        <div className="absolute right-0 bottom-full mb-2 w-72 max-w-[80vw] bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)] z-palette py-1">
-          {queued.map((q, i) => (
-            <div key={`${i}-${q.slice(0, 8)}`} className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border last:border-0">
-              <span className="text-[10px] text-text2 shrink-0">{i + 1}.</span>
-              <span className="flex-1 truncate" title={q}>{q}</span>
-              <button onClick={() => onRemove?.(i)}
-                className="text-text2 hover:text-danger shrink-0" aria-label={t('composer.removeQueued')} title={t('composer.remove')}>
-                <IconX size={12} />
-              </button>
-            </div>
-          ))}
+    <div className="flex flex-wrap gap-1.5 mb-2">
+      {items.map((a) => (
+        <AttachmentChip
+          key={a.path}
+          item={a}
+          projectPath={projectPath}
+          onRemove={onRemove}
+          onOpen={onOpen}
+          removeTitle={t('composer.attachmentRemove')}
+          previewFailed={t('composer.attachmentPreviewFailed')}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AttachmentChip({ item, projectPath, onRemove, onOpen, removeTitle, previewFailed }) {
+  const { t } = useI18n();
+  const [hover, setHover] = useState(false);
+  const [dataUrl, setDataUrl] = useState('');
+  const [failed, setFailed] = useState(false);
+  const askedRef = useRef(false);
+  // 悬浮预览惰性加载：首次 hover 才请求（大图走 previewUrl 流式协议，小图 dataUrl）
+  useEffect(() => {
+    if (!hover || !item.isImage || askedRef.current) return undefined;
+    askedRef.current = true;
+    (async () => {
+      try {
+        const r = await window.mjcode?.previewFile?.({ path: item.path, cwd: projectPath || undefined });
+        const src = r?.previewUrl || r?.dataUrl || '';
+        if (r?.kind === 'image' && src) setDataUrl(src);
+        else setFailed(true);
+      } catch (err) {
+        console.warn('[composer] attachment preview failed:', err);
+        setFailed(true);
+      }
+    })();
+    return undefined;
+  }, [hover, item.isImage, item.path, projectPath]);
+
+  return (
+    <div
+      className="relative group"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div className="flex items-center gap-1.5 pl-2 pr-1 h-7 rounded-lg bg-raise border border-border max-w-[220px]">
+        {item.isImage
+          ? <IconEye size={12} className="text-text2 shrink-0" />
+          : <IconFile size={12} className="text-text2 shrink-0" />}
+        <button
+          onClick={() => { if (!item.isImage) onOpen?.(item.path); }}
+          title={item.isImage ? item.path : `${item.path} · ${t('message.openFileHint')}`}
+          className="truncate text-xs text-text min-w-0"
+        >
+          {item.name}
+        </button>
+        <button
+          onClick={() => onRemove?.(item.path)}
+          title={removeTitle}
+          aria-label={removeTitle}
+          className="shrink-0 text-text2 hover:text-text rounded p-0.5"
+        >
+          <IconX size={10} />
+        </button>
+      </div>
+      {hover && item.isImage && (
+        <div className="absolute left-0 bottom-full mb-1.5 z-menu">
+          <div className="p-1.5 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]">
+            {failed ? (
+              <div className="text-caption text-text2 px-1 py-2 w-40">{previewFailed}</div>
+            ) : dataUrl ? (
+              <img src={dataUrl} alt={item.name} className="max-w-[200px] max-h-[140px] rounded-lg object-contain" />
+            ) : (
+              <div className="w-40 h-24 flex items-center justify-center"><IconSpinner size={16} className="text-text2" /></div>
+            )}
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// 排队任务卡片（对标 Codex 的排队指令）：运行中发出的消息不立即执行，排在这里等下一轮。
+// 三个动作与截图一致：
+//   ① 立即执行 = 打断当前轮并马上跑这条（onRunNow：先 stop，再等 loading 归零后发送）
+//   ② 编辑     = 移回输入框重编（不丢用户刚写的内容）
+//   ③ 删除     = 丢弃这条排队
+// 不再用「已排队 N」徽标 + 浮层：用户在运行中最需要确认的就是「我刚发的那条在哪」。
+function QueuedTasks({ queued = [], onRunNow, onEdit, onRemove }) {
+  const { t } = useI18n();
+  if (!queued.length) return null;
+  return (
+    <div className="mb-1.5 space-y-1">
+      {queued.map((q, i) => (
+        <div
+          key={`${i}-${String(q).slice(0, 12)}`}
+          className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-1.5"
+        >
+          <span className="text-caption text-text2 shrink-0 tabular-nums">{i + 1}</span>
+          <span className="flex-1 min-w-0 text-xs text-text truncate" title={q}>{q}</span>
+          <button
+            onClick={() => onRunNow?.(i)}
+            className="shrink-0 text-text2 hover:text-accent p-1 rounded"
+            title={t('composer.queueRunNowTip')}
+            aria-label={t('composer.queueRunNow')}
+          >
+            <IconArrowUp size={13} />
+          </button>
+          <button
+            onClick={() => onEdit?.(i)}
+            className="shrink-0 text-text2 hover:text-text p-1 rounded"
+            title={t('composer.queueEditTip')}
+            aria-label={t('composer.queueEdit')}
+          >
+            <IconEdit size={13} />
+          </button>
+          <button
+            onClick={() => onRemove?.(i)}
+            className="shrink-0 text-text2 hover:text-danger p-1 rounded"
+            title={t('composer.queueDeleteTip')}
+            aria-label={t('composer.queueDelete')}
+          >
+            <IconTrash size={13} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

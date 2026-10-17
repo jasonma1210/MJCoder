@@ -159,6 +159,50 @@ function refsKey(src, mod, keys) {
     /removeEventListener\('abort', onExternalAbort\)/.test(mainSrc)
     && /\blet onExternalAbort = null\b/.test(mainSrc));
 
+  // ── P1-4：审批卡可选理由输入（源码级护栏）──
+  // 设计约束（方案文档 §5.2 方案 B）：理由可选、默认收起——必填会让用户放弃填写，
+  // 反而阻塞高频审批；理由随决议回传（resolveApproval 负载带 reason）。
+  check('审批卡有理由输入框（textarea）',
+    /placeholder=\{t\('approval\.reasonPlaceholder'\)\}/.test(cardSrc));
+  check('审批卡「附加理由」默认收起（setReasonOpen(false) 初值 + 切换按钮）',
+    /useState\(false\);\s*\n\s*const \[reasonText/.test(cardSrc)
+    && /onClick=\{\(\) => setReasonOpen\(\(v\) => !v\)\}/.test(cardSrc));
+  check('审批卡引用 attachReason / reasonPlaceholder i18n key',
+    /t\('approval\.attachReason'\)/.test(cardSrc) && /t\('approval\.reasonPlaceholder'\)/.test(cardSrc));
+  check('审批卡 resolve 负载有条件携带 reason（无理由时与旧版一致）',
+    /resolveApproval\(\s*reason\s*\n?\s*\?\s*\{\s*approvalId: pending\.approvalId,\s*decision,\s*reason\s*\}\s*:\s*\{\s*approvalId: pending\.approvalId,\s*decision\s*\}/.test(cardSrc));
+  check('审批卡队列推进时清空理由草稿（不带到下一条）',
+    /useEffect\(\(\) => \{\s*setReasonText\(''\);\s*setReasonOpen\(false\);\s*\}, \[pending\?\.approvalId\]\)/.test(cardSrc));
+  check('审批卡理由草稿走 ref（避免键盘监听随输入重挂）',
+    /reasonTextRef/.test(cardSrc) && /const reason = reasonTextRef\.current\.trim\(\)/.test(cardSrc));
+  // i18n 纪律：新 key 的 zh/en 语言包条目由主理人 diff 应用（见 track-e.md），
+  // 此处先锁「组件侧只引用 key、不写死中文」——附件理由类文案不得内联字面量。
+  check('审批卡理由区无内联中文字面量（全走 i18n key）',
+    !/placeholder="[^"]*[一-龥][^"]*"/.test(cardSrc.slice(cardSrc.indexOf('reasonOpen && ('))));
+
+  // ── 差集 A：DiffReviewPanel 行内评论通道（源码级护栏）──
+  const panelSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'src', 'components', 'DiffReviewPanel.jsx'), 'utf8');
+  check('diff 面板接收 threadId（评论按线程归属）', /threadId = null/.test(panelSrc));
+  check('diff 面板经 diffComment IPC 提交评论（主进程存储）',
+    /window\.mjcode\?\.diffComment\?\.\(\{[\s\S]*?threadId,[\s\S]*?filePath: file\.path,[\s\S]*?hunkIndex,[\s\S]*?lineRange,[\s\S]*?comment: text,[\s\S]*?diffSnippet/.test(panelSrc));
+  check('diff 面板提交后派发 mjcode:diff-comment（触发回灌）',
+    /dispatchEvent\(new CustomEvent\('mjcode:diff-comment'/.test(panelSrc));
+  check('diff 面板评论负载带 diffSnippet（模型须同时看到被评论的变更）',
+    /diffSnippet: \(hunk\.lines \|\| \[\]\)\.join\('\\n'\)/.test(panelSrc));
+  check('diff 面板 hunk 级评论按钮 + 输入 + 评论列表',
+    /toggleComment\(f\.path, hi\)/.test(panelSrc)
+    && /hunkComments\(f\.path, hi\)\.map/.test(panelSrc)
+    && /placeholder=\{t\('diff\.commentPlaceholder'\)\}/.test(panelSrc));
+  check('diff 面板从 hunk 头解析行范围（不硬造定位）',
+    /function hunkLineRange\(hunk\) \{[\s\S]*?const m = \/\^@@[\s\S]*?if \(!m\) return null;/.test(panelSrc));
+  check('diff 面板评论文案全走 i18n key（comment/submitComment/commentSent/commentHint/noThread/lineRange）',
+    ['diff.comment', 'diff.submitComment', 'diff.commentSent', 'diff.commentHint', 'diff.noThread', 'diff.lineRange']
+      .every((k) => new RegExp(`t\\('${k.replace('.', '\\.')}'`).test(panelSrc)));
+  // i18n 纪律：新 key 的 zh/en 语言包条目由主理人 diff 应用（见 track-e.md）；
+  // 评论输入区不得内联中文字面量。
+  check('diff 面板评论区无内联中文字面量（全走 i18n key）',
+    !/placeholder="[^"]*[一-龥][^"]*"/.test(panelSrc));
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);
 })();

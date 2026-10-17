@@ -18,7 +18,10 @@ const EMPTY = {
   providers: [],    // { id, name, base_url, keyEncrypted, createdAt } —— safeStorage 加密
   projects: [],     // { path, name, createdAt, lastOpenedAt }（B1：项目一等实体落本机）
   preferences: {},  // { key: value }
-  memories: [],     // { id, projectPath, content, createdAt, usageCount }
+  // P3-4/P1-16：旧 JSON 记忆轨（memories 字段 + addMemory/listMemories/touchMemories）已删除——
+  // 记忆唯一事实来源是 SQLite（MemoryManager）。历史文件里的 memories 字段经 migrate 的
+  // {...EMPTY, ...rawObj} 原样保留，供主进程一次性导入（main.js importLegacy），
+  // 导入成功后即被清空，不再有新写入。
   seq: 1,
   schemaVersion: SCHEMA_VERSION,
 };
@@ -505,36 +508,6 @@ class LocalStore {
     this.data.preferences[key] = value;
     this.flush();
     return { ok: true };
-  }
-
-  // ── 记忆（两阶段 POC：stage1 原始留存，注入时按项目与使用计数选取）──
-  addMemory({ projectPath, content }) {
-    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
-    if (!content) return null;
-    const m = { id: this.nextId(), projectPath: projectPath || '', content: String(content).slice(0, 2000), createdAt: Date.now(), usageCount: 0 };
-    this.data.memories.push(m);
-    // 上限控制：每项目最多保留 50 条，淘汰最旧
-    const same = this.data.memories.filter((x) => x.projectPath === m.projectPath);
-    if (same.length > 50) {
-      const oldest = same.sort((a, b) => a.createdAt - b.createdAt)[0];
-      this.data.memories = this.data.memories.filter((x) => x.id !== oldest.id);
-    }
-    this.flush();
-    return m;
-  }
-
-  listMemories(projectPath, limit = 5) {
-    return this.data.memories
-      .filter((m) => m.projectPath === projectPath)
-      .sort((a, b) => (b.usageCount - a.usageCount) || (b.createdAt - a.createdAt))
-      .slice(0, limit);
-  }
-
-  touchMemories(ids) {
-    for (const m of this.data.memories) {
-      if (ids.includes(m.id)) m.usageCount += 1;
-    }
-    this.scheduleFlush(); // P0-1：使用计数属低危高频候选，走合并刷盘
   }
 }
 

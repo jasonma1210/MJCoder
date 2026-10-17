@@ -6,9 +6,11 @@ import { confirm } from './feedback';
 import InlineAlert from './InlineAlert';
 import RecordReplayPanel from './RecordReplayPanel';
 import UpdateSection from './UpdateSection';
+import MemorySection from './MemorySection';
 import { IconAlert, IconCheck, IconCpu, IconGitBranch, IconGlobe, IconPalette, IconSettings, IconUser, IconX } from './icons';
 import THEMES from '../lib/themes.json';
 import ACCENT_CHOICES from '../lib/accentColors.json';
+import { applyAccent } from '../lib/color';
 
 // 权限档位统一常量源（A10）：Composer 与设置页共用，禁止各自维护值域
 import { APPROVAL_MODES, SANDBOX_MODES, migrateApprovalMode } from '../constants/approval';
@@ -79,18 +81,13 @@ export default function SettingsModal({
 
   // TH5：强调色备选（null = 跟随主题默认）；色值常量在 lib/accentColors.js
   // （ui-conventions 基线：组件文件零十六进制硬编码色）
+  // 2026-10-17：改写统一走 lib/color.applyAccent —— 必须 hex + rgb 双写，
+  // 否则换色后所有 `bg-accent/10`、`border-accent/40` 会重新失效。
   function setAccent(color) {
     try {
       if (color) localStorage.setItem('mj_accent', color);
       else localStorage.removeItem('mj_accent');
-      const root = document.documentElement;
-      if (color) {
-        root.style.setProperty('--theme-accent', color);
-        root.style.setProperty('--sem-accent', color);
-      } else {
-        root.style.removeProperty('--theme-accent');
-        root.style.removeProperty('--sem-accent');
-      }
+      applyAccent(color);
       setAccentVer((v) => v + 1);
     } catch (e) { console.warn('[settings] failed to apply accent color:', e); }
   }
@@ -146,27 +143,22 @@ export default function SettingsModal({
   // 平台相关关闭按钮（用户要求按系统环境定义）：macOS 沿用交通灯语义（左上红点），
   // Windows/Linux 沿用窗口按钮语义（右上 X）。主窗口仍为 hiddenInset，浮窗化后
   // 系统交通灯回到背景窗口左上角，不再与设置页内容重叠，原拖拽安全区随之移除。
-  const isMac = /Mac|iPhone|iPad/i.test(navigator.userAgent || '');
+  // 关闭入口统一为右上角 X：此前 macOS 分支自绘了一枚 12px 红点模拟系统交通灯，
+  // 既与窗口真实的交通灯（左上角、属于主窗口）语义重复，也和后端平台分支行为不一致。
+  // 现在两个平台同一处、同一交互（Esc 亦可关闭）。
 
   return (
     <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay p-6">
-      <div className="w-[920px] max-w-[calc(100vw-3rem)] h-[680px] max-h-[calc(100vh-3rem)] bg-bg border border-border rounded-2xl shadow-[var(--shadow-modal)] flex overflow-hidden relative">
-        {isMac ? (
-          <button onClick={onClose}
-            className="absolute top-[18px] left-[18px] w-3 h-3 rounded-full bg-danger hover:brightness-90 z-10"
-            title={t('settings.closeSettingsEsc')} aria-label={t('settings.closeSettings')} />
-        ) : (
-          <button onClick={onClose}
-            className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
-            title={t('settings.closeSettingsEsc')} aria-label={t('settings.closeSettings')}>
-            <IconX size={16} />
-          </button>
-        )}
+      <div className="w-[min(920px,calc(100vw-3rem))] h-[min(680px,calc(100vh-3rem))] bg-bg border border-border rounded-2xl shadow-[var(--shadow-modal)] flex overflow-hidden relative">
+        <button onClick={onClose}
+          className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
+          title={t('settings.closeSettingsEsc')} aria-label={t('settings.closeSettings')}>
+          <IconX size={16} />
+        </button>
 
         {/* 左侧导航 */}
-        <div className="w-[240px] border-r border-border flex flex-col shrink-0">
-          {/* macOS 红点让位区（红点悬浮在左栏顶部，搜索框下移避让） */}
-          <div className={isMac ? 'h-9 shrink-0' : 'h-3 shrink-0'} />
+        <div className="w-[clamp(196px,24%,240px)] border-r border-border flex flex-col shrink-0">
+          <div className="h-3 shrink-0" />
           <div className="px-4 pb-4 flex flex-col flex-1 min-h-0">
             <input placeholder={t('settings.searchPlaceholder')} value={search} onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm mb-4 outline-none shrink-0" />
@@ -195,7 +187,7 @@ export default function SettingsModal({
 
         {/* 右侧内容 */}
         <div className="flex-1 min-h-0 overflow-y-auto p-8">
-          <h1 className="text-2xl font-semibold mb-6">
+          <h1 className="text-xl font-semibold mb-5">
             {t(nav.flatMap(g => g.items).find(i => i.id === tab)?.labelKey || 'settings.navGroupSettings')}
           </h1>
 
@@ -206,7 +198,7 @@ export default function SettingsModal({
               <div className="flex items-center justify-between gap-4 py-3">
                 <p className="text-xs text-text2 min-w-0">{t('settings.languageDesc')}</p>
                 <select value={locale} onChange={(e) => setLocale(e.target.value)}
-                  className="bg-bg border border-border rounded-lg px-3 py-1.5 text-sm outline-none shrink-0">
+                  className="bg-input border border-border rounded-lg px-3 py-1.5 text-sm outline-none shrink-0">
                   <option value="zh-CN">简体中文</option>{/* i18n-literal */}
                   <option value="en-US">English</option>{/* i18n-literal */}
                 </select>
@@ -215,7 +207,22 @@ export default function SettingsModal({
             <Section title={t('settings.sandboxPolicy')}>
               {SANDBOX_MODES.map((o) => (
                 <OptionRow key={o.id} name={t(o.nameKey)} desc={t(o.descKey)} selected={sandbox === o.id} warn={o.id === 'full-access'}
-                  onSelect={() => onApprovalSettingsChange?.({ ...approvalSettings, sandbox_policy: o.id })} />
+                  onSelect={async () => {
+                    // P1-3 修复（2026-10-17）：full-access 一次性关停四层守卫（OS 沙箱 /
+                    // 写白名单 / 受保护路径 carve-out / 非沙箱执行审批联动），此前无二次确认——
+                    // 而 never 档（自动执行）有确认，治理强度倒挂：更危险的选择反而更易触发。
+                    // 现与 never 档同强度：confirm({ danger: true }) 二次确认，文案走 i18n。
+                    if (o.id === 'full-access' && sandbox !== 'full-access') {
+                      const ok = await confirm({
+                        title: t('settings.switchToFullAccessTitle'),
+                        message: t('settings.switchToFullAccessMessage'),
+                        danger: true,
+                        confirmLabel: t('settings.enableFullAccessLabel'),
+                      });
+                      if (!ok) return;
+                    }
+                    onApprovalSettingsChange?.({ ...approvalSettings, sandbox_policy: o.id });
+                  }} />
               ))}
               {sandboxStatus && !sandboxStatus.available && (
                 <div className="mt-3">
@@ -257,6 +264,8 @@ export default function SettingsModal({
               </div>
             </Section>
             <UpdateSection />
+            {/* P0-2：记忆管理（统计/后台任务/列表/自动沉淀开关）——随常规设置页展示 */}
+            <MemorySection projectPath={projectPath} />
           </>
         )}
 
@@ -265,7 +274,7 @@ export default function SettingsModal({
           <>
             <Section title={t('settings.themeTitle')}>
               {/* TH4：三色条组合预览（bg/surface/accent）+ hover 实时预览，离开未选中的自动恢复 */}
-              <div className="grid grid-cols-5 gap-3">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(96px,1fr))]">
                 {THEMES.map((th) => (
                   <button key={th.id}
                     onClick={() => onThemeChange(th.id)}
@@ -296,7 +305,7 @@ export default function SettingsModal({
                       className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${active ? 'border-accent' : 'border-border'}`}
                       style={c ? { background: c } : undefined}>
                       {active && <IconCheck size={14} className={c ? 'text-white' : 'text-accent'} />}
-                      {!c && <span className="text-[9px] text-text2">{t('settings.accentDefault')}</span>}
+                      {!c && <span className="text-caption text-text2">{t('settings.accentDefault')}</span>}
                     </button>
                   );
                 })}
@@ -611,16 +620,16 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                 {editing ? (
                   <>
                     <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      className="flex-1 bg-bg border border-border rounded px-2 py-1 text-sm" placeholder={t('settings.nameLabel')} />
+                      className="flex-1 bg-input border border-border rounded px-2 py-1 text-sm" placeholder={t('settings.nameLabel')} />
                     <input value={editForm.base_url} onChange={(e) => setEditForm({ ...editForm, base_url: e.target.value })}
-                      className="flex-[2] bg-bg border border-border rounded px-2 py-1 text-sm font-mono" placeholder={t('settings.baseUrlLabel')} />
-                    <button onClick={() => saveEdit(p)} className="bg-accent text-white px-3 rounded text-xs py-1">{t('settings.save')}</button>
+                      className="flex-[2] bg-input border border-border rounded px-2 py-1 text-sm font-mono" placeholder={t('settings.baseUrlLabel')} />
+                    <button onClick={() => saveEdit(p)} className="bg-accent-solid text-on-accent px-3 rounded text-xs py-1">{t('settings.save')}</button>
                     <button onClick={() => setEditingId(null)} className="text-text2 text-xs">{t('settings.cancel')}</button>
                   </>
                 ) : (
                   <>
                     <span className="text-sm font-medium">{p.name}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-hover text-text2">{isFile ? t('settings.sourceFile') : (isServer ? t('settings.sourceShared') : t('settings.sourceLocal'))}</span>
+                    <span className="text-caption px-1.5 py-0.5 rounded bg-hover text-text2">{isFile ? t('settings.sourceFile') : (isServer ? t('settings.sourceShared') : t('settings.sourceLocal'))}</span>
                     <span className="ml-auto flex items-center gap-2 shrink-0">
                       {!isServer && !isFile && (
                         <>
@@ -664,7 +673,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
               </div>
               {!editing && <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>}
               {isFile && (
-                <div className="text-[10px] text-text2 mt-0.5">{t('settings.fileManagedNote', { path: mf?.path || '~/.mjcode/models.json' })}</div>
+                <div className="text-caption text-text2 mt-0.5">{t('settings.fileManagedNote', { path: mf?.path || '~/.mjcode/models.json' })}</div>
               )}
               {st?.testing && <div className="text-xs text-text2 mt-1">{t('settings.testing')}</div>}
               {st && !st.testing && (st.ok
@@ -676,8 +685,8 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                 <div className="flex gap-2 mt-2">
                   <input type="password" value={keyValue} onChange={(e) => setKeyValue(e.target.value)}
                     placeholder={t('settings.newApiKeyPlaceholder')}
-                    className="flex-1 bg-bg border border-border rounded px-2 py-1 text-xs" />
-                  <button onClick={() => saveKey(p)} className="bg-accent text-white px-3 rounded text-xs">{t('settings.saveKey')}</button>
+                    className="flex-1 bg-input border border-border rounded px-2 py-1 text-xs" />
+                  <button onClick={() => saveKey(p)} className="bg-accent-solid text-on-accent px-3 rounded text-xs">{t('settings.saveKey')}</button>
                 </div>
               )}
               {p.models?.length > 0 && (
@@ -734,7 +743,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
                     <input placeholder={t('settings.displayNamePlaceholder')} value={addForm.pid === p.id ? addForm.display_name : ''}
                       onChange={(e) => setAddForm({ ...addForm, display_name: e.target.value })}
                       className="w-28 bg-surface border border-border rounded px-2 py-1 text-xs" />
-                    <button onClick={submitAddModel} className="bg-accent text-white px-3 rounded text-xs">{t('settings.add')}</button>
+                    <button onClick={submitAddModel} className="bg-accent-solid text-on-accent px-3 rounded text-xs">{t('settings.add')}</button>
                     <button onClick={() => { setAddFormPid(null); setAddForm({ pid: null, fileKey: null, model_id: '', display_name: '' }); }}
                       className="text-text2 text-xs">{t('settings.cancel')}</button>
                   </div>
@@ -754,7 +763,7 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
         <Input placeholder={t('settings.providerUrlPlaceholder')} value={newP.base_url} onChange={(e) => setNewP({ ...newP, base_url: e.target.value })} />
         <Input placeholder="API Key" type="password" value={newP.api_key} onChange={(e) => setNewP({ ...newP, api_key: e.target.value })} />
         {addPError && <p className="text-xs text-danger mt-1">{addPError}</p>}
-        <button onClick={addProvider} className="bg-accent text-white px-4 py-2 rounded-lg text-sm mt-2">{t('settings.addService')}</button>
+        <button onClick={addProvider} className="bg-accent-solid text-on-accent px-4 py-2 rounded-lg text-sm mt-2">{t('settings.addService')}</button>
       </Section>
       <Section title={t('settings.serverModelsTitle')}>
         {(!globalProviders || globalProviders.length === 0) ? (
@@ -763,8 +772,8 @@ function ModelsTab({ providers, onProvidersChange, globalProviders, newP, setNew
           <div key={p.id} className="py-3 border-b border-border last:border-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">{p.name}</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-hover text-text2">{t('settings.sourceShared')}</span>
-              <span className="text-[10px] text-text2 ml-auto">{t('settings.serverManagedNote')}</span>
+              <span className="text-caption px-1.5 py-0.5 rounded bg-hover text-text2">{t('settings.sourceShared')}</span>
+              <span className="text-caption text-text2 ml-auto">{t('settings.serverManagedNote')}</span>
             </div>
             <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>
             {p.models?.length > 0 && (
@@ -848,14 +857,14 @@ function NetworkTab() {
                   <div className="text-sm flex items-center gap-2">
                     {t(`search.${m.id}.label`)}
                     {m.requiresKey
-                      ? <span className="text-[10px] text-warn">{t('settings.needsKey')}</span>
-                      : <span className="text-[10px] text-text2">{t('settings.noKeyNeeded')}</span>}
-                    {needsKey && p.enabled && <span className="text-[10px] text-danger">{t('settings.keyMissingSkip')}</span>}
+                      ? <span className="text-caption text-warn">{t('settings.needsKey')}</span>
+                      : <span className="text-caption text-text2">{t('settings.noKeyNeeded')}</span>}
+                    {needsKey && p.enabled && <span className="text-caption text-danger">{t('settings.keyMissingSkip')}</span>}
                   </div>
                   <div className="text-xs text-text2">{t(`search.${m.id}.note`)}</div>
                   {m.docsUrl && (
                     <a href={m.docsUrl} onClick={(e) => { e.preventDefault(); window.mjcode?.openExternal?.(m.docsUrl); }}
-                      className="text-[11px] text-accent hover:underline">{m.docsUrl}</a>
+                      className="text-xs text-accent hover:underline">{m.docsUrl}</a>
                   )}
                 </div>
                 <Toggle on={p.enabled} onChange={() => update(m.id, { enabled: !p.enabled })} />
@@ -882,7 +891,7 @@ function NetworkTab() {
       </Section>
       <div className="flex items-center gap-3">
         <button onClick={save}
-          className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:opacity-90">{t('settings.saveNetworkConfig')}</button>
+          className="px-4 py-2 rounded-lg text-sm bg-accent-solid text-on-accent hover:brightness-110">{t('settings.saveNetworkConfig')}</button>
         {saved && <span className="text-xs text-success">{t('settings.networkSaved')}</span>}
         {enabledCount > 1 && <span className="text-xs text-text2">{t('settings.networkEnabledCount', { n: enabledCount })}</span>}
         {error && <span className="text-xs text-danger">{error}</span>}
@@ -941,7 +950,7 @@ function ApprovalRulesSection() {
                 {rule.pattern || t('settings.ruleAllPatterns')}
               </span>
               {rule.createdAt && (
-                <span className="text-[10px] text-text2 shrink-0">{new Date(rule.createdAt).toLocaleString('zh-CN')}</span>
+                <span className="text-caption text-text2 shrink-0">{new Date(rule.createdAt).toLocaleString('zh-CN')}</span>
               )}
               <button onClick={() => revoke(rule)} className="text-xs text-danger shrink-0">{t('settings.revoke')}</button>
             </div>
@@ -973,8 +982,8 @@ function OptionRow({ name, desc, selected, warn, onSelect }) {
 function Toggle({ on, onChange }) {
   // ST8：关闭态轨道由 bg-text2（灰字灰底难辨）改为 bg-hover + 边框
   return (
-    <button onClick={onChange} role="switch" aria-checked={on} className={`w-11 h-6 rounded-full transition-colors ${on ? 'bg-accent' : 'bg-hover border border-border'} relative`}>
-      <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+    <button onClick={onChange} role="switch" aria-checked={on} className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
+      <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
     </button>
   );
 }
@@ -982,7 +991,7 @@ function Toggle({ on, onChange }) {
 function Input({ placeholder, value, onChange, type = 'text' }) {
   return (
     <input placeholder={placeholder} value={value} onChange={onChange} type={type}
-      className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm my-1 outline-none focus:border-accent" />
+      className="w-full bg-input border border-border rounded-lg px-3 py-2 text-sm my-1 outline-none focus:border-accent" />
   );
 }
 

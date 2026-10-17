@@ -43,5 +43,20 @@
   "cmdFiles": "打开文件树",
   "cmdToggleSidebar": "显示/隐藏左侧栏",
   "cmdScheduled": "打开定时任务",
-  "cmdTheme": "切换主题（当前：{name}）"
+  "cmdTheme": "切换主题（当前：{name}）",
+  "expandPaneTitle": "展开右侧面板（⌘⌥B）",
+  "expandPane": "展开右侧面板",
+  "togglePaneTitle": "显示/隐藏右侧面板（⌘⌥B）",
+  "togglePane": "显示/隐藏右侧面板",
+  "paneDisabledHint": "进入会话后可打开右侧面板",
+  "toggleSidebar": "显示/隐藏左侧栏",
+  "searchTitle": "搜索会话、文件与命令（⌘K）",
+  "search": "搜索",
+  "filter": "筛选",
+  "filterTitle": "按状态筛选左侧会话列表",
+  "filterAll": "全部",
+  "filterRunning": "运行中",
+  "filterAwaiting": "待审批",
+  "cmdSummary": "打开任务摘要",
+  "cmdTerminal": "打开终端"
 }

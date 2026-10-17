@@ -11,7 +11,7 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
   return (
     <div className="fixed inset-0 bg-overlay flex items-start justify-center pt-24 z-settings overflow-y-auto" onClick={onClose}>
       <div
-        className="bg-surface border border-border rounded-3xl w-[620px] p-7 shadow-2xl my-8"
+        className="bg-surface border border-border rounded-2xl w-[min(620px,calc(100vw-2rem))] p-6 shadow-[var(--shadow-pop)] my-8"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-6">

@@ -34,7 +34,7 @@ export default function ContextRing({ usage, onClick, compacting }) {
           transform="rotate(-90 10 10)"
         />
       </svg>
-      <span className="text-[11px] tabular-nums">{compacting ? t('contextRing.compacting') : `${pct}%`}</span>
+      <span className="text-xs tabular-nums">{compacting ? t('contextRing.compacting') : `${pct}%`}</span>
     </button>
   );
 }

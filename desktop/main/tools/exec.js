@@ -16,10 +16,19 @@ const approval = require('../approval');
 const sandbox = require('../sandbox');
 const writeGuard = require('../writeGuard');
 const { audit } = require('../audit/auditLog');
+// P1-4：审批拒绝理由的取回与文案（单一事实来源在 main/approvalChannel.js）
+const { approvalReasonOf, denialText } = require('../approvalChannel');
+const { ipcGovernance } = require('./execGovernance'); // P0-5：直连 IPC 治理参数强制覆写
+const { registerGitHunkIpc, registerDestructiveGitIpc } = require('../ipc/gitHunks'); // hunk 级接受/拒绝 + 破坏性 git 操作（带审批）
 
 let deps = null;
+// P1-4：审批等待统一入口——返回 { decision, reason }，拒绝点把理由拼进工具结果与审计行
+async function awaitApproval(requestApproval, tool, args) {
+  const waitP = requestApproval(tool, args);
+  return { decision: await waitP, reason: approvalReasonOf(waitP) };
+}
 function initToolExec(d) {
-  deps = d; // { requestApproval, applyApprovalDecision, getAlwaysRules, conversationRules }
+  deps = d; // { requestApproval, applyApprovalDecision, getAlwaysRules, conversationRules, registerChild }
   registerIpc();
 }
 
@@ -34,6 +43,8 @@ function initToolExec(d) {
 const { shellEnv, SHELL_PATH } = require('./shellEnv');
 // N2 执行契约（cwd 信任 + 真实进程终态描述 + 工具路径解析）抽到 ./execCwd.js
 const { shellErrorNote, resolveToolCwd, defaultToolCwd, resolveToolPath } = require('./execCwd');
+// P0-1：detached 子进程执行器（execFile 的 detached 选项被 Node 静默丢弃，见该模块注释）
+const { execFileDetached } = require('./execFileDetached');
 const { diagnoseEditMiss, nearestContext } = require('./editMissDiagnostics');
 // N2 ShellProfile + argv 优先（字符串命令显式 shell 契约；argv 数组完全绕开 shell）
 const shellProfile = require('../cmd/shellProfile');
@@ -83,10 +94,10 @@ async function toolShell(args) {
     if (verdict.matched) ruleMatched = verdict.matched;
     if (verdict.need) {
       neededApproval = true;
-      const decision = await deps.requestApproval('shell', { command });
+      const { decision, reason } = await awaitApproval(deps.requestApproval, 'shell', { command });
       if (decision === 'deny') {
-        audit('shell', command, `用户拒绝（cwd=${cwd}）`, 'denied');
-        return { stdout: '', stderr: '用户拒绝执行', exitCode: -1, error: 'Approval denied', ...cwdMeta };
+        audit('shell', command, reason ? `用户拒绝（理由：${reason}，cwd=${cwd}）` : `用户拒绝（cwd=${cwd}）`, 'denied');
+        return { stdout: '', stderr: denialText(reason), exitCode: -1, error: 'Approval denied', ...cwdMeta };
       }
       deps.applyApprovalDecision(decision, 'shell', { command }, conversationId);
     }
@@ -126,11 +137,11 @@ async function toolShell(args) {
           });
           return;
         }
-        const decision = await deps.requestApproval('unconfined_exec', { command });
+        const { decision, reason } = await awaitApproval(deps.requestApproval, 'unconfined_exec', { command });
         if (decision !== 'once') {
-          audit('shell', command, `非沙箱执行未获显式批准（decision=${decision}）`, 'blocked');
+          audit('shell', command, `非沙箱执行未获显式批准（decision=${decision}${reason ? `，理由：${reason}` : ''}）`, 'blocked');
           resolve({
-            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），非沙箱执行未获显式批准，已阻断。`,
+            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），非沙箱执行未获显式批准，已阻断。${reason ? `理由：${reason}` : ''}`,
             exitCode: -1, error: 'sandbox-unavailable-blocked', errorCode: 'sandbox-unavailable',
             blocked: true, sandboxed: false, sandbox: { policy, sandboxed: false, reason: fallbackReason }, ...cwdMeta,
           });
@@ -138,6 +149,8 @@ async function toolShell(args) {
         }
         console.warn(`[sandbox] 用户显式批准单次非沙箱执行（${fallbackReason}）policy=${policy}`);
       } else {
+        // P1-5：环境变量豁免同留审计痕——「谁在何时豁免了沙箱」必须可复盘，不能只进 console
+        audit('shell', command, `unconfined-env 豁免（MJCODE_ALLOW_UNCONFINED_FALLBACK=1，${fallbackReason}）`, 'auto');
         console.warn(`[sandbox] MJCODE_ALLOW_UNCONFINED_FALLBACK=1：显式豁免单次审批，非沙箱执行（${fallbackReason}）policy=${policy}`);
       }
       // 黑名单守卫保留为纵深防御（非安全边界）：即使走到非沙箱执行，命中危险模式的命令仍然拒绝
@@ -155,8 +168,9 @@ async function toolShell(args) {
       const result = {
         stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000),
         exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0),
-        // N2：真实进程终态——signal/killed 透出，不再把信号终止折叠成裸 -1
+        // N2：真实进程终态——signal/killed 透出，不折叠成裸 -1；P0-6：非沙箱兜底如实标记未隔离+原因
         signal: error?.signal || null, killed: !!error?.killed,
+        sandboxed: false, sandboxBackend: 'none', sandboxReason: fallbackReason,
         error: shellErrorNote(error),
         ...cwdMeta,
       };
@@ -164,8 +178,8 @@ async function toolShell(args) {
       resolve(result);
     };
     if (argvList) {
-      const child = execFile(argvList[0], argvList.slice(1), { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
-      try { deps?.registerChild?.(child); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+      const child = execFileDetached(argvList[0], argvList.slice(1), { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
+      deps.registerChild(child);
     } else {
       const sp = shellProfile.resolveShellProfile();
       if (!sp.ok) {
@@ -173,8 +187,8 @@ async function toolShell(args) {
         resolve({ stdout: '', stderr: `shell 不可用：${sp.reason}`, exitCode: -1, error: 'shell-unavailable', errorCode: 'shell-unavailable', blocked: true, ...cwdMeta });
         return;
       }
-      const child = execFile(sp.exe, [...sp.args, command], { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
-      try { deps?.registerChild?.(child); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+      const child = execFileDetached(sp.exe, [...sp.args, command], { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
+      deps.registerChild(child);
     }
   };
 
@@ -193,13 +207,15 @@ async function toolShell(args) {
         ? ['-p', profile, ...argvList]
         : ['-p', profile, '/bin/zsh', '-c', command];
       return new Promise((resolve) => {
-        const seatbeltChild = execFile(sandbox.SANDBOX_EXEC, sbArgv,
+        const seatbeltChild = execFileDetached(sandbox.SANDBOX_EXEC, sbArgv,
           { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'seatbelt', ...cwdMeta };
+            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error),
+              sandboxed: !(error && (error.code === 'ENOENT' || error.code === 'EACCES')), sandboxBackend: 'seatbelt', ...(error && (error.code === 'ENOENT' || error.code === 'EACCES') ? { sandboxReason: `sandbox-exec 启动失败：${error.code}` } : {}), ...cwdMeta };
             audit('shell', command, `cwd=${cwd} sandbox=${policy} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
             resolve(result);
           });
-        try { deps?.registerChild?.(seatbeltChild); } catch { /* N5 统一取消的注册为尽力而为项 */ }
+        // P0-1：沙箱路径同样接线（原来整个分支未注册，取消时 seatbelt 子进程存活）
+        deps.registerChild(seatbeltChild);
       });
     }
   }
@@ -211,12 +227,15 @@ async function toolShell(args) {
     const built = sandbox.linuxBackend.buildBwrapExec(policy, cwd, shellCommand, '/bin/sh', null, writeGuard.protectedPathsFor(cwd));
     if (built.argv.length) {
       return new Promise((resolve) => {
-        execFile(built.argv[0], built.argv.slice(1),
+        // P0-1：bwrap 分支原来完全未注册子进程（取消时 bubblewrap 包裹的进程全部存活）
+        const bwrapChild = execFileDetached(built.argv[0], built.argv.slice(1),
           { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, (error, stdout, stderr) => {
-            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error), sandboxed: true, sandboxBackend: 'bubblewrap', ...cwdMeta };
+            const result = { stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000), exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0), signal: error?.signal || null, killed: !!error?.killed, error: shellErrorNote(error),
+              sandboxed: !(error && (error.code === 'ENOENT' || error.code === 'EACCES')), sandboxBackend: 'bubblewrap', ...(error && (error.code === 'ENOENT' || error.code === 'EACCES') ? { sandboxReason: `bubblewrap 启动失败：${error.code}` } : {}), ...cwdMeta };
             audit('shell', command, `cwd=${cwd} sandbox=bubblewrap/${policy} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
             resolve(result);
           });
+        deps.registerChild(bwrapChild);
       });
     }
     console.warn(`[sandbox] Linux 未走 bubblewrap（${built.reason}），落到命令守卫`);
@@ -347,20 +366,20 @@ async function runWriteTool(toolName, args) {
       audit(toolKey, rest.path || '(patch)', `白名单外写入被拦截：${outside}`, 'blocked');
       return { ok: false, blocked: true, outsideWhitelist: true, path: outside, error: `写入目标超出允许范围（仅限项目目录 / 应用数据 / 系统临时目录）：${outside}` };
     }
-    const decision = await deps.requestApproval(toolKey, rest);
+    const { decision, reason } = await awaitApproval(deps.requestApproval, toolKey, rest);
     if (decision === 'deny') {
-      audit(toolKey, rest.path || '(patch)', `白名单外写入被拒绝：${outside}`, 'denied');
-      return { ok: false, error: '用户拒绝执行', denied: true };
+      audit(toolKey, rest.path || '(patch)', reason ? `白名单外写入被拒绝：${outside}。理由：${reason}` : `白名单外写入被拒绝：${outside}`, 'denied');
+      return { ok: false, error: denialText(reason), denied: true };
     }
     // 决策仅本次有效（once），不调用 applyApprovalDecision——白名单外路径不允许沉淀「始终允许」
   } else if (requireApproval) {
     const verdict = approval.needsApproval({ tool: toolKey, args: rest, approvalMode, conversationId, alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules });
     if (verdict.matched) ruleMatched = verdict.matched;
     if (verdict.need) {
-      const decision = await deps.requestApproval(toolKey, rest);
+      const { decision, reason } = await awaitApproval(deps.requestApproval, toolKey, rest);
       if (decision === 'deny') {
-        audit(toolKey, rest.path || 'patch', '用户拒绝', 'denied');
-        return { ok: false, error: '用户拒绝执行', denied: true };
+        audit(toolKey, rest.path || 'patch', reason ? `用户拒绝。理由：${reason}` : '用户拒绝', 'denied');
+        return { ok: false, error: denialText(reason), denied: true };
       }
       deps.applyApprovalDecision(decision, toolKey, rest, conversationId);
     }
@@ -596,10 +615,10 @@ async function gitWithApproval(toolKey, args, gitArgs) {
     if (verdict.matched) ruleMatched = verdict.matched;
     if (verdict.need) {
       neededApproval = true;
-      const decision = await deps.requestApproval(toolKey, args);
+      const { decision, reason } = await awaitApproval(deps.requestApproval, toolKey, args);
       if (decision === 'deny') {
-        audit(toolKey, args.message || args.files || '', '用户拒绝', 'denied');
-        return { stdout: '', stderr: '用户拒绝执行', error: 'Approval denied', denied: true };
+        audit(toolKey, args.message || args.files || '', reason ? `用户拒绝。理由：${reason}` : '用户拒绝', 'denied');
+        return { stdout: '', stderr: denialText(reason), error: 'Approval denied', denied: true };
       }
       deps.applyApprovalDecision(decision, toolKey, args, conversationId);
     }
@@ -623,18 +642,20 @@ const toolGitAdd = (args = {}) => {
 function runGit(args, cwd) {
   const target = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
   return new Promise((resolve) => {
-    execFile('git', args, { cwd: target, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // P0-1：git 子进程同样注册 + detached（随运行取消终止）；无 run 上下文的直连 IPC 自动跳过
+    const child = execFileDetached('git', args, { cwd: target, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       resolve({ stdout: (stdout || '').slice(0, 30000), stderr: (stderr || '').slice(0, 5000), error: error?.message || null, cwd: target });
     });
+    deps.registerChild(child);
   });
 }
 
 // ── IPC 注册（与 main.js 原注册一一对应，只搬移不改行为）──
 function registerIpc() {
-  ipcMain.handle('tool:shell', (_, payload) => toolShell(payload));
+  ipcMain.handle('tool:shell', (_, payload) => toolShell(ipcGovernance(payload)));
   ipcMain.handle('tool:readFile', (_, payload) => toolReadFile(payload));
   for (const toolName of WRITE_TOOLS) {
-    ipcMain.handle(`tool:${toolName}`, (_, args) => runWriteTool(toolName, args));
+    ipcMain.handle(`tool:${toolName}`, (_, args) => runWriteTool(toolName, ipcGovernance(args)));
   }
 
   // 预览元信息 + 二进制内容（文本类只回元信息，正文由 tool:readFile 分页取）——实现见 ./previewTool.js
@@ -718,42 +739,16 @@ function registerIpc() {
 
   ipcMain.handle('tool:gitStatus', (_, p) => toolGitStatus(p));
   ipcMain.handle('tool:gitDiff', (_, p) => toolGitDiff(p));
-  // hunk 级还原（对标 Codex 三级还原中的最小粒度）：反向应用指定代码块
-  ipcMain.handle('tool:gitApplyHunk', async (_, { cwd, patch }) => {
-    if (!patch || typeof patch !== 'string') return { stdout: '', stderr: 'patch 为空', error: 'patch 为空' };
-    return new Promise((resolve) => {
-      const child = spawn('git', ['apply', '--reverse', '--unidiff-zero', '-'], { cwd });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => { stdout += d.toString(); });
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
-      const timer = setTimeout(() => {
-        child.kill();
-        resolve({ stdout, stderr: 'git apply 超时', error: 'timeout' });
-      }, 15000);
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        resolve({ stdout, stderr, exitCode: code ?? 0, error: code ? `git apply 失败（退出码 ${code}）` : null });
-      });
-      child.stdin.write(patch);
-      child.stdin.end();
-    });
-  });
+  // hunk 级接受/拒绝（Per hunk stage / revert）——抽到 main/ipc/gitHunks.js，
+  // 本文件已顶到 800 行门禁，且这块逻辑与 shell/读写工具无耦合。
+  registerGitHunkIpc(ipcMain, deps);
+  // 破坏性 git 操作（丢弃工作区改动 / 回退索引）：L3 审批 + 审计，见 main/ipc/gitHunks.js
+  registerDestructiveGitIpc(ipcMain, deps, runGit);
   ipcMain.handle('tool:gitLog', (_, p) => toolGitLog(p));
   ipcMain.handle('tool:gitBranch', (_, p) => toolGitBranch(p));
-  ipcMain.handle('tool:gitCommit', (_, p) => toolGitCommit(p));
-  ipcMain.handle('tool:gitAdd', (_, p) => toolGitAdd(p));
+  ipcMain.handle('tool:gitCommit', (_, p) => toolGitCommit(ipcGovernance(p)));
+  ipcMain.handle('tool:gitAdd', (_, p) => toolGitAdd(ipcGovernance(p)));
   // DiffReviewPanel：接受（add）/ 拒绝（checkout -- / restore --staged）
-  ipcMain.handle('tool:gitCheckout', async (_, { cwd, files }) => {
-    const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
-    if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
-    return runGit(['checkout', '--', ...list], cwd);
-  });
-  ipcMain.handle('tool:gitRestoreStaged', async (_, { cwd, files }) => {
-    const list = Array.isArray(files) ? files.map(String) : String(files || '').split(/\s+/).filter(Boolean);
-    if (list.length === 0) return { stdout: '', stderr: 'files required', error: 'files required' };
-    return runGit(['restore', '--staged', ...list], cwd);
-  });
 }
 
 module.exports = {

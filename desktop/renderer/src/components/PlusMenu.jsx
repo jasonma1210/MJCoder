@@ -254,11 +254,11 @@ export default function PlusMenu({
               </span>
               <span className="flex-1 min-w-0">
                 <span className="block text-xs">{tr(o.labelKey)}</span>
-                <span className="block text-[10px] text-text2 mt-0.5">{tr(o.hintKey)}</span>
+                <span className="block text-caption text-text2 mt-0.5">{tr(o.hintKey)}</span>
               </span>
             </button>
           ))}
-          <p className="text-[10px] text-text2 px-3 py-2 border-t border-border">{tr('plusMenu.modeFooter')}</p>
+          <p className="text-caption text-text2 px-3 py-2 border-t border-border">{tr('plusMenu.modeFooter')}</p>
         </SubPanel>
       )}
 
@@ -284,8 +284,8 @@ export default function PlusMenu({
                   </span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-xs font-medium truncate">{e.title_cn || e.name}</span>
-                    <span className="block text-[10px] text-text2 truncate mt-0.5">{e.mission || e.category}</span>
-                    <span className="block text-[10px] text-text2 mt-1">
+                    <span className="block text-caption text-text2 truncate mt-0.5">{e.mission || e.category}</span>
+                    <span className="block text-caption text-text2 mt-1">
                       {e.approval_policy === 'trusted' || e.approval_policy === 'always' ? tr('plusMenu.trustFull') : e.approval_policy === 'safe-auto' || e.approval_policy === 'auto-safe' ? tr('plusMenu.trustSafe') : tr('plusMenu.trustOnRequest')}
                     </span>
                   </span>
@@ -314,7 +314,7 @@ export default function PlusMenu({
                   <IconZap size={13} className={on ? 'text-accent shrink-0' : 'text-text2 shrink-0'} />
                   <span className="flex-1 min-w-0">
                     <span className="block text-xs truncate">{displayName}</span>
-                    <span className="block text-[10px] text-text2 truncate">{s.description || tr('plusMenu.noDescription')}</span>
+                    <span className="block text-caption text-text2 truncate">{s.description || tr('plusMenu.noDescription')}</span>
                   </span>
                   {on && <IconCheck size={13} className="text-accent shrink-0" />}
                 </button>
@@ -326,7 +326,7 @@ export default function PlusMenu({
               </p>
             )}
             {lazySkill.hasMore && <div ref={lazySkill.sentinelRef} className="h-6" />}
-            <p className="text-[10px] text-text2 px-3 py-2">{tr('plusMenu.skillsFooter')}</p>
+            <p className="text-caption text-text2 px-3 py-2">{tr('plusMenu.skillsFooter')}</p>
           </div>
         </SubPanel>
       )}
@@ -379,17 +379,17 @@ export default function PlusMenu({
                     <IconPlug size={13} className={inSession ? 'text-accent shrink-0' : 'text-text2 shrink-0'} />
                     <span className="flex-1 min-w-0">
                       <span className="block text-xs truncate">{c.display_name || c.name}</span>
-                      <span className="block text-[10px] text-text2 truncate">{c.vendor || c.category || c.description}</span>
+                      <span className="block text-caption text-text2 truncate">{c.vendor || c.category || c.description}</span>
                     </span>
                     {inSession
                       ? <IconCheck size={13} className="text-accent shrink-0" />
-                      : <span className="text-[10px] shrink-0 text-text2 whitespace-nowrap">{status}</span>}
+                      : <span className="text-caption shrink-0 text-text2 whitespace-nowrap">{status}</span>}
                   </button>
                   {cfgOpen && (
                     <div className="px-3 pb-2.5 space-y-1.5">
                       {plan.kind === 'needs-config' && plan.missing.map((m) => (
                         <div key={m.name}>
-                          <label className="block text-[10px] text-text2 mb-0.5">
+                          <label className="block text-caption text-text2 mb-0.5">
                             {m.label}
                             {m.docs_url && (
                               <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-1.5" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
@@ -405,7 +405,7 @@ export default function PlusMenu({
                       ))}
                       {plan.kind === 'needs-auth' && (
                         <>
-                          <p className="text-[10px] text-text2 leading-relaxed">{tr('plusMenu.authHint')}</p>
+                          <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.authHint')}</p>
                           <input
                             value={vals.Authorization || ''}
                             onChange={(ev) => setVal('Authorization', ev.target.value)}
@@ -415,11 +415,11 @@ export default function PlusMenu({
                         </>
                       )}
                       {plan.kind === 'manual' && (
-                        <p className="text-[10px] text-text2 leading-relaxed">{tr('plusMenu.manualHint')}</p>
+                        <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.manualHint')}</p>
                       )}
                       {plan.kind !== 'manual' && (
                         <button onClick={submit}
-                          className="h-7 px-2.5 rounded-md bg-accent text-white text-xs whitespace-nowrap hover:opacity-90">
+                          className="h-7 px-2.5 rounded-md bg-accent-solid text-on-accent text-xs whitespace-nowrap hover:brightness-110">
                           {plan.kind === 'needs-auth' ? tr('plusMenu.connect') : tr('plusMenu.saveConnect')}
                         </button>
                       )}
@@ -440,7 +440,7 @@ export default function PlusMenu({
               </p>
             )}
             {lazyConn.hasMore && <div ref={lazyConn.sentinelRef} className="h-6" />}
-            <p className="text-[10px] text-text2 px-3 py-2">{tr('plusMenu.connectorsFooter')}</p>
+            <p className="text-caption text-text2 px-3 py-2">{tr('plusMenu.connectorsFooter')}</p>
           </div>
         </SubPanel>
       )}
@@ -458,9 +458,9 @@ function MenuRow({ Icon, label, hasSub, badge, hint, disabled, disabledReason, o
       role="menuitem"
     >
       <Icon size={15} className="text-text2 shrink-0" />
-      <span className="text-[13px] flex-1 truncate">{label}</span>
-      {badge && <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0">{badge}</span>}
-      {hint && <span className="text-[10px] text-text2 shrink-0">{hint}</span>}
+      <span className="text-xs flex-1 truncate">{label}</span>
+      {badge && <span className="text-caption px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0">{badge}</span>}
+      {hint && <span className="text-caption text-text2 shrink-0">{hint}</span>}
       {hasSub && !disabled && <IconChevronRight size={12} className="text-text2 shrink-0" />}
     </button>
   );

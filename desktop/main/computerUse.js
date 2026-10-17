@@ -38,9 +38,13 @@ const INTERACTIVE_ROLES = new Set([
 const VALID_ACTIONS = new Set(['click', 'type', 'key', 'scroll', 'set_value', 'done']);
 
 // 逐次确认关键词：支付/结账/转账/删除/发送/购买/验证码类（中英文）
-const CONFIRM_RE = /\b(pay|payment|checkout|transfer|delete|send|purchase|confirm|remove)\b/i;
-const CONFIRM_ZH = ['支付', '付款', '结账', '结算', '转账', '删除', '发送', '购买', '下单', '验证码', '确认'];
-const CAPTCHA_RE = /(captcha|验证码)/i;
+// P1-2（2026-10-17）：关键词矩阵收敛至 dangerousPatterns.js 单一事实来源
+// （原 computerUse.js 自建 CONFIRM_RE/CONFIRM_ZH 与 STRONG_CONFIRM_CATEGORIES 两份副本，
+// 与审批中心各改各的——敏感动作可能在一条路径上漏问）。此处仅转投。
+const { CUA_STRONG_CONFIRM_CATEGORIES, cuaStrongConfirm, cuaGeneralSensitive } = require('./dangerousPatterns');
+// 保留旧名导出，避免外部引用断裂（测试与 main.js 均按此名引用）
+const STRONG_CONFIRM_CATEGORIES = CUA_STRONG_CONFIRM_CATEGORIES;
+const approval = require('./approval');
 
 // ─────────────────────────────────────────────
 // 纯函数：解析 AppleScript System Events 输出
@@ -192,15 +196,16 @@ function parseAction(llmOutput) {
 // ─────────────────────────────────────────────
 // 纯函数：敏感动作判定（必须逐次确认，不可会话放行）
 // ─────────────────────────────────────────────
-// 依据动作上下文（输入文本/按键）与目标节点（名称/值）命中敏感关键词或验证码 → true
+// 依据动作上下文（输入文本/按键）与目标节点（名称/值）命中强确认类目 → true。
+// P1-2（2026-10-17）：判定规则改为调用 dangerousPatterns.js 的 cuaStrongConfirm
+// （单一事实来源，审批中心的 cua_action 分级共用同一份类目）；函数签名与返回值不变。
 function needsCUAConfirmation(action, node) {
   if (!action) return false;
   const ctx = [action.text, action.key, node?.name, node?.value]
     .filter(Boolean).join(' ');
-  if (CAPTCHA_RE.test(ctx)) return true;
-  if (CONFIRM_RE.test(ctx)) return true;
-  if (CONFIRM_ZH.some((k) => ctx.includes(k))) return true;
-  return false;
+  // 强确认类目（支付/删除/发送/验证码）+ 通用敏感词（确认类）——两层规则均在
+  // dangerousPatterns.js 单一事实来源内
+  return cuaStrongConfirm(ctx).strong || cuaGeneralSensitive(ctx);
 }
 
 // ─────────────────────────────────────────────
@@ -455,24 +460,15 @@ function clampToScreen(point, screenSize) {
 
 // 强确认白名单：验证码 / 支付转账 / 删除 / 发送邮件消息
 // 命中即逐次确认，且不可被会话级放行覆盖（见 normalizeStrongDecision）
-const STRONG_CONFIRM_CATEGORIES = [
-  { id: 'captcha', label: '验证码', re: /(captcha|验证码)/i },
-  { id: 'payment', label: '支付/转账', re: /(支付|付款|结账|结算|下单|购买|转账|充值)|\b(pay|checkout|purchase|transfer|billing)\b/i },
-  { id: 'delete', label: '删除', re: /(删除|删掉|移除|清空|清除)|\b(delete|remove|erase|trash|wipe)\b/i },
-  { id: 'send', label: '发送邮件/消息', re: /(发送|发邮件|发消息|发短信)|(\bsend\b)/i },
-];
+// P1-2（2026-10-17）：类目表已收敛至 dangerousPatterns.js（CUA_STRONG_CONFIRM_CATEGORIES），
+// 此处保留的 STRONG_CONFIRM_CATEGORIES 是同一引用的转投（旧导出名不断裂）。
 
 // 纯函数：强确认白名单判定，返回 { strong, category, label, reason }
+// P1-2：判定逻辑收敛至 dangerousPatterns.cuaStrongConfirm（单一事实来源）。
 function needsStrongConfirmation(action, targetText = '') {
   const ctx = [action?.text, action?.key, action?.label, action?.summary, targetText]
     .filter(Boolean).join(' ');
-  if (!ctx.trim()) return { strong: false, category: '', label: '', reason: '' };
-  for (const c of STRONG_CONFIRM_CATEGORIES) {
-    if (c.re.test(ctx)) {
-      return { strong: true, category: c.id, label: c.label, reason: `命中强确认白名单：${c.label}` };
-    }
-  }
-  return { strong: false, category: '', label: '', reason: '' };
+  return cuaStrongConfirm(ctx);
 }
 
 // 纯函数：视觉动作的确认判定（强确认优先，其余复用 AX 侧关键词矩阵）
@@ -1118,8 +1114,16 @@ class ComputerUseLoop {
 
       // 5. 定位目标节点 + 确认
       const node = action.ref ? axTree.interactive.find((n) => n.ref === action.ref) : null;
-      const mustConfirm = needsCUAConfirmation(action, node);
-      const shouldAsk = mustConfirm || this.approvalMode === 'on-request' || this.approvalMode === 'always';
+      // P1-2 修复（2026-10-17）：确认判定复用审批中心（单一事实来源）——原先是 CUA 自建的
+      // 「mustConfirm || mode === 'on-request' || mode === 'always'」，与审批中心的档位语义
+      // 双份实现（auto-safe 档下普通动作是否询问全靠这边自己判断，一侧漂移即漏问/多问）。
+      // 现 cua_action 的 L1/L2 分级走 approval.toolLevel，档位语义走 approval.needsApproval；
+      // L1 敏感动作是硬地板：任何审批档都逐次确认（与审批中心「L1 不接受规则豁免」同纪律——
+      // CUA 操作的是用户真实桌面，漏问代价高于多问）。
+      const cuaArgs = { action: action.action, text: action.text, key: action.key, target: node?.name || node?.value || '' };
+      const cuaLevel = approval.toolLevel('cua_action', cuaArgs);
+      const cuaVerdict = approval.needsApproval({ tool: 'cua_action', args: cuaArgs, approvalMode: this.approvalMode });
+      const shouldAsk = cuaVerdict.need || cuaLevel === 'L1';
       if (shouldAsk) {
         const summary = cuApprovalSummary(action, node);
         this.emit({ type: 'confirm', action, node, summary });
@@ -1217,9 +1221,13 @@ class ComputerUseLoop {
       return 'skipped';
     }
 
-    // 6. 确认：强确认白名单不可被会话级放行覆盖
-    const gate = needsVisionConfirmation(vAction, vAction.label || '');
-    const shouldAsk = gate.need || this.approvalMode === 'on-request' || this.approvalMode === 'always';
+      // 6. 确认：强确认白名单不可被会话级放行覆盖
+      // P1-2：判定同样复用审批中心（与 AX 路径同款理由）——gate.strong 与 cua_action 的
+      // L1 分级同源（dangerousPatterns.cuaStrongConfirm），gate 保留供摘要展示。
+      const gate = needsVisionConfirmation(vAction, vAction.label || '');
+      const cuaArgs = { action: vAction.action, text: vAction.text, key: vAction.key, label: vAction.label, target: vAction.label || '' };
+      const cuaVerdict = approval.needsApproval({ tool: 'cua_action', args: cuaArgs, approvalMode: this.approvalMode });
+      const shouldAsk = cuaVerdict.need || gate.strong;
     if (shouldAsk) {
       const summary = visionApprovalSummary(vAction, { ...check, screenWidth: screenSize.width, screenHeight: screenSize.height }, gate);
       this.emit({ type: 'confirm', action: vAction, node: null, summary, mode: 'vision' });

@@ -43,5 +43,20 @@
   "cmdFiles": "Open file tree",
   "cmdToggleSidebar": "Show/hide sidebar",
   "cmdScheduled": "Open scheduled tasks",
-  "cmdTheme": "Switch theme (current: {name})"
+  "cmdTheme": "Switch theme (current: {name})",
+  "expandPaneTitle": "Expand right panel (⌘⌥B)",
+  "expandPane": "Expand right panel",
+  "togglePaneTitle": "Show/hide right panel (⌘⌥B)",
+  "togglePane": "Show/hide right panel",
+  "paneDisabledHint": "Open a thread to use the right panel",
+  "toggleSidebar": "Show/hide sidebar",
+  "searchTitle": "Search threads, files and commands (⌘K)",
+  "search": "Search",
+  "filter": "Filter",
+  "filterTitle": "Filter the left thread list by status",
+  "filterAll": "All",
+  "filterRunning": "Running",
+  "filterAwaiting": "Awaiting approval",
+  "cmdSummary": "Open task summary",
+  "cmdTerminal": "Open terminal"
 }

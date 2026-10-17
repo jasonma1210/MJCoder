@@ -154,6 +154,24 @@ export const BASE_TOOLS = [
       + '用于确认当前分支、查找可用分支名；创建或切换分支请改用 shell（会触发危险命令审批）。',
     parameters: { type: 'object', properties: {} },
   }},
+  // ── 定时任务（2026-10-17 补齐）──
+  // 事故背景：模型侧此前**零**定时任务工具（agent-core 内 grep "scheduled" 0 命中），
+  // 用户说「每天 9:41 帮我搜新闻」，模型只能回答「请到界面手动创建」——它没偷懒，是没入口。
+  // 创建动作 = 持久化 + 未来无人值守自动执行，故恒走 L3 审批（见 main/scheduledTools.js）。
+  { type: 'function', function: {
+    name: 'scheduled_create',
+    description: '创建一个定时任务（会弹审批卡请用户确认，拒绝即中止）。'
+      + '用户说「每天/每周/每月 X 点帮我做某事」这类需要反复执行的安排时使用。'
+      + 'schedule 是 5 段 cron（分 时 日 月 周）：每天 09:41 → "41 9 * * *"，每周一 10:00 → "0 10 * * 1"。'
+      + 'prompt 要写成"无人值守执行时能独立看懂"的完整指令（不要出现"帮我""上面说的"这类需要追问的措辞）。'
+      + '只创建一次即可——调度器会在到点时自己触发，不要用 chat 或 shell 模拟定时。',
+    parameters: { type: 'object', properties: {
+      name: { type: 'string', description: '任务名（简短，用于任务列表展示）' },
+      schedule: { type: 'string', description: '5 段 cron 表达式：分 时 日 月 周' },
+      prompt: { type: 'string', description: '每次执行时给执行器的完整指令' },
+      enabled: { type: 'boolean', description: '是否立即启用，默认 true；false 表示建好先暂停' },
+    }, required: ['schedule', 'prompt'] },
+  }},
   // ── GitHub PR 审查闭环（对标 Codex 的 diff 审查交付出口）──
   { type: 'function', function: {
     name: 'pr_list', description: '列出 GitHub PR（gh CLI，只读）。用于审查前概览：编号/标题/作者/CI 状态。',
@@ -483,6 +501,8 @@ const CWD_TOOLS = new Set([
 const SUBAGENT_TOOL_NAMES = ['read_file', 'list_dir', 'grep', 'glob', 'git_status', 'git_diff', 'git_log'];
 const SUBAGENT_TOOLS = BASE_TOOLS.filter((t) => SUBAGENT_TOOL_NAMES.includes(t.function.name));
 const SUBAGENT_DEFAULT_BUDGET = 50000;
+// P1-11：压缩救援调用的看门狗上限——压缩是上下文恢复路径，自身不能成为新的挂起点
+const COMPACT_RESCUE_TIMEOUT_MS = 30000;
 
 // 子代理提前停止时的可行动提示（给父代理的模型看，不是给用户看的）。
 // 此前的失败模式：子代理被轮次/预算熔断后，finalText 里带着「发送『继续』让我接着执行」
@@ -511,9 +531,36 @@ function stoppedEarlyHint(budgetKind, tokenExhausted, objective) {
 // 真机复盘：单次救援对文件密集型审查任务不够（逐文件读源码单窗口仍打满），
 // 放宽到 3 次（累计消耗上限 ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
 const TOKEN_RESCUE_MAX = 3;
-// 预判式触发比例（复盘文档 P1-2 采纳）：窗口消耗达预算 70% 即压缩，
-// 而非等超限后溢出一轮才救——省下溢出轮的无效消耗；触闸后仍受 TOKEN_RESCUE_MAX 约束。
+// 预判式触发比例（复盘文档 P1-2 采纳）：上下文达模型窗口 70% 即压缩。
+// 2026-10-17 语义修正：这个比例**只作用于上下文体积**，不再作用于「累计花费」——
+// 拿花费判"上下文过长"会导致小上下文被强制压缩（详见 budgetDecision 注释）。
 const TOKEN_COMPACTION_TRIGGER = 0.7;
+
+// 闸门判定（纯函数，单测直调）。
+//
+// 2026-10-17 事故与修正：用户跑「取 10 条最新新闻」，5 轮累计 143k（每轮重发 ~27k 上下文），
+// 旧逻辑拿累计花费判「上下文过长」，把 27k 上下文 force 压成 376 tokens 摘要 → 新闻原文被抹掉
+// → 模型只能重搜 → 再撞闸再压，表现为「后台一直在压缩、还没有任何输出」。
+//
+// 修正原则（不删救援机制，只改判据）：
+//   · 上下文真的接近窗口上限 → 压缩（这是压缩唯一能解决的问题）；
+//   · 预算压力 + 上下文够大（≥ 窗口 35%，压缩确实能省下可观重发成本）→ 压缩；
+//   · 预算压力 + 上下文很小 → **只开新预算窗口、不压缩**（小上下文压缩纯亏）；
+//   · 窗口用尽且救援用尽 → 暂停（断点续跑）。
+export const TOKEN_COMPACT_MIN_RATIO = 0.35;
+
+export function budgetDecision({
+  ctxEst = 0, ctxWindow = 128000, spent = 0, budget = 0, rescues = 0, rescueMax = 3,
+} = {}) {
+  const ctxHot = ctxWindow > 0 && ctxEst > ctxWindow * TOKEN_COMPACTION_TRIGGER;
+  if (ctxHot) return rescues < rescueMax ? 'compact' : 'suspend-context';
+  if (budget > 0 && spent > budget * TOKEN_COMPACTION_TRIGGER) {
+    if (rescues >= rescueMax) return spent > budget ? 'suspend-tokens' : 'ok';
+    // 上下文够大才值得压缩（压缩省下的是「每轮重发量」）
+    return ctxEst >= ctxWindow * TOKEN_COMPACT_MIN_RATIO ? 'compact' : 'new-window';
+  }
+  return 'ok';
+}
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
 const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'install_plugin', 'pr_review', 'pr_comment',
@@ -549,6 +596,7 @@ const TOOL_HANDLER_NAMES = {
   install_plugin: 'installPlugin',
   web_search: 'webSearch',
   web_fetch: 'webFetch',
+  scheduled_create: 'scheduledCreate', // 2026-10-17：漏了这一行工具就"有声明无通道"
   pr_list: 'prList',
   pr_view: 'prView',
   pr_diff: 'prDiff',
@@ -579,8 +627,19 @@ export function estimateTokens(text) {
   return Math.ceil(cjk + rest / 4);
 }
 
+// 估算必须计入 tool_calls 的 name+arguments：write_file/apply_patch 的正文全在
+// arguments 里（实测同一历史 content 口径 70,894 / 真实 prompt_tokens 217,238，
+// 低估 3.06 倍 → 压缩阈值永不触发，长任务按全价反复重传同一批文件内容）。
 export function estimateMessagesTokens(msgs) {
-  return msgs.reduce((sum, m) => sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')) + 4, 0);
+  return msgs.reduce((sum, m) => {
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+    let n = estimateTokens(text);
+    for (const tc of (Array.isArray(m.tool_calls) ? m.tool_calls : [])) {
+      const a = tc?.function?.arguments;
+      n += estimateTokens(`${tc?.function?.name || ''}${typeof a === 'string' ? a : JSON.stringify(a || '')}`);
+    }
+    return sum + n + 4;
+  }, 0);
 }
 
 // P1-A：轮边界对齐——压缩切点不得落在工具轮中间
@@ -593,6 +652,20 @@ export function alignCutToRoundBoundary(body, cut) {
   return k;
 }
 
+// 固定头（压缩与入口裁剪共用）：**全部前导 system**（基础提示 + 渲染层插入的专家角色提示，
+// convo[1] 也可能是 system，只留 convo[0] 会把专家 system 静默丢弃 → 角色/技能约束全线失效）
+// + 第一条非 system 的 user 消息（用户原始需求）。
+// 返回 { systems, firstUser, from, head }：from 为 body 起始下标，head = [...systems, firstUser]。
+function splitFixedHead(msgs) {
+  const systems = [];
+  let from = 0;
+  while (from < msgs.length && msgs[from].role === 'system') { systems.push(msgs[from]); from += 1; }
+  while (from < msgs.length && msgs[from].role !== 'user') from += 1; // 跳过罕见残留在首条 user 之前的非 user 消息
+  const firstUser = from < msgs.length ? msgs[from] : null;
+  if (firstUser) from += 1;
+  return { systems, firstUser, from, head: firstUser ? [...systems, firstUser] : systems };
+}
+
 // 上下文压缩：超出上下文窗口 70% 时，将早期对话摘要化，保留 system + 最近若干轮
 // P1-A 双档阈值：70% 常规摘要；85% 激进裁剪（保留更短尾部 + 注入压力告警）
 // opts.knownTokens：调用方提供的真实 prompt_tokens（上一轮 usage），替代每轮全量重估（O(n²)）
@@ -600,25 +673,43 @@ export function alignCutToRoundBoundary(body, cut) {
 export async function compactHistory(convo, model, chatFn, opts = {}) {
   const contextWindow = model?.model?.context_window || 128000;
   const est = typeof opts.knownTokens === 'number' ? opts.knownTokens : estimateMessagesTokens(convo);
-  if (!opts.force && (est <= contextWindow * 0.7 || convo.length <= 8)) return convo;
+  // 触发只看体积：此前的 `|| convo.length <= 8` 会让「消息少但内容大」的历史永不压缩
+  // （/compact 压平后、单条超长粘贴都会踩到）。条数少到无可裁内容时，下面
+  // `body.length <= keepTail` 与「无收益即放弃」两道闸会兜住，不会白付一次摘要调用。
+  if (!opts.force && est <= contextWindow * 0.7) return convo;
 
   const aggressive = est > contextWindow * 0.85;
   const keepTail = aggressive ? 3 : 6;
-  const head = convo.slice(0, 1); // system
-  const body = convo.slice(1);
+  // 固定头必须含专家 system 与原始需求：压缩结果会回写 convo（C2），丢一次就永久丢。
+  const { systems, firstUser, from } = splitFixedHead(convo);
+  const body = convo.slice(from);
   if (body.length <= keepTail) return convo;
+  // 滚动摘要（G1）：本函数写入的摘要带固定前缀，历史摘要必须**并进本次摘要的输入**、产出后只留一条。
+  // 只丢旧摘要会丢历史（toCompact 不含 head）；只加不并则 head 无界增长——紧窗口下每轮都在追加
+  // 摘要，上下文反而发散（实测 6k 窗口 41 轮：37 条摘要、末轮 4.56 倍窗口）。
+  const isSummary = (m) => m.role === 'system' && String(m.content).startsWith('[早期对话摘要');
+  const priorSummaries = systems.filter(isSummary);
+  const fixedSystems = systems.filter((m) => !isSummary(m));
+  // 摘要消息恒放在**前导 system 块内、首条 user 之前**：部分 OpenAI 兼容端点（DeepSeek 系）
+  // 只认首部 system，messages 中部出现 system 会被忽略甚至报错。
+  const withHead = (mid) => [...fixedSystems, ...(mid ? [mid] : []), ...(firstUser ? [firstUser] : [])];
   const cut = alignCutToRoundBoundary(body, body.length - keepTail);
   if (cut <= 0 || cut >= body.length) return convo; // 无法安全切分（全是工具消息），放弃压缩
   const toCompact = body.slice(0, cut);
   const tail = body.slice(cut);
 
-  const transcript = toCompact
+  // 旧摘要前置进 transcript（上限 6000 字符，超出取最近）：让本次摘要「看得见」此前结论，
+  // 从而可以安全地用它替换全部旧摘要，而不是无限追加。
+  const priorText = priorSummaries.map((m) => String(m.content || '')).join('\n').slice(-6000);
+  const transcript = (priorText ? `【此前摘要】\n${priorText}\n\n` : '') + toCompact
     .map((m) => `${m.role}: ${(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')).slice(0, 600)}`)
     .join('\n')
     .slice(0, 24000);
 
   try {
-    const r = await chatFn({
+    // P1-11：压缩救援调用加看门狗——此前无超时，provider 挂起时整轮运行被拖死
+    // （压缩是恢复路径，自身不能成为新的挂起点）。超时走下方 catch 回落截断。
+    const r = await withTimeout(chatFn({
       providerId: model.provider.id,
       isGlobal: !!model.provider.isGlobal,
       baseUrl: model.provider.base_url,
@@ -634,7 +725,7 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
 ${transcript}` }],
       model: model.model.model_id,
       reasoningEffort: model.model.reasoning_effort || '',
-    });
+    }), COMPACT_RESCUE_TIMEOUT_MS, '上下文压缩救援');
     if (r?.content) {
       console.log(`[agent] 上下文压缩（${aggressive ? '激进' : '常规'}）：${est} → 摘要 ${estimateTokens(r.content)} tokens`);
       // 激进档追加压力告警：明确告知模型历史已深度裁剪，精确信息需重新核实，禁止凭记忆假设
@@ -642,7 +733,10 @@ ${transcript}` }],
         ? `[早期对话摘要·激进裁剪]\n${r.content}\n\n[上下文压力告警] 历史已被深度裁剪以控制上下文长度，早期细节可能缺失；如需精确信息请用 read_file/grep 重新核实，不要凭记忆假设。`
         : `[早期对话摘要]\n${r.content}`;
       // 防线：压缩结果也过 normalizeMessages，杜绝任何残留断链触发 400
-      return normalizeMessages([head[0], { role: 'system', content: summary }, ...tail]);
+      const next = normalizeMessages([...withHead({ role: 'system', content: summary }), ...tail]);
+      // 无收益即放弃（同 trimHistoryForRun）：紧窗口下 head+tail 已贴近窗口时，压缩只会白换一次请求，
+      // 且下一轮还会再压——这正是「头部摘要发散」的收敛闸。
+      return estimateMessagesTokens(next) >= estimateMessagesTokens(convo) ? convo : next;
     }
   } catch (err) {
     console.warn('[agent] 压缩失败，回落为截断最早消息:', err.message);
@@ -650,7 +744,74 @@ ${transcript}` }],
   // 兜底：直接丢弃最早的旧消息（切点同样对齐轮边界；激进档丢 3/4，常规档丢 1/2）
   const drop = alignCutToRoundBoundary(body, Math.floor(toCompact.length * (aggressive ? 0.75 : 0.5)));
   if (drop <= 0 || drop >= body.length) return convo;
-  return normalizeMessages([head[0], ...body.slice(drop)]);
+  const next = normalizeMessages([...withHead(null), ...body.slice(drop)]);
+  return estimateMessagesTokens(next) >= estimateMessagesTokens(convo) ? convo : next;
+}
+
+// 入口裁剪（本轮 C3）：压缩只在 >70% 时触发，而长会话在 70% 以下照样把「已完成的工具轮」
+// （write_file/apply_patch 全文）按全价每轮重传——同一段上下文被反复刷卡。
+// 这里在 run 开始前按「轮」裁掉中段：只留前导 system + 用户原始需求 + 最近若干轮，
+// 被丢弃的中段用一条 system 消息占位（明确告知模型去重新读取，而不是凭记忆假设）。
+function TRIM_NOTICE(dropped, tokens) {
+  return `[历史已裁剪] 已省略 ${dropped} 条早期消息（约 ${tokens} tokens）。`
+    + '需要细节时用 read_file / grep 重新读取，不要凭记忆假设。';
+}
+
+export function trimHistoryForRun(convo, { contextWindow, targetRatio = 0.45, keepRecent = 8 } = {}) {
+  const msgs = Array.isArray(convo) ? convo : [];
+  const beforeTokens = estimateMessagesTokens(msgs);
+  // 下限 16000 是刻意的：单测用 1000~1300 的小窗口强制走压缩路径，入口裁剪不得抢跑。
+  const effectiveWindow = Math.max(Number(contextWindow) || 0, 16000);
+  const budget = Math.floor(effectiveWindow * targetRatio);
+  const unchanged = { convo: msgs, trimmed: false, dropped: 0, beforeTokens, afterTokens: beforeTokens };
+  if (msgs.length <= 3 || beforeTokens <= budget) return unchanged;
+
+  // 必留固定头：全部前导 system + 首条 user（与 compactHistory 同一份实现，防两处规则漂移）
+  const { systems, firstUser, from, head } = splitFixedHead(msgs);
+  const body = msgs.slice(from);
+  if (body.length <= 1) return unchanged;
+
+  // 按「轮」分组（一条非 tool 消息 + 其后紧随的 tool 结果）。切点恒落在组边界，
+  // 组内绝不拆开 assistant(tool_calls) 与它的 tool 结果——孤儿 tool 消息会直接 400。
+  const groups = [];
+  let end = body.length;
+  while (end > 0) {
+    let start = end - 1;
+    while (start > 0 && body[start - 1].role === 'tool') start -= 1;
+    if (start > 0 && body[start - 1].role === 'assistant') start -= 1;
+    while (start > 0 && body[start].role === 'tool') start -= 1; // 兜底：组首不得是 tool
+    groups.unshift({ start, end });
+    end = start;
+  }
+
+  const headTokens = estimateMessagesTokens(head);
+  const headRoom = headTokens + estimateTokens(TRIM_NOTICE(9999, 9999999)) + 4;
+  let cut = body.length;
+  let keepTokens = 0;
+  let keptRounds = 0;
+  for (let g = groups.length - 1; g >= 0; g -= 1) {
+    const grp = body.slice(groups[g].start, groups[g].end);
+    const t = estimateMessagesTokens(grp);
+    // 至少留 keepRecent 轮（再预算紧张也不裁到 0 轮），之后按预算从尾部向前收
+    if (keptRounds >= keepRecent && headRoom + keepTokens + t > budget) break;
+    cut = groups[g].start;
+    keepTokens += t;
+    keptRounds += 1;
+  }
+  if (cut <= 0) return unchanged;
+
+  const droppedMsgs = body.slice(0, cut);
+  const trimmedConvo = [
+    ...systems,
+    // 占位同样放在前导 system 块内、首条 user 之前（与 compactHistory 的摘要同位）：
+    // messages 中部出现 system，DeepSeek 系端点会忽略甚至报错。
+    { role: 'system', content: TRIM_NOTICE(droppedMsgs.length, estimateMessagesTokens(droppedMsgs)) },
+    ...(firstUser ? [firstUser] : []),
+    ...body.slice(cut),
+  ];
+  const afterTokens = estimateMessagesTokens(trimmedConvo);
+  if (afterTokens >= beforeTokens) return unchanged; // 裁了没收益（例如整段都是必留的 system）
+  return { convo: trimmedConvo, trimmed: true, dropped: droppedMsgs.length, beforeTokens, afterTokens };
 }
 
 // A1（2026-10-16）：不可信内容统一管道——注入规则不再在引擎内联副本。
@@ -1269,6 +1430,14 @@ export async function runAgent({
     ...extra,
   });
   trace({ type: 'run_start', model: model?.model?.model_id || '', cwd: cwd || '', tools: allTools.length, maxRounds, tokenBudget });
+  // 入口裁剪：run 开始前先按轮裁掉中段（见 trimHistoryForRun 注释）。
+  // 落库不做——展示历史 ≠ 模型上下文，会话记录仍保留全文。
+  const trimRes = trimHistoryForRun(convo, { contextWindow: model?.model?.context_window });
+  if (trimRes.trimmed) {
+    convo = trimRes.convo;
+    console.warn(`[agent] 入口裁剪：丢弃 ${trimRes.dropped} 条早期消息，估算 ${trimRes.beforeTokens} → ${trimRes.afterTokens} tokens`);
+    trace({ type: 'trim', dropped: trimRes.dropped, beforeTokens: trimRes.beforeTokens, afterTokens: trimRes.afterTokens });
+  }
 
   let finalText = '';
   let usage = { prompt_tokens: 0, completion_tokens: 0 };
@@ -1338,6 +1507,9 @@ export async function runAgent({
     roundsUsed += 1;
     onStream?.('');
     const compacted = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens });
+    // 压缩结果必须回写：此前只用于本次 outbound，下一轮仍按「已被压缩的 prompt_tokens」判阈值
+    // → 跳过压缩 → 又发全量（10k↔220k 抖动）。回写后清空增量口径，避免连续两次压缩。
+    if (compacted !== convo) { convo = compacted; lastPromptTokens = null; }
     // P1-I：续期/截断指令旁路注入——只进当轮请求的 system 消息，不进 convo
     const outbound = renewNotice && compacted[0]?.role === 'system'
       ? [{ ...compacted[0], content: `${compacted[0].content}\n\n${renewNotice}` }, ...compacted.slice(1)]
@@ -1376,6 +1548,24 @@ export async function runAgent({
         convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
         continue;
       }
+      // 超时不再「判死」：供应商/网络挂起时先存断点再抛——否则前面几十轮成果全废，
+      // 用户只能重放整个历史。断点走与 token 预算熔断同一 onSuspend 通道（kind=timeout），
+      // 「继续」即可接续；budgetKind 不新增取值（会外溢到 workerPool 与收尾文案）。
+      if (!signal?.aborted && (err?.name === 'AbortError' || /超时|timeout|TIMEOUT/.test(msg))) {
+        try {
+          suspendNoticed = !!onSuspend?.({
+            kind: 'timeout', summary: finalText, usage: { ...usage },
+            roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
+          });
+        } catch (e) {
+          console.warn('[agent] 断点保存钩子异常:', e.message);
+        }
+        if (suspendNoticed) {
+          console.error(`[agent] 模型调用超时，已保存断点（第 ${roundsUsed} 轮后）`);
+          emitRunEnd({ error: msg.slice(0, 300) });
+          throw err;
+        }
+      }
       console.error(`[agent] 模型调用失败终止运行：${msg.slice(0, 300)}（第 ${roundsUsed} 轮后）`);
       // T0-5：异常终止同样闭合 trace 时间线（带错误原因，供诊断包还原卡死现场）
       emitRunEnd({ error: msg.slice(0, 300) });
@@ -1385,12 +1575,22 @@ export async function runAgent({
     if (result.aborted) { aborted = true; finalText = result.content || finalText; console.warn(`[agent] 运行中止：收到中止信号（第 ${roundsUsed} 轮后，窗口消耗 ${tokenWindowSpent} tokens）`); break; }
     const roundUsage = result.usage
       ? { prompt_tokens: result.usage.prompt_tokens || 0, completion_tokens: result.usage.completion_tokens || 0 }
-      : null;
+      // P1-10：usage 缺失时按内容长度估算（≈4 字符/token，与子代理路径 :1583 同口径）——
+      // 否则不回传 usage 的兼容端点上 tokenWindowSpent 恒 0，预算闸形同虚设。
+      : { prompt_tokens: 0, completion_tokens: 0,
+          _estimated: Math.ceil(String(result.content || '').length / 4) };
     if (roundUsage) {
-      usage.prompt_tokens += roundUsage.prompt_tokens;
-      usage.completion_tokens += roundUsage.completion_tokens;
-      lastPromptTokens = roundUsage.prompt_tokens;
-      tokenWindowSpent += roundUsage.prompt_tokens + roundUsage.completion_tokens;
+      // P1-10：估算值只计入窗口预算闸（tokenWindowSpent），不污染真实 usage 累计
+      // （仪表盘的 usage.prompt_tokens 只反映 provider 真实上报，两者语义不同）。
+      const windowDelta = roundUsage._estimated != null
+        ? roundUsage._estimated
+        : roundUsage.prompt_tokens + roundUsage.completion_tokens;
+      if (roundUsage._estimated == null) {
+        usage.prompt_tokens += roundUsage.prompt_tokens;
+        usage.completion_tokens += roundUsage.completion_tokens;
+        lastPromptTokens = roundUsage.prompt_tokens;
+      }
+      tokenWindowSpent += windowDelta;
     }
     // Phase 3-4：逐轮 token 用量上报（仪表盘数据源）——runner 侧缓存最新状态供渲染层轮询
     try {
@@ -1402,27 +1602,34 @@ export async function runAgent({
       });
     } catch (e) { /* 仪表盘上报绝不影响主流程 */ }
 
-    // P1-I：token 预算闸——窗口消耗达预算 70%（TOKEN_COMPACTION_TRIGGER）即预判式压缩续跑
-    // （最多 TOKEN_RESCUE_MAX 次），救援用尽仍触闸才收尾。
-    // 预算口径 = 当前窗口累计消耗（压缩救援后清零开新窗口），而非全程累计：
-    // 事故复盘：原实现拿全程累计 usage 判闸——usage 单调递增且压缩后不清零，
-    // 导致压缩救援后下一轮必然再次超限立即收尾，救援形同虚设（真机复现）。
-    // 注意：压缩解决的是「上下文过长」，预算闸防的是「单任务失控烧 token」，
-    // 两者独立；每轮都会重复读取上下文，长任务累计消耗会滚动增大属正常现象。
-    // 真机迭代：单次救援不够——文件密集型审查任务（逐文件读源码）单窗口仍会打满，
-    // 用户看到 470k/454k 熔断文案即第 2 次触闸。放宽为最多 3 次救援（累计上限
-    // ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线；不设无限救援（成本失控风险）。
-    if (tokenBudget > 0 && tokenWindowSpent > tokenBudget * TOKEN_COMPACTION_TRIGGER) {
-      if (tokenRescues < TOKEN_RESCUE_MAX) {
-        tokenRescues += 1;
-        console.warn(`[agent] 单任务 token 窗口达预判阈值（${tokenWindowSpent} / 预算 ${tokenBudget} 的 ${TOKEN_COMPACTION_TRIGGER * 100}%），自动压缩后开启新预算窗口续跑（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次救援）`);
-        convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
-        tokenWindowSpent = 0; // 新窗口：清零重算（usage 全程累计仍如实上报，不动）
-        continue;
-      }
+    // 闸门判定收敛到一个纯函数（budgetDecision），便于单测锁语义。
+    // 事故（2026-10-17 用户实测）：「取 10 条最新新闻」5 轮累计 143k（每轮重发 ~27k 上下文），
+    // 原实现拿**累计花费**判「上下文过长」，把只有 27k 的上下文 force 压成 376 tokens 摘要；
+    // 新闻原文被抹掉 → 模型重搜 → 再撞闸再压，用户看到「后台一直在压缩、还没有任何输出」。
+    const ctxWindow = Number(model?.model?.context_window) || 128000;
+    const ctxEst = Number(lastPromptTokens) || estimateMessagesTokens(convo);
+    const gate = budgetDecision({
+      ctxEst, ctxWindow, spent: tokenWindowSpent, budget: tokenBudget,
+      rescues: tokenRescues, rescueMax: TOKEN_RESCUE_MAX,
+    });
+    if (gate === 'compact') {
+      tokenRescues += 1;
+      console.warn(`[agent] 上下文达模型窗口 ${Math.round((ctxEst / ctxWindow) * 100)}%（${ctxEst}/${ctxWindow} tokens），压缩后继续（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次）`);
+      convo = await compactHistory(convo, model, chatFn, { knownTokens: lastPromptTokens, force: true });
+      tokenWindowSpent = 0; // 新窗口：清零重算（usage 全程累计仍如实上报，不动）
+      continue;
+    }
+    if (gate === 'new-window') {
+      // 预算压力但上下文很小：只换窗口，**不压缩**——否则会把模型还需要的内容压成摘要，
+      // 逼它重新取一遍（事故现场：27k → 376 tokens，新闻正文全丢）。
+      // 不 continue：本轮结果照常消费，避免白白丢掉一次模型响应。
+      tokenRescues += 1;
+      console.warn(`[agent] 预算窗口用至 ${Math.round((tokenWindowSpent / tokenBudget) * 100)}%（${tokenWindowSpent}/${tokenBudget}），但上下文仅 ${ctxEst} tokens（< 窗口 ${ctxWindow} 的 ${TOKEN_COMPACT_MIN_RATIO * 100}%）——只开新窗口、不压缩（第 ${tokenRescues}/${TOKEN_RESCUE_MAX} 次）`);
+      tokenWindowSpent = 0;
+    } else if (gate === 'suspend-context' || gate === 'suspend-tokens') {
+      // 压缩救援用尽且上下文仍过大（continue 必然被端点拒），或累计花费用满预算：
+      // 都走「暂停而非失败」——挂起钩子落断点，收尾文案引导「继续」走断点恢复。
       budgetExhausted = true; budgetKind = 'tokens';
-      // Phase 3-1：预算熔断 = 暂停而非失败。挂起钩子（runner 侧落盘断点），
-      // 保存成功后在收尾文案明示「断点已保存」，引导用户「继续」走断点恢复而非全量重放
       try {
         suspendNoticed = !!onSuspend?.({
           kind: 'tokens', summary: finalText, usage: { ...usage },
@@ -1533,6 +1740,10 @@ export async function runAgent({
             // 真子代理：只读工具子集 + 独立上下文 + token 预算（耗尽自动停止）
             const budget = Number(args.token_budget) > 0 ? Number(args.token_budget) : SUBAGENT_DEFAULT_BUDGET;
             const subCtl = new AbortController();
+            // P0-9：取消级联——父运行中止时子代理同步中止。此前 subCtl 永不触发：
+            // 取消父运行后子代理继续把 token 烧到预算耗尽（预算闸变成「花了才算」的记账器）。
+            // { once: true }：触发一次即解除，父 signal 随运行结束回收，无监听器泄漏。
+            signal?.addEventListener?.('abort', () => subCtl.abort(), { once: true });
             let subTokens = 0;
             let exhausted = false;
             // 子代理终态快照：onBudget 的最后一次上报带 running:false + budgetKind，

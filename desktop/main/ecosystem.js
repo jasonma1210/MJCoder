@@ -130,6 +130,8 @@ const ROLE_APPROVAL_MAP = {
 };
 
 // 由归一化后的员工对象组装 rolePreset（进 agent:run 载荷；审批/沙箱的最终钳制在 agentRunner）
+// skillNames：员工 starter_skills 透传——agentRunner 按名从 ~/.mjcode/skills 读 SKILL.md
+// 内容注入引擎（技能内容的安全处置在引擎侧统一走不可信内容管道，此处只传名不传内容）
 function buildEmployeeRuntimePreset(emp) {
   const toolNames = [...new Set((emp.tools || []).flatMap((t) => ROLE_TOOL_ALIASES[t] || []))];
   return {
@@ -137,6 +139,7 @@ function buildEmployeeRuntimePreset(emp) {
     toolNames,
     approvalMode: ROLE_APPROVAL_MAP[emp.approval_policy] || 'on-request',
     sandboxPolicy: emp.sandbox_policy || 'workspace-write',
+    skillNames: (emp.starter_skills || []).map((s) => (s == null ? '' : String(s))).filter(Boolean),
   };
 }
 

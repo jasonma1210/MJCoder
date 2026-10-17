@@ -190,7 +190,7 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                   setManualOpen(false);
                   setForm({ name: '', transport: 'stdio', command: '', args: '', url: '' });
                 }}
-                className="h-8 inline-flex items-center justify-center px-4 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40">
+                className="h-8 inline-flex items-center justify-center px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40">
                 {t('localMcp.connectAndSave')}
               </button>
             </div>
@@ -204,11 +204,11 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                 <button onClick={() => setJsonOpen(false)} className="text-text2 hover:text-text"><IconX size={13} /></button>
               </div>
               <textarea value={jsonText} onChange={(e) => setJsonText(e.target.value)} rows={10}
-                className="w-full rounded-lg border border-border bg-surface p-2.5 text-[11px] font-mono outline-none focus:border-accent resize-y" />
+                className="w-full rounded-lg border border-border bg-surface p-2.5 text-xs font-mono outline-none focus:border-accent resize-y" />
               <div className="flex items-center justify-between mt-1.5">
-                <span className="text-[11px] text-text2">{jsonMsg}</span>
+                <span className="text-xs text-text2">{jsonMsg}</span>
                 <button onClick={saveJson}
-                  className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">
+                  className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">
                   {t('localMcp.jsonSave')}
                 </button>
               </div>
@@ -226,25 +226,25 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs flex items-center gap-2">
                     <span className="truncate font-medium">{s.name}</span>
-                    {st === 'ok' && <span className="text-[10px] text-success inline-flex items-center gap-0.5 shrink-0"><IconCheck size={10} /> {statusText.ok}{s.toolCount ? ` · ${s.toolCount}` : ''}</span>}
-                    {st === 'fail' && <span className="text-[10px] text-danger inline-flex items-center gap-0.5 shrink-0"><IconAlert size={10} /> {statusText.fail}</span>}
-                    {st === 'connecting' && <span className="text-[10px] text-text2 shrink-0">{statusText.connecting}</span>}
-                    {st === 'saved' && <span className="text-[10px] text-text2 shrink-0">{statusText.saved}</span>}
+                    {st === 'ok' && <span className="text-caption text-success inline-flex items-center gap-0.5 shrink-0"><IconCheck size={10} /> {statusText.ok}{s.toolCount ? ` · ${s.toolCount}` : ''}</span>}
+                    {st === 'fail' && <span className="text-caption text-danger inline-flex items-center gap-0.5 shrink-0"><IconAlert size={10} /> {statusText.fail}</span>}
+                    {st === 'connecting' && <span className="text-caption text-text2 shrink-0">{statusText.connecting}</span>}
+                    {st === 'saved' && <span className="text-caption text-text2 shrink-0">{statusText.saved}</span>}
                   </div>
                   {(s.command || s.url) && (
-                    <div className="text-[10px] text-text2 font-mono truncate mt-0.5">
+                    <div className="text-caption text-text2 font-mono truncate mt-0.5">
                       {s.transport === 'http' ? s.url : `${s.command || ''} ${(s.args || []).join(' ')}`}
                     </div>
                   )}
                 </div>
                 {st === 'fail' && (
-                  <button onClick={() => connect(s)} className="text-[11px] text-accent hover:underline shrink-0">{t('localMcp.retry')}</button>
+                  <button onClick={() => connect(s)} className="text-xs text-accent hover:underline shrink-0">{t('localMcp.retry')}</button>
                 )}
                 {/* 开关：连接/断开（启用≠连接语义下，这里就是真实连接态） */}
                 <button onClick={() => (isConnected ? disconnect(s.name) : connect(s))}
                   role="switch" aria-checked={isConnected}
                   className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${isConnected ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${isConnected ? 'left-[22px]' : 'left-0.5'}`} />
+                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${isConnected ? 'left-[22px]' : 'left-0.5'}`} />
                 </button>
               </div>
             );

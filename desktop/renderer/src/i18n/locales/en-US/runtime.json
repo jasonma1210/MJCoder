@@ -59,5 +59,10 @@
   "sandboxNextStepResultUnknown": "Safe next step: do not treat this as success. When you need the real result, run the same command yourself in a terminal, or switch to unsandboxed mode (which is explicitly marked as unisolated).",
   "sandboxPolicyLine": "Policy: {policy} | Isolation: {sandboxed}",
   "sandboxIsolatedYes": "isolated",
-  "sandboxIsolatedNo": "not isolated"
+  "sandboxIsolatedNo": "not isolated",
+  "memNeedProject": "Select a project before writing memories",
+  "memSaved": "Saved to project memory",
+  "memSaveFailed": "Failed to save memory: {error}",
+  "threadCreateFailed": "Failed to create the conversation; this run has been stopped: {error}\nTry again; if it keeps failing, check that the local conversation store is writable.",
+  "messageSendFailed": "Failed to write the message to the local conversation; this run has been stopped: {error}\nYour input has been kept, so you can retry directly."
 }

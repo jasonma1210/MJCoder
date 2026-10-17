@@ -11,15 +11,32 @@ const crypto = require('crypto');
 
 const DEFAULT_DONE_RETENTION_MS = 7 * 24 * 3600 * 1000; // 7 天保留期
 const DEFAULT_MAX_HISTORY_ROWS = 500;                   // 终态行容量上限
+// P3-3：每日本地压缩配额——LLM 压缩是后台唯一付费调用，按本地计数（memory_bg_tasks
+// 当日 done 行）设上限；超限则压缩任务留队次日再跑。上限可经 localStore preference
+// 'memory.bgDailyQuota' 覆盖（main.js 经 deps.getDailyQuota 注入）。
+const DEFAULT_DAILY_COMPRESS_QUOTA = 20;
 
 const PROCESSORS = {
-  compress: async (payload, deps) => deps.memory.compress({
-    spaceId: payload.spaceId,
-    domain: payload.domain || 'session',
-    batchSize: payload.batchSize || 10,
-    chatOnce: deps.chatOnce,
-    model: deps.resolveModel?.() || null,
-  }),
+  compress: async (payload, deps) => {
+    const model = deps.resolveModel?.() || null;
+    // P3-3：后台压缩走 bg 槽位（预算隔离：不吃前台预留槽，前台繁忙时最多 1 个并发）。
+    // 槽位经 deps.acquireSlot 注入（main.js: quota.acquire）；未注入（测试）时退化为无槽位直跑。
+    const slot = typeof deps.acquireSlot === 'function'
+      ? await deps.acquireSlot('bg', model?.providerId || 'default')
+      : null;
+    try {
+      return await deps.memory.compress({
+        spaceId: payload.spaceId,
+        domain: payload.domain || 'session',
+        batchSize: payload.batchSize || 10,
+        // 槽位类型随调用透传：scheduledAgentChat(payload, 'bg') 占用 bg 槽位而非 fg
+        chatOnce: (p) => (deps.chatOnce ? deps.chatOnce(p, 'bg') : null),
+        model,
+      });
+    } finally {
+      slot?.release?.();
+    }
+  },
   promote: async (_payload, deps) => ({ promoted: deps.memory.promoteByHits(3) }),
   decay: async (_payload, deps) => deps.memory.decayJob({}),
   cleanup: async (_payload, deps) => deps.memory.cleanupJob({}),
@@ -94,16 +111,31 @@ class MemoryBgScheduler {
   }
 
   // 取一个可执行任务（优先级 1 最高，FIFO 同级）；attempts>=3 直接判死（卡死防线）
+  // P3-3：压缩任务受每日本地配额约束——当日已 done 的压缩数达上限时跳过不 claim
+  // （任务留队、不消耗 attempts），让位给 decay/cleanup 等无成本维护任务。
   _claim() {
     const dead = this.deps.db.prepare(`UPDATE memory_bg_tasks SET status = 'failed', error = '超过 3 次尝试上限', updated_at = ?
       WHERE status = 'queued' AND attempts >= 3`).run(Date.now());
     if (dead.changes) this.deps.emit?.({ type: 'memory_bg_failed', purged: dead.changes });
-    const row = this.deps.db.prepare(`SELECT * FROM memory_bg_tasks WHERE status = 'queued'
-      ORDER BY priority ASC, created_at ASC LIMIT 1`).get();
-    if (!row) return null;
-    this.deps.db.prepare(`UPDATE memory_bg_tasks SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?`)
-      .run(Date.now(), row.id);
-    return { ...row, payload: (() => { try { return JSON.parse(row.payload || '{}'); } catch { return {}; } })() };
+    const rows = this.deps.db.prepare(`SELECT * FROM memory_bg_tasks WHERE status = 'queued'
+      ORDER BY priority ASC, created_at ASC LIMIT 10`).all();
+    for (const row of rows) {
+      if (row.type === 'compress' && this._dailyQuotaExceeded()) continue; // 配额用尽：今天不再派发压缩
+      this.deps.db.prepare(`UPDATE memory_bg_tasks SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?`)
+        .run(Date.now(), row.id);
+      return { ...row, payload: (() => { try { return JSON.parse(row.payload || '{}'); } catch { return {}; } })() };
+    }
+    return null;
+  }
+
+  // P3-3：当日压缩配额是否已用尽（本地计数 + 可配置上限，无需新增配额子系统）
+  _dailyQuotaExceeded() {
+    const limit = Math.max(1, Number(this.deps.getDailyQuota?.()) || DEFAULT_DAILY_COMPRESS_QUOTA);
+    const d = new Date();
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const n = this.deps.db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks
+      WHERE type = 'compress' AND status = 'done' AND updated_at >= ?`).get(dayStart).n;
+    return n >= limit;
   }
 
   async runOne() {

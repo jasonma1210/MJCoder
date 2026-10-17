@@ -118,7 +118,7 @@ export default function FeedbackHost() {
               <button
                 onClick={() => finish(true)}
                 disabled={dialog.count != null && Number(countInput) !== dialog.count}
-                className={`text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger text-white hover:opacity-90' : 'bg-accent text-white hover:opacity-90'}`}
+                className={`text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger-solid text-on-accent hover:brightness-110' : 'bg-accent-solid text-on-accent hover:brightness-110'}`}
               >
                 {dialog.confirmLabel || (dialog.danger ? tr('feedback.confirmDanger') : tr('feedback.confirm'))}
               </button>

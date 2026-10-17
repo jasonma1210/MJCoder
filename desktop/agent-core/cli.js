@@ -270,6 +270,10 @@ async function main() {
   const sessionDir = opts.sessionDir || path.dirname(path.resolve(opts.out));
   const maxRounds = Number(task.maxRounds) > 0 ? Number(task.maxRounds) : 15;
   const approvalMode = task.approvalMode || 'on-request';
+  // P0-9：CLI 通道同样注入 token 预算——headless 场景（CI/定时脚本）无人盯盘，
+  // 缺省预算让失控循环一直烧到进程被外部杀掉。口径与 workerPool（200k）对齐，
+  // task.json 可显式覆盖。
+  const tokenBudget = Number(task.tokenBudget) > 0 ? Number(task.tokenBudget) : 200000;
 
   const toolHandlers = createLocalToolHandlers(cwd);
   const chatFn = process.env.MJ_AGENT_MOCK === '1'
@@ -300,6 +304,7 @@ async function main() {
       sessionDir,
       maxRounds,
       approvalMode,
+      tokenBudget,
       agentsMd,
       onMessage: () => {},
       onDone: (finalText, usage) => {

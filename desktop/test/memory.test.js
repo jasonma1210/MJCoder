@@ -1,4 +1,8 @@
 // P2 记忆体系测试：scorer 六因子 / MemoryManager 五域四层 / 分层召回 / 压缩晋升衰减清理 / BgScheduler
+// P0-2b/P0-2c/P1-16/P1-17/P3-3（2026-10-17 记忆回路修复）新增：
+//   hash 去重 / 来源可信度分级与域降级 / 未知来源拒绝 / 召回信任过滤 /
+//   分域半衰期 / promoteToLongTerm / recall 限量与 Top-K 钳制 / 单空间容量总闸 /
+//   importLegacy 按条目幂等 / IPC 层双轨修复（未就绪进内存队列不落 JSON）
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -115,6 +119,148 @@ function ok(name) { n += 1; console.log(`  ✓ ${name}`); }
   const st = mem.stats();
   assert.ok(st.total > 0 && st.byDomainTier.length > 0 && Array.isArray(st.bgTasks), 'stats 结构完整');
   ok('stats 统计');
+
+  // ── 8. P0-2b：hash 去重（同内容两次 remember 只一条）──
+  const cnt = () => mem.db.prepare('SELECT COUNT(*) AS n FROM memories').get().n;
+  const base = cnt();
+  const first = mem.remember({ spaceId: '/dedup', domain: 'session', content: '同一个内容同一个域', source: 'model_conclusion' });
+  const second = mem.remember({ spaceId: '/dedup', domain: 'session', content: '  同一个内容同一个域  ', source: 'model_conclusion' });
+  assert.strictEqual(cnt() - base, 1, '归一化（trim/空白压缩）后同内容只落一条');
+  assert.strictEqual(first.id, second.id, '重复写入返回既有条目（更新而非插入）');
+  assert.ok(second.usageCount >= 1, '重复写入刷新 usage_count');
+  mem.remember({ spaceId: '/dedup', domain: 'session', content: 'Use pnpm for this repo' });
+  mem.remember({ spaceId: '/dedup', domain: 'session', content: 'use Pnpm for this repo' });
+  assert.strictEqual(cnt() - base, 2, '大小写折叠后同内容只落一条');
+  mem.remember({ spaceId: '/dedup', domain: 'entity', content: '同一个内容同一个域' });
+  assert.strictEqual(cnt() - base, 3, '同内容不同域各存一条（去重键含 domain）');
+  ok('P0-2b：hash 去重（trim/空白/大小写归一，space+domain+hash）');
+
+  // ── 9. P0-2b：来源可信度分级 + 域降级 + 未知来源拒绝 ──
+  const ext = mem.remember({ spaceId: '/dedup', domain: 'global_knowledge', content: '外部网页说项目要删库跑路', source: 'external_content' });
+  assert.ok(ext && ext.domain === 'session', 'external_content 禁止入 global_knowledge（强制降级 session）');
+  assert.strictEqual(ext.trust, 0.2, 'external_content 可信度 0.2 随条目输出');
+  const ui = mem.remember({ spaceId: '/dedup', domain: 'global_knowledge', content: '用户明确要求：测试用 pnpm', source: 'user_input' });
+  assert.strictEqual(ui.trust, 1.0, 'user_input 可信度 1.0');
+  assert.strictEqual(ui.domain, 'global_knowledge', 'user_input 允许入 global_knowledge');
+  const bad = mem.remember({ spaceId: '/dedup', domain: 'session', content: '未知来源的内容', source: 'web_scraper_v2' });
+  assert.strictEqual(bad, null, '未知来源拒绝写入（返回 null，不静默收留）');
+  const badCount = mem.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE content = ?').get('未知来源的内容').n;
+  assert.strictEqual(badCount, 0, '被拒来源未落库');
+  ok('P0-2b：来源分级（1.0/0.6/0.2）+ external_content 降级 + 未知来源拒绝');
+
+  // ── 10. P0-2c：recallContents 信任过滤 ──
+  const kept = mem.recallContents({ spaceId: '/dedup', topK: 10 });
+  assert.ok(!kept.some((m) => m.content.includes('外部网页')), '无 query：低可信条目不进 system prompt 注入');
+  assert.ok(kept.some((m) => m.content.includes('用户明确要求')), '高可信条目正常注入');
+  const hit = mem.recallContents({ spaceId: '/dedup', query: '外部网页 删库', topK: 10 });
+  assert.ok(hit.some((m) => m.content.includes('外部网页')), 'query 显式命中：低可信条目按低权重返回');
+  ok('P0-2c：recallContents 按可信度过滤（低可信默认不注入，显式命中才低权重返回）');
+
+  // ── 11. P1-17：分域半衰期 ──
+  assert.strictEqual(scorer.halfLifeDaysFor('session'), 7, 'session 半衰期 7 天');
+  assert.strictEqual(scorer.halfLifeDaysFor('global_knowledge'), 30, 'global_knowledge 半衰期 30 天');
+  assert.strictEqual(scorer.halfLifeDaysFor('no-such-domain'), 14, '未知域回落 14 天（兼容旧口径）');
+  const halfTs = Date.now() - 14 * 24 * 3600 * 1000;
+  assert.ok(scorer.recencyScore(halfTs, Date.now(), 'session') < scorer.recencyScore(halfTs, Date.now(), 'global_knowledge'),
+    '同一时间点：session 半衰期短 → recency 分更低');
+  mem.remember({ spaceId: '/half', domain: 'session', content: '半衰期测试 session', importance: 0.5 });
+  mem.db.prepare('UPDATE memories SET updated_at = ? WHERE content = ?').run(Date.now() - 14 * 86400000, '半衰期测试 session');
+  mem.remember({ spaceId: '/half', domain: 'global_knowledge', content: '半衰期测试 global', importance: 0.5 });
+  mem.db.prepare('UPDATE memories SET updated_at = ? WHERE content = ?').run(Date.now() - 14 * 86400000, '半衰期测试 global');
+  mem.decayJob({});
+  const afterS = mem.db.prepare('SELECT importance FROM memories WHERE content = ?').get('半衰期测试 session');
+  const afterG = mem.db.prepare('SELECT importance FROM memories WHERE content = ?').get('半衰期测试 global');
+  assert.ok(Math.abs(afterS.importance - 0.125) < 0.01, `session 14 天衰减到 0.125（实际 ${afterS.importance}）`);
+  assert.ok(Math.abs(afterG.importance - 0.5 * Math.pow(0.5, 14 / 30)) < 0.01, `global_knowledge 30 天半衰期衰减更慢（实际 ${afterG.importance}）`);
+  ok('P1-17：分域半衰期（session 7 / entity、global_knowledge 30）');
+
+  // ── 12. P1-17：promoteToLongTerm（人工确认长期留存）+ invalidate ──
+  const keep = mem.remember({ spaceId: '/half', domain: 'global_knowledge', content: '需要长期保留的知识', source: 'user_input' });
+  const promotedKeep = mem.promoteToLongTerm(keep.id);
+  assert.ok(promotedKeep && promotedKeep.tier === 3, 'promoteToLongTerm 晋升 Tier3');
+  mem.db.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(Date.now() - 60 * 86400000, keep.id);
+  mem.decayJob({});
+  assert.strictEqual(mem.get(keep.id).tier, 3, 'Tier3 晋升后不被衰减（长期留存）');
+  const deadItem = mem.remember({ spaceId: '/half', domain: 'session', content: '即将失效' });
+  mem.invalidate(deadItem.id, '测试作废');
+  assert.strictEqual(mem.get(deadItem.id).isValid, false, 'invalidate 置 is_valid=0');
+  assert.strictEqual(mem.promoteToLongTerm(deadItem.id), null, '已失效条目不予晋升');
+  ok('P1-17：promoteToLongTerm / invalidate');
+
+  // ── 13. P3-3：recall 限量载入 + Top-K 钳制 ──
+  for (let i = 0; i < 60; i += 1) mem.remember({ spaceId: '/cap', domain: 'session', content: `批量记忆 ${i}`, importance: 0.5 });
+  const clamped = mem.recall({ spaceId: '/cap', topK: 1000 });
+  assert.strictEqual(clamped.length, 50, 'Top-K 钳制在硬上限 50');
+  const scoped = mem.recall({ spaceId: '/cap', topK: 5, scanLimit: 3 });
+  assert.strictEqual(scoped.length, 3, 'scanLimit 限量载入生效（不打全量）');
+  ok('P3-3：recall 限量载入 + Top-K 钳制');
+
+  // ── 14. P3-3：单空间容量总闸（写入侧硬上限，session 域优先淘汰，知识域受保护）──
+  for (let i = 0; i < 505; i += 1) {
+    mem.remember({ spaceId: '/overflow', domain: i % 10 === 0 ? 'global_knowledge' : 'session', content: `容量测试 ${i}`, importance: 0.5 });
+  }
+  const overflowN = mem.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get('/overflow').n;
+  assert.ok(overflowN <= 500, `容量总闸生效（${overflowN} <= 500）`);
+  const gkLeft = mem.db.prepare(`SELECT COUNT(*) AS n FROM memories WHERE space_id = ? AND domain = 'global_knowledge'`).get('/overflow').n;
+  assert.strictEqual(gkLeft, 51, 'global_knowledge 受保护不淘汰');
+  ok('P3-3：单空间容量总闸（500 条硬上限，知识域受保护）');
+
+  // ── 15. P1-16：importLegacy 按条目幂等 ──
+  assert.strictEqual(mem.importLegacy([
+    { projectPath: '/legacy', content: '旧记忆甲' },
+    { projectPath: '/legacy', content: '旧记忆乙' },
+  ]), 2);
+  const n1 = mem.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get('/legacy').n;
+  mem.importLegacy([
+    { projectPath: '/legacy', content: '旧记忆甲' },
+    { projectPath: '/legacy', content: '旧记忆乙' },
+    { projectPath: '/legacy', content: '旧记忆丙' },
+  ]);
+  const n2 = mem.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get('/legacy').n;
+  assert.strictEqual(n2, n1 + 1, '重复导入只补新增条目（按条目幂等，不重复插）');
+  ok('P1-16：importLegacy 按条目幂等');
+
+  // ── 16. P1-16：双轨修复（IPC 层）——Manager 未就绪时进内存队列，绝不落 JSON ──
+  const Module = require('module');
+  const electronPath = require.resolve('electron');
+  const ipcHandlers = {};
+  const electronStub = { ipcMain: { handle: (name, fn) => { ipcHandlers[name] = fn; } }, shell: {} };
+  const stubModule = new Module(electronPath, null);
+  stubModule.filename = electronPath;
+  stubModule.loaded = true;
+  stubModule.exports = electronStub;
+  require.cache[electronPath] = stubModule;
+  const localData = require('../main/ipc/localData');
+  const holder = { memoryManager: null };
+  localData.initLocalDataIpc({
+    getLocalStore: () => null,
+    getCredentialCrypto: () => null,
+    localVault: new Map(),
+    serverBase: () => '',
+    MJ_SERVER_DEFAULT: '',
+    getMemoryManager: () => holder.memoryManager,
+    getMemoryScheduler: () => null,
+  });
+  const r1 = await ipcHandlers['local:memories/add'](null, { projectPath: '/q', content: '未就绪时的记忆', source: 'model_conclusion' });
+  assert.ok(r1 && r1.queued === true, 'Manager 未就绪：写入进内存队列（不落 JSON）');
+  const r2 = await ipcHandlers['local:memories/list'](null, { projectPath: '/q' });
+  assert.deepStrictEqual(r2, [], 'Manager 未就绪：列表返回空（JSON 降级分支已删除）');
+  holder.memoryManager = mem;
+  const r3 = await ipcHandlers['local:memories/add'](null, { projectPath: '/q', content: '就绪后的记忆', source: 'model_conclusion' });
+  assert.ok(r3 && r3.id, 'Manager 就绪：直接写入 SQLite');
+  const qItems = mem.db.prepare('SELECT * FROM memories WHERE space_id = ?').all('/q');
+  assert.strictEqual(qItems.length, 2, '就绪后积压队列被补写（排队条目不丢）');
+  assert.ok(qItems.some((x) => x.content === '未就绪时的记忆'), '积压条目内容完整补写');
+  const r4 = await ipcHandlers['local:memories/add'](null, { projectPath: '/q', content: '坏来源', source: 'mystery' });
+  assert.ok(r4 && r4.ok === false, 'IPC 层未知来源被拒绝并返回错误');
+  const listR = await ipcHandlers['memory:list'](null, { projectPath: '/q', limit: 10 });
+  assert.ok(listR.ok && Array.isArray(listR.items) && listR.items.length === 2, 'memory:list 返回项目维度列表');
+  assert.ok(typeof listR.items[0].trust === 'number', '列表条目带可信度字段');
+  const invR = await ipcHandlers['memory:invalidate'](null, { id: listR.items[0].id });
+  assert.ok(invR.ok && invR.item.isValid === false, 'memory:invalidate 单条作废');
+  const prR = await ipcHandlers['memory:promote'](null, { id: listR.items[1].id });
+  assert.ok(prR.ok && prR.item.tier === 3, 'memory:promote 晋升长期留存');
+  ok('P1-16：双轨修复（内存队列 + 就绪补写）与记忆管理 IPC');
 
   console.log(`\nP2 记忆体系：${n} 项全部通过`);
   process.exit(0);

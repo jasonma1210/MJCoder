@@ -95,7 +95,7 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
       <div
         className={embedded
           ? 'flex-1 min-h-0 flex flex-col bg-bg'
-          : 'w-[560px] max-w-[80vw] h-full bg-bg border-l border-border flex flex-col shadow-2xl'}
+          : 'w-[min(560px,80vw)] h-full bg-bg border-l border-border flex flex-col shadow-[var(--shadow-pop)]'}
       >
         {/* 标题栏 */}
         <div className="flex items-center gap-2 px-4 h-11 border-b border-border shrink-0">
@@ -119,7 +119,7 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
           {state.loading && <p className="text-text2 text-sm">{t('codeView.loading')}</p>}
           {state.error && <p className="text-danger text-sm">{state.error}</p>}
           {!state.loading && !state.error && (
-            <pre className="text-xs leading-5 font-mono whitespace-pre">
+            <pre className="text-code leading-[18px] font-mono whitespace-pre">
               {lines.map((line, i) => (
                 <div key={i} className="flex">
                   <span className="w-10 shrink-0 select-none text-right pr-3 text-text2">{i + 1}</span>

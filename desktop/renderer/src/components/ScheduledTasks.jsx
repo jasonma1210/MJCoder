@@ -6,10 +6,12 @@ import { IconCheck, IconClock, IconPlus, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
 
 // labelKey 而非 label：顶层常量不持有求值结果，渲染时经 t() 取文案
+// P0-8a：missed=应用未运行期间错过计划执行（主进程启动扫描标记，绝不静默）
 const STATUS_META = {
   success: { labelKey: 'scheduled.statusSuccess', cls: 'text-success' },
   failed: { labelKey: 'scheduled.statusFailed', cls: 'text-danger' },
   running: { labelKey: 'scheduled.statusRunning', cls: 'text-accent' },
+  missed: { labelKey: 'scheduled.statusMissed', cls: 'text-danger' },
 };
 
 // ── Cron 解析（5 字段：分 时 日 月 周），支持 * 数字 a-b 列表与 /步进 ──
@@ -98,8 +100,8 @@ const REPEATS = [
 function Switch({ on, onChange }) {
   return (
     <button onClick={onChange} role="switch" aria-checked={on}
-      className={`w-10 h-[22px] rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-      <div className={`absolute w-[18px] h-[18px] rounded-full bg-white top-[1px] transition-all ${on ? 'left-[19px]' : 'left-[1px]'}`} />
+      className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
+      <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
     </button>
   );
 }
@@ -116,6 +118,11 @@ export default function ScheduledTasks() {
   const [busyId, setBusyId] = useState(null);
   const [expandedRuns, setExpandedRuns] = useState(null); // { taskId, list } — B1：绑定 taskId，避免历史展开污染所有卡片
   const [runResult, setRunResult] = useState(null); // { taskId, ok, text }
+  // P0-8c：开机自启（主进程 app.setLoginItemSettings，偏好落 localStore）。
+  // 桥接 IPC（app:autoLaunchGet/Set + preload）未就绪时 autoLaunchSupported=false，
+  // 开关整体隐藏——不做「看起来能切、实际不生效」的假开关（设置项必须真的被消费）。
+  const [autoLaunchSupported] = useState(() => typeof window.mjcode?.autoLaunchGet === 'function');
+  const [autoLaunch, setAutoLaunch] = useState(false);
 
   async function load() {
     try {
@@ -127,6 +134,16 @@ export default function ScheduledTasks() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // P0-8c：开机自启现状读取（主进程侧为唯一事实源：localStore preference + 系统登录项）
+  useEffect(() => {
+    if (!autoLaunchSupported) return;
+    let alive = true;
+    window.mjcode.autoLaunchGet()
+      .then((r) => { if (alive) setAutoLaunch(!!r?.enabled); })
+      .catch((err) => console.warn('[scheduled] failed to read auto-launch state:', err));
+    return () => { alive = false; };
+  }, [autoLaunchSupported]);
 
   // Bug2：调度器到点执行/手动运行后主进程广播 → 自动刷新列表与展开中的运行记录
   // P1-6：showRuns 走 latest-ref 模式。它是普通 async 函数声明（每次渲染新建），
@@ -179,6 +196,20 @@ export default function ScheduledTasks() {
     load();
   }
 
+  // P0-8c：开机自启切换（乐观更新，失败回滚并明示；不静默丢失用户意图）
+  async function toggleAutoLaunch() {
+    const next = !autoLaunch;
+    setAutoLaunch(next);
+    try {
+      const r = await window.mjcode.autoLaunchSet({ enabled: next });
+      if (r && r.ok === false) throw new Error(r.error || t('runtime.unknownError'));
+    } catch (err) {
+      setAutoLaunch(!next);
+      console.warn('[scheduled] failed to set auto-launch:', err);
+      setError(t('scheduled.autoLaunchFailed', { msg: err.message }));
+    }
+  }
+
   async function remove(id, name) {
     // A2：删除需确认
     const ok = await confirm({
@@ -197,7 +228,13 @@ export default function ScheduledTasks() {
     setRunResult(null);
     try {
       const r = await api.runScheduledTask(id);
-      setRunResult({ taskId: id, ok: true, text: r.output || t('scheduled.noOutput') });
+      // 此前这里写死 ok:true —— 任务明明判失败（r.ok=false）也用成功色渲染，
+      // 用户看到「成功了，但内容是做不到」。现在如实透传执行结果。
+      setRunResult({
+        taskId: id,
+        ok: !!r?.ok,
+        text: (r?.ok ? r?.output : (r?.error || r?.output)) || t('scheduled.noOutput'),
+      });
     } catch (err) {
       setRunResult({ taskId: id, ok: false, text: err.message || t('scheduled.runFailed') });
     }
@@ -228,7 +265,7 @@ export default function ScheduledTasks() {
           <p className="text-text2 text-xs mt-1">{t('scheduled.subtitle')}</p>
         </div>
         <button onClick={() => { setShowForm(true); setError(''); }}
-          className="h-8 inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg bg-accent text-white text-sm hover:opacity-90">
+          className="h-8 inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg bg-accent-solid text-on-accent text-sm hover:brightness-110">
           <IconPlus size={14} /> {t('scheduled.newTask')}
         </button>
       </div>
@@ -246,10 +283,21 @@ export default function ScheduledTasks() {
       {error && <div className="mb-4"><InlineAlert type="error" onDismiss={() => setError('')}>{error}</InlineAlert></div>}
       {notice && <div className="mb-4"><InlineAlert type="info" onDismiss={() => setNotice('')}>{notice}</InlineAlert></div>}
 
+      {/* P0-8c：开机自动运行（定时任务错过即永久丢失的根因之一是应用没开；自启 + 启动补跑扫描共同闭环） */}
+      {autoLaunchSupported && (
+        <div className="flex items-center justify-between bg-surface border border-border rounded-xl px-4 py-3 mb-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">{t('scheduled.autoLaunch')}</div>
+            <div className="text-xs text-text2 mt-1">{t('scheduled.autoLaunchHint')}</div>
+          </div>
+          <Switch on={autoLaunch} onChange={toggleAutoLaunch} />
+        </div>
+      )}
+
       {/* 新建任务弹窗（TRAE 同款：名称 / 提示词 / 重复 / 时间 / 有效期） */}
       {showForm && (
         <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onClick={() => setShowForm(false)}>
-          <div className="w-[560px] max-h-[86vh] overflow-y-auto bg-bg border border-border rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="w-[min(560px,calc(100vw-2rem))] max-h-[86vh] overflow-y-auto bg-surface border border-border rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold">{t('scheduled.formTitle')}</h3>
               <button onClick={() => setShowForm(false)} className="text-text2 hover:text-text"><IconX size={16} /></button>
@@ -257,33 +305,33 @@ export default function ScheduledTasks() {
 
             <input placeholder={t('scheduled.namePlaceholder')} value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full h-10 bg-bg border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
+              className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
             <textarea placeholder={t('scheduled.promptPlaceholder')} value={form.prompt}
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-              className="w-full bg-bg border border-border rounded-xl px-3.5 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
+              className="w-full bg-input border border-border rounded-xl px-3.5 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
 
             {/* 重复 / 时间 / 有效期（TRAE 三联行） */}
             <div className="grid grid-cols-3 gap-2 mb-3">
               <select value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })}
-                className="h-10 bg-bg border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
+                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
                 {REPEATS.map((r) => <option key={r.id} value={r.id}>{t('scheduled.repeatLabel', { label: t(r.labelKey) })}</option>)}
               </select>
               <select value={form.validType} onChange={(e) => setForm({ ...form, validType: e.target.value })}
-                className="h-10 bg-bg border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
+                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
                 <option value="forever">{t('scheduled.validForever')}</option>
                 <option value="until">{t('scheduled.validUntilType')}</option>
               </select>
               <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })}
-                className="h-10 bg-bg border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent" />
+                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent" />
             </div>
             {form.validType === 'until' && (
               <input type="date" value={form.validUntil} onChange={(e) => setForm({ ...form, validUntil: e.target.value })}
-                className="w-full h-10 bg-bg border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
+                className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
             )}
             {form.repeat === 'custom' && (
               <input placeholder={t('scheduled.cronPlaceholder')} value={form.schedule}
                 onChange={(e) => setForm({ ...form, schedule: e.target.value })}
-                className="w-full h-10 bg-bg border border-border rounded-xl px-3.5 text-sm font-mono mb-2 outline-none focus:border-accent" />
+                className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm font-mono mb-2 outline-none focus:border-accent" />
             )}
 
             {formCronErr ? (
@@ -300,7 +348,7 @@ export default function ScheduledTasks() {
               <button onClick={() => setShowForm(false)}
                 className="h-9 inline-flex items-center justify-center px-4 rounded-xl text-sm border border-border hover:bg-hover">{t('scheduled.cancel')}</button>
               <button onClick={createTask}
-                className="h-9 inline-flex items-center justify-center px-4 rounded-xl bg-accent text-white text-sm hover:opacity-90">{t('scheduled.confirm')}</button>
+                className="h-9 inline-flex items-center justify-center px-4 rounded-xl bg-accent-solid text-on-accent text-sm hover:brightness-110">{t('scheduled.confirm')}</button>
             </div>
           </div>
         </div>
@@ -330,14 +378,15 @@ export default function ScheduledTasks() {
                   <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
                   {task.last_run_at && <span className="ml-2">{t('scheduled.lastRun', { time: new Date(task.last_run_at).toLocaleString('zh-CN') })}</span>}
                 </div>
-                {task.last_result && (
-                  <div className="text-xs text-text2 mt-2 bg-bg rounded-lg p-2 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                    {String(task.last_result).slice(0, 400)}
-                  </div>
-                )}
-                {runResult?.taskId === task.id && (
-                  <div className={`text-xs mt-2 rounded-lg p-2 max-h-40 overflow-y-auto whitespace-pre-wrap ${runResult.ok ? 'bg-bg text-text2' : 'bg-danger-bg text-danger'}`}>
+                {/* 结果只渲染一处：刚跑完用 runResult（带成功/失败配色），否则回落到 last_result。
+                    此前两个条件独立成立，同一次运行的结果会在卡片里叠成两个框（用户实测）。 */}
+                {runResult?.taskId === task.id ? (
+                  <div className={`text-xs mt-2 rounded-lg p-2 max-h-40 overflow-y-auto whitespace-pre-wrap ${runResult.ok ? 'bg-input text-text2' : 'bg-danger-bg text-danger'}`}>
                     {runResult.text.slice(0, 800)}
+                  </div>
+                ) : task.last_result && (
+                  <div className="text-xs text-text2 mt-2 bg-input rounded-lg p-2 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                    {String(task.last_result).slice(0, 400)}
                   </div>
                 )}
               </div>
@@ -366,6 +415,8 @@ export default function ScheduledTasks() {
                         <span className={rm?.cls || 'text-text2'}>{rm ? t(rm.labelKey) : r.status}</span>
                         <span className="text-text2">{new Date(r.started_at).toLocaleString('zh-CN')}</span>
                         {(r.trigger === 'scheduled') && <span className="text-text2">{t('scheduled.scheduledTrigger')}</span>}
+                        {/* P0-8a：补跑标记——应用未运行期间到期，启动时补跑一次（与定时触发区分，避免误导） */}
+                        {(r.trigger === 'catchup') && <span className="text-text2">{t('scheduled.catchupTrigger')}</span>}
                         {r.duration_ms > 0 && <span className="text-text2">{t('scheduled.duration', { n: (r.duration_ms / 1000).toFixed(1) })}</span>}
                         {/* P0-D：Agent 通道标记 + 工具调用数（可观测：区分「跑了 Agent」与「只说了句话」） */}
                         {r.channel === 'agent' && <span className="text-text2">{r.tools > 0 ? t('scheduled.agentToolCalls', { n: r.tools }) : t('scheduled.agentTag')}</span>}

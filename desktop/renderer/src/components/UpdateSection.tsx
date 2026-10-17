@@ -1,5 +1,8 @@
 // 版本更新区块（原「账户与更新」页随登录系统移除后，迁入通用页保留更新能力入口）：
 // 手动检查 + 状态订阅 + P1-N 手动下载兜底链接（由主进程 build.publish 推导）
+// P0-3：available 态补「下载更新」按钮（此前全仓无 downloadUpdate 调用，用户看到新版本
+// 也无从更新，只剩 Releases 链接）；下载中经 updater:status 'downloading' 显示进度，
+// 'downloaded' 态渲染「重启安装」。手动下载链接保留为自动链路失败时的回滚手段。
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useI18n } from '../i18n';
@@ -62,6 +65,22 @@ export default function UpdateSection() {
     }
   }
 
+  // P0-3：available 态触发下载（updater:download → autoUpdater.downloadUpdate()）。
+  // 未打包/初始化失败时主进程返回 { ok:false, error }，这里如实展示，不假装在下载。
+  async function download() {
+    setUpdateError('');
+    try {
+      const r = (await window.mjcode?.downloadUpdate?.()) as
+        { ok?: boolean; error?: string; downloadUrl?: string } | undefined;
+      if (r && !r.ok) {
+        setUpdateError(t('settings.updaterDownloadFailed', { message: r.error || t('runtime.unknownError') }));
+        setUpdateDownloadUrl(r.downloadUrl || '');
+      }
+    } catch (err) {
+      setUpdateError((err as Error).message);
+    }
+  }
+
   async function install() {
     try { await window.mjcode?.installUpdate?.(); } catch (err) { setUpdateError((err as Error).message); }
   }
@@ -75,15 +94,20 @@ export default function UpdateSection() {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={check} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">{t('settings.checkUpdate')}</button>
+          {/* P0-3：available 态「下载更新」——downloading 中禁用防重复触发（进度经状态文案展示） */}
+          {(updaterState === 'available' || updaterState === 'downloading') && (
+            <button onClick={download} disabled={updaterState === 'downloading'}
+              className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent disabled:opacity-50">{t('settings.updaterDownloadBtn')}</button>
+          )}
           {updaterState === 'downloaded' && (
-            <button onClick={install} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white">{t('settings.restartInstall')}</button>
+            <button onClick={install} className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent">{t('settings.restartInstall')}</button>
           )}
         </div>
       </div>
       {(updateStatus || updateError) && (
         <div className="pb-3 text-xs text-text2">
           {updateError || updateStatus}
-          {/* P1-N：手动下载兜底——自动更新失败时用户可自行前往 Releases 页下载 */}
+          {/* P1-N：手动下载兜底——available 态显式提供、失败态降级，用户可自行前往 Releases 页下载 */}
           {updateDownloadUrl && (
             <a href={updateDownloadUrl} target="_blank" rel="noreferrer"
               className="ml-2 text-accent underline" title={updateDownloadUrl}>

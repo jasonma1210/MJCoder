@@ -5,6 +5,13 @@
 
 const LEVELS = { L1: 'danger-command', L2: 'file-write', L3: 'mcp-tool' };
 
+// 不可「记住」的工具：审批 UI 不得给出「本会话允许 / 始终允许」——
+// 这两类决策对它们无效（实现侧不调用 applyApprovalDecision），给了就是产品对用户撒谎。
+//   · unconfined_exec：非沙箱执行是单次逃生口，不可沉淀为长期规则；
+//   · scheduled_create：创建定时任务 = 持久化 + 未来无人值守执行，一次点击不该授权任意多次。
+const NON_REMEMBERABLE = new Set(['unconfined_exec', 'scheduled_create']);
+const isRememberable = (tool) => !NON_REMEMBERABLE.has(tool);
+
 // 工具 → 默认分级
 const TOOL_LEVEL = {
   shell: 'L1', // 命中危险模式才实际询问（见 needsApproval）
@@ -37,6 +44,19 @@ const TOOL_LEVEL = {
   // V03（2026-10-16）：受限沙箱不可用时的单次非沙箱执行审批（显式逃生口，非隔离能力）。
   // L1：任何档位、任何规则都不可豁免；该审批只取 'once' 决策，从不进入 always/conversation 规则库。
   unconfined_exec: 'L1',
+  // 2026-10-17：破坏性 git 操作分级（按「是否会静默销毁内容」而不是「是否写磁盘」）：
+  //   · git_checkout（丢弃工作区改动）判 L3：内容是**真的没了**，任何档位都弹卡；
+  //     可经「本对话同类」豁免（level !== L1），用户点过一次后不再打扰。
+  //   · git_restore_staged（取消暂存）判 L2：内容仍在工作区，只是索引回退，属可逆操作；
+  //     判 L3 会让「取消暂存」每点一次弹一次卡——用户为了省事会转去用更危险的「放弃修改」，
+  //     把可逆操作逼成不可逆操作，是安全设计上的反效果。
+  //   · 判 L2 的反面（auto-safe 静默放行）在这里可接受：auto-safe 的语义正是「文件写类自动放行」。
+  git_checkout: 'L3',
+  git_restore_staged: 'L2',
+  // 2026-10-17：模型创建定时任务（scheduled_create）——持久化 + 未来无人值守自动执行，
+  // 等价于「给 AI 一个以后自己动手的长期授权」，判 L3：任何审批档位都弹卡。
+  // 实现侧（main/scheduledTools.js）刻意不落规则库，所以 L3 的「可豁免」对本工具实际不生效。
+  scheduled_create: 'L3',
 };
 
 // 只读工具：任何档位都不询问
@@ -50,7 +70,12 @@ const READONLY_TOOLS = new Set([
 // 但主进程 sandbox.js 实际是 12 条且已漂移 —— 漂移导致审批层比沙箱层**更宽松**，
 // 于是 `curl xxx | sh` / `rm --recursive --force` 这类命令能同时绕过两层守卫，
 // 在默认 on-request 档下不弹任何审批直接执行。现改为单一事实来源，从根上消除漂移可能。
-const { DANGEROUS_PATTERNS, isDangerousCommand } = require('./dangerousPatterns');
+// P1-2 / P2-8（2026-10-17）：Code Mode 危险代码判定与 CUA 强确认类目同样收敛到
+// dangerousPatterns.js（原 approval.js 内联的 isDangerousCode 正则、computerUse.js 的
+// 关键词矩阵各是一份手抄副本，任一侧加规则另一侧不生效）。
+const {
+  DANGEROUS_PATTERNS, isDangerousCommand, matchDangerousPattern, isDangerousCode, cuaStrongConfirm,
+} = require('./dangerousPatterns');
 
 function toolLevel(tool, args = {}) {
   if (READONLY_TOOLS.has(tool)) return null;
@@ -59,19 +84,22 @@ function toolLevel(tool, args = {}) {
   }
   // T4-7：Code Mode 危险代码判 L1（恒逐次、规则不可豁免），普通代码 L3（可豁免）
   if (tool === 'code_exec') return isDangerousCode(args.code) ? 'L1' : 'L3';
+  // P1-2（2026-10-17）：CUA 界面动作——命中强确认类目（支付/删除/发送/验证码）判 L1
+  // （恒逐次确认、规则不可豁免，与 shell 危险命令同纪律）；其余界面动作判 L2
+  // （按审批档语义：on-request/always 逐次确认、auto-safe 放行——含「确认」类通用
+  // 敏感词，与视觉路径 needsVisionConfirmation 的 soft 分层一致：强确认才不可放行）。
+  // 此前 CUA 自建「mustConfirm || mode === 'on-request'」判定逻辑，与审批中心双份实现；
+  // 现判定统一走本模块，类目规则单一事实来源在 dangerousPatterns.js。
+  if (tool === 'cua_action') {
+    const ctx = [args.text, args.key, args.label, args.target].filter(Boolean).join(' ');
+    return cuaStrongConfirm(ctx).strong ? 'L1' : 'L2';
+  }
   if (tool.startsWith('mcp__')) return 'L3';
   return TOOL_LEVEL[tool] || 'L2';
 }
 
-// T4-7：代码危险面判定——两条通道：① Node 侧起进程/执行系统命令的 API 面
-// （child_process / exec / spawn，含解构别名前的字面名——宁可误报）；
-// ② 代码字符串里内嵌的危险 shell 命令（复用 dangerousPatterns 单一事实来源，
-// rm -rf / sudo / curl|sh 出现在任何字符串字面量里都会命中）。
-function isDangerousCode(code) {
-  const s = String(code || '');
-  if (/\bchild_process\b|\bexec(?:Sync)?\s*\(|\bspawn(?:Sync)?\s*\(|\bexecFile\b/.test(s)) return true;
-  return DANGEROUS_PATTERNS.some((p) => p.test(s));
-}
+// P0-S1 / P2-8：Code Mode 危险代码判定已收敛至 dangerousPatterns.js（单一事实来源），
+// 此处仅做转投，保持既有导出面不断裂。
 
 // 综合判定：该次工具调用是否需要弹审批
 function needsApproval({ tool, args = {}, approvalMode = 'on-request', conversationId, alwaysRules = [], conversationRules = [] }) {
@@ -113,7 +141,13 @@ function approvalTarget(tool, args = {}) {
   // T4-7 Code Mode：规则粒度=代码前缀（matchPattern 前缀语义——批准过 200 字符前缀，
   // 后续代码只有以该前缀开头且边界为空白才豁免，防止「批准短代码后长代码静默放行」）
   if (tool === 'code_exec') return String(args.code || '').slice(0, 200);
+  // P1-2：CUA 界面动作——规则粒度为动作上下文（CUA 决策本就不落规则库，此处仅为
+  // needsApproval 的豁免检查提供一致的目标形态）
+  if (tool === 'cua_action') return [args.text, args.key, args.label, args.target].filter(Boolean).join(' ').slice(0, 200);
   if (tool.startsWith('mcp__')) return tool;
+  // 2026-10-17：破坏性 git 操作按「受影响文件列表」做规则粒度——
+  // 用户对 a.js 允许「本会话同类」后，b.js 仍会再问一次（不做全工具一次放行）。
+  if (tool === 'git_checkout' || tool === 'git_restore_staged') return String(args.files || '').slice(0, 200);
   return String(args.path || args.patch?.slice(0, 80) || args.message || '');
 }
 
@@ -156,6 +190,30 @@ function approvalSummary(tool, args = {}) {
       return { level: 'L2', title: 'Git 提交', detail: String(args.message || '').slice(0, 300) };
     case 'git_add':
       return { level: 'L2', title: 'Git 暂存', detail: String(args.files || '.') };
+    // 2026-10-17：Diff 面板的破坏性动作——文案必须写明「不可撤销」，否则用户会当成普通暂存点掉
+    case 'git_checkout':
+      return {
+        level: 'L3',
+        title: '丢弃工作区改动',
+        detail: `将还原以下文件到上次提交状态：\n${String(args.files || '').slice(0, 300)}\n\n`
+          + '⚠ 这些文件里未提交的修改会**永久丢失，无法撤销**（面板内的 5 秒撤销快照仅覆盖刚才那一次）。'
+          + '确认要丢弃吗？',
+      };
+    case 'git_restore_staged':
+      return {
+        level: 'L2',
+        title: '移出暂存区',
+        detail: `将把以下文件移出暂存区（工作区改动保留）：\n${String(args.files || '').slice(0, 300)}`,
+      };
+    // 2026-10-17：模型侧创建定时任务——文案必须讲清「以后会自己跑」，否则用户会当成一次性动作
+    case 'scheduled_create':
+      return {
+        level: 'L3',
+        title: '创建定时任务',
+        detail: `任务名：${args.name || '(未命名)'}\n计划：${String(args.schedule || '')}\n`
+          + `执行内容：${String(args.prompt || '').slice(0, 300)}\n\n`
+          + '⚠ 该任务会按上述计划**无人值守自动执行**——你不在场时它也会跑。请确认内容与频率无误。',
+      };
     case 'install_plugin': {
       const what = args.kind === 'mcp'
         ? `MCP 服务（npm 包 ${args.pkg || ''}，npx 启动）`
@@ -251,6 +309,22 @@ function approvalSummary(tool, args = {}) {
           + '\n\n⚠ 当前环境无法提供 OS 级沙箱隔离。批准后该命令将以应用完整权限直接执行（无文件/网络边界）。'
           + '本批准仅对这一次命令有效，不会沉淀为「始终允许」规则。',
       };
+    // ── P1-2：CUA 界面动作审批卡（与 computerUse 的 cuApprovalSummary 同结构；
+    // CUA 当前走自有确认通道，此分支供统一通道接线后直接复用）──
+    case 'cua_action': {
+      const target = String(args.target || '').slice(0, 120);
+      const extra = [];
+      if (args.text !== undefined) extra.push(`内容：${String(args.text).slice(0, 200)}`);
+      if (args.key) extra.push(`按键：${args.key}`);
+      if (args.label) extra.push(`目标描述：${String(args.label).slice(0, 120)}`);
+      const danger = toolLevel('cua_action', args) === 'L1';
+      return {
+        level: danger ? 'L1' : 'L2',
+        title: `界面操作：${String(args.action || '未知动作')}`,
+        detail: [`动作：${String(args.action || '')}`, target ? `目标：${target}` : '', ...extra].filter(Boolean).join('\n')
+          + (danger ? '\n\n⚠ 命中敏感动作白名单（支付/删除/发送/验证码类），每次操作都会重新询问，不可被「始终允许」覆盖。' : ''),
+      };
+    }
     default:
       if (tool.startsWith('mcp__')) {
         return { level: 'L3', title: `MCP 工具 ${tool}`, detail: JSON.stringify(args).slice(0, 500) };
@@ -259,4 +333,4 @@ function approvalSummary(tool, args = {}) {
   }
 }
 
-module.exports = { LEVELS, toolLevel, needsApproval, approvalTarget, matchPattern, approvalSummary, DANGEROUS_PATTERNS, READONLY_TOOLS, isDangerousCode };
+module.exports = { LEVELS, toolLevel, needsApproval, approvalTarget, matchPattern, approvalSummary, DANGEROUS_PATTERNS, READONLY_TOOLS, isDangerousCode, NON_REMEMBERABLE, isRememberable };

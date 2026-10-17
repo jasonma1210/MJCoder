@@ -22,7 +22,7 @@
   -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src 'self' 'sha256-r6bCK3RgwZdHDrPh/Cb1F7M53SCupiMCFVVCUzxTRB0=';
+    script-src 'self' 'sha256-ryBujN7qL/S028i3xoxNy3xI5m2BJ2OdAscfQyFMx3Q=';
     style-src 'self' 'unsafe-inline';
     img-src 'self' data: blob: mjpreview:;
     media-src 'self' data: blob: mjpreview:;
@@ -46,6 +46,15 @@
       if (accent) {
         document.documentElement.style.setProperty('--theme-accent', accent);
         document.documentElement.style.setProperty('--sem-accent', accent);
+        // 视觉修复：hex 必须与 rgb 三元组成对写入。React 挂载前若只有 hex，
+        // bg-accent/10、border-accent/40 这类透明度类会退回主题色（与 lib/color.ts 同一条纪律）。
+        var h = String(accent).replace('#', '');
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        if (/^[0-9a-fA-F]{6}$/.test(h)) {
+          var rgb = parseInt(h.slice(0, 2), 16) + ' ' + parseInt(h.slice(2, 4), 16) + ' ' + parseInt(h.slice(4, 6), 16);
+          document.documentElement.style.setProperty('--theme-accent-rgb', rgb);
+          document.documentElement.style.setProperty('--sem-accent-rgb', rgb);
+        }
       }
     } catch (e) {}
   </script>

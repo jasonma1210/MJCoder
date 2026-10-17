@@ -123,6 +123,7 @@ function autoRespondApproval(channel, payload) {
 }
 class FakeBrowserWindow {
   constructor() { this.webContents = { setWindowOpenHandler: noop, openDevTools: noop, send: autoRespondApproval }; }
+  isDestroyed() { return false; } // P0-5：requestApproval 现按窗口存活判定 fail-closed，桩需对齐真实契约
   loadURL() {} loadFile() {} on() {}
   isMinimized() { return false; } restore() {} focus() {}
   getBounds() { return { width: 1600, height: 1000 }; }
@@ -148,6 +149,9 @@ const h = (name) => handlers.get(name);
 // ③ 重复失败熔断（ESM 引擎，动态 import）
 // ─────────────────────────────────────────────
 (async () => {
+  // P0-5 后直连 IPC 恒过审批：先让 whenReady 微任务跑完（FakeBrowserWindow 就位），
+  // 审批卡经 autoRespondApproval 自动「允许一次」，后续断言测的是编辑诊断而非审批
+  await new Promise((r) => setImmediate(r));
   const TMP = '/tmp/mjcode-edit-guard';
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });

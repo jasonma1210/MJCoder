@@ -100,7 +100,9 @@ check('应用根容器已设置 min-h-0（外层不溢出）', () => {
   assert.match(app, /h-screen/, '根容器应为 h-screen');
   assert.match(app, /className="flex flex-col h-screen bg-bg text-text"/,
     '根容器应为 flex flex-col + h-screen');
-  assert.match(app, /className="flex flex-1 min-h-0"/,
+  // 允许主区追加定位上下文（relative）：右侧面板最大化用 absolute inset-0 叠加层，
+  // 需要父容器提供定位上下文；min-h-0 的护栏目标不变。
+  assert.match(app, /className="flex flex-1 min-h-0( relative)?"/,
     '根容器下的主区缺 min-h-0');
   assert.match(app, /className="flex-1 min-w-0 flex flex-col"/,
     '内容列缺 min-w-0，长内容会横向撑破布局');

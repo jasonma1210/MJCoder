@@ -61,6 +61,12 @@
   "send": "Send",
   "queuedTip": "{n} queued and will run next turn (click to view)",
   "queued": "{n} queued",
+  "queueRunNow": "Run now",
+  "queueRunNowTip": "Stop the current task and run this one immediately",
+  "queueEdit": "Edit",
+  "queueEditTip": "Move back to the input box for editing",
+  "queueDelete": "Delete",
+  "queueDeleteTip": "Delete this queued task",
   "removeQueued": "Remove this queued instruction",
   "remove": "Remove",
   "mode": {
@@ -72,5 +78,7 @@
   "isolatedBranch": "Isolated branch: {branch}",
   "riskyApprovalTip": "High risk: tools run automatically under this tier — make sure you understand the risk",
   "approvalTierTip": "Approval tier: decides which operations need your confirmation",
-  "sandboxPolicyTip": "Sandbox policy: limits which files the agent can touch"
+  "sandboxPolicyTip": "Sandbox policy: limits which files the agent can touch",
+  "attachmentRemove": "Remove attachment",
+  "attachmentPreviewFailed": "Failed to load image preview"
 }

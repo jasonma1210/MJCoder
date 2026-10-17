@@ -49,4 +49,24 @@ function getSkill(skillsDir, name) {
   return fs.readFileSync(file, 'utf8');
 }
 
-module.exports = { parseFrontmatter, listSkills, getSkill };
+// 按技能名批量读取内容（数字员工 starter_skills 的运行时挂载用）：
+// listSkills 给出 name→dir 映射（frontmatter 的 name 可能与目录名不同），两者都参与查找；
+// 未找到的名称静默跳过（fail-open：缺一个技能不阻塞整个员工的会话）。
+function loadSkillContents(skillsDir, names) {
+  const wanted = (Array.isArray(names) ? names : [names]).map(String).map((s) => s.trim()).filter(Boolean);
+  if (!wanted.length) return [];
+  const byKey = new Map();
+  for (const s of listSkills(skillsDir)) {
+    byKey.set(s.name, s.dir);
+    if (!byKey.has(s.dir)) byKey.set(s.dir, s.dir);
+  }
+  const out = [];
+  for (const n of wanted) {
+    const dir = byKey.get(n);
+    const content = dir ? getSkill(skillsDir, dir) : null;
+    if (content) out.push({ name: n, content });
+  }
+  return out;
+}
+
+module.exports = { parseFrontmatter, listSkills, getSkill, loadSkillContents };

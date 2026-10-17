@@ -13,7 +13,7 @@ import { useI18n } from '../../i18n'; // T3-2：i18n
 import { IconAlert, IconCheck, IconDot, IconSpinner } from '../icons';
 
 // 与 shared-ipc SubagentEventData 对齐的局部类型（渲染层不直接 import 契约 d.mts）
-interface SubagentEvent {
+export interface SubagentEvent {
   tool: 'spawn_subagent' | 'orchestrate_task';
   phase: 'spawn' | 'progress' | 'done' | 'failed';
   objective?: string;
@@ -114,26 +114,26 @@ function NodeCard({ node }: { node: TaskNode }) {
         <PhaseIcon phase={node.phase} />
         <span className="truncate flex-1 text-text">{node.title || node.taskId}</span>
         {node.tokens > 0 && (
-          <span className="shrink-0 text-[10px] text-text2 border border-border rounded px-1 py-px">
+          <span className="shrink-0 text-caption text-text2 border border-border rounded px-1 py-px">
             {fmtTokens(node.tokens)} tk
           </span>
         )}
       </div>
       {node.dependsOn.length > 0 && (
-        <div className="flex items-center gap-1 flex-wrap text-[10px] text-text2">
+        <div className="flex items-center gap-1 flex-wrap text-caption text-text2">
           {t('subtaskTree.dependsOn')}
           {node.dependsOn.map((d) => (
             <span key={d} className="border border-border rounded px-1 py-px">{d}</span>
           ))}
         </div>
       )}
-      {node.error && <div className="text-[11px] text-danger break-all">{node.error}</div>}
+      {node.error && <div className="text-xs text-danger break-all">{node.error}</div>}
       {!node.error && node.budgetKind && node.budgetKind !== 'normal' && (
-        <div className="text-[11px] text-warn">
+        <div className="text-xs text-warn">
           {t('subtaskTree.earlyStop', { reason: node.budgetKind === 'tokens' ? t('subtaskTree.stopTokens') : node.budgetKind === 'rounds' ? t('subtaskTree.stopRounds') : t('subtaskTree.stopAborted') })}
         </div>
       )}
-      {open && node.summary && <div className="text-[11px] text-text2 whitespace-pre-wrap break-all border-t border-border pt-1">{node.summary}</div>}
+      {open && node.summary && <div className="text-xs text-text2 whitespace-pre-wrap break-all border-t border-border pt-1">{node.summary}</div>}
     </button>
   );
 }
@@ -153,7 +153,7 @@ function SingleCard({ evt }: { evt: SubagentEvent }) {
   };
   return (
     <div className="space-y-1">
-      <div className="text-[11px] text-text2">{t('subtaskTree.singleAgent', { type: evt.taskType || t('subtaskTree.general') })}</div>
+      <div className="text-xs text-text2">{t('subtaskTree.singleAgent', { type: evt.taskType || t('subtaskTree.general') })}</div>
       <NodeCard node={node} />
     </div>
   );
@@ -214,7 +214,7 @@ export default function SubtaskTree({ events }: { events: SubagentEvent[] }) {
         const totalTokens = all.reduce((s, n) => s + n.tokens, 0);
         return (
           <section key={groupId} className="space-y-2">
-            <header className="flex items-center gap-2 text-[11px] text-text2">
+            <header className="flex items-center gap-2 text-xs text-text2">
               <span className="text-text">{t('subtaskTree.group')}</span>
               <span className="border border-border rounded px-1 py-px">{t('subtaskTree.doneRatio', { done: doneCount, total: all.length })}</span>
               {failedCount > 0 && <span className="text-danger border border-border rounded px-1 py-px">{t('subtaskTree.failedCount', { n: failedCount })}</span>}

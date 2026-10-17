@@ -1,18 +1,18 @@
 # MJ Coder
 
-> Local-first AI coding workbench · Desktop agent assistant (offline-capable)
+> Local-first AI coding workbench · Desktop agent assistant (your data and code execution stay on your machine; inference connects to your own model service)
 >
 > 中文版: [README.zh-CN.md](./README.zh-CN.md)
 
-**MJ Coder** is an open-source desktop application for pair programming with AI on your own machine. It ships a complete Agent execution engine — the model can read and write your project files, run shell commands, and call Git and MCP tools to complete coding tasks autonomously under your approval and supervision. All conversations, code, and credentials stay on your computer by default — **offline-first, local-first**.
+**MJ Coder** is an open-source desktop application for pair programming with AI on your own machine. It ships a complete Agent execution engine — the model can read and write your project files, run shell commands, and call Git and MCP tools to complete coding tasks autonomously under your approval and supervision. All conversations, code, and credentials stay on your computer by default: **your data and execution are local; inference requires a connection to your own model service** (any OpenAI-compatible endpoint, including a local one such as Ollama).
 
 ## Key Features
 
 - **🤖 Complete Agent engine** — tool-calling loop (model → tool execution → results back to model), with automatic large-task decomposition, parallel sub-agents, context compaction, and turn-budget controls
-- **🛡️ Three safety gates** — a tiered approval center (dangerous commands / file writes / MCP tools at three levels; dangerous commands and MCP tools are never auto-approved) + sandbox isolation (OS-level on macOS, command-level hard blocking on Windows / Linux — see the tiering table below) + a local audit log for full traceability
+- **🛡️ Three safety gates** — a tiered approval center (dangerous commands / file writes / MCP tools at three levels; dangerous commands and MCP tools are never auto-approved) + sandbox isolation (OS-level on macOS and Linux, command-level hard blocking on Windows — see the tiering table below) + a local audit log for full traceability
 - **📁 Project workspaces** — project management, file tree & previews, code diff review panel, Git worktrees for isolation, and one-click PR creation
 - **⚙️ Dual-mode models** — connect any OpenAI-compatible endpoint (DeepSeek / Qwen / MiniMax / etc.), freely switch between locally defined and globally shared models; API keys stay in the main process and never reach the renderer
-- **⏰ Scheduled tasks** — offline local scheduler; tasks run through the full Agent channel at their due time (with approval, sandbox, and timeout protection)
+- **⏰ Scheduled tasks** — local scheduler; tasks run through the full Agent channel at their due time (with approval, sandbox, and timeout protection); missed runs are flagged and can be caught up on next launch
 - **🧩 Plugin ecosystem** — plugin marketplace (MCP servers / skills / prompt packs with signature verification and fail-closed installation), 100 built-in official skills, MCP tool integration
 - **🖥️ Computer Use** — drive desktop apps via macOS Accessibility (AX) trees; sensitive actions (payment / delete / send) always require case-by-case confirmation
 - **👥 Collaborative editing** — CRDT (Yjs)-based collaboration on conversation threads, task boards, and approval flows; local-first and offline-capable
@@ -36,48 +36,41 @@ which structurally prevents them from drifting apart.
 
 ### Sandbox capability by platform
 
-**All three platforms now have OS-level isolation**, aligned with OpenAI Codex's published design.
-The command blacklist is no longer the primary mechanism — it is the *fallback* when no OS sandbox is
-available. Once OS-level isolation is active the blacklist steps aside, so legitimate in-project
-commands such as `rm -rf ./build` are not falsely rejected.
+**macOS and Linux provide OS-level isolation; Windows ships command-level protection only.**
+The command blacklist is no longer the primary mechanism on OS-isolated platforms — it is the
+*fallback* when no OS sandbox is available. Once OS-level isolation is active the blacklist steps
+aside, so legitimate in-project commands such as `rm -rf ./build` are not falsely rejected.
 
 | Platform | Isolation level | Implementation | Ready when |
 |---|---|---|---|
 | macOS | **OS-level** | Seatbelt (`sandbox-exec` + generated profile): `deny default` + curated macOS platform policy, three tiers (read-only / workspace-write / full-access) restricting writes, network denied at every tier | Works out of the box (`>= 10.15`) |
-| Linux | **OS-level** | bubblewrap (`bwrap`): `--ro-bind / /` makes the whole disk read-only, only the project dir is `--bind`ed writable, `--unshare-all` (net/pid/ipc/uts/cgroup), `--tmpfs /tmp`, `--die-with-parent`, `--seccomp` | Install it: `apt install bubblewrap` / `dnf install bubblewrap` |
-| Windows | **OS-level** | Restricted token + dedicated local user + targeted ACL + outbound firewall: commands run as the low-privilege `MJCodeSandboxOffline` user (`schtasks /RL LIMITED`), with all outbound traffic blocked by firewall rule | **Requires a one-time admin setup** (see below) |
+| Linux | **OS-level** | bubblewrap (`bwrap`): `--ro-bind / /` makes the whole disk read-only, only the project dir is `--bind`ed writable, `--unshare-all` (net/pid/ipc/uts/cgroup), `--tmpfs /tmp`, `--die-with-parent`, `--new-session` | Install it: `apt install bubblewrap` / `dnf install bubblewrap` |
+| Windows | **Command-level (default)** | Command guard + tiered approval: 30 dangerous-command patterns are blocked before execution and cannot be bypassed or exempted by approval | Works out of the box; **OS-level isolation is not yet wired on this platform** (see below) |
 
-When the prerequisites are not met (bwrap missing, Windows setup not done, user namespaces disabled in
-a container, etc.), it automatically degrades to **command-level hard blocking**: 30 dangerous-command
-patterns are blocked before execution, and approval cannot bypass or exempt them. The reason is logged,
+When the prerequisites are not met (bwrap missing, user namespaces disabled in a container, etc.),
+it automatically degrades to **command-level hard blocking**: 30 dangerous-command patterns are
+blocked before execution, and approval cannot bypass or exempt them. The reason is logged,
 e.g. `[sandbox] 未沙箱执行（bwrap 未安装…）policy=workspace-write`.
 
-#### One-time Windows admin setup
+#### Windows: OS-level isolation is not yet wired
 
-The Windows backend must create a dedicated low-privilege user and firewall rules, which
-**requires administrator rights**. All setup commands are first produced by `windowsSandboxPlan()`
-for human review, then executed one by one; any failing step triggers rollback:
-
-```powershell
-# Run as Administrator. The password is randomly generated and stored DPAPI-encrypted —
-# it never appears in plaintext in the command line or logs.
-net user MJCodeSandboxOffline <RANDOM_PASSWORD> /add /passwordchg:no /passwordreq:yes /active:yes
-net localgroup Users MJCodeSandboxOffline /delete
-netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out action=block user=MJCodeSandboxOffline enable=yes
-```
-
-Rollback: `netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`, then delete the user.
+The OS-level Windows backend code exists (`desktop/main/sandboxWindows.js`: restricted token +
+dedicated local user + targeted ACL + outbound firewall), but **it is not wired into the execution
+path — there is no entry point that runs the one-time admin setup, so Windows users never receive
+OS-level isolation today**. What actually protects Windows users is the command-level guard plus
+the tiered approval center (fail-closed: uncertain verdicts take the stricter side). Wiring the
+Windows backend — including a setup entry point, `read-only` vs `workspace-write` tiering, and the
+`.git` / `.mjcode` carve-out — is tracked as platform work, not shipped behavior; this README will
+be updated when it lands.
 
 #### Known limitations, honestly documented
 
-- **Windows**: writes to directories that grant write access to the *Everyone* SID cannot be blocked
-  (world-writable folders). Mitigation: the workspace-write tier makes only the project directory
-  writable and everything else read-only. This is the same limitation Codex acknowledges publicly.
 - **Linux**: inside a container (default Docker configuration) unprivileged user namespaces may be
   disabled, in which case bwrap exists but cannot run. This project only probes for the binary's
   presence; runtime failures are caught by the exec error path and degraded.
 - **All platforms**: the `full-access` tier intentionally applies neither sandbox nor command guard
   (it is explicit opt-in; the default policy is already fail-closed).
+- **Windows**: OS-level isolation is not yet wired (see above) — protection is command-level only.
 
 Design rationale and trade-offs for each backend are documented in the header comments of
 `desktop/main/sandbox.js`, `sandboxLinux.js`, and `sandboxWindows.js`; cross-platform behavior is
@@ -101,7 +94,7 @@ guarded by `desktop/test/sandbox-crossplatform.test.js` (61 assertions).
 - **Server** (optional): Node.js · Express · PostgreSQL · Yjs
 - **Testing**: Node built-in test runner, all suites green (see `desktop/test/` for the current count)
 
-## Quick Start (Offline)
+## Quick Start
 
 ```bash
 # 1. Install dependencies (first time)
@@ -112,9 +105,22 @@ cd renderer && npm install && cd ..
 npm run dev
 ```
 
-No database, no server, no account required — create a local project and start chatting right away. Configure any OpenAI-compatible model (Base URL + API Key) and you are set; all data is stored locally.
+No database, no server, no account required — create a local project and start chatting right away. Configure any OpenAI-compatible model (Base URL + API Key) and you are set; all data is stored locally. Inference needs that model endpoint to be reachable (a local one such as Ollama keeps everything offline).
 
 > The server (`server/`) and mini-program (`miniprogram/`) are optional extensions; no deployment is needed for standalone offline use.
+
+## Updates
+
+- **macOS**: in-app update is fully supported. Releases ship **both `.dmg` (manual install) and `.zip`
+  (the artifact `electron-updater` consumes on macOS)**; the app checks on launch (10s delay), then
+  offers in-app **check → download (with progress) → restart to install**. Updates fail closed:
+  `verifyUpdateCodeSignature` is enabled, so a failed signature/digest check refuses to install and
+  points you to the manual download.
+- **Windows / Linux**: releases ship NSIS / AppImage installers, and this app does **not** provide
+  in-app auto-update on these platforms — download the new version manually from
+  [GitHub Releases](https://github.com/jasonma1210/MJCoder/releases).
+- **Rollback**: every release keeps its `.dmg` / installer on the Releases page, so downgrading is
+  always a manual download away — the in-app path never removes access to older versions.
 
 ## Project Layout (Overview)
 

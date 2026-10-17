@@ -128,6 +128,14 @@ function main() {
   const emptyPreset = eco.buildEmployeeRuntimePreset({});
   check('空员工预设 fail-closed（on-request + workspace-write + 空工具）',
     emptyPreset.approvalMode === 'on-request' && emptyPreset.sandboxPolicy === 'workspace-write' && emptyPreset.toolNames.length === 0);
+  // T4-3 技能接线：starter_skills 以 skillNames 透传进 rolePreset（内容装载在 agentRunner）
+  const skillPreset = eco.buildEmployeeRuntimePreset({
+    tools: [], starter_skills: ['code-review', 'unit-test-gen', '', null],
+  });
+  check('预设携带 skillNames（starter_skills 透传并去空）',
+    Array.isArray(skillPreset.skillNames) && skillPreset.skillNames.join(',') === 'code-review,unit-test-gen',
+    JSON.stringify(skillPreset.skillNames));
+  check('无 starter_skills 的员工 skillNames 为空数组（不炸）', eco.buildEmployeeRuntimePreset({}).skillNames.length === 0);
 
   // 真实生态数据：de-visualize 专职可视化员工存在且产出要求完备
   const realDir = path.join(__dirname, '..', '..', 'ecosystem');

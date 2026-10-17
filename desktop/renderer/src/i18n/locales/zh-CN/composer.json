@@ -61,6 +61,12 @@
   "send": "发送",
   "queuedTip": "已排队 {n} 条，将在下一轮执行（点击查看）",
   "queued": "已排队 {n}",
+  "queueRunNow": "立即执行",
+  "queueRunNowTip": "中断当前任务，马上执行这条",
+  "queueEdit": "编辑",
+  "queueEditTip": "移回输入框重新编辑",
+  "queueDelete": "删除",
+  "queueDeleteTip": "删除这条排队任务",
   "removeQueued": "移除该排队指令",
   "remove": "移除",
   "mode": {
@@ -72,5 +78,7 @@
   "isolatedBranch": "隔离分支：{branch}",
   "riskyApprovalTip": "高风险：当前档位下工具将自动执行，请确认你了解风险",
   "approvalTierTip": "审批档位：决定哪些操作需要你确认",
-  "sandboxPolicyTip": "沙箱策略：限制 Agent 能触碰的文件范围"
+  "sandboxPolicyTip": "沙箱策略：限制 Agent 能触碰的文件范围",
+  "attachmentRemove": "移除附件",
+  "attachmentPreviewFailed": "图片预览加载失败"
 }

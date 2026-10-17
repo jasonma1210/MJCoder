@@ -8,39 +8,32 @@ import DiffReviewPanel from './components/DiffReviewPanel';
 import ScheduledTasks from './components/ScheduledTasks';
 import ProjectPicker from './components/ProjectPicker';
 import Onboarding from './components/Onboarding';
+import SplashScreen from './components/SplashScreen';
 import EcosystemModal from './components/EcosystemModal';
-import FileTree from './components/FileTree';
-import FileViewerPane from './components/FileViewerPane';
 import StatusBar from './components/StatusBar';
 import CommandPalette from './components/CommandPalette';
-import RightPane, { PanelEmpty } from './components/RightPane';
-import SubtaskTree from './components/tools/SubtaskTree';
+import RightPane from './components/RightPane';
+import FilesPanel from './components/FilesPanel';
+import TerminalPanel from './components/TerminalPanel';
+import TaskSummaryPanel from './components/TaskSummaryPanel';
+import BrowserPanel from './components/BrowserPanel';
+import SideChatPanel from './components/SideChatPanel';
 import ArchiveModal from './components/ArchiveModal';
-import { IconChart, IconFile, IconFolderOpen, IconPalette, IconSidebar } from './components/icons';
+import { IconChart, IconCheck, IconFilter, IconPalette, IconPanelRight, IconSearch, IconSidebar } from './components/icons';
 import { api, setLocalMode, isLocalMode } from './lib/api';
 import { restoreMcpTools } from './lib/mcpTools';
 import { loadAgentsMd } from './lib/agentsMd';
 import ipc from './lib/ipc';
 import FeedbackHost, { confirm, toast } from './components/feedback';
 import { projectDisplayName } from './lib/projectName';
+import { getDefaultProject, loadJSON, applyThemeToDocument } from './lib/appState';
+import usePendingExpert from './hooks/usePendingExpert';
 import THEMES from './lib/themes.json';
-import { useI18n, tGlobal } from './i18n';
-
-// i18n：顶层常量改为工厂函数，避免模块加载即冻结文案（切换语言不更新）
-const getDefaultProject = () => ({ id: 'default', name: tGlobal('app.defaultProject'), path: '' });
+import { useI18n } from './i18n';
 
 // 登录系统已移除：恒用本机数据层（local-first）。
 // 模块级置位，确保任何 api 请求发起前本地路由已生效。
 setLocalMode(true);
-
-function loadJSON(key, fallback) {
-  try {
-    return JSON.parse(localStorage.getItem(key)) || fallback;
-  } catch (e) {
-    console.warn('[app] failed to parse local data:', key);
-    return fallback;
-  }
-}
 
 export default function App() {
   // 本文件多处 map/filter 回调参数名为 t（会话/主题项），解构改名 tr 避免遮蔽
@@ -108,6 +101,10 @@ export default function App() {
   const [autoDecompose, setAutoDecompose] = useState(() => localStorage.getItem('mj_auto_decompose') !== '0');
   useEffect(() => { localStorage.setItem('mj_auto_decompose', autoDecompose ? '1' : '0'); }, [autoDecompose]);
   const [onboarded, setOnboarded] = useState(() => localStorage.getItem('mj_onboarded') === '1');
+  // 启动页：冷启动展示 2.4s（可点击跳过），与首启向导叠加——splash 在上，向导在下
+  const [splashDone, setSplashDone] = useState(false);
+  // 引导里选的数字员工在主界面挂载后注入当前会话（一次性消费）
+  usePendingExpert(onboarded);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [approvalSettings, setApprovalSettings] = useState(() => loadJSON('mj_approval_settings', { sandbox_policy: 'workspace-write', approval_mode: 'on-request' }));
   // 登录系统已移除：恒用本机数据层（local-first），启动即直达主界面
@@ -122,25 +119,29 @@ export default function App() {
   // 三栏布局状态（对标 Codex）：左侧栏与右侧常驻面板可独立折叠
   const [sidebarOpen, setSidebarOpen] = useState(() => loadJSON('mj_sidebar_open', true));
   const [paneOpen, setPaneOpen] = useState(() => loadJSON('mj_pane_open', false));
-  const [paneTab, setPaneTab] = useState('diff'); // diff | files | preview
+  const [paneTab, setPaneTab] = useState('diff'); // diff | files | subtasks | terminal | browser | sidechat
+  // 顶栏筛选：按状态过滤左栏会话（对标 WorkBuddy 头部第三枚左键）；默认不过滤
+  const [threadFilter, setThreadFilter] = useState('all'); // all | running | awaiting
+  // 顶栏筛选弹层（点击外部 / Esc 关闭）
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterRef = useRef(null);
+  useEffect(() => {
+    if (!filterOpen) return undefined;
+    const onDown = (e) => { if (!filterRef.current?.contains(e.target)) setFilterOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setFilterOpen(false); };
+    document.addEventListener('mousedown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [filterOpen]);
   const [agentFiles, setAgentFiles] = useState([]); // 本轮 Agent 改动的文件（Diff 面板「上一轮」筛选）
   // T1-4：子任务事件按会话分桶（threadId -> 事件流），后台会话的子任务照常入桶，切回仍可见
   const [subagentsByThread, setSubagentsByThread] = useState({});
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    // TH5：应用自定义强调色（内联变量优先于主题文件定义；未设置则回落主题色）
-    const accent = localStorage.getItem('mj_accent');
-    const root = document.documentElement;
-    if (accent) {
-      root.style.setProperty('--theme-accent', accent);
-      root.style.setProperty('--sem-accent', accent);
-    } else {
-      root.style.removeProperty('--theme-accent');
-      root.style.removeProperty('--sem-accent');
-    }
-    localStorage.setItem('mj_theme', theme);
-  }, [theme]);
+  // 主题落地（写 data-theme/data-platform + 强调色双写 + 记住选择）见 lib/appState.ts
+  useEffect(() => { applyThemeToDocument(theme); }, [theme]);
 
   // TH2：顶栏快捷换肤入口 —— 在主题列表中循环（点击循环，全部主题在 设置 → 外观）
   function cycleTheme() {
@@ -190,7 +191,14 @@ export default function App() {
         else setSidebarOpen((v) => !v);            // ⌘B 左侧栏
       } else if (k === 'p') {
         e.preventDefault();
-        setPaletteOpen(true);                       // ⌘P 复用命令面板（文件搜索）
+        // 右栏停在「文件」面板时，⌘P 落到该面板自己的搜索框（与其占位提示 ⌘P 一致）；
+        // 其余情况仍打开命令面板（面板内含文件搜索 + 会话跳转）。
+        const ps = paneStateRef.current;
+        if (ps.open && ps.tab === 'files') {
+          window.dispatchEvent(new CustomEvent('mjcode:focus-file-search'));
+        } else {
+          setPaletteOpen(true);
+        }
       }
     }
     window.addEventListener('keydown', onKey);
@@ -239,6 +247,9 @@ export default function App() {
   // 快捷键 effect 闭包是空的，用 ref 读取最新的任务态（⌘⌥B 需按作用域判断）
   const activeThreadRef = useRef(null);
   useEffect(() => { activeThreadRef.current = activeThread; }, [activeThread]);
+  // 同上：⌘P 需按「右栏是否停在文件面板」分流，闭包读 ref 防陈旧
+  const paneStateRef = useRef({ open: false, tab: 'diff' });
+  useEffect(() => { paneStateRef.current = { open: paneOpen, tab: paneTab }; }, [paneOpen, paneTab]);
   useEffect(() => {
     if (!activeThreadId) setPaneOpen(false);
     // 打开的文件标签属于「某个任务在看的文件」：切任务必须清空，
@@ -251,6 +262,7 @@ export default function App() {
   // 打开文件到右侧预览栏（已在标签中则仅切换，不重复入栈）
   // 相对路径统一按当前项目根解析：聊天里模型常只写文件名（如「报告已生成：xxx.md」），
   // 若原样入栈，FileViewerPane 会以主进程 cwd 为基准去找 → 必然找不到文件。
+  // 落点 tab 为 files：预览已并入「文件」面板（左预览 + 右文件树同屏），不再是独立 tab。
   function openFileInPane(filePath) {
     if (!filePath) return;
     const raw = String(filePath);
@@ -258,7 +270,7 @@ export default function App() {
     const resolved = (!isAbsolute && activeProject?.path) ? `${activeProject.path}/${raw.replace(/^\.\//, '')}` : raw;
     setOpenedFiles((prev) => (prev.includes(resolved) ? prev : [...prev, resolved]));
     setActiveFilePath(resolved);
-    setPaneTab('preview');
+    setPaneTab('files');
     setPaneOpen(true);
   }
 
@@ -364,9 +376,15 @@ export default function App() {
   }
   useEffect(() => () => clearTimeout(loadDataTimerRef.current), []);
 
+  // 启动页与首启向导的叠放关系：splash 用 fixed 全屏覆盖，两层同时挂载，
+  // 这样 splash 结束只是卸载自己，不会让下方界面重新挂载（避免数据二次拉取）。
+  const splash = splashDone ? null : <SplashScreen onDone={() => setSplashDone(true)} />;
+
   // 首启向导未完成时优先展示（登录系统已移除：直达主界面，仅保留首启向导门禁）
   if (!onboarded) {
     return (
+      <>
+      {splash}
       <Onboarding
         globalProviders={globalProviders}
         userProviders={userProviders}
@@ -375,12 +393,22 @@ export default function App() {
         // B5：安全默认档步骤——向导内选择即落地为审批/沙箱设置（用户跳过选择时也带安全默认离开）
         approvalSettings={approvalSettings}
         onApprovalSettingsChange={setApprovalSettings}
-        onFinish={(prompt) => {
+        onFinish={(prompt, extras) => {
           localStorage.setItem('mj_onboarded', '1');
           setOnboarded(true);
           if (prompt) setInitialPrompt(prompt);
+          // 引导里选的技能：合并进启用列表（setEnabledSkillsSafe 只接受值，不接受 updater）
+          if (extras && Array.isArray(extras.skillIds) && extras.skillIds.length > 0) {
+            setEnabledSkillsSafe([...new Set([...enabledSkills, ...extras.skillIds])]);
+          }
+          // 选中的数字员工：先落盘，等主界面挂载后再注入当前会话（见下方 pending-expert effect）
+          if (extras && extras.expert) {
+            try { localStorage.setItem('mj_pending_expert', JSON.stringify(extras.expert)); }
+            catch (e) { console.warn('[app] failed to persist pending expert:', e); }
+          }
         }}
       />
+      </>
     );
   }
 
@@ -464,7 +492,91 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-bg text-text">
-      <div className="flex flex-1 min-h-0">
+      {splash}
+      {/* 统一顶栏（常驻全宽）：左「左栏开关 + 搜索」／中 标题／右「右栏开关 + 主题 + 数据」。
+          全宽、不随左右栏开合移动——两个侧边栏开关常驻可点（左栏/右栏收起后仍在，不会失去回路）。
+          pl-20：预留 macOS 交通灯（hiddenInset，窗口左上角）的位置，避免控件被系统按钮压住。 */}
+      <header className="flex items-center gap-2 pl-[var(--titlebar-inset)] pr-3 h-11 shrink-0 border-b border-border">
+        <button
+          onClick={() => setSidebarOpen((v) => !v)}
+          className="text-text2 hover:text-text p-1 rounded-lg"
+          title={tr('app.toggleSidebarTitle')}
+          aria-label={tr('app.toggleSidebar')}
+        >
+          <IconSidebar size={16} />
+        </button>
+        <button
+          onClick={() => setPaletteOpen(true)}
+          className="text-text2 hover:text-text p-1 rounded-lg"
+          title={tr('app.searchTitle')}
+          aria-label={tr('app.search')}
+        >
+          <IconSearch size={16} />
+        </button>
+        {/* 顶栏筛选（对标 WorkBuddy 头部第三枚左键）：按状态过滤左栏会话 */}
+        <div className="relative" ref={filterRef}>
+          <button
+            onClick={() => setFilterOpen((v) => !v)}
+            className={`p-1 rounded-lg ${threadFilter !== 'all' ? 'text-text bg-hover' : 'text-text2 hover:text-text'}`}
+            title={tr('app.filterTitle')}
+            aria-label={tr('app.filter')}
+            aria-expanded={filterOpen}
+          >
+            <IconFilter size={16} />
+          </button>
+          {filterOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 top-full mt-1 z-menu w-[168px] py-1 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]"
+            >
+              {[
+                { id: 'all', labelKey: 'app.filterAll' },
+                { id: 'running', labelKey: 'app.filterRunning' },
+                { id: 'awaiting', labelKey: 'app.filterAwaiting' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  role="menuitem"
+                  onClick={() => { setThreadFilter(opt.id); setFilterOpen(false); }}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-hover ${threadFilter === opt.id ? 'text-text' : 'text-text2'}`}
+                >
+                  <span>{tr(opt.labelKey)}</span>
+                  {threadFilter === opt.id && <IconCheck size={13} className="text-accent" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <span className="text-xs text-text2 truncate min-w-0 max-w-[38%]" title={activeProject?.path || ''}>
+          {activeProject?.path ? projectDisplayName(activeProject) : tr('app.noProject')}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          {/* 右栏开关常驻（与左栏开关对称）：开/关都在，状态用高亮区分 */}
+          <button
+            onClick={() => { if (activeThreadRef.current) setPaneOpen((v) => !v); }}
+            disabled={!activeThread}
+            className={`p-1 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen ? 'text-text' : 'text-text2 hover:text-text'}`}
+            title={activeThread ? tr('app.togglePaneTitle') : tr('app.paneDisabledHint')}
+            aria-label={tr('app.togglePane')}
+          >
+            <IconPanelRight size={16} />
+          </button>
+          <button onClick={cycleTheme}
+            className="text-text2 hover:text-text px-1.5 py-1 rounded-lg" title={tr('app.themeTitle', { name: themeLabel() })} aria-label={tr('app.switchTheme')}>
+            <IconPalette size={15} />
+          </button>
+          {localMode && (
+            <span className="text-caption px-1.5 py-0.5 rounded-md bg-warn-bg text-warn" title={tr('app.offlineTitle')}>
+              {tr('app.offlineMode')}
+            </span>
+          )}
+          <button onClick={() => { resetView(); setShowDashboard(true); }}
+            className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 ${showDashboard ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'}`}>
+            <IconChart size={14} /> {tr('app.data')}
+          </button>
+        </div>
+      </header>
+      <div className="flex flex-1 min-h-0 relative">
       {sidebarOpen && (
       // P1-E：归档管理仅本地模式可用（服务端归档 API 未实现）；在线模式隐藏入口，
       // 此前点击直接弹英文错误（删除语义双轨分裂，服务端列后续）
@@ -521,51 +633,10 @@ export default function App() {
         onSelectProject={selectProject}
         onRemoveProject={removeProject}
         onRenameProject={renameProject}
-        onOpenSearch={() => setPaletteOpen(true)}
+        filter={threadFilter}
       />
       )}
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="flex items-center gap-3 px-3 h-12 shrink-0 border-b border-border">
-          <button onClick={() => setSidebarOpen((v) => !v)}
-            className="text-text2 hover:text-text text-xs px-2 py-1" title={tr('app.toggleSidebarTitle')}>
-            <IconSidebar size={15} />
-          </button>
-          <span className="text-xs text-text2 truncate" title={activeProject?.path || ''}>
-            {activeProject?.path ? projectDisplayName(activeProject) : tr('app.noProject')}
-          </span>
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={cycleTheme}
-              className="text-text2 hover:text-text px-1.5 py-1 rounded-lg" title={tr('app.themeTitle', { name: themeLabel() })} aria-label={tr('app.switchTheme')}>
-              <IconPalette size={15} />
-            </button>
-            {localMode && (
-              <span className="text-xs px-2 py-1 rounded bg-warn-bg text-warn" title={tr('app.offlineTitle')}>
-                {tr('app.offlineMode')}
-              </span>
-            )}
-            <button onClick={() => { if (activeThread) { setPaneTab('diff'); setPaneOpen(true); } }}
-              disabled={!activeThread}
-              className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'diff' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
-              title={activeThread ? tr('app.changesTitle') : tr('app.changesDisabledHint')}
-            >{tr('app.changes')}</button>
-            <button onClick={() => { if (activeThread) { setPaneTab('files'); setPaneOpen(true); } }}
-              disabled={!activeThread}
-              className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'files' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
-              title={activeThread ? tr('app.filesTitle') : tr('app.filesDisabledHint')}
-            >{tr('app.files')}</button>
-            <button onClick={() => { if (activeThread) { setPaneTab('preview'); setPaneOpen(true); } }}
-              disabled={!activeThread || openedFiles.length === 0}
-              className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${paneOpen && paneTab === 'preview' ? 'bg-surface text-text' : 'text-text2 hover:text-text'}`}
-              title={activeThread
-                ? (openedFiles.length ? tr('app.previewCount', { n: openedFiles.length }) : tr('app.previewOpenFirst'))
-                : tr('app.previewDisabledHint')}
-            >{tr('app.preview')}</button>
-            <button onClick={() => { resetView(); setShowDashboard(true); }}
-              className={`text-xs px-2 py-1 rounded-lg flex items-center gap-1 ${showDashboard ? 'bg-accent text-white' : 'text-text2 hover:text-text'}`}>
-              <IconChart size={14} /> {tr('app.data')}
-            </button>
-          </div>
-        </header>
         {showDashboard && <Dashboard />}
         {showScheduled && <ScheduledTasks />}
         {/* 任务编排已并入对话流（orchestrate_task 工具 + AgentDock 胶囊），不再有独立面板入口 */}
@@ -605,26 +676,35 @@ export default function App() {
         </div>
       </div>
 
-      {/* 右侧常驻面板：变更 / 文件 / 代码（同屏可见，不再全屏模态） */}
+      {/* 右侧常驻面板：变更 / 文件 / 任务摘要 / 终端（同屏可见，不再全屏模态）
+          面板切换、添加（+）、最大化、折叠四个控制点全在面板自己的顶栏上 */}
       <RightPane
         open={paneOpen}
         tab={paneTab}
         onTab={setPaneTab}
         onClose={() => setPaneOpen(false)}
-        diffPanel={<DiffReviewPanel projectPath={activeProject?.path} agentFiles={agentFiles} />}
-        filesPanel={activeProject?.path
-          ? <FileTree root={activeProject.path} onOpenFile={openFileInPane} />
-          : <PanelEmpty icon={IconFolderOpen} title={tr('app.noProjectSelected')} hint={tr('app.openProjectHint')} />}
-        previewPanel={openedFiles.length
-          ? <FileViewerPane
-              files={openedFiles}
-              active={activeFilePath}
-              projectPath={activeProject?.path}
-              onSelect={setActiveFilePath}
-              onClose={closeFileInPane}
-            />
-          : <PanelEmpty icon={IconFile} title={tr('app.noFileOpen')} hint={tr('app.openFileHint')} />}
-        subtasksPanel={<SubtaskTree events={(activeThread?.id && subagentsByThread[activeThread.id]) || []} />}
+        diffPanel={<DiffReviewPanel projectPath={activeProject?.path} agentFiles={agentFiles} threadId={activeThreadId} />}
+        filesPanel={
+          <FilesPanel
+            root={activeProject?.path}
+            files={openedFiles}
+            active={activeFilePath}
+            projectPath={activeProject?.path}
+            onSelect={setActiveFilePath}
+            onClose={closeFileInPane}
+            onOpenFile={openFileInPane}
+          />
+        }
+        subtasksPanel={
+          <TaskSummaryPanel
+            threadId={activeThreadId}
+            cwd={activeProject?.path || ''}
+            events={(activeThread?.id && subagentsByThread[activeThread.id]) || []}
+          />
+        }
+        terminalPanel={<TerminalPanel cwd={activeProject?.path} />}
+        browserPanel={<BrowserPanel />}
+        sidechatPanel={<SideChatPanel model={selectedModel} />}
       />
 
       {showEcosystem && (
@@ -681,6 +761,8 @@ export default function App() {
           { label: tr('app.cmdUsage'), run: () => { resetView(); setShowDashboard(true); } },
           { label: tr('app.cmdChanges'), hint: '⌘⌥B', run: () => { if (activeThread) { setPaneTab('diff'); setPaneOpen(true); } } },
           { label: tr('app.cmdFiles'), run: () => { if (activeThread) { setPaneTab('files'); setPaneOpen(true); } } },
+          { label: tr('app.cmdSummary'), run: () => { if (activeThread) { setPaneTab('subtasks'); setPaneOpen(true); } } },
+          { label: tr('app.cmdTerminal'), run: () => { if (activeThread) { setPaneTab('terminal'); setPaneOpen(true); } } },
           { label: tr('app.cmdToggleSidebar'), hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
           { label: tr('app.cmdScheduled'), run: () => { resetView(); setShowScheduled(true); } },
           { label: tr('app.cmdTheme', { name: themeLabel() }), run: cycleTheme },

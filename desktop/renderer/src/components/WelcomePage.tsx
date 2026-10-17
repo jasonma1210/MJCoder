@@ -27,11 +27,11 @@ export default function WelcomePage({
   const { t } = useI18n();
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-8">
-      <h1 className="text-4xl font-semibold text-center mb-3">{t('welcome.heading')}</h1>
+      <h1 className="text-3xl font-semibold text-center mb-3">{t('welcome.heading')}</h1>
       {/* 副标题 = 项目入口（真机反馈：新建任务页找不到「选择目录/创建项目」入口）。
           只在本轮主动选择过项目时才说「在 X 中」——重启后残留的上次项目
           不是用户的选择，不得当默认事实展示（空态不得伪装成已选） */}
-      <p className="text-text2 text-sm mb-12">
+      <p className="text-text2 text-sm mb-8">
         {project?.path && projectPicked ? (
           <>{t('welcome.inProject', { name: projectDisplayName(project) })} · </>
         ) : (
@@ -43,7 +43,7 @@ export default function WelcomePage({
         </button>
       </p>
 
-      <div className="grid grid-cols-4 gap-4 max-w-3xl mb-12">
+      <div className="grid gap-3 max-w-3xl mb-8 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
         {/* C5：固定 8 槽位（ambient 不足用默认建议补齐），避免 4+3 排列不齐 */}
         {(() => {
           const DEFAULT_TIPS = [t('welcome.defaultTip1'), t('welcome.defaultTip2')];

@@ -9,5 +9,7 @@
   "threadsSection": "Threads",
   "addProject": "Add Project",
   "archived": "Archived",
-  "settings": "Settings"
+  "settings": "Settings",
+  "collapseTitle": "Collapse sidebar (⌘B)",
+  "collapse": "Collapse sidebar"
 }

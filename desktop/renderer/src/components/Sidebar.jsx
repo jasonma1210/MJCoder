@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
-import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSearch, IconSettings, IconArchive } from './icons';
+import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSettings, IconArchive } from './icons';
 import logo from '../assets/logo.png';
 import { useI18n } from '../i18n';
 
@@ -11,8 +11,7 @@ export default function Sidebar({
   threads, activeThread, onSelect, onNew, onDelete, onRenameThread, onAssignThread, onOpenArchive,
   onOpenScheduled, onOpenEcosystem, onOpenProjectPicker, onOpenSettings,
   projects, activeProject, onSelectProject, onRemoveProject, onRenameProject,
-  onNewThread,
-  onOpenSearch,
+  onNewThread, filter,
 }) {
   const { t } = useI18n();
   // 版本号从主进程 app.getVersion() 动态获取（此前硬编码 v1.0.0，发版后永远显示旧版本）
@@ -21,22 +20,15 @@ export default function Sidebar({
     window.mjcode?.getAppVersion?.().then((v) => { if (v) setVersion(String(v)); }).catch(() => {});
   }, []);
   return (
-    <aside className="w-[260px] flex flex-col bg-sidebar border-r border-border">
-      {/* 品牌头（Bug4，参考 WorkBuddy）：首行高度留给 macOS 交通灯（右侧仅搜索钮），
-          应用名 + 版本独立成行，不再与交通灯挤在同一行 */}
-      <div className="shrink-0">
-        <div className="flex items-center justify-end px-4 h-11">
-          <button onClick={() => onOpenSearch?.()} className="text-text2 hover:text-text" title={t('sidebar.searchTitle')} aria-label={t('sidebar.searchAria')}>
-            <IconSearch size={16} />
-          </button>
+    <aside className="w-[clamp(216px,20vw,260px)] flex flex-col bg-sidebar border-r border-border">
+      {/* 品牌头：左栏开关与搜索已上移到统一顶栏（常驻全宽，收起了也还能点），
+          此处只留品牌与版本。顶栏已为 macOS 交通灯预留内边距，本行不再需要空出一行。 */}
+      <div className="shrink-0 px-4 pt-3 pb-2">
+        <div className="flex items-center gap-2">
+          <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
+          <div className="font-semibold text-base leading-none">MJ Code</div>
         </div>
-        <div className="px-4 pb-3 pt-1">
-          <div className="flex items-center gap-2">
-            <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
-            <div className="font-semibold text-[15px] leading-none">MJ Code</div>
-          </div>
-          <div className="text-xs text-text2 mt-1">{version ? `v${version} ${t('sidebar.beta')}` : ''} · {t('sidebar.tagline')}</div>
-        </div>
+        <div className="text-xs text-text2 mt-1">{version ? `v${version} ${t('sidebar.beta')}` : ''} · {t('sidebar.tagline')}</div>
       </div>
 
       {/* 主操作（对标 Codex：New chat / Scheduled / Plugins） */}
@@ -47,7 +39,7 @@ export default function Sidebar({
       </div>
 
       {/* 会话（项目 → 会话 二级结构） */}
-      <div className="flex items-center justify-between mt-4 px-4 mb-1 text-xs text-text2 uppercase tracking-wider">
+      <div className="flex items-center justify-between mt-4 px-4 mb-1 text-caption text-text2">
         <span>{t('sidebar.threadsSection')}</span>
         <button onClick={onOpenProjectPicker} className="text-text2 hover:text-text" title={t('sidebar.addProject')} aria-label={t('sidebar.addProject')}>
           <IconPlus size={13} />
@@ -58,6 +50,7 @@ export default function Sidebar({
         activeProject={activeProject}
         activeThread={activeThread}
         threads={threads}
+        filter={filter}
         onSelectThread={onSelect}
         onSelectProject={onSelectProject}
         onDeleteThread={onDelete}
@@ -83,7 +76,7 @@ export default function Sidebar({
 function NavItem({ icon, label, onClick, active }) {
   return (
     <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm truncate ${active ? 'bg-surface text-text' : 'hover:bg-hover text-text2'}`}>
+      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm truncate ${active ? 'bg-hover text-text font-medium' : 'hover:bg-hover text-text2'}`}>
       <span className="shrink-0">{icon}</span> {label}
     </button>
   );

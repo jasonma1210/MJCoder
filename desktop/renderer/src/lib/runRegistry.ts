@@ -13,6 +13,7 @@ export function makeRunState(runId, threadId) {
     streaming: '', reasoning: '', toolCalls: [],
     finalMsg: null, applied: true, // applied=false 表示完成消息还没进过可见消息列表（切回时补挂）
     runSummary: null, startedAt: 0,
+    files: [], // 本轮产出文件（write_file/edit_file/apply_patch 目标），切回会话时渲染成卡片
   };
   runRegistry.set(threadId, rs);
   runIndex.set(runId, rs);

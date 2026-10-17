@@ -20,7 +20,7 @@ export default function Dashboard() {
   if (error) {
     return (
       <div className="p-6">
-        <h2 className="text-lg font-semibold mb-4">{t('dashboard.title')}</h2>
+        <h2 className="text-xl font-semibold mb-4">{t('dashboard.title')}</h2>
         <p className="text-text2 text-sm">{error}</p>
       </div>
     );
@@ -29,7 +29,7 @@ export default function Dashboard() {
   if (!stats) {
     return (
       <div className="p-6">
-        <h2 className="text-lg font-semibold mb-4">{t('dashboard.title')}</h2>
+        <h2 className="text-xl font-semibold mb-4">{t('dashboard.title')}</h2>
         <div className="grid grid-cols-4 gap-4 mb-6">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-surface rounded-lg border border-border p-4 animate-pulse">
@@ -60,11 +60,11 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 overflow-y-auto">
-      <h2 className="text-lg font-semibold mb-1">{t('dashboard.title')}</h2>
+      <h2 className="text-xl font-semibold mb-1">{t('dashboard.title')}</h2>
       <p className="text-text2 text-xs mb-4">{t('dashboard.totalTokens', { n: fmt(totalTokens) })}</p>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid gap-4 mb-6 [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
         <StatCard label={t('dashboard.chats')} value={fmt(stats.threads || 0)} icon={<IconMessage size={20} />} />
         <StatCard label={t('dashboard.messages')} value={fmt(stats.messages || 0)} icon={<IconMail size={20} />} />
         <StatCard label={t('dashboard.inputTokens')} value={fmt(stats.tokens_input || 0)} icon={<IconDownload size={20} />} />
@@ -89,7 +89,7 @@ export default function Dashboard() {
                 <span>{d.model}</span>
                 <span className="text-text2">{t('dashboard.modelRow', { n: d.messages, tokens: fmt(d.tokens) })}</span>
               </div>
-              <div className="h-2 bg-bg rounded-full overflow-hidden">
+              <div className="h-2 bg-hover rounded-full overflow-hidden">
                 <div className="h-full bg-accent rounded-full" style={{ width: `${((d.tokens || 0) / maxTokens) * 100}%` }} />
               </div>
             </div>
@@ -139,7 +139,7 @@ function StatCard({ label, value, icon }) {
   return (
     <div className="bg-surface rounded-lg border border-border p-4">
       <div className="text-accent mb-1">{icon}</div>
-      <div className="text-2xl font-bold">{value}</div>
+      <div className="text-xl font-semibold tabular-nums">{value}</div>
       <div className="text-xs text-text2">{label}</div>
     </div>
   );

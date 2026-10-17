@@ -7,7 +7,10 @@ import { useI18n } from '../i18n';
 // 嵌入右侧常驻面板渲染，不再使用全屏模态（对标 Codex 的 Review Pane）
 // A2：放弃 = gitCheckout 销毁磁盘工作，必须确认 + 落快照 + 5s 可撤销
 // R1：文件默认折叠为统计行，点击展开 hunk —— 大变更（几百文件）不再全量渲染卡死
-export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
+// 差集 A（方案文档 §4.2，最高优先核心差集）：行内评论通道——用户对 hunk 发表评论，
+// 经 IPC diff:comment 存主进程（挂线程）后包装成 user 消息回灌模型，把「用户审查」
+// 从否决权升级为指导权（对标 Codex：inline review → agent continues）。
+export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId = null }) {
   const { t } = useI18n();
   const [files, setFiles] = useState([]);
   const [lastTurnOnly, setLastTurnOnly] = useState(false);
@@ -15,12 +18,20 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [expandedFiles, setExpandedFiles] = useState(() => new Set());
+  // 视图口径（对标 Codex 的 Unstaged / Staged 切换）：默认看未暂存；接受后该块会移到「已暂存」，
+  // 没有这个切换的话用户点完接受只会看到块消失，无法确认它到底进了哪里。
+  const [scope, setScope] = useState('unstaged'); // 'unstaged' | 'staged'
   // P0-E：创建 PR（gh CLI）——diff 审查的「交付」出口
   const [prOpen, setPrOpen] = useState(false);
   const [prForm, setPrForm] = useState({ title: '', body: '', base: '', draft: true });
   const [prBusy, setPrBusy] = useState(false);
   const [prError, setPrError] = useState('');
   const [prResult, setPrResult] = useState(null); // { url }
+  // 差集 A：行内评论（hunk 级最小可靠实现）——草稿开关 + 评论列表（按 hunk 聚合展示）
+  const [commentDraft, setCommentDraft] = useState(null); // { filePath, hunkIndex } | null
+  const [commentText, setCommentText] = useState('');
+  const [comments, setComments] = useState([]); // { id, filePath, hunkIndex, lineRange, comment, createdAt }
+  const [commentBusy, setCommentBusy] = useState(false);
 
   function toggleFile(path) {
     setExpandedFiles((prev) => {
@@ -33,7 +44,9 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
   const load = useCallback(async () => {
     if (!projectPath || !window.mjcode?.gitDiff) return;
     try {
-      const r = await window.mjcode.gitDiff({ cwd: projectPath });
+      // 视图口径：未暂存 = `git diff`（索引↔工作区）；已暂存 = `git diff --staged`（HEAD↔索引）。
+      // 两者都取「相对索引」或「相对 HEAD」的 hunk 头，因此各自视图内的块可直接 apply。
+      const r = await window.mjcode.gitDiff({ cwd: projectPath, staged: scope === 'staged' });
       if (r.error && !r.stdout) { setError(r.error); setFiles([]); return; }
       setError('');
       setFiles(parseDiff(r.stdout || ''));
@@ -41,7 +54,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
       console.warn('[diffReview] load failed:', err);
       setError(err.message || t('diff.loadFailed'));
     }
-  }, [projectPath, t]);
+  }, [projectPath, t, scope]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -69,22 +82,24 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
   }
 
   async function reject(file) {
-    // 文案改「放弃修改」并明确后果；快照默认保留，5s 内可撤销
+    if (busy) return;
+    // 先落快照，再问——确认文案里能直接告诉用户「已经备份好了，5 秒内可撤销」。
+    // 快照成功也照问：不可逆的破坏性动作保留一道人工确认，比只靠自动撤销更稳。
+    // 代价是比「只有审批卡」多一次点击，换来的是「确认时就知道怎么撤回」而不是「事后才发现」。
+    setBusy(true);
+    const snapshotId = await snapshot([file.path]);
     const ok = await confirm({
       title: t('diff.discard'),
-      message: t('diff.discardMessage', { path: file.path, add: file.added, del: file.removed }),
+      message: t('diff.discardMessage', { path: file.path, add: file.added, del: file.removed })
+        + (snapshotId ? `\n\n${t('diff.undoAvailable')}` : ''),
       danger: true,
       confirmLabel: t('diff.discard'),
     });
-    if (!ok) return;
-    setBusy(true);
+    if (!ok) { setBusy(false); return; }
     try {
-      const snapshotId = await snapshot([file.path]);
-      // 已暂存文件先取消暂存再还原，保证精确还原
-      const staged = await window.mjcode.gitStatus({ cwd: projectPath });
-      const isStaged = (staged.stdout || '').split('\n').some((l) => l.trim().startsWith('M ') && l.includes(file.path));
-      if (isStaged) await window.mjcode.gitRestoreStaged({ cwd: projectPath, files: file.path });
-      const r = await window.mjcode.gitCheckout({ cwd: projectPath, files: file.path });
+      // 一条命令同时回退索引与工作区：此前「先 restore --staged 再 checkout」是两次 IPC，
+      // 也就是同一个动作要过两次审批卡。
+      const r = await window.mjcode.gitDiscardFiles({ cwd: projectPath, conversationId: threadId, files: file.path });
       if (r.error) {
         setNotice(t('diff.discardFailed', { error: r.error }));
       } else {
@@ -142,41 +157,30 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
   }
 
   async function rejectAll() {
-    // 「全部放弃」：输入文件数量二次确认 + 快照 + 5s 可撤销
+    if (!files.length || busy) return;
+    // 「全部放弃」：先落快照——快照成功才有撤销出口，据此决定要不要面板确认。
     const list = files.map((f) => f.path).slice(0, 8).join('\n');
     const more = files.length > 8 ? `\n${t('diff.moreFiles', { n: files.length })}` : '';
-    const ok = await countConfirm({
+    setBusy(true);
+    const allPaths = files.map((f) => f.path);
+    const snapshotId = await snapshot(allPaths);
+    // 与单文件一致：快照成功也照问，确认文案里附带「已备份、5 秒内可撤销」。
+    const proceed = await countConfirm({
       title: t('diff.discardAllTitle'),
-      message: t('diff.discardAllMessage', { n: files.length, list, more }),
+      message: t('diff.discardAllMessage', { n: files.length, list, more })
+        + (snapshotId ? `\n\n${t('diff.undoAvailable')}` : ''),
       danger: true,
       count: files.length,
       confirmLabel: t('diff.discardAll'),
     });
-    if (!ok) return;
-    setBusy(true);
-    const allPaths = files.map((f) => f.path);
-    const snapshotId = await snapshot(allPaths);
-    // V24：逐项收集结果——部分失败不算全部成功，回执明确「成功 N 项、失败 M 项」
+    if (!proceed) { setBusy(false); return; }
+    // 批量一次调用：逐个文件 checkout 会把 L3 审批卡刷成 N 张（用户得连点 N 次确认）。
     const failures = []; // { path, error }
     try {
-      // R2：批量取全量 staged 集合，暂存文件先批量取消暂存再逐文件还原
-      // （还原阶段逐文件执行以定位失败项；此前批量 gitCheckout 失败时无法区分
-      //  哪些文件已销毁、哪些仍带着改动，回执却统一报「全部成功」）
-      const staged = await window.mjcode.gitStatus({ cwd: projectPath });
-      const stagedLines = (staged.stdout || '').split('\n').filter((l) => l.trim());
-      const stagedPaths = new Set(stagedLines.map((l) => l.slice(3).trim()));
-      const toUnstage = allPaths.filter((p) => stagedPaths.has(p));
-      if (toUnstage.length > 0) await window.mjcode.gitRestoreStaged({ cwd: projectPath, files: toUnstage });
+      const r = await window.mjcode.gitDiscardFiles({ cwd: projectPath, conversationId: threadId, files: allPaths });
+      if (r.error) for (const p of allPaths) failures.push({ path: p, error: r.error });
     } catch (err) {
-      console.warn('[diffReview] batch unstage failed (per-file checkout still attempted):', err);
-    }
-    for (const p of allPaths) {
-      try {
-        const r = await window.mjcode.gitCheckout({ cwd: projectPath, files: p });
-        if (r.error) failures.push({ path: p, error: r.error });
-      } catch (err) {
-        failures.push({ path: p, error: err.message });
-      }
+      for (const p of allPaths) failures.push({ path: p, error: err.message });
     }
     const okCount = allPaths.length - failures.length;
     setNotice(batchNotice(okCount, failures, 'diff.discardedCount', 'diff.discardAllPartial'));
@@ -243,11 +247,105 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
   async function rejectHunk(file, hunk) {
     setBusy(true);
     try {
-      const r = await window.mjcode.gitApplyHunk({ cwd: projectPath, patch: hunkPatch(file.path, hunk) });
+      const r = await window.mjcode.gitApplyHunk({ cwd: projectPath, patch: hunkPatch(file, hunk) });
       setNotice(r.error ? t('diff.revertFailed', { error: r.error }) : t('diff.hunkDiscarded'));
     } catch (err) { setNotice(t('diff.revertFailed', { error: err.message })); }
     setBusy(false);
     await load();
+  }
+
+  // 接受单个代码块（对标 Codex 的 Per hunk stage）：只写索引，工作区不动——
+  // 因此「其余块仍在未暂存区」，用户可继续逐块决定，不会像整文件 add 那样一次吞掉全部改动。
+  async function acceptHunk(file, hunk) {
+    setBusy(true);
+    try {
+      const r = await window.mjcode.gitApplyHunkCached({ cwd: projectPath, patch: hunkPatch(file, hunk) });
+      setNotice(r.error ? t('diff.hunkStageFailed', { error: r.error }) : t('diff.hunkStaged'));
+    } catch (err) { setNotice(t('diff.hunkStageFailed', { error: err.message })); }
+    setBusy(false);
+    await load();
+  }
+
+  // 取消暂存单块（已暂存视图）：`git apply --cached --reverse` 只把该块移出索引，工作区改动保留
+  async function unstageHunk(file, hunk) {
+    setBusy(true);
+    try {
+      const r = await window.mjcode.gitApplyHunkUnstage({ cwd: projectPath, patch: hunkPatch(file, hunk) });
+      setNotice(r.error ? t('diff.unstageHunkFailed', { error: r.error }) : t('diff.hunkUnstaged'));
+    } catch (err) { setNotice(t('diff.unstageHunkFailed', { error: err.message })); }
+    setBusy(false);
+    await load();
+  }
+
+  // 取消暂存整个文件（已暂存视图）：git restore --staged，工作区不动
+  async function unstageFile(file) {
+    setBusy(true);
+    try {
+      const r = await window.mjcode.gitRestoreStaged({ cwd: projectPath, conversationId: threadId, files: file.path });
+      setNotice(r.error ? t('diff.unstageFileFailed', { error: r.error }) : t('diff.fileUnstaged', { path: file.path }));
+    } catch (err) { setNotice(t('diff.unstageFileFailed', { error: err.message })); }
+    setBusy(false);
+    await load();
+  }
+
+  // 差集 A：切换某个 hunk 的评论输入（再点一次收起）
+  function toggleComment(filePath, hunkIndex) {
+    setCommentDraft((prev) => (
+      prev && prev.filePath === filePath && prev.hunkIndex === hunkIndex ? null : { filePath, hunkIndex }
+    ));
+    setCommentText('');
+  }
+
+  function hunkComments(filePath, hunkIndex) {
+    return comments.filter((c) => c.filePath === filePath && c.hunkIndex === hunkIndex);
+  }
+
+  // 差集 A：提交行内评论——主进程存储（挂线程）并返回包装好的回灌 user 消息；
+  // 成功后派发 mjcode:diff-comment，由发送链路（useAgentRun 的 send）触发下一轮模型调用。
+  // 负载带 diffSnippet：回灌消息必须让模型同时看到「评论」与「被评论的变更本身」，
+  // 否则模型只看到评论、看不到自己做过什么（方案文档 §4.2 关键约束）。
+  async function submitComment(file, hunk, hunkIndex) {
+    const text = commentText.trim();
+    if (!text) return;
+    if (!threadId) { setNotice(t('diff.noThread')); return; }
+    const lineRange = hunkLineRange(hunk);
+    setCommentBusy(true);
+    try {
+      const r = await window.mjcode?.diffComment?.({
+        threadId,
+        filePath: file.path,
+        hunkIndex,
+        lineRange,
+        comment: text,
+        diffSnippet: (hunk.lines || []).join('\n').slice(0, 4000),
+      });
+      if (!r?.ok) {
+        setNotice(t('diff.commentFailed', { error: r?.error || t('diff.unknownError') }));
+        setCommentBusy(false);
+        return;
+      }
+      setComments((prev) => [...prev, {
+        id: r.comment?.id || `dc-${Date.now()}`,
+        filePath: file.path,
+        hunkIndex,
+        lineRange,
+        comment: text,
+        createdAt: r.comment?.createdAt || Date.now(),
+      }]);
+      setNotice(t('diff.commentSent'));
+      setCommentText('');
+      setCommentDraft(null);
+      if (r.feedback?.content) {
+        window.dispatchEvent(new CustomEvent('mjcode:diff-comment', { detail: { text: r.feedback.content } }));
+      } else {
+        // 主进程未返回回灌消息：评论已存储，但本轮不会触发模型调用——如实告警，不假装已发送
+        console.warn('[diffReview] diff:comment response missing feedback; comment stored but no follow-up turn triggered');
+      }
+    } catch (err) {
+      console.warn('[diffReview] comment submit failed:', err);
+      setNotice(t('diff.commentFailed', { error: err.message }));
+    }
+    setCommentBusy(false);
   }
 
   return (
@@ -259,6 +357,18 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
           <span className="text-success text-xs">+{totalAdd}</span>
           <span className="text-danger text-xs">−{totalDel}</span>
         </h3>
+        <span className="flex items-center gap-1">
+          {/* 视图切换：接受后的块落在「已暂存」，不切过去就看不到（也确认不了） */}
+          {[['unstaged', t('diff.scopeUnstaged')], ['staged', t('diff.scopeStaged')]].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setScope(key)}
+              className={`text-xs px-2 py-1 rounded-md ${scope === key ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </span>
         <button onClick={load} className="text-text2 hover:text-text p-1" title={t('diff.refresh')} aria-label={t('diff.refreshAria')}>
           <IconRefresh size={14} />
         </button>
@@ -266,7 +376,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
           onClick={() => setLastTurnOnly((v) => !v)}
           disabled={agentSet.size === 0}
           title={agentSet.size === 0 ? t('diff.noAgentChanges') : t('diff.lastTurnTitle')}
-          className={`text-[11px] px-2 py-1 rounded-md ${lastTurnOnly ? 'bg-accent text-white' : 'text-text2 hover:text-text'} disabled:opacity-40`}
+          className={`text-xs px-2 py-1 rounded-md ${lastTurnOnly ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'} disabled:opacity-40`}
         >
           {t('diff.lastTurn')}
         </button>
@@ -280,7 +390,9 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
         ) : !projectPath ? (
           <p className="text-text2 text-sm text-center py-10">{t('diff.noProject')}</p>
         ) : visible.length === 0 ? (
-          <p className="text-text2 text-sm text-center py-10">{lastTurnOnly ? t('diff.agentNoChange') : t('diff.noUncommitted')}</p>
+          <p className="text-text2 text-sm text-center py-10">
+            {lastTurnOnly ? t('diff.agentNoChange') : (scope === 'staged' ? t('diff.stagedEmpty') : t('diff.noUncommitted'))}
+          </p>
         ) : (
           <div className="space-y-3">
             {visible.map((f) => {
@@ -299,29 +411,94 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
                     <span className="flex items-center gap-2 shrink-0 ml-3">
                       <span className="text-success text-xs">+{f.added}</span>
                       <span className="text-danger text-xs">−{f.removed}</span>
-                      <button onClick={(e) => { e.stopPropagation(); reject(f); }} disabled={busy} title={t('diff.discardFileTitle')}
-                        className="text-xs px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-50">{t('diff.discard')}</button>
-                      <button onClick={(e) => { e.stopPropagation(); accept(f); }} disabled={busy} title={t('diff.stageFileTitle')}
-                        className="text-xs px-2 py-1 rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 flex items-center gap-1">
-                        <IconCheck size={12} /> {t('diff.accept')}
-                      </button>
+                      {scope === 'staged' ? (
+                        // 已暂存视图只提供「取消暂存」：在这里做「放弃修改」语义含糊
+                        // （既可能指丢弃工作区，也可能指把索引回退），交给未暂存视图处理。
+                        <button onClick={(e) => { e.stopPropagation(); unstageFile(f); }} disabled={busy}
+                          title={t('diff.unstageFileTitle')}
+                          className="text-xs px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-50">
+                          {t('diff.unstage')}
+                        </button>
+                      ) : (
+                        <>
+                          <button onClick={(e) => { e.stopPropagation(); reject(f); }} disabled={busy} title={t('diff.discardFileTitle')}
+                            className="text-xs px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-50">{t('diff.discard')}</button>
+                          <button onClick={(e) => { e.stopPropagation(); accept(f); }} disabled={busy} title={t('diff.stageFileTitle')}
+                            className="text-xs px-2 py-1 rounded bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50 flex items-center gap-1">
+                            <IconCheck size={12} /> {t('diff.accept')}
+                          </button>
+                        </>
+                      )}
                     </span>
                   </div>
                   {/* R1：默认折叠，展开才渲染 hunk 行 */}
                   {isOpen && (f.hunks?.length ? f.hunks : [{ header: '', lines: f.lines }]).map((h, hi) => (
                   <div key={hi} className="border-t border-border first:border-t-0">
                     <div className="flex items-center gap-2 px-3 py-1 bg-hover">
-                      <span className="text-[10px] font-mono text-text2 truncate flex-1">{h.header || t('diff.wholeChange')}</span>
-                      <button
-                        onClick={() => rejectHunk(f, h)}
-                        disabled={busy || !h.header}
-                        title={h.header ? t('diff.revertHunkTitle') : t('diff.noHunkRevert')}
-                        className="text-[10px] px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
-                      >
-                        {t('diff.revertHunk')}
-                      </button>
+                      <span className="text-caption font-mono text-text2 truncate flex-1">{h.header || t('diff.wholeChange')}</span>
+                      {scope === 'staged' ? (
+                        // 已暂存视图：块已在索引里，唯一有意义的动作是「取消暂存」（工作区改动保留）
+                        <button
+                          onClick={() => unstageHunk(f, h)}
+                          disabled={busy || !h.header}
+                          title={h.header ? t('diff.unstageHunkTitle') : t('diff.noHunkUnstage')}
+                          className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                        >
+                          {t('diff.unstageHunk')}
+                        </button>
+                      ) : (
+                        <>
+                          {/* 差集 A：行内评论入口（hunk 级最小可靠实现；未进入会话时禁用） */}
+                          <button
+                            onClick={() => toggleComment(f.path, hi)}
+                            disabled={!threadId}
+                            title={threadId ? t('diff.commentHunkTitle') : t('diff.noThread')}
+                            className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                          >
+                            {t('diff.comment')}
+                          </button>
+                          <button
+                            onClick={() => acceptHunk(f, h)}
+                            disabled={busy || !h.header}
+                            title={h.header ? t('diff.acceptHunkTitle') : t('diff.noHunkAccept')}
+                            className="text-caption px-1.5 py-0.5 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-40"
+                          >
+                            {t('diff.acceptHunk')}
+                          </button>
+                          <button
+                            onClick={() => rejectHunk(f, h)}
+                            disabled={busy || !h.header}
+                            title={h.header ? t('diff.revertHunkTitle') : t('diff.noHunkRevert')}
+                            className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                          >
+                            {t('diff.revertHunk')}
+                          </button>
+                        </>
+                      )}
                     </div>
-                    <pre className="text-xs font-mono p-3 overflow-x-auto max-h-56 leading-relaxed">
+                    {/* 差集 A：评论输入（点「评论」展开） */}
+                    {commentDraft && commentDraft.filePath === f.path && commentDraft.hunkIndex === hi && (
+                      <div className="px-3 py-2 border-t border-border space-y-2">
+                        <textarea
+                          value={commentText}
+                          onChange={(e) => setCommentText(e.target.value)}
+                          placeholder={t('diff.commentPlaceholder')}
+                          rows={2}
+                          className="w-full px-2 py-1.5 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => submitComment(f, h, hi)}
+                            disabled={commentBusy || !commentText.trim()}
+                            className="text-xs px-2.5 py-1 rounded bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">
+                            {commentBusy ? t('diff.submitting') : t('diff.submitComment')}
+                          </button>
+                          <button onClick={() => { setCommentDraft(null); setCommentText(''); }}
+                            className="text-xs px-2.5 py-1 rounded border border-border hover:bg-hover">{t('diff.cancel')}</button>
+                          <span className="text-caption text-text2 ml-auto">{t('diff.commentHint')}</span>
+                        </div>
+                      </div>
+                    )}
+                    <pre className="text-code font-mono p-3 overflow-x-auto max-h-56 leading-relaxed">
                       {h.lines.map((line, i) => {
                         let cls = 'text-text2';
                         if (line.startsWith('+') && !line.startsWith('+++')) cls = 'text-success bg-success-bg';
@@ -330,6 +507,16 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
                         return <div key={i} className={cls}>{line || ' '}</div>;
                       })}
                     </pre>
+                    {/* 差集 A：评论列表（展示在对应 hunk 下） */}
+                    {hunkComments(f.path, hi).map((c) => (
+                      <div key={c.id} className="px-3 py-1.5 text-xs border-t border-border">
+                        <span className="text-text2 mr-1.5">
+                          {c.lineRange ? t('diff.lineRange', { start: c.lineRange.start, end: c.lineRange.end }) : t('diff.wholeChange')}
+                        </span>
+                        <span className="whitespace-pre-wrap">{c.comment}</span>
+                        <span className="text-success ml-1.5">{t('diff.commentDone')}</span>
+                      </div>
+                    ))}
                   </div>
                   ))}
                 </div>
@@ -369,7 +556,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
               {prError && <p className="text-danger text-xs">{prError}</p>}
               <div className="flex items-center gap-2">
                 <button onClick={submitPr} disabled={prBusy}
-                  className="h-8 inline-flex items-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-50">{prBusy ? t('diff.creating') : t('diff.createPr')}</button>
+                  className="h-8 inline-flex items-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-50">{prBusy ? t('diff.creating') : t('diff.createPr')}</button>
                 <button onClick={() => setPrOpen(false)}
                   className="h-8 inline-flex items-center px-3 rounded-lg border border-border text-xs hover:bg-hover">{t('diff.cancel')}</button>
               </div>
@@ -391,7 +578,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [] }) {
             <button onClick={rejectAll} disabled={busy}
               className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover disabled:opacity-50">{t('diff.discardAll')}</button>
             <button onClick={acceptAll} disabled={busy}
-              className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50">{t('diff.acceptAll')}</button>
+              className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">{t('diff.acceptAll')}</button>
           </div>
         </div>
       )}
@@ -427,13 +614,31 @@ function parseDiff(stdout) {
   });
 }
 
-// 还原单个代码块：反向应用该 hunk 的 patch
-function hunkPatch(filePath, hunk) {
+// 单块 patch：接受（正向 --cached）与拒绝（反向 apply）共用同一份构造。
+// 头信息取自文件级的 --- /+++ 与 mode 行，而不是硬编码 a/ b/——新增/删除文件的 patch
+// 这两行是 /dev/null，硬编码会导致「接受新增文件的第一块」直接失败。
+function hunkPatch(file, hunk) {
+  const head = Array.isArray(file?.lines) ? file.lines : [];
+  const modeLines = head.filter((l) => /^(new file mode|deleted file mode|old mode|new mode) /.test(l));
+  const from = head.find((l) => l.startsWith('--- ')) || `--- a/${file.path}`;
+  const to = head.find((l) => l.startsWith('+++ ')) || `+++ b/${file.path}`;
   return [
-    `diff --git a/${filePath} b/${filePath}`,
-    `--- a/${filePath}`,
-    `+++ b/${filePath}`,
+    `diff --git a/${file.path} b/${file.path}`,
+    ...modeLines,
+    from,
+    to,
     ...hunk.lines,
     '',
   ].join('\n');
+}
+
+// 差集 A：从 hunk 头解析新文件行范围——@@ -a,b +c,d @@ → { start: c, end: c+d-1 }
+// （d 缺省为 1）。无 hunk 头（整体改动兜底）或格式不匹配时返回 null，不硬造定位。
+function hunkLineRange(hunk) {
+  const m = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(hunk?.header || '');
+  if (!m) return null;
+  const start = Number(m[1]);
+  const count = m[2] === undefined ? 1 : Number(m[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(count) || count < 1) return null;
+  return { start, end: start + count - 1 };
 }

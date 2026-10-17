@@ -19,6 +19,13 @@ async function createIsolated({ cwd, groupId, taskId }) {
     const w = await wt.createWorktree(cwd, `worker-${groupId}-${taskId}`.slice(0, 60));
     return { worktreePath: w.path, branch: w.branch, repoRoot: w.repoRoot };
   } catch (e) {
+    // P1-12：上限打满 ≠「不可隔离」而是「隔离不可用」——静默回落主目录会让并发任务
+    // 互相覆盖（隔离机制存在的意义被绕过，且用户毫无感知）。上限错误显式抛出：
+    // dispatch 的 catch 会把任务置 failed，错误信息可行动（先清理旧工作区）。
+    // 其余创建失败仍按既有降级语义回落主目录（非 git 仓库在上游已直接返回 null）。
+    if (/上限/.test(String(e?.message || e))) {
+      throw new Error(`隔离工作区已达上限，并发任务禁止降级直写主目录——请先清理旧工作区后重试（${e.message}）`);
+    }
     console.warn(`[workerIso] 创建隔离工作区失败（回落主目录执行）: ${e.message}`);
     return null;
   }

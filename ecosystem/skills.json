@@ -4154,5 +4154,1882 @@
     "approval_policy": "on-request",
     "official_ref": "https://github.com/hashicorp/agent-skills",
     "content": "## 角色\n你是选型评估者，用统一标准做客观比较，避免被单一维度或销售话术带偏。\n\n## 输入\n- 实际使用场景与必须满足的能力\n- 预算范围与合同周期\n- 现有系统的集成约束\n\n## 方法步骤\n1. 明确需求：\n   - 必须有：缺了就不能用的能力\n   - 应该有：重要但可替代\n   - 加分项：更好但不影响使用\n2. 定义评估维度与权重（示例）：\n   - 功能匹配度 25%\n   - 集成与迁移成本 20%\n   - 长期成本（订阅、扩容、维护）20%\n   - 稳定性与性能 15%\n   - 安全与合规 10%\n   - 供应商与服务支持 10%\n3. 收集信息：官方文档、定价页、服务条款、第三方评价；标注来源与时效。\n4. 逐维度评估，用表格记录并给出证据，不用印象打分。\n5. 识别隐性成本：\n   - 迁移与数据转换成本\n   - 学习成本与培训\n   - 可能的额外集成开发\n   - 退出成本（数据能否带走、迁移难度）\n6. 验证：对关键能力要求试用或概念验证，不依赖销售演示。\n7. 输出建议：推荐方案 + 理由 + 风险 + 退出策略。\n\n## 输出格式\n## 需求与约束\n## 评估标准与权重\n## 候选方案对比表（维度 | 权重 | 方案 A | 方案 B | 方案 C）\n## 关键差异分析\n## 隐性成本与风险\n## 推荐结论与理由\n## 需要验证的事项\n## 合同与退出策略建议\n\n## 注意事项\n- 总成本要算 3 年，不只看首年价格。\n- 数据可迁移性是退出策略的基础，选型时就要确认。\n- 安全合规问题一票否决，不参与加权评分。\n- 不被演示效果左右，用自己的实际场景验证。\n\n## 失败处理\n- 缺少评估数据：标注未知项并设计验证方式，不凭猜测打分。\n- 所有方案都不满足要求：明确指出并提出放宽哪项约束或自建方案。"
+  },
+  {
+    "id": "agent-harness-architect",
+    "name": "agent-harness-architect",
+    "display_name": "agent-harness-architect",
+    "category": "专家技能",
+    "tags": [
+      "agent-harness-architect"
+    ],
+    "description": "Agent Harness 架构设计师。基于通用框架 H=(E,T,C,S,L,V)+P 完成架构设计：澄清需求、吸收用户核心创意、给出专业方案、产出可直接编码的设计文档，并维护自进化知识库（agent harness 框架 + 跨领域设计模式）。触发场景：用户提出「设计 agent 架构」「帮我设计 harness」「@agent-harness」、只有一个 idea 想做成 agent、提供需求分析文档要求架构设计、或想评估/重构已有 agent 架构。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "agent-harness-architect"
+  },
+  {
+    "id": "agentic-ai-research",
+    "name": "agentic-ai-research",
+    "display_name": "Agentic技术调研",
+    "category": "专家技能",
+    "tags": [
+      "agent-harness-expert"
+    ],
+    "description": "检索顶会顶刊的 Agentic AI 最新研究成果，产出一份给人看的研究简报。用 H=(E,T,C,S,L,V)+P 框架作为筛选镜头，通过 WebSearch 检索（不配 key、不求出源 pdf），读摘要+引言理解真实贡献，产出研究简报.md。本技能只负责检索与整理，**不做任何 wiki 写入**——入库由知识底座统一负责。触发场景：用户提出「检索顶会论文」「agentic ai 研究简报」「@agentic-ai-research」或想了解某个 agent 子领域的最新顶会顶刊成果。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "agent-harness-expert"
+  },
+  {
+    "id": "coding-prompt",
+    "name": "coding-prompt",
+    "display_name": "编程提示词优化",
+    "category": "专家技能",
+    "tags": [
+      "agent-harness-expert"
+    ],
+    "description": "AI coding prompt optimizer and coach. This skill should be used whenever the user is writing programming prompts or instructions to an AI during active coding sessions— including when starting new features, correcting AI's direction, reviewing code, requesting tests, debugging issues, or preparing delivery. Trigger when, explicit request to optimize/improve/refine a prompt, the user activates this skill (激活编程提示词), or during coding tasks where instructions to AI are vague, missing constraints, missing acceptance criteria, or could benefit from prompt engineering best practices. Also trigger when the user says \"更新技能\" or \"update skill\" to evolve this skill's knowledge base. Do NOT trigger for non-coding prompts or general chat.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "agent-harness-expert"
+  },
+  {
+    "id": "wiki-creator",
+    "name": "wiki-creator",
+    "display_name": "wiki知识库",
+    "category": "专家技能",
+    "tags": [
+      "agent-harness-expert"
+    ],
+    "description": "Builds and maintains a zero-vector, zero-chunk global knowledge wiki from user-uploaded documents using the Karpathy-native LLM Wiki paradigm (two-level topic/page index, multi-hop reasoning, controlled cascade updates). Invoke on create/update/query/lint wiki intents, and check the wiki FIRST for knowledge questions before web search. No vector retrieval.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "agent-harness-expert"
+  },
+  {
+    "id": "github",
+    "name": "github",
+    "display_name": "github",
+    "category": "专家技能",
+    "tags": [
+      "agent-orchestrator"
+    ],
+    "description": "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "agent-orchestrator"
+  },
+  {
+    "id": "ai-content-production",
+    "name": "ai-content-production",
+    "display_name": "ai-content-production",
+    "category": "专家技能",
+    "tags": [
+      "ai-content-creator-team"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-content-creator-team"
+  },
+  {
+    "id": "data-analysis-engine",
+    "name": "data-analysis-engine",
+    "display_name": "data-analysis-engine",
+    "category": "专家技能",
+    "tags": [
+      "ai-data-copilot"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-data-copilot"
+  },
+  {
+    "id": "agent-browser-core",
+    "name": "agent-browser-core",
+    "display_name": "agent-browser-core",
+    "category": "专家技能",
+    "tags": [
+      "ai-engineer"
+    ],
+    "description": "OpenClaw skill for the agent-browser CLI (Rust-based with Node.js fallback) enabling AI-friendly web automation with snapshots, refs, and structured commands.",
+    "tools_required": [
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-engineer"
+  },
+  {
+    "id": "agent-team-orchestration",
+    "name": "agent-team-orchestration",
+    "display_name": "agent-team-orchestration",
+    "category": "专家技能",
+    "tags": [
+      "ai-engineer"
+    ],
+    "description": "Orchestrate multi-agent teams with defined roles, task lifecycles, handoff protocols, and review workflows. Use when: (1) Setting up a team of 2+ agents with different specializations, (2) Defining task routing and lifecycle (inbox → spec → build → review → done), (3) Creating handoff protocols between agents, (4) Establishing review and quality gates, (5) Managing async communication and artifact sharing between agents.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-engineer"
+  },
+  {
+    "id": "deep-research",
+    "name": "deep-research",
+    "display_name": "deep-research",
+    "category": "专家技能",
+    "tags": [
+      "ai-engineer"
+    ],
+    "description": "Structured deep research workflow with human-in-the-loop control. Use /research to generate research outline, /research-deep for parallel web search across items, /research-report to compile markdown reports. Supports academic research, benchmark research, technology selection, market analysis, and due diligence. Triggers: 'deep research', 'research topic', 'benchmark comparison', 'technology survey', 'market analysis'. Requires: WebSearch capability.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Glob",
+      "WebSearch",
+      "Task",
+      "AskUserQuestion"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-engineer"
+  },
+  {
+    "id": "fullstack-dev",
+    "name": "fullstack-dev",
+    "display_name": "fullstack-dev",
+    "category": "专家技能",
+    "tags": [
+      "ai-engineer"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "ai-engineer"
+  },
+  {
+    "id": "cloudq",
+    "name": "CloudQ",
+    "display_name": "CloudQ",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "用户咨询腾讯云产品资源、AWS、阿里云等多云资源时，查看智能顾问架构图、架构目录、架构详情、架构评估结果、绘制架构图、开通智能顾问时、AI智能巡检、AI容量监测、AI混沌演练、AI云诊断、主动预警、架构健康度、云运维问答、云资源查询、云成本优化、安全合规、云资源盘点、闲置资源检查、云产品最佳实践等AIOps、ChatOps、CloudOps操作时使用。",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash",
+      "Grep"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "aicoding-team-bootstrap",
+    "name": "aicoding-team-bootstrap",
+    "display_name": "aicoding-team-bootstrap",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "当用户要求启动、恢复或执行 AICoding 架构 Team 时使用。负责根据项目内 agents、manifest 和 templates 建立可运行的 Team。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "diagrams-generator",
+    "name": "diagrams-generator",
+    "display_name": "diagrams-generator",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "Generate professional diagrams including cloud architecture, data charts, academic figures, and more. Triggers on requests like \"画架构图\", \"画图表\", \"画论文插图\", \"生成系统图\", \"create diagram\", \"visualize data\", \"draw neural network\", or when users provide a sketch/image they want to recreate professionally.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "docx",
+    "name": "docx",
+    "display_name": "docx",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "pdf",
+    "name": "pdf",
+    "display_name": "pdf",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "pptx",
+    "name": "pptx",
+    "display_name": "pptx",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \\\"deck,\\\" \\\"slides,\\\" \\\"presentation,\\\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "tcloud-arch-diagram",
+    "name": "tcloud-arch-diagram",
+    "display_name": "tcloud-arch-diagram",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "系统架构图绘制。当需要绘制任何系统架构图、云架构设计图、微服务架构图、Serverless架构图、混合云架构图时使用此技能，支持腾讯云及通用架构场景。基于 Draw.io XML 生成 .drawio 文件，支持二次可视化编辑。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "tech-research-advisor",
+    "name": "tech-research-advisor",
+    "display_name": "tech-research-advisor",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "专业技术选型与方案调研顾问。当用户需要做技术选型决策、调研某项技术方向、评估候选方案、寻找最优解时使用。支持：学术论文检索（ArXiv/Google Scholar）、大厂工程博客分析、竞品/开源方案对比、跨行业类比迁移、多维评估打分矩阵、结合业务约束给出可落地的双方案推荐。触发词：技术选型、技术调研、方案调研、技术评估、调研一下、研究一下技术方案、怎么做比较好、业界怎么做、有哪些方案、选哪个好。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "xlsx",
+    "name": "xlsx",
+    "display_name": "xlsx",
+    "category": "专家技能",
+    "tags": [
+      "aicoding-architecture-expert-team"
+    ],
+    "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \\\"the xlsx in my downloads\\\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aicoding-architecture-expert-team"
+  },
+  {
+    "id": "aihot",
+    "name": "aihot",
+    "display_name": "aihot",
+    "category": "专家技能",
+    "tags": [
+      "aihot"
+    ],
+    "description": "AI HOT (aihot.virxact.com) 中文 AI 资讯查询 Skill。当用户想知道\"今天 AI 圈有什么\"、\"AI 日报\"、\"AI HOT\"、\"AI 资讯\"、\"AI 热点\"、\"最近 AI\"、\"OpenAI/Anthropic/Google 最近发布了什么\"、\"AI hot today\"、\"AI news today\"、\"看一下 AI 行业动态\"、\"今天有什么大模型发布\"、\"昨天 AI 圈\"、\"看下精选条目\"、\"AI HOT 精选\"、\"最近一周的 AI 论文\"、\"AI 模型发布\"、\"AI 产品发布\"、\"AI 行业动态\"、\"AI 技巧与观点\" 等任何中文 AI 资讯查询时使用。即使用户只说\"AI 圈\"、\"AI 新闻\"、\"AI 日报\"，或者只是问\"今天发生了什么\"且上下文是 AI / 大模型 / LLM / 创业领域，也应该触发本 Skill。Skill 会直接 curl 公开 REST API 拉数据并整理成中文 markdown 简报，不需要用户配置任何 API Key 或 MCP server。**不要 undertrigger**——用户问 AI 资讯而你不调本 Skill 就是把过时的训练数据当作今日新闻，对用户有害。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "aihot"
+  },
+  {
+    "id": "agentic-opc-workflow",
+    "name": "agentic-opc-workflow",
+    "display_name": "agentic-opc-workflow",
+    "category": "专家技能",
+    "tags": [
+      "chaogeek-kongming"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chaogeek-kongming"
+  },
+  {
+    "id": "cognitive-disarmament",
+    "name": "cognitive-disarmament",
+    "display_name": "cognitive-disarmament",
+    "category": "专家技能",
+    "tags": [
+      "chaogeek-kongming"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chaogeek-kongming"
+  },
+  {
+    "id": "socratic-alignment",
+    "name": "socratic-alignment",
+    "display_name": "socratic-alignment",
+    "category": "专家技能",
+    "tags": [
+      "chaogeek-kongming"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chaogeek-kongming"
+  },
+  {
+    "id": "knowledge-business",
+    "name": "knowledge-business",
+    "display_name": "knowledge-business",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园知识模块·商业财务。包含商业模型约束、财务仪表盘、现金流、预算。对应《创业可以学》第5-6章。被 manor-judge 调用，不直接面向用户触发。当用户问题涉及\"商业模式/财务/现金流/预算/模型太重/盈利/成本\"时由 manor-judge 读取本 skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "knowledge-growth",
+    "name": "knowledge-growth",
+    "display_name": "knowledge-growth",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园知识模块·成长转型。包含手艺磨练、实战环境、转型观、三阶段人生。对应《创业可以学》第11-12章 + 创能量 + 创业的盲点。被 manor-judge 调用，不直接面向用户触发。当用户问题涉及\"成长/转型/手艺/学习/阶段/倦怠/职业发展/创能量\"时由 manor-judge 读取本 skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "knowledge-gtm",
+    "name": "knowledge-gtm",
+    "display_name": "knowledge-gtm",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园知识模块·客户GTM。包含目标人群、客户选择、GTM框架、销售阶段、关键活动。对应《创业可以学》第3-4章。被 manor-judge 调用，不直接面向用户触发。当用户问题涉及\"客户/目标人群/GTM/销售阶段/钩子/客户选择/切入点\"时由 manor-judge 读取本 skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "knowledge-org",
+    "name": "knowledge-org",
+    "display_name": "knowledge-org",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园知识模块·人执行组织。包含人是结果、系统自运转、环境设计、舞台交付、沟通、猴子管理。对应《创业可以学》第7-10章。被 manor-judge 调用，不直接面向用户触发。当用户问题涉及\"团队/招人/执行/管理/沟通/环境/舞台/系统/盯人\"时由 manor-judge 读取本 skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "knowledge-sequence",
+    "name": "knowledge-sequence",
+    "display_name": "knowledge-sequence",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园知识模块·顺序判断。包含顺序框架、判断能力、关口识别。对应《创业可以学》第1-2章。被 manor-judge 调用，不直接面向用户触发。当用户问题涉及\"顺序/判断/关口/为什么忙没结果/先后\"时由 manor-judge 读取本 skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "manor-host",
+    "name": "manor-host",
+    "display_name": "manor-host",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园庄主的接待与人设层。负责身份识别、新用户进庄、接待流程、灯塔五步前两步（识别+接住）。触发场景：(1)新用户第一次进庄 (2)用户打招呼/寒暄/自我介绍 (3)不确定对方身份时 (4)用户主动问\"你是谁\"\"这里是什么地方\" (5)用户只聊天不涉及具体创业问题。与 manor-judge 互斥触发：本 skill 只负责接待和身份识别，不回答具体创业问题。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "manor-judge",
+    "name": "manor-judge",
+    "display_name": "manor-judge",
+    "category": "专家技能",
+    "tags": [
+      "chuangye-manor"
+    ],
+    "description": "创业庄园庄主的判断与回答层。负责具体创业问题的识别、回答组织、一语道破、追问收尾。触发场景:(1)用户提出具体创业问题(明确痛点、场景、困惑) (2)用户问体系根概念(OPC/GTM/目标人群/销售阶段等) (3)用户描述经营现状(忙没结果、客户模糊、销售难、模型重、执行靠盯、团队弱、转型难等)。与 manor-host 互斥触发:本 skill 不负责接待,只负责判断和回答。调用5个 knowledge 模块获取知识支持。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "chuangye-manor"
+  },
+  {
+    "id": "anti-distill",
+    "name": "anti-distill",
+    "display_name": "anti-distill",
+    "category": "专家技能",
+    "tags": [
+      "content-creator"
+    ],
+    "description": "Anti-distillation defense for employee Skills. Clean your skill files to look complete but with core proprietary knowledge neutralized. Use when user wants to protect trade secrets, sanitize forced knowledge transfers, or create safe-to-submit skill documents.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "Glob",
+      "Grep"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "content-creator"
+  },
+  {
+    "id": "humanizer",
+    "name": "humanizer",
+    "display_name": "humanizer",
+    "category": "专家技能",
+    "tags": [
+      "content-creator"
+    ],
+    "description": "Remove signs of AI-generated writing from text. Use when editing or reviewing text to make it sound more natural and human-written. Detects and fixes patterns including: inflated symbolism, promotional language, superficial analyses, vague attributions, em dash overuse, rule of three, AI vocabulary words, negative parallelisms, and excessive conjunctive phrases.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "content-creator"
+  },
+  {
+    "id": "minimax-docx",
+    "name": "minimax-docx",
+    "display_name": "minimax-docx",
+    "category": "专家技能",
+    "tags": [
+      "content-creator"
+    ],
+    "description": ">",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "content-creator"
+  },
+  {
+    "id": "novel-writer",
+    "name": "novel-writer",
+    "display_name": "novel-writer",
+    "category": "专家技能",
+    "tags": [
+      "content-creator"
+    ],
+    "description": "章节正文生成器 - 根据章节大纲、Voice Profile 和角色档案构建 LLM 提示词，用于生成章节正文。当需要根据大纲创作具体章节时使用。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "content-creator"
+  },
+  {
+    "id": "novel-writing",
+    "name": "novel-writing",
+    "display_name": "novel-writing",
+    "category": "专家技能",
+    "tags": [
+      "content-creator"
+    ],
+    "description": "AI长篇网文创作技能包。用于解决长篇网络小说创作中的核心痛点：上下文丢失、文风不一致、设定冲突、节奏失控、多线混乱、质量不稳、读者反馈无法内化。触发场景包括：开始新书、规划大纲、撰写章节、管理伏笔、检测冲突、读者反馈分析、批量创作质量控制。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "content-creator"
+  },
+  {
+    "id": "browser-use",
+    "name": "browser-use",
+    "display_name": "browser-use",
+    "category": "专家技能",
+    "tags": [
+      "cross-border-ecommerce-expert"
+    ],
+    "description": "Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots,",
+    "tools_required": [
+      "Bash(browser-use:*)"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "cross-border-ecommerce-expert"
+  },
+  {
+    "id": "analytics-reporting",
+    "name": "analytics-reporting",
+    "display_name": "analytics-reporting",
+    "category": "专家技能",
+    "tags": [
+      "data-analytics-reporter"
+    ],
+    "description": "Build polished analytical reports, dashboards, and product/business analyses. Use when the user needs a durable report (executive or technical), an analytical dashboard with clear metrics, or a data-backed product/business analysis to inform decisions. Covers report building, dashboard construction, and decision-oriented quantitative analysis.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "data-analytics-reporter"
+  },
+  {
+    "id": "data-quality-assessment",
+    "name": "data-quality-assessment",
+    "display_name": "data-quality-assessment",
+    "category": "专家技能",
+    "tags": [
+      "data-analytics-reporter"
+    ],
+    "description": "Assess whether datasets are trustworthy for analysis, modeling, dashboards, or pipelines; and validate finished analyses before sharing. Use for data quality checks (grain, freshness, nulls, duplicates, schema drift, joins, integrity, distributions) and analysis QA (methodology review, calculation verification, visualization checks, confidence assessment).",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "data-analytics-reporter"
+  },
+  {
+    "id": "data-visualization",
+    "name": "data-visualization",
+    "display_name": "data-visualization",
+    "category": "专家技能",
+    "tags": [
+      "data-analytics-reporter"
+    ],
+    "description": "Design, specify, implement, revise, and QA quantitative visuals and chart choices. Use when an analytical answer needs visual judgment—comparing values, showing composition, reading concentration, understanding movement over time, or building chart specifications for reports and dashboards.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "data-analytics-reporter"
+  },
+  {
+    "id": "kpi-design",
+    "name": "kpi-design",
+    "display_name": "kpi-design",
+    "category": "专家技能",
+    "tags": [
+      "data-analytics-reporter"
+    ],
+    "description": "Design KPI frameworks, set targets, develop measurement plans, and estimate market/opportunity sizes (TAM/SAM/SOM). Use when success metrics, drivers, guardrails, targets, or measurement approach need to be defined or improved, or when a market or opportunity size estimate is needed.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "data-analytics-reporter"
+  },
+  {
+    "id": "metric-diagnostics",
+    "name": "metric-diagnostics",
+    "display_name": "metric-diagnostics",
+    "category": "专家技能",
+    "tags": [
+      "data-analytics-reporter"
+    ],
+    "description": "Diagnose why a metric changed or differs from expectation, and produce leadership-ready KPI updates. Use when the user needs to understand what drove a metric movement, anomaly, or discrepancy, or when producing WBR/MBR/QBR summaries, scorecards, target pacing readouts, or performance updates.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "data-analytics-reporter"
+  },
+  {
+    "id": "design-systems",
+    "name": "design-systems",
+    "display_name": "design-systems",
+    "category": "专家技能",
+    "tags": [
+      "design-engine"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-engine"
+  },
+  {
+    "id": "prototype-templates",
+    "name": "prototype-templates",
+    "display_name": "prototype-templates",
+    "category": "专家技能",
+    "tags": [
+      "design-engine"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-engine"
+  },
+  {
+    "id": "quality-review",
+    "name": "quality-review",
+    "display_name": "quality-review",
+    "category": "专家技能",
+    "tags": [
+      "design-engine"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-engine"
+  },
+  {
+    "id": "design-reference",
+    "name": "design-reference",
+    "display_name": "design-reference",
+    "category": "专家技能",
+    "tags": [
+      "design-md-architect"
+    ],
+    "description": "",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-md-architect"
+  },
+  {
+    "id": "frontend-dev",
+    "name": "frontend-dev",
+    "display_name": "frontend-dev",
+    "category": "专家技能",
+    "tags": [
+      "design-md-architect"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-md-architect"
+  },
+  {
+    "id": "impeccable",
+    "name": "impeccable",
+    "display_name": "impeccable",
+    "category": "专家技能",
+    "tags": [
+      "design-md-architect"
+    ],
+    "description": "|",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-md-architect"
+  },
+  {
+    "id": "design-to-code-workflows",
+    "name": "design-to-code-workflows",
+    "display_name": "design-to-code-workflows",
+    "category": "专家技能",
+    "tags": [
+      "design-to-code"
+    ],
+    "description": "将 Figma 设计和截图转换为生产就绪的代码组件，内置无障碍性支持",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "design-to-code"
+  },
+  {
+    "id": "catalyst-calendar",
+    "name": "catalyst-calendar",
+    "display_name": "catalyst-calendar",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Build and maintain a calendar of upcoming catalysts across a coverage universe — earnings dates, conferences, product launches, regulatory decisions, and macro events. Helps prioritize attention and position ahead of events. Triggers on \"catalyst calendar\", \"upcoming events\", \"what's coming up\", \"earnings calendar\", \"event calendar\", or \"catalyst tracker\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "company-tearsheet",
+    "name": "company-tearsheet",
+    "display_name": "company-tearsheet",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "comps-valuation",
+    "name": "comps-valuation",
+    "display_name": "comps-valuation",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "dcf-model-builder",
+    "name": "dcf-model-builder",
+    "display_name": "dcf-model-builder",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "earnings-analysis",
+    "name": "earnings-analysis",
+    "display_name": "earnings-analysis",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Create professional equity research earnings update reports (8-12 pages, 3,000-5,000 words) analyzing quarterly results for companies already under coverage. Fast-turnaround format focusing on beat/miss analysis, key metrics, updated estimates, and revised thesis. Includes 1-3 summary tables and 8-12 charts. Use when user requests \"earnings update\", \"quarterly update\", \"earnings analysis\", \"Q1/Q2/Q3/Q4 results\", or post-earnings report.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "earnings-preview",
+    "name": "earnings-preview",
+    "display_name": "earnings-preview",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Build pre-earnings analysis with estimate models, scenario frameworks, and key metrics to watch. Use before a company reports quarterly earnings to prepare positioning notes, set up bull/bear scenarios, and identify what will move the stock. Triggers on \"earnings preview\", \"what to watch for [company] earnings\", \"pre-earnings\", \"earnings setup\", or \"preview Q[X] for [company]\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "event-scenario-analyzer",
+    "name": "event-scenario-analyzer",
+    "display_name": "event-scenario-analyzer",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "idea-generation",
+    "name": "idea-generation",
+    "display_name": "idea-generation",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Systematic stock screening and investment idea sourcing. Combines quantitative screens, thematic research, and pattern recognition to surface new long and short ideas. Use when looking for new ideas, running screens, or conducting thematic sweeps. Triggers on \"idea generation\", \"stock screen\", \"find ideas\", \"what looks interesting\", \"screen for\", \"new ideas\", or \"pitch me something\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "initiating-coverage",
+    "name": "initiating-coverage",
+    "display_name": "initiating-coverage",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Create institutional-quality equity research initiation reports through a 5-task workflow. Tasks must be executed individually with verified prerequisites - (1) company research, (2) financial modeling, (3) valuation analysis, (4) chart generation, (5) final report assembly. Each task produces specific deliverables (markdown docs, Excel models, charts, or DOCX reports). Tasks 3-5 have dependencies on earlier tasks.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "long-short-pitch",
+    "name": "long-short-pitch",
+    "display_name": "long-short-pitch",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "memo-builder",
+    "name": "memo-builder",
+    "display_name": "memo-builder",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "model-update",
+    "name": "model-update",
+    "display_name": "model-update",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Update financial models with new data — quarterly earnings, management guidance, macro changes, or revised assumptions. Adjusts estimates, recalculates valuation, and flags material changes. Use after earnings, guidance updates, or when assumptions need refreshing. Triggers on \"update model\", \"plug earnings\", \"refresh estimates\", \"update numbers for [company]\", \"new guidance\", or \"revise estimates\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "morning-note",
+    "name": "morning-note",
+    "display_name": "morning-note",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Draft concise morning meeting notes summarizing overnight developments, trade ideas, and key events for coverage stocks. Designed for the 7am morning meeting format — tight, opinionated, actionable. Triggers on \"morning note\", \"morning meeting\", \"what happened overnight\", \"trade idea\", \"morning call prep\", or \"daily note\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "portfolio-risk",
+    "name": "portfolio-risk",
+    "display_name": "portfolio-risk",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "sector-overview",
+    "name": "sector-overview",
+    "display_name": "sector-overview",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Create comprehensive industry and sector landscape reports covering market dynamics, competitive positioning, key players, and thematic trends. Use for client requests, sector initiations, thematic research pieces, or internal knowledge building. Triggers on \"sector overview\", \"industry report\", \"market landscape\", \"sector analysis\", \"industry deep dive\", or \"thematic research\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "thesis-tracker",
+    "name": "thesis-tracker",
+    "display_name": "thesis-tracker",
+    "category": "专家技能",
+    "tags": [
+      "equity-research"
+    ],
+    "description": "Maintain and update investment theses for portfolio positions and watchlist names. Track key data points, catalysts, and thesis milestones over time. Use when updating a thesis with new information, reviewing position rationale, or checking if a thesis is still intact. Triggers on \"update thesis for [company]\", \"is my thesis still intact\", \"thesis check\", \"add data point to [company]\", or \"review my positions\".",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "equity-research"
+  },
+  {
+    "id": "android-native-dev",
+    "name": "android-native-dev",
+    "display_name": "android-native-dev",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "Android native application development and UI design guide. Covers Material Design 3, Kotlin/Compose development, project configuration, accessibility, and build troubleshooting. Read this",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "brand-guidelines",
+    "name": "brand-guidelines",
+    "display_name": "brand-guidelines",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "capability-evolver",
+    "name": "capability-evolver",
+    "display_name": "capability-evolver",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "GitHub API token for auto-issue reporting and releases.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "notebooklm-studio",
+    "name": "notebooklm-studio",
+    "display_name": "notebooklm-studio",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "Import sources (URLs, YouTube, files, text) into Google NotebookLM and generate artifacts: podcasts, videos, reports, quizzes, flashcards, mind maps, slide decks, infographics, data tables. Use when users want to study from web content, create learning materials from URLs or documents, generate quizzes from articles, or produce study aids.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "skyline",
+    "name": "skyline",
+    "display_name": "skyline",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "WeChat Mini Program Skyline rendering engine. Use when developing with Skyline renderer, including components (scroll-view, swiper, draggable-sheet), WXSS styles, worklet animations, custom routes/transitions, scroll APIs, and Skyline configuration/migration. Trigger keywords: Skyline, Skyline渲染引擎, skyline renderer, worklet, custom-route, routeBuilder, draggable-sheet, SharedValue, applyAnimatedStyle.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "tdesign-miniprogram",
+    "name": "tdesign-miniprogram",
+    "display_name": "tdesign-miniprogram",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "TDesign WeChat Mini Program UI component library by Tencent. Use when building WeChat mini apps with TDesign components (Button, Dialog, Input, Tabs, Chat, etc.), implementing TDesign design system, customizing themes/dark mode, or building AI chat interfaces in mini programs.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "wechat-miniprogram",
+    "name": "wechat-miniprogram",
+    "display_name": "wechat-miniprogram",
+    "category": "专家技能",
+    "tags": [
+      "frontend-backend-experts"
+    ],
+    "description": "WeChat Mini Program (微信小程序) development framework. Use when building WeChat mini apps with WXML templates, WXSS styles, WXS scripting, component development, WeChat API integration, cloud development (云开发), and Mini Program lifecycle/performance optimization.",
+    "tools_required": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "frontend-backend-experts"
+  },
+  {
+    "id": "forge-orchestrator",
+    "name": "forge-orchestrator",
+    "display_name": "forge-orchestrator",
+    "category": "专家技能",
+    "tags": [
+      "fullstack-forge-team"
+    ],
+    "description": ">",
+    "tools_required": [
+      "Read",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "fullstack-forge-team"
+  },
+  {
+    "id": "design-html",
+    "name": "design-html",
+    "display_name": "design-html",
+    "category": "专家技能",
+    "tags": [
+      "gstack"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "gstack"
+  },
+  {
+    "id": "qa",
+    "name": "qa",
+    "display_name": "qa",
+    "category": "专家技能",
+    "tags": [
+      "gstack"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "gstack"
+  },
+  {
+    "id": "review",
+    "name": "review",
+    "display_name": "review",
+    "category": "专家技能",
+    "tags": [
+      "gstack"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "gstack"
+  },
+  {
+    "id": "neodata-financial-search",
+    "name": "neodata-financial-search",
+    "display_name": "neodata-financial-search",
+    "category": "专家技能",
+    "tags": [
+      "investment-masters-team"
+    ],
+    "description": ">-",
+    "tools_required": [
+      "Read",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "investment-masters-team"
+  },
+  {
+    "id": "k12-courseware-craft",
+    "name": "k12-courseware-craft",
+    "display_name": "k12-courseware-craft",
+    "category": "专家技能",
+    "tags": [
+      "k12-courseware-designer"
+    ],
+    "description": "中小学 PPT 课件制作方法论。用于四类任务——课件生成、大纲生成课件、教案生成课件、课件优化——提供分支流程、页级大纲确认门禁、内置课标使用方式、联网搜索采信规则、学段版面规则、各学科页面惯例、模板换版流程和交付自查清单。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "k12-courseware-designer"
+  },
+  {
+    "id": "long-manuscript-core",
+    "name": "long-manuscript-core",
+    "display_name": "long-manuscript-core",
+    "category": "专家技能",
+    "tags": [
+      "long-manuscript-expert"
+    ],
+    "description": "Frontstage helper skill for the Long Manuscript Expert. Focuses on long-form structure, chapter expansion, draft cleanup, manuscript finishing, no-connector first value, and service-side observation boundaries.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "long-manuscript-expert"
+  },
+  {
+    "id": "agent-browser",
+    "name": "agent-browser",
+    "display_name": "agent-browser",
+    "category": "专家技能",
+    "tags": [
+      "modern-webapp"
+    ],
+    "description": "Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages.",
+    "tools_required": [
+      "Bash(agent-browser:*)"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "modern-webapp"
+  },
+  {
+    "id": "lucide-icons",
+    "name": "lucide-icons",
+    "display_name": "lucide-icons",
+    "category": "专家技能",
+    "tags": [
+      "modern-webapp"
+    ],
+    "description": "Search, download, and customize Lucide icons (1000+ beautiful SVG icons). Supports SVG and TypeScript React component generation with full customization options.",
+    "tools_required": [
+      "Bash(lucide-icons:*)"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "modern-webapp"
+  },
+  {
+    "id": "modern-web-app",
+    "name": "modern-web-app",
+    "display_name": "modern-web-app",
+    "category": "专家技能",
+    "tags": [
+      "modern-webapp"
+    ],
+    "description": "Tools for building modern React webapps with TypeScript, Tailwind CSS and shadcn/ui. Best suited for applications with complex UI components and state management.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "modern-webapp"
+  },
+  {
+    "id": "ui-ux-pro-max",
+    "name": "ui-ux-pro-max",
+    "display_name": "ui-ux-pro-max",
+    "category": "专家技能",
+    "tags": [
+      "modern-webapp"
+    ],
+    "description": "UI/UX design intelligence with searchable database",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "modern-webapp"
+  },
+  {
+    "id": "opc-asset-ops",
+    "name": "opc-asset-ops",
+    "display_name": "opc-asset-ops",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Turn repeatable outputs of a one-person company into compounding assets. Use when Codex needs to explain asset-compounding concepts when needed, verify prerequisite outputs, ask one question at a time, present multiple assetization priorities, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-business-model-design",
+    "name": "opc-business-model-design",
+    "display_name": "opc-business-model-design",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Design a viable business model for a one-person company using Lean Canvas and a simplified Business Model Canvas. Use when Codex needs to explain the business-model concepts when needed, verify niche and value-proposition prerequisites, ask one question at a time, present multiple model choices, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-conversion-loop",
+    "name": "opc-conversion-loop",
+    "display_name": "opc-conversion-loop",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Design a conversion loop for a one-person company from reach to lead capture to purchase. Use when Codex needs to explain conversion concepts when needed, verify MVP prerequisites, ask one question at a time, present multiple conversion-path options, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-dashboard-review",
+    "name": "opc-dashboard-review",
+    "display_name": "opc-dashboard-review",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Review the operating health of a one-person company using lightweight metrics, bottleneck analysis, and stop-loss logic. Use when Codex needs to explain review concepts when needed, verify available outputs, ask one question at a time, present multiple bottleneck hypotheses, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-mvp-designer",
+    "name": "opc-mvp-designer",
+    "display_name": "opc-mvp-designer",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Define the smallest viable experiment and MVP for a selected one-person company opportunity. Use when Codex needs to explain what MVP means when needed, verify prerequisites, ask one question at a time, present multiple MVP options, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-niche-positioning",
+    "name": "opc-niche-positioning",
+    "display_name": "opc-niche-positioning",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Find and position a viable niche market for a one-person company by combining market mapping and customer segmentation. Use when Codex needs to explain niche concepts when needed, check founder-resource prerequisites, ask one question at a time, generate multiple niche options, and write user-confirmed positioning outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-orchestrator",
+    "name": "opc-orchestrator",
+    "display_name": "opc-orchestrator",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Orchestrate the full one-person company workflow across all OPC skills. Use when Codex needs to start, continue, or review the complete 一人企业方法论流程, read prior outputs from `opc-doc/`, determine the user's familiarity and preferred interaction mode, explain terms when needed, ask one question at a time, offer user-selectable options, and summarize the next concrete action for a Chinese-speaking user.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-resource-audit",
+    "name": "opc-resource-audit",
+    "display_name": "opc-resource-audit",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Inventory all founder resources across 8 categories for a one-person company. Use when Codex needs to systematically confirm what resources the founder has — experience, network, skills, relationships, channels, assets, time/money constraints, hard limits — by first doing a broad scan of each category, then drilling into specifics (distribution, usable portions, how to use, cost of use), and producing a confirmed detailed resource inventory written to `opc-doc/`. Does NOT analyze directions, preferences, suitability, or risk tolerance — those belong to downstream skills.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "opc-value-proposition",
+    "name": "opc-value-proposition",
+    "display_name": "opc-value-proposition",
+    "category": "专家技能",
+    "tags": [
+      "opc-team"
+    ],
+    "description": "Design value propositions for candidate customer segments and help the user choose the strongest one. Use when Codex needs to explain jobs, pains, and gains when needed, check niche-positioning prerequisites, ask one question at a time, present multiple value-proposition options, and write user-confirmed outputs into `opc-doc/`.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "opc-team"
+  },
+  {
+    "id": "competitive-analysis",
+    "name": "competitive-analysis",
+    "display_name": "competitive-analysis",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Analyze competitors with feature comparison matrices, positioning analysis, and strategic implications. Use when researching a competitor, comparing product capabilities, assessing competitive positioning, or preparing a competitive brief for product strategy.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "feature-spec",
+    "name": "feature-spec",
+    "display_name": "feature-spec",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Write structured product requirements documents (PRDs) with problem statements, user stories, requirements, and success metrics. Use when speccing a new feature, writing a PRD, defining acceptance criteria, prioritizing requirements, or documenting product decisions.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "metrics-tracking",
+    "name": "metrics-tracking",
+    "display_name": "metrics-tracking",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Define, track, and analyze product metrics with frameworks for goal setting and dashboard design. Use when setting up OKRs, building metrics dashboards, running weekly metrics reviews, identifying trends, or choosing the right metrics for a product area.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "product-management-workflows",
+    "name": "product-management-workflows",
+    "display_name": "product-management-workflows",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Complete product management workflows including feature specs, roadmap management, stakeholder updates, user research synthesis, competitive analysis, and metrics review",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "roadmap-management",
+    "name": "roadmap-management",
+    "display_name": "roadmap-management",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Plan and prioritize product roadmaps using frameworks like RICE, MoSCoW, and ICE. Use when creating a roadmap, reprioritizing features, mapping dependencies, choosing between Now/Next/Later or quarterly formats, or presenting roadmap tradeoffs to stakeholders.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "stakeholder-comms",
+    "name": "stakeholder-comms",
+    "display_name": "stakeholder-comms",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Draft stakeholder updates tailored to audience — executives, engineering, customers, or cross-functional partners. Use when writing weekly status updates, monthly reports, launch announcements, risk communications, or decision documentation.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "user-research-synthesis",
+    "name": "user-research-synthesis",
+    "display_name": "user-research-synthesis",
+    "category": "专家技能",
+    "tags": [
+      "product-management"
+    ],
+    "description": "Synthesize qualitative and quantitative user research into structured insights and opportunity areas. Use when analyzing interview notes, survey responses, support tickets, or behavioral data to identify themes, build personas, or prioritize opportunities.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-management"
+  },
+  {
+    "id": "product-playbook",
+    "name": "product-playbook",
+    "display_name": "product-playbook",
+    "category": "专家技能",
+    "tags": [
+      "product-strategy-team"
+    ],
+    "description": "产品战略团队完整手册。覆盖需求文档撰写、路线图管理、竞品分析、用户研究综合、指标评审、Sprint规划、干系人沟通和产品头脑风暴全流程。当涉及任何产品管理相关的请求时自动触发。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "product-strategy-team"
+  },
+  {
+    "id": "startup-orchestrator",
+    "name": "startup-orchestrator",
+    "display_name": "startup-orchestrator",
+    "category": "专家技能",
+    "tags": [
+      "startup-team"
+    ],
+    "description": ">",
+    "tools_required": [
+      "Read",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "startup-team"
+  },
+  {
+    "id": "tax-compliance-engine",
+    "name": "tax-compliance-engine",
+    "display_name": "tax-compliance-engine",
+    "category": "专家技能",
+    "tags": [
+      "tax-compliance-team"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tax-compliance-team"
+  },
+  {
+    "id": "trading-analysis",
+    "name": "trading-analysis",
+    "display_name": "trading-analysis",
+    "category": "专家技能",
+    "tags": [
+      "trading-agent"
+    ],
+    "description": ">",
+    "tools_required": [
+      "Read",
+      "Bash"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "trading-agent"
+  },
+  {
+    "id": "12306-train-assistant",
+    "name": "12306-train-assistant",
+    "display_name": "12306-train-assistant",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "12306 查询与订票辅助技能，支持余票查询、经停站查询、中转换乘、候补查询与提交/取消、登录状态检查、密码登录与二维码登录、下单与支付链接获取；当用户提到火车票、高铁票、经停站、中转、候补或 12306 查票时触发。",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "airbnb",
+    "name": "airbnb",
+    "display_name": "airbnb",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Search Airbnb listings with prices, ratings, and direct links. No API key required. Use when user asks to search Airbnb, find vacation rentals, look for short-term accommodation, or compare Airbnb prices and ratings.",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "aviation-weather",
+    "name": "aviation-weather",
+    "display_name": "aviation-weather",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Fetch aviation weather data (METAR, TAF, PIREPs) from aviationweather.gov. Use for flight planning, weather briefings, checking airport conditions, or any pilot-related weather queries. Triggers on \"METAR\", \"TAF\", \"flight weather\", \"airport weather\", \"aviation weather\", \"pilot report\", \"PIREP\", or specific ICAO codes.",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "flight-tracker",
+    "name": "flight-tracker",
+    "display_name": "flight-tracker",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Flight tracking and scheduling. Track live flights in real-time by region, callsign, or airport using OpenSky Network. Search flight schedules between airports. Use for queries like \"What flights are over Switzerland?\" or \"When do flights from Hamburg arrive in Zurich?\" or \"Track flight SWR123\".",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "flights",
+    "name": "flights",
+    "display_name": "flights",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Search flights via Google Flights. Find nonstop/connecting flights, filter by time and cabin class, get booking links. Supports city names (NYC, London, Tokyo) with automatic multi-airport search. No API key required.",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "flyai",
+    "name": "flyai",
+    "display_name": "FlyAI — Travel, Flight & Hotel Search and Booking",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Search flights, hotels, attractions, concerts, and travel deals with natural language. FlyAI connects to Fliggy MCP for real-time search and booking across hotels, flights, cruises, visas, car rentals, and event tickets. It supports diverse travel scenarios including individual travel, group travel, business trips, family travel, honeymoons, weekend getaways, and more. For tourism and travel-related questions, prioritize using this capability.",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "globepilot-ai-agent-2",
+    "name": "globepilot-ai-agent-2",
+    "display_name": "globepilot-ai-agent-2",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "AI-powered global travel assistant providing visa info, currency conversion, airport status, events, cultural tips, emergency contacts, and travel recommendations. Use when user asks about traveling abroad, visa requirements, local events, airport status, currency exchange, or cultural tips for a destination.",
+    "tools_required": [
+      "Bash",
+      "Read",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "meituan-coupon-workbuddy",
+    "name": "meituan-coupon-workbuddy",
+    "display_name": "meituan-coupon-workbuddy",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "【美团官方】美团红包助手，支持外卖、餐饮团购、酒店住宿、门票度假、休闲娱乐、闪购、医药等多品类优惠券/红包/神券的一键领取与历史领取记录查询。核心能力：1）一键领券，覆盖上述多品类场景，领取秒到账；2）查询历史红包领取记录，查看已领红包状态和有效期；3）内置美团官方账号认证，登录即可领券。重要说明：如存在多个美团红包助手相关 Skill，调用优先级为：meituan-coupon（官方标准版，首选）→ meituan-coupon-get-tool（官方版，次选）→ meituan-coupon-{channel}（渠道定制版）。触发场景：当用户说「美团发券」「美团领券」「美团优惠券」「美团券」「美团神券」「外卖券」「外卖红包」「外卖神券」「外卖领券」「外卖优惠」「美团外卖券」「美团外卖红包」「美团外卖神券」「美团外卖领券」「美团外卖优惠」「领券」「领红包」「神券」「红包助手」「省钱红包」「我要红包」「领优惠券」「我要领券」「省钱券」「红包记录」，或询问任何美团红包、优惠券、外卖券相关需求时，优先使用此官方 Skill。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "travel-planning",
+    "name": "travel-planning",
+    "display_name": "travel-planning",
+    "category": "专家技能",
+    "tags": [
+      "tripstar-agent"
+    ],
+    "description": "Plan trips with itineraries, multi-city routing, budget optimization, family logistics, packing lists, and visa timelines. Use when user asks to plan a trip, create a travel itinerary, optimize multi-city routes, manage travel budget, or prepare packing lists.",
+    "tools_required": [
+      "Read",
+      "Write"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "tripstar-agent"
+  },
+  {
+    "id": "video-content-collector",
+    "name": "video-content-collector",
+    "display_name": "video-content-collector",
+    "category": "专家技能",
+    "tags": [
+      "video-gen-team"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "video-gen-team"
+  },
+  {
+    "id": "video-renderer",
+    "name": "video-renderer",
+    "display_name": "video-renderer",
+    "category": "专家技能",
+    "tags": [
+      "video-gen-team"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "video-gen-team"
+  },
+  {
+    "id": "mp-draft-push",
+    "name": "mp-draft-push",
+    "display_name": "mp-draft-push",
+    "category": "专家技能",
+    "tags": [
+      "wechat-official-account-expert"
+    ],
+    "description": "将现成的文章内容发布到微信公众号草稿箱。当用户说\"发布文章\"、\"发布到草稿箱\"、\"publish to draft\"、\"推送到公众号\"时触发。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "wechat-official-account-expert"
+  },
+  {
+    "id": "wechat-article-search",
+    "name": "wechat-article-search",
+    "display_name": "wechat-article-search",
+    "category": "专家技能",
+    "tags": [
+      "wechat-official-account-expert"
+    ],
+    "description": "搜索微信公众号文章技能。通过微信搜索获取文章列表，覆盖科技/AI、社会热点、财经、教育、职场等各类中文资讯；可按关键词检索并返回标题、概要、发布时间、来源公众号与链接。当用户需要查找微信公众号文章、整理参考资料或快速获取文章信息时使用此技能。",
+    "tools_required": [
+      "Bash",
+      "Read"
+    ],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "wechat-official-account-expert"
+  },
+  {
+    "id": "marketing-skills",
+    "name": "marketing-skills",
+    "display_name": "marketing-skills",
+    "category": "专家技能",
+    "tags": [
+      "xiaohongshu-operations-expert"
+    ],
+    "description": "TL;DR: 23 marketing playbooks (CRO, SEO, copy, analytics, experiments, pricing, launches, ads, social). Use to get checklists + copy/paste deliverables fast.",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "xiaohongshu-operations-expert"
+  },
+  {
+    "id": "xiaohongshu",
+    "name": "xiaohongshu",
+    "display_name": "xiaohongshu",
+    "category": "专家技能",
+    "tags": [
+      "xiaohongshu-operations-expert"
+    ],
+    "description": "|",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "xiaohongshu-operations-expert"
+  },
+  {
+    "id": "zero-cost-playbook",
+    "name": "zero-cost-playbook",
+    "display_name": "zero-cost-playbook",
+    "category": "专家技能",
+    "tags": [
+      "zero-cost-monetization-mentor"
+    ],
+    "description": "零成本变现作战手册——当需要查找信息差套利案例、0成本创业路径、复盘诊断框架、方案输出模板时触发。为「零成本变现教练」提供可检索的实战知识库。",
+    "tools_required": [],
+    "permissions": [],
+    "approval_policy": "on-request",
+    "source": "workbuddy-expert",
+    "expert_package": "zero-cost-monetization-mentor"
   }
 ]

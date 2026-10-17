@@ -1,13 +1,28 @@
 // P2-3：memoryScorer——记忆六因子加权打分（纯函数，无 IO）
 // 因子（文档②第五节裁剪为可量化六项）：
 //   relevance  查询相关性：词法重叠（CJK 二元组 + 拉丁词）Jaccard
-//   recency    时间衰减：半衰期 14 天的指数衰减
+//   recency    时间衰减：分域半衰期指数衰减（P1-17）
 //   importance 人工/模型赋予的重要性 [0,1]
 //   frequency  使用频次：usage_count 对数饱和
 //   tierBoost  层级权重：Tier3 固化 > Tier2 摘要 > Tier1 原文
 //   validity   失效硬闸：is_valid=0 直接出局（不参与加权）
-const HALF_LIFE_DAYS = 14;
+// P1-17（2026-10-17）：分域半衰期——session 瞬时域 7 天，entity / global_knowledge /
+//   reflection / private 30 天；未知域（如无 domain 字段的旧记忆对象）回落 14 天，
+//   与修复前的单一 14 天口径兼容，不改变既有调用方的相对排序。
+const HALF_LIFE_DAYS_BY_DOMAIN = {
+  session: 7,
+  entity: 30,
+  global_knowledge: 30,
+  reflection: 30,
+  private: 30,
+};
+const HALF_LIFE_DAYS = 14; // 未知域回落值（保持导出名兼容）
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// P1-17：分域半衰期查询（未知域回落 14 天）
+function halfLifeDaysFor(domain) {
+  return HALF_LIFE_DAYS_BY_DOMAIN[domain] || HALF_LIFE_DAYS;
+}
 
 const WEIGHTS = {
   relevance: 0.40,
@@ -40,9 +55,10 @@ function relevance(query, text) {
   return hit / q.size;
 }
 
-function recencyScore(updatedAt, now = Date.now()) {
+// P1-17：recency 支持按域取半衰期（domain 缺省 = 未知域，回落 14 天，行为同修复前）
+function recencyScore(updatedAt, now = Date.now(), domain = undefined) {
   const days = Math.max(0, (now - (updatedAt || now)) / DAY_MS);
-  return Math.pow(0.5, days / HALF_LIFE_DAYS);
+  return Math.pow(0.5, days / halfLifeDaysFor(domain));
 }
 
 function frequencyScore(usageCount) {
@@ -57,7 +73,8 @@ function scoreMemory(memory, { query, now = Date.now() } = {}) {
   const hasQuery = String(query || '').trim().length > 0;
   const text = `${memory.summary || ''}\n${memory.content || ''}`;
   const relevanceV = hasQuery ? relevance(query, text) : null;
-  const recencyV = recencyScore(memory.updated_at, now);
+  // P1-17：recency 按记忆所属域取半衰期（memory.domain 缺省时回落 14 天）
+  const recencyV = recencyScore(memory.updated_at, now, memory.domain);
   const importanceV = Math.max(0, Math.min(1, Number(memory.importance) || 0));
   const frequencyV = frequencyScore(memory.usage_count);
   const tierV = TIER_BOOST[memory.tier] ?? 0.3;
@@ -88,4 +105,4 @@ function cosineSim(a, b) {
   return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
 }
 
-module.exports = { tokenize, relevance, recencyScore, frequencyScore, scoreMemory, cosineSim, HALF_LIFE_DAYS };
+module.exports = { tokenize, relevance, recencyScore, frequencyScore, scoreMemory, cosineSim, halfLifeDaysFor, HALF_LIFE_DAYS, HALF_LIFE_DAYS_BY_DOMAIN };

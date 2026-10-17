@@ -33,6 +33,14 @@ check('getSkill 返回完整内容', String(skills.getSkill(dir, 'review')).incl
 check('getSkill 不存在回落 null', skills.getSkill(dir, 'ghost') === null);
 check('目录不存在回落空数组', skills.listSkills('/tmp/mjcode-no-such-dir').length === 0);
 
+// loadSkillContents：数字员工 starter_skills 的按名装载（name 与目录名双轨查找）
+const loaded = skills.loadSkillContents(dir, ['review', 'docs', 'ghost']);
+check('loadSkillContents 按名装载已存在技能',
+  loaded.length === 2 && loaded[0].name === 'review' && String(loaded[0].content).includes('检查 bug'),
+  loaded.map((s) => s.name).join(','));
+check('loadSkillContents 未知名静默跳过（不炸）', skills.loadSkillContents(dir, ['ghost']).length === 0);
+check('loadSkillContents 空入参回落空数组', skills.loadSkillContents(dir, []).length === 0 && skills.loadSkillContents(dir).length === 0);
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
 process.exit(fail === 0 ? 0 : 1);

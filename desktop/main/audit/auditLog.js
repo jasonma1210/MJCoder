@@ -51,7 +51,9 @@ function auditLocal(action, target, detail, approvalResult) {
 }
 
 function audit(action, target, detail, approvalResult) {
-  if (!deps.getAuthToken()) { auditLocal(action, target, detail, approvalResult); return; } // 本地优先：无令牌时落盘留痕
+  // deps 未注入（initAudit 尚未调用 / 单测环境）时按「无令牌」处理：本地落盘，绝不抛。
+  // 审计是「可丢失遥测」，它崩掉不该把业务调用一起带走。
+  if (!deps?.getAuthToken?.()) { auditLocal(action, target, detail, approvalResult); return; } // 本地优先：无令牌时落盘留痕
   if (Date.now() < auditBreakerUntil) { auditFailures++; return; } // 熔断期内不再发起连接
   fetch(`${deps.serverBase()}/audit`, {
     method: 'POST',

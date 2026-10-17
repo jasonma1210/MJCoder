@@ -122,11 +122,18 @@ await check('onSuspend：cbReq 送达主进程且收尾文案含断点提示', a
   let chatCalls = 0;
   let suspendSeen = null;
   const toolHandlers = {
-    // 每轮固定烧 1000 tokens：预算 100 下 3 次救援后第 4 轮触闸熔断
+    // 每轮固定烧 1000 tokens，且**必须继续干活**（带工具调用）：
+    // 2026-10-17 语义修正后「预算压力 + 小上下文」只换窗口、不丢响应，
+    // 若这轮返回纯文本，任务会当场收尾，就测不到触闸路径了。
     chat: async () => {
       chatCalls += 1;
-      return { content: 'x', usage: { prompt_tokens: 1000, completion_tokens: 0 } };
+      return {
+        content: 'x',
+        tool_calls: [{ id: `c${chatCalls}`, function: { name: 'shell', arguments: '{}' } }],
+        usage: { prompt_tokens: 1000, completion_tokens: 0 },
+      };
     },
+    shell: async () => ({ ok: true, stdout: '' }),
   };
   const finalText = await host.runEngine('run-suspend', baseParams({ tokenBudget: 100 }), {
     toolHandlers,

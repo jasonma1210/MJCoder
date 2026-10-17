@@ -9,10 +9,40 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
+// 解析到「真实路径」：自身不存在时向上找最近的已存在祖先，再把剩余段拼回。
+// 为什么需要向上走：写工具的目标常是**尚不存在的新文件**（write_file 创建文件），
+// 直接 realpath 会 ENOENT——不能因「目标不存在」就判越界，那会挡死所有新建文件；
+// 而「解析失败却放行」正是软链穿越的利用面，故向上解析到真实存在点再拼回剩余段。
+// 软链场景验证：/proj/link → /etc 时，realpath('/proj/link/passwd') 虽失败，
+// 但向上命中 /proj/link 解析为 /etc，拼回得 /etc/passwd → 与 root 比较即判越界。
+function realPathOf(p) {
+  const abs = path.resolve(p);
+  const rest = [];
+  let cur = abs;
+  for (; ;) {
+    try { return path.join(fs.realpathSync(cur), ...rest); } catch { /* 不存在，继续向上 */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) return null; // 到达文件系统根仍不存在（极端情况）
+    rest.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
 // 目录包含判定：target 在 root 内（含 root 本身），不受符号链接外的 ../ 逃逸影响
+// P2-6 修复（2026-10-17）：追加 realpath 校验防软链穿越——原实现只用 path.resolve
+// 做字符串包含判定，而 resolve 不解析符号链接：root 内的 symlink 指向 root 外时
+// （/proj/link → /etc），「/proj/link/passwd」会被判为在界内，写操作经软链落到
+// 白名单之外。判定分两步：① resolve 快速路径（纯字符串，先挡掉显式越界）；
+// ② realpath 精确判定（双方都解析到最终真实路径后再做包含比较）。
+// realpath 彻底失败（连文件系统根都不可解析）按 fail-closed：视为不在界内。
 function isWithinRoot(target, root) {
   const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) return false;
+  const realRoot = realPathOf(root);
+  const realTarget = realPathOf(target);
+  if (realRoot === null || realTarget === null) return false; // fail-closed：解析失败按不在界内
+  const realRel = path.relative(realRoot, realTarget);
+  return realRel === '' || (!realRel.startsWith('..') && !path.isAbsolute(realRel));
 }
 
 // 允许写根目录集合：项目目录 + 应用数据目录 + 系统临时目录。

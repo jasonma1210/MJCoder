@@ -1,18 +1,18 @@
 # MJ Coder
 
-> 本地优先的 AI 编码工作台 · 桌面端智能体助手（离线可用）
+> 本地优先的 AI 编码工作台 · 桌面端智能体助手（数据与本机执行留在本机；推理连接你自己的模型服务）
 >
 > English: [README.md](./README.md)
 
-**MJ Coder** 是一款开源桌面应用，让你在本机与 AI 结对编程：它拥有完整的 Agent 执行引擎——模型可以读写你的项目文件、执行 Shell 命令、调用 Git 与 MCP 工具，在你审批监督下自主完成编码任务。所有对话、代码与凭证默认只留在你的电脑上，**离线为主、本地优先**。
+**MJ Coder** 是一款开源桌面应用，让你在本机与 AI 结对编程：它拥有完整的 Agent 执行引擎——模型可以读写你的项目文件、执行 Shell 命令、调用 Git 与 MCP 工具，在你审批监督下自主完成编码任务。所有对话、代码与凭证默认只留在你的电脑上：**数据保存在本机、执行在本机；推理需连接你自己的模型服务**（任意 OpenAI 兼容接口，含本机 Ollama 等）。
 
 ## 核心特性
 
 - **🤖 完整 Agent 引擎** — 工具调用循环（模型 → 工具执行 → 结果回传 → 模型），支持大任务自动拆分、子代理并行、上下文自动压缩与轮次预算控制
-- **三道安全闸** — 分级审批中心（危险命令 / 文件写入 / MCP 工具三级，危险命令与 MCP 工具永不自动放行）+ 沙箱（macOS 为操作系统级隔离，Windows / Linux 为命令级硬拦截，见下方分档说明）+ 本地审计日志全程留痕
+- **三道安全闸** — 分级审批中心（危险命令 / 文件写入 / MCP 工具三级，危险命令与 MCP 工具永不自动放行）+ 沙箱（macOS / Linux 为操作系统级隔离，Windows 为命令级硬拦截，见下方分档说明）+ 本地审计日志全程留痕
 - **📁 项目工作区** — 项目管理、文件树与文件预览、代码 diff 审查面板、Git 隔离工作区（worktree）与一键创建 PR
 - **⚙️ 双模式模型** — 对接任意 OpenAI 兼容接口（DeepSeek / Qwen / MiniMax 等），本地自定义模型与全局共享模型自由切换，API Key 保存在主进程不进渲染层
-- **⏰ 定时任务** — 离线可用的本地定时调度，到点由完整 Agent 通道执行（含审批、沙箱与超时保护）
+- **⏰ 定时任务** — 本机定时调度，到点由完整 Agent 通道执行（含审批、沙箱与超时保护）；错过即标记、启动可补跑
 - **🧩 插件生态** — 插件市场（MCP Server / 技能 / 提示词三类包，签名校验 + fail-closed 安装）、内置 100 个官方技能、MCP 工具接入
 - **🖥️ Computer Use** — macOS 辅助功能（AX）结构化驱动桌面应用，敏感操作（支付 / 删除 / 发送）逐次人工确认
 - **👥 协同编辑** — 基于 CRDT（Yjs）的会话线程、任务看板与审批流协同，本地先行、离线可用
@@ -33,7 +33,8 @@
 
 ### 沙箱能力按平台分档
 
-三平台的能力水位**并不相同**，下表如实标注各自实际实现与就绪条件，不做跨平台对等承诺。
+三平台的能力水位**并不相同**，下表如实标注各自实际实现与就绪条件，不做跨平台对等承诺：
+macOS / Linux 提供操作系统级隔离，**Windows 仅有命令级防护**。
 命令黑名单不是主力，而是 OS 沙箱**不可用时的兜底**——OS 级隔离一旦生效，黑名单自动让位，避免误伤
 `rm -rf ./build` 这类项目内的合理命令。
 
@@ -41,12 +42,21 @@
 |---|---|---|---|
 | macOS | **操作系统级（开箱即用）** | Seatbelt（`sandbox-exec` + 生成 profile）：`deny default` + curated 平台策略 + 按 read-only / workspace-write / full-access 三档限制文件写入，全档禁网；可写区内的 `.git`（含 gitdir）与应用配置目录**追加 deny 压为只读**；启动前做**真实可用性探测**（`sandbox-exec` 存在 ≠ 能 apply） | 开箱即用（`≥10.15`） |
 | Linux | **操作系统级（需安装）** | bubblewrap（`bwrap`）：`--ro-bind / /` 全盘只读、仅项目目录 `--bind` 可写、**可写区内 `.git`（含 gitdir）与应用配置目录再 `--ro-bind` 覆盖为只读**、`--unshare-all`（含 net/pid/ipc/uts/cgroup）、`--tmpfs /tmp`、`--die-with-parent`、`--new-session` | 装 sandbox：`apt install bubblewrap` / `dnf install bubblewrap` |
-| Windows | **命令级防护（默认）＋ 可选 OS 级增强** | 默认走命令守卫 + 分级审批；完成一次性管理员设置后，可选启用受限专用用户（`MJCodeSandboxOffline`，`schtasks /RL LIMITED`）+ 定向工作区 ACL + 出站防火墙 | 需一次性管理员设置（见下）；**未设置即不启用 OS 隔离** |
+| Windows | **命令级防护（默认）** | 命令守卫 + 分级审批：30 条危险命令模式执行前硬拦截，审批不能绕过或豁免 | 开箱即用；**本平台尚未提供 OS 级隔离入口**（见下） |
 
-#### 沙箱能力的两处如实说明
+#### Windows：OS 级隔离未接线
+
+Windows 的 OS 级隔离后端代码存在（`desktop/main/sandboxWindows.js`：受限专用用户 + 定向工作区
+ACL + 出站防火墙），**但未接入执行链路——没有任何入口会执行一次性管理员设置，Windows 用户
+当前不会获得 OS 级隔离**。实际保护 Windows 用户的是命令级守卫 + 分级审批中心（fail-closed：
+判定不确定时按更严格的一侧处理）。接线工作（含设置入口、read-only 与 workspace-write 分档、
+`.git` / `.mjcode` carve-out）列为平台适配项，落地后本文档同步更新；在落地前，Windows 行不以
+任何形式宣称 OS 级隔离。
+
+#### 沙箱能力的如实说明
 
 - **Linux 当前不含 seccomp 系统调用过滤**。原实现传入的 `--seccomp 9` 依赖 fd 传递，而 `execFile` 在 exec 前会关闭全部非 stdio fd（子进程只有 0/1/2），该 fd 根本不存在，bwrap 启动即失败。现已移除该参数，隔离由 `--unshare-all`（命名空间 + 断网）与全盘只读 bind 提供；系统调用过滤列为后续增量（届时应改走 `spawn` + 显式 stdio）。
-- **Windows 沙箱不保证把命令结果回传给你**。以专用用户经计划任务执行时，`schtasks` 无法回传真实退出码与输出，因此结果会明确标记为「不可知」（`resultUnknown`）并附提示，**不会伪造成功**。若必须看到真实输出，请改用非沙箱模式或在终端自行执行。
+- **Windows 的 OS 级隔离后端未接线**（详见上一节）：不存在管理员设置入口，也不宣称该能力；Windows 的防护 = 命令守卫 + 分级审批。
 
 #### 可写区内的只读 carve-out（项目目录里的「禁写区」）
 
@@ -62,7 +72,7 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 
 注意边界：`.gitignore`、`.gitmodules` 等「以 `.git` 开头的普通文件」**不在**保护范围内（保护按路径包含判定，只覆盖 `.git` 本身及其内容）。
 
-未满足就绪条件时（未装 bwrap、未完成 Windows 设置、容器内禁用 user namespace 等），受限档位
+未满足就绪条件时（未装 bwrap、容器内禁用 user namespace 等），受限档位
 （`read-only` / `workspace-write`）**默认阻断执行**——不再「黑名单过滤后裸跑」，因为黑名单是提示分类器、
 不是安全边界。两条显式逃生口，且都不会被记录为「已隔离」：
 
@@ -71,24 +81,9 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 
 `full-access` 档按设计不套沙箱、不走命令守卫——它是显式 opt-in，默认策略已被 fail-safe 兜住。
 
-#### Windows 一次性管理员设置
-
-Windows 后端需要创建专用低权用户与防火墙规则，**必须管理员权限**执行。
-设置命令全部先由 `windowsSandboxPlan()` 生成供人工审计，再逐条执行，任何一步失败即回滚：
-
-```powershell
-# 以管理员身份运行；密码由程序随机生成并经 DPAPI 加密保存，命令行与日志均不落明文
-net user MJCodeSandboxOffline <RANDOM_PASSWORD> /add /passwordchg:no /passwordreq:yes /active:yes
-net localgroup Users MJCodeSandboxOffline /delete
-netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out action=block user=MJCodeSandboxOffline enable=yes
-```
-
-回滚：`netsh advfirewall firewall delete rule name=MJCodeSandbox_BlockOutbound`、随后删除该用户。
-
 #### 已如实记录的已知局限
 
-- **Windows**：无法阻止对「Everyone SID 已有写权限」目录的写入（world-writable 文件夹）。
-  缓解方式为 workspace-write 档只把项目目录设为可写，其余一律只读。这与 Codex 公开承认的局限相同。
+- **Windows**：仅有命令级防护，OS 级隔离未接线（见「Windows：OS 级隔离未接线」一节）。
 - **Linux**：容器内（Docker 默认配置）可能禁用 unprivileged user namespace，此时 bwrap 存在也不可用；
   本项目只做二进制存在性静态探测，运行时失败由 exec 错误路径捕获并按上述默认阻断处理。
 - **三平台共通**：`full-access` 档不提供任何隔离，也不应用可写区 carve-out（该档语义即 opt-in 全放开）。
@@ -116,7 +111,7 @@ netsh advfirewall firewall add rule name=MJCodeSandbox_BlockOutbound dir=out act
 - **服务端**（可选）：Node.js · Express · PostgreSQL · Yjs
 - **测试**：Node 内置 test runner，全部测试套件绿灯（数量以 `desktop/test/` 实测为准）
 
-## 快速开始（离线）
+## 快速开始
 
 ```bash
 # 1. 安装依赖（首次）
@@ -127,9 +122,15 @@ cd renderer && npm install && cd ..
 npm run dev
 ```
 
-无需数据库、无需服务端、无需账号——启动即可在本地创建项目并开始对话。配置任意 OpenAI 兼容模型（Base URL + API Key）即可运行，全部数据保存在本机。
+无需数据库、无需服务端、无需账号——启动即可在本地创建项目并开始对话。配置任意 OpenAI 兼容模型（Base URL + API Key）即可运行，全部数据保存在本机；推理需要该模型端点可达（本机 Ollama 等本地端点同样适用，可全程不联网）。
 
 > 服务端（`server/`）、小程序（`miniprogram/`）为可选扩展，离线单机使用无需部署。
+
+## 自动更新
+
+- **macOS**：支持应用内更新。发布产物**同时包含 `.dmg`（手动安装）与 `.zip`（electron-updater 在 macOS 上消费的更新包）**；应用启动 10 秒后自动检查，随后可**应用内检查 → 下载（带进度）→ 重启安装**。更新 fail-closed：已开启 `verifyUpdateCodeSignature`，签名/摘要校验失败即拒绝安装并引导手动下载官方包。
+- **Windows / Linux**：发布产物为 NSIS / AppImage 安装包，本应用**不提供**这两个平台的应用内自动更新——请前往 [GitHub Releases](https://github.com/jasonma1210/MJCoder/releases) 手动下载新版本。
+- **回滚**：每个版本都保留在 Releases 页，降级始终是「手动下载旧版安装包」一件事；应用内更新链路不会剥夺此路径。
 
 ## 项目结构（简览）
 

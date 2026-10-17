@@ -5,7 +5,7 @@
 // 小文本（<500 行）走普通渲染，避免虚拟化的额外复杂度无收益。
 import { useMemo, useRef, useState } from 'react';
 
-const LINE_H = 18; // 与 text-[11px] leading 匹配的行高（px）
+const LINE_H = 18; // 与 text-code（12px/18px）行高严格一致，虚拟滚动按此计算
 const OVERSCAN = 20; // 视口上下各多渲染的缓冲行数
 const VIRTUAL_MIN_LINES = 500; // 低于此行数不值得虚拟化
 
@@ -51,7 +51,7 @@ export default function VirtualText({
           {lines.slice(start, end).map((l, i) => (
             <div
               key={start + i}
-              className="whitespace-pre font-mono text-[11px]"
+              className="whitespace-pre font-mono text-code"
               style={{ height: LINE_H, lineHeight: `${LINE_H}px` }}
             >
               {l || ' '}

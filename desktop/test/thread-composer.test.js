@@ -130,8 +130,10 @@ check('queue（Tab 排队下一轮）已实现', () => {
   assert.match(runHook, /function queueNext\(/);
   assert.match(composer, /if \(e\.key === 'Tab' && loading && input\.trim\(\)\)/);
   assert.match(runHook, /setQueued\(\(q\) => \[\.\.\.q, t\]\)/);
-  // T3-2 i18n：「已排队」徽标文案已抽取到 zh-CN/composer.json（queued/queuedTip），改为两段式验证
-  assertI18nCopy(composer, 'composer', '已排队', '排队徽标缺少「已排队」文案');
+  // 2026-10-17：排队入口从「已排队 N」徽标浮层改为输入框上方的任务卡片（三动作：立即执行/编辑/删除），
+  // 文案随之换成新 key。守护目标不变——排队必须在 UI 上可见、可操作。
+  assert.match(composer, /<QueuedTasks/, '排队任务卡片未渲染（排队将不可见）');
+  assertI18nCopy(composer, 'composer', '立即执行', '排队卡片缺少「立即执行」文案');
 });
 
 check('排队指令在本轮结束后自动接力', () => {

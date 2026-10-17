@@ -261,7 +261,11 @@ class McpAuthManager {
           tokenEndpoint: meta.token_endpoint,
           registrationEndpoint: meta.registration_endpoint || '',
           scope: (meta.scopes_supported || []).join(' '),
-          resource: origin,
+          // RFC 8707：resource 指示必须等于 RS 元数据声明的**规范标识**（可含路径，如
+          // https://ardot.tencent.com/mcp）。此前用 origin（丢掉路径）——Ardot 实测：
+          // authorize 放行但 token 交换恒 400 invalid_target（在 code 校验之前被拒），
+          // 用户侧表现即「登录成功后授权失败 400」。
+          resource: (pr && typeof pr.resource === 'string' && pr.resource) ? pr.resource : origin,
         };
       }
     }
@@ -370,7 +374,12 @@ class McpAuthManager {
     let data = null;
     try { data = JSON.parse(text); } catch { /* 非 JSON 错误体 */ }
     if (!res.ok) {
-      throw new Error(`令牌端点返回 ${res.status}${data && data.error_description ? `：${data.error_description}` : ''}`);
+      // RFC 6749 错误码（data.error，如 invalid_target/invalid_grant）必须透出：
+      // 此前只拼 error_description，很多 AS 的 400 只有 error 码——用户看到的是
+      // 「令牌端点返回 400」，诊断信息全部丢失。正文截断兜底（非 JSON 错误体）。
+      const detail = data?.error_description || data?.error
+        || String(text || '').slice(0, 200) || '无响应体';
+      throw new Error(`令牌端点返回 ${res.status}：${detail}`);
     }
     return data;
   }

@@ -58,8 +58,8 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
       {/* 项目名称 */}
       <div className="mb-5">
         <label className="block text-sm text-text2 mb-2">{t('project.nameLabel')}</label>
-        <div className="flex items-center gap-3 bg-bg border border-border rounded-2xl px-4 h-14 focus-within:border-accent">
-          <IconFolder size={18} className="text-text2 shrink-0" />
+        <div className="flex items-center gap-3 bg-input border border-border rounded-2xl px-4 h-12 focus-within:border-accent">
+          <IconFolder size={16} className="text-text2 shrink-0" />
           <input
             value={name}
             onChange={(e) => { setName(e.target.value); setError(''); }}
@@ -82,9 +82,9 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
         <button
           onClick={addLocalFolder}
           disabled={disabled}
-          className="w-full flex items-center gap-3 bg-bg border border-border rounded-2xl px-4 h-14 text-left hover:bg-hover disabled:opacity-50"
+          className="w-full flex items-center gap-3 bg-input border border-border rounded-2xl px-4 h-12 text-left hover:bg-hover disabled:opacity-50"
         >
-          <IconFolderPlus size={18} className="text-text2 shrink-0" />
+          <IconFolderPlus size={16} className="text-text2 shrink-0" />
           <span className="text-sm text-text2">{t('project.addFolder')}</span>
         </button>
       </div>
@@ -97,7 +97,7 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
             className="px-5 py-2.5 rounded-xl text-sm border border-border hover:bg-hover disabled:opacity-50">{t('project.cancel')}</button>
         )}
         <button onClick={create} disabled={disabled}
-          className="bg-accent text-white px-5 py-2.5 rounded-xl text-sm disabled:opacity-50">
+          className="bg-accent-solid text-on-accent px-5 py-2.5 rounded-xl text-sm disabled:opacity-50">
           {creating ? t('project.creating') : t('project.createBtn')}
         </button>
       </div>

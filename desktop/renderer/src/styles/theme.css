@@ -2,81 +2,170 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── 换肤系统 ── */
+/* ══════════════════════════════════════════════════════════════
+   换肤系统（v2）
+   --------------------------------------------------------------
+   约定（2026-10-17 视觉修复）：
+   · 每个颜色 token 提供 **两份**：`--x`（hex/rgba，给 CSS、SVG、JS 用）
+     与 `--x-rgb`（`r g b` 三元组，给 Tailwind 的 `/opacity` 用）。
+     原因：Tailwind v3 无法对 `var(--hex)` 应用透明度修饰符，
+     `bg-accent/10`、`border-accent/40` 这类类会**整个不生成**，
+     带 `border` 的元素随即回退到 preflight 的 #e5e7eb（暗底上的亮白细边）。
+   · 新增/改色只改本文件，组件内一律禁止十六进制（ui-conventions 门禁）。
+   · 角色分工固定：`accent` = 文字/图标/描边；`accent-solid` = 实心按钮底；
+     `on-accent` = 实心底上的字；`*-soft` 只作前景，`*-bg` 只作背景。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 暗色（默认）── */
 :root {
-  --theme-bg: #0d0d0d;
-  --theme-sidebar: #161616;
-  --theme-surface: #1e1e1e;
-  --theme-border: #2a2a2a;
-  --theme-text: #e8e8e8;
-  --theme-text-secondary: #888888;
-  --theme-accent: #10a37f;
-  --theme-hover: #2a2a2a;
+  --theme-bg: #0d0d0d;            --theme-bg-rgb: 13 13 13;
+  --theme-sidebar: #161616;       --theme-sidebar-rgb: 22 22 22;
+  --theme-surface: #1e1e1e;       --theme-surface-rgb: 30 30 30;
+  --surface-input: #141414;       --surface-input-rgb: 20 20 20;
+  --theme-border: #313131;        --theme-border-rgb: 49 49 49;
+  --border-strong: #3a3a3a;       --border-strong-rgb: 58 58 58;
+  --surface-raise: #232323;       --surface-raise-rgb: 35 35 35;
+
+  --theme-text: #e8e8e8;          --theme-text-rgb: 232 232 232;
+  --theme-text-secondary: #9a9a9a; --theme-text2-rgb: 154 154 154;
+  --theme-text-disabled: #6a6a6a;  --theme-text-disabled-rgb: 106 106 106;
+
+  --theme-accent: #12b48c;        --theme-accent-rgb: 18 180 140;
+  --theme-accent-solid: #0b7c61;  --theme-accent-solid-rgb: 11 124 97;
+  --theme-on-accent: #ffffff;     --theme-on-accent-rgb: 255 255 255;
+  --theme-accent-soft: #7fe0c4;   --theme-accent-soft-rgb: 127 224 196;
+
+  --theme-hover: #2a2a2a;         --theme-hover-rgb: 42 42 42;
   --theme-code-bg: #1a1a1a;
+  /* 选中态：淡蓝底 + 蓝勾（不再用饱和紫压住正文） */
+  --theme-select-bg: rgba(96, 140, 255, 0.16);
+  --theme-select-fg: #bfd3ff;     --theme-select-fg-rgb: 191 211 255;
 }
 
 [data-theme="light"] {
-  --theme-bg: #ffffff;
-  --theme-sidebar: #f7f7f7;
-  --theme-surface: #f0f0f0;
-  --theme-border: #e0e0e0;
-  --theme-text: #1a1a1a;
-  --theme-text-secondary: #666666;
-  --theme-accent: #0B7C61;  /* light 下 4.6:1 达 AA（原 #10a37f 仅 3.0:1，A9） */
-  --theme-hover: #e8e8e8;
+  --theme-bg: #ffffff;            --theme-bg-rgb: 255 255 255;
+  --theme-sidebar: #f7f7f7;       --theme-sidebar-rgb: 247 247 247;
+  --theme-surface: #f5f6f7;       --theme-surface-rgb: 245 246 247;
+  --surface-input: #edeef0;       --surface-input-rgb: 237 238 240;
+  --theme-border: #e3e5e7;        --theme-border-rgb: 227 229 231;
+  --border-strong: #c9c9c9;       --border-strong-rgb: 201 201 201;
+  --surface-raise: #ffffff;       --surface-raise-rgb: 255 255 255;
+
+  --theme-text: #1a1a1a;          --theme-text-rgb: 26 26 26;
+  --theme-text-secondary: #5a5a5a; --theme-text2-rgb: 90 90 90;
+  --theme-text-disabled: #a0a0a0;  --theme-text-disabled-rgb: 160 160 160;
+
+  --theme-accent: #0b7c61;        --theme-accent-rgb: 11 124 97;
+  --theme-accent-solid: #0b7c61;  --theme-accent-solid-rgb: 11 124 97;
+  --theme-on-accent: #ffffff;     --theme-on-accent-rgb: 255 255 255;
+  --theme-accent-soft: #6750a4;   --theme-accent-soft-rgb: 103 80 164;
+
+  --theme-hover: #e8e8e8;         --theme-hover-rgb: 232 232 232;
   --theme-code-bg: #f6f8fa;
+  --theme-select-bg: #e8effb;
+  --theme-select-fg: #1d4ed8;     --theme-select-fg-rgb: 29 78 216;
 }
 
 [data-theme="midnight"] {
-  --theme-bg: #0a0e1a;
-  --theme-sidebar: #0f1525;
-  --theme-surface: #162033;
-  --theme-border: #1e2d4a;
-  --theme-text: #e0e6f0;
-  --theme-text-secondary: #6b7a99;
-  --theme-accent: #6366f1;
-  --theme-hover: #1a2742;
+  --theme-bg: #0a0e1a;            --theme-bg-rgb: 10 14 26;
+  --theme-sidebar: #0f1525;       --theme-sidebar-rgb: 15 21 37;
+  --theme-surface: #162033;       --theme-surface-rgb: 22 32 51;
+  --surface-input: #111a2b;       --surface-input-rgb: 17 26 43;
+  --theme-border: #24365a;        --theme-border-rgb: 36 54 90;
+  --border-strong: #2a3a5c;       --border-strong-rgb: 42 58 92;
+  --surface-raise: #1b2640;       --surface-raise-rgb: 27 38 64;
+
+  --theme-text: #e0e6f0;          --theme-text-rgb: 224 230 240;
+  --theme-text-secondary: #7c8bae; --theme-text2-rgb: 124 139 174;
+  --theme-text-disabled: #5f6e8c;  --theme-text-disabled-rgb: 95 110 140;
+
+  --theme-accent: #818cf8;        --theme-accent-rgb: 129 140 248;
+  --theme-accent-solid: #4f46e5;  --theme-accent-solid-rgb: 79 70 229;
+  --theme-on-accent: #ffffff;     --theme-on-accent-rgb: 255 255 255;
+  --theme-accent-soft: #a5b4fc;   --theme-accent-soft-rgb: 165 180 252;
+
+  --theme-hover: #1a2742;         --theme-hover-rgb: 26 39 66;
   --theme-code-bg: #0d1424;
+  --theme-select-bg: rgba(96, 140, 255, 0.20);
+  --theme-select-fg: #c7d8ff;     --theme-select-fg-rgb: 199 216 255;
 }
 
 [data-theme="forest"] {
-  --theme-bg: #0c120e;
-  --theme-sidebar: #111a14;
-  --theme-surface: #16241c;
-  --theme-border: #1e3328;
-  --theme-text: #dce8dd;
-  --theme-text-secondary: #6b8a72;
-  --theme-accent: #22c55e;
-  --theme-hover: #1a2e22;
+  --theme-bg: #0c120e;            --theme-bg-rgb: 12 18 14;
+  --theme-sidebar: #111a14;       --theme-sidebar-rgb: 17 26 20;
+  --theme-surface: #16241c;       --theme-surface-rgb: 22 36 28;
+  --surface-input: #101a14;       --surface-input-rgb: 16 26 20;
+  --theme-border: #27412f;        --theme-border-rgb: 39 65 47;
+  --border-strong: #2a4433;       --border-strong-rgb: 42 68 51;
+  --surface-raise: #1b2a1f;       --surface-raise-rgb: 27 42 31;
+
+  --theme-text: #dce8dd;          --theme-text-rgb: 220 232 221;
+  --theme-text-secondary: #86a68d; --theme-text2-rgb: 134 166 141;
+  --theme-text-disabled: #5e7a66;  --theme-text-disabled-rgb: 94 122 102;
+
+  --theme-accent: #22c55e;        --theme-accent-rgb: 34 197 94;
+  --theme-accent-solid: #15803d;  --theme-accent-solid-rgb: 21 128 61;
+  --theme-on-accent: #ffffff;     --theme-on-accent-rgb: 255 255 255;
+  --theme-accent-soft: #86efac;   --theme-accent-soft-rgb: 134 239 172;
+
+  --theme-hover: #1a2e22;         --theme-hover-rgb: 26 46 34;
   --theme-code-bg: #0e1811;
+  --theme-select-bg: rgba(96, 140, 255, 0.16);
+  --theme-select-fg: #c7d8ff;     --theme-select-fg-rgb: 199 216 255;
 }
 
 [data-theme="sunset"] {
-  --theme-bg: #1a0f0a;
-  --theme-sidebar: #241612;
-  --theme-surface: #2e1c16;
-  --theme-border: #3d2620;
-  --theme-text: #f0e0d8;
-  --theme-text-secondary: #a08070;
-  --theme-accent: #f97316;
-  --theme-hover: #33201a;
+  --theme-bg: #1a0f0a;            --theme-bg-rgb: 26 15 10;
+  --theme-sidebar: #241612;       --theme-sidebar-rgb: 36 22 18;
+  --theme-surface: #2e1c16;       --theme-surface-rgb: 46 28 22;
+  --surface-input: #24150f;       --surface-input-rgb: 36 21 15;
+  --theme-border: #4a3026;        --theme-border-rgb: 74 48 38;
+  --border-strong: #4a3026;       --border-strong-rgb: 74 48 38;
+  --surface-raise: #38231b;       --surface-raise-rgb: 56 35 27;
+
+  --theme-text: #f0e0d8;          --theme-text-rgb: 240 224 216;
+  --theme-text-secondary: #b0907f; --theme-text2-rgb: 176 144 127;
+  --theme-text-disabled: #7d6255;  --theme-text-disabled-rgb: 125 98 85;
+
+  --theme-accent: #f97316;        --theme-accent-rgb: 249 115 22;
+  --theme-accent-solid: #c2410c;  --theme-accent-solid-rgb: 194 65 12;
+  --theme-on-accent: #ffffff;     --theme-on-accent-rgb: 255 255 255;
+  --theme-accent-soft: #fdba74;   --theme-accent-soft-rgb: 253 186 116;
+
+  --theme-hover: #33201a;         --theme-hover-rgb: 51 32 26;
   --theme-code-bg: #21120c;
+  --theme-select-bg: rgba(96, 140, 255, 0.18);
+  --theme-select-fg: #c7d8ff;     --theme-select-fg-rgb: 199 216 255;
 }
 
-/* TH1：midnight / forest / sunset 语义层补齐（此前三套主题只定义骨架色，
-   --sem-* / --surface-raise / --border-strong 沿用暗色默认值，切换后观感割裂） */
+/* ── 语义层（L2）：组件唯一可用层，禁止在组件内写十六进制色 ── */
+:root {
+  --sem-success: #4ade80;         --sem-success-rgb: 74 222 128;
+  --sem-danger: #f97066;          --sem-danger-rgb: 249 112 102;
+  --sem-danger-solid: #c4342a;    --sem-danger-solid-rgb: 196 52 42;
+  --sem-warn: #f2b544;            --sem-warn-rgb: 242 181 68;
+  --sem-info: #8ab4f8;            --sem-info-rgb: 138 180 248;
+  --sem-overlay: rgba(0, 0, 0, 0.6);
+  --sem-accent: #12b48c;          --sem-accent-rgb: 18 180 140;
+  --sem-focus: #8ab4f8;           --sem-focus-rgb: 138 180 248;
+  /* 淡底（Tailwind v3 对纯 CSS 变量色不支持 /opacity，故单独提供底色 token） */
+  --sem-accent-bg: rgba(18, 180, 140, 0.12);
+  --sem-danger-bg: rgba(249, 112, 102, 0.12);
+  --sem-success-bg: rgba(74, 222, 128, 0.15);
+  --sem-warn-bg: rgba(242, 181, 68, 0.15);
+  --sem-info-bg: rgba(138, 180, 248, 0.12);
+}
+
 [data-theme="midnight"] {
-  --theme-accent-soft: #A5B4FC;   /* indigo-300，与 accent #6366f1 同色系 */
-  --sem-success: #34D399;
-  --sem-danger: #F87171;
-  --sem-warn: #FBBF24;
-  --sem-info: #93C5FD;
+  --sem-success: #34d399;         --sem-success-rgb: 52 211 153;
+  --sem-danger: #f87171;          --sem-danger-rgb: 248 113 113;
+  --sem-danger-solid: #b91c1c;    --sem-danger-solid-rgb: 185 28 28;
+  --sem-warn: #fbbf24;            --sem-warn-rgb: 251 191 36;
+  --sem-info: #93c5fd;            --sem-info-rgb: 147 197 253;
   --sem-overlay: rgba(0, 0, 0, 0.65);
-  --sem-accent: #6366F1;
-  --sem-accent-bg: rgba(99, 102, 241, 0.14);
-  --sem-focus: #93C5FD;
-  --surface-raise: #1B2640;
-  --border-strong: #2A3A5C;
+  --sem-accent: #818cf8;          --sem-accent-rgb: 129 140 248;
+  --sem-focus: #93c5fd;           --sem-focus-rgb: 147 197 253;
+  --sem-accent-bg: rgba(129, 140, 248, 0.14);
   --sem-danger-bg: rgba(248, 113, 113, 0.13);
   --sem-success-bg: rgba(52, 211, 153, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
@@ -84,17 +173,15 @@
 }
 
 [data-theme="forest"] {
-  --theme-accent-soft: #86EFAC;   /* green-300，与 accent #22c55e 同色系 */
-  --sem-success: #4ADE80;
-  --sem-danger: #F87171;
-  --sem-warn: #FBBF24;
-  --sem-info: #7DD3FC;
+  --sem-success: #4ade80;         --sem-success-rgb: 74 222 128;
+  --sem-danger: #f87171;          --sem-danger-rgb: 248 113 113;
+  --sem-danger-solid: #b91c1c;    --sem-danger-solid-rgb: 185 28 28;
+  --sem-warn: #fbbf24;            --sem-warn-rgb: 251 191 36;
+  --sem-info: #7dd3fc;            --sem-info-rgb: 125 211 252;
   --sem-overlay: rgba(0, 0, 0, 0.65);
-  --sem-accent: #22C55E;
+  --sem-accent: #22c55e;          --sem-accent-rgb: 34 197 94;
+  --sem-focus: #7dd3fc;           --sem-focus-rgb: 125 211 252;
   --sem-accent-bg: rgba(34, 197, 94, 0.13);
-  --sem-focus: #7DD3FC;
-  --surface-raise: #1B2A1F;
-  --border-strong: #2A4433;
   --sem-danger-bg: rgba(248, 113, 113, 0.13);
   --sem-success-bg: rgba(74, 222, 128, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
@@ -102,67 +189,46 @@
 }
 
 [data-theme="sunset"] {
-  --theme-accent-soft: #FDBA74;   /* orange-300，与 accent #f97316 同色系 */
-  --sem-success: #34D399;
-  --sem-danger: #F97066;
-  --sem-warn: #FBBF24;
-  --sem-info: #93C5FD;
+  --sem-success: #34d399;         --sem-success-rgb: 52 211 153;
+  --sem-danger: #f97066;          --sem-danger-rgb: 249 112 102;
+  --sem-danger-solid: #b3271e;    --sem-danger-solid-rgb: 179 39 30;
+  --sem-warn: #fbbf24;            --sem-warn-rgb: 251 191 36;
+  --sem-info: #93c5fd;            --sem-info-rgb: 147 197 253;
   --sem-overlay: rgba(0, 0, 0, 0.65);
-  --sem-accent: #F97316;
+  --sem-accent: #f97316;          --sem-accent-rgb: 249 115 22;
+  --sem-focus: #93c5fd;           --sem-focus-rgb: 147 197 253;
   --sem-accent-bg: rgba(249, 115, 22, 0.14);
-  --sem-focus: #93C5FD;
-  --surface-raise: #38231B;
-  --border-strong: #4A3026;
   --sem-danger-bg: rgba(249, 112, 102, 0.13);
   --sem-success-bg: rgba(52, 211, 153, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
   --sem-info-bg: rgba(147, 197, 253, 0.12);
 }
 
-/* ── 语义层（L2）：组件唯一可用层，禁止在组件内写十六进制色 ── */
-:root {
-  --theme-accent-soft: #D0BCFF;   /* 图标与次要强调（仅暗色主题适用） */
-  --sem-success: #4ADE80;
-  --sem-danger: #F97066;
-  --sem-warn: #F2B544;
-  --sem-info: #8AB4F8;
-  --sem-overlay: rgba(0, 0, 0, 0.6);
-  /* A8 修复：ContextRing 正常态圆环此前取不到值（theme.css 未定义 accent） */
-  --sem-accent: #10A37F;
-  --sem-accent-bg: rgba(16, 163, 127, 0.12);
-  --sem-focus: #8AB4F8;
-  --surface-raise: #232323;      /* 浮层抬升面 */
-  --border-strong: #3A3A3A;      /* hover 边框 */
-  /* 淡底（Tailwind v3 对纯 CSS 变量色不支持 /opacity，故单独提供底色 token） */
-  --sem-danger-bg: rgba(249, 112, 102, 0.12);
-  --sem-success-bg: rgba(74, 222, 128, 0.15);
-  --sem-warn-bg: rgba(242, 181, 68, 0.15);
-  --sem-info-bg: rgba(138, 180, 248, 0.12);
-}
 [data-theme="light"] {
-  --theme-accent-soft: #6750A4;   /* #D0BCFF 在白底对比度不足，取同色系深色 */
-  --sem-success: #16A34A;
-  --sem-danger: #DC2626;
-  --sem-warn: #B45309;
-  --sem-info: #1D4ED8;
+  --sem-success: #16a34a;         --sem-success-rgb: 22 163 74;
+  --sem-danger: #dc2626;          --sem-danger-rgb: 220 38 38;
+  --sem-danger-solid: #dc2626;    --sem-danger-solid-rgb: 220 38 38;
+  --sem-warn: #b45309;            --sem-warn-rgb: 180 83 9;
+  --sem-info: #1d4ed8;            --sem-info-rgb: 29 78 216;
   --sem-overlay: rgba(0, 0, 0, 0.35);
-  --sem-accent: #0B7C61;
+  --sem-accent: #0b7c61;          --sem-accent-rgb: 11 124 97;
+  --sem-focus: #1d4ed8;           --sem-focus-rgb: 29 78 216;
   --sem-accent-bg: rgba(11, 124, 97, 0.10);
-  --sem-focus: #1D4ED8;
-  --surface-raise: #FFFFFF;
-  --border-strong: #C9C9C9;
   --sem-danger-bg: rgba(220, 38, 38, 0.10);
   --sem-success-bg: rgba(22, 163, 74, 0.12);
   --sem-warn-bg: rgba(180, 83, 9, 0.12);
   --sem-info-bg: rgba(29, 78, 216, 0.10);
 }
 
-/* ── 圆角四档（小控件=sm / 按钮·输入框=md / 卡片=lg / 模态=xl / 胶囊=full）── */
+/* ── 圆角四档 + 两档扩展（sm/小控件 · md/按钮输入框 · lg/卡片 · xl/模态）
+   Tailwind 的 borderRadius 直接引用这些变量，改一处即全局生效 ── */
 :root {
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
   /* 阴影三档（light 主题另乘 0.6 定义） */
   --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.18);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.22);
@@ -174,7 +240,11 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --font-mono: 'SF Mono', Menlo, Consolas, monospace;
+  /* 窗口红绿灯留白：macOS hiddenInset 需要 80px，其余平台 12px（由 data-platform 覆盖） */
+  --titlebar-inset: 12px;
 }
+[data-platform="darwin"] { --titlebar-inset: 80px; }
+
 [data-theme="light"] {
   --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.11);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.13);
@@ -193,6 +263,8 @@
   --z-palette: 110;
   --z-toast: 120;
   --z-approval: 130;
+  /* 启动页：遮盖一切（含审批卡），仅冷启动出现 */
+  --z-splash: 200;
 }
 
 /* C9：全局键盘焦点可见性 */
@@ -204,17 +276,24 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* 显式中日韩回退链：Windows 上 -apple-system/Segoe UI 缺中文字形时不再随机回落 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   background: var(--theme-bg);
   color: var(--theme-text);
   overflow: hidden;
 }
 
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 3px; }
+/* 选中文字：用 accent 淡底，避免系统默认蓝与主题冲突 */
+::selection { background: var(--sem-accent-bg); color: var(--theme-text); }
 
-/* 消息气泡 */
+/* 滚动条：滚动容器保留沟槽位，内容变长时不再横向抖动 */
+[class*="overflow-y-auto"], [class*="overflow-auto"], [class*="overflow-y-scroll"] { scrollbar-gutter: stable; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--theme-border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* 消息气泡（旧类保留：外部引用与回归断言仍在用） */
 .msg-user {
   background: var(--theme-surface);
   border: 1px solid var(--theme-border);
@@ -223,7 +302,30 @@ body {
 }
 .msg-assistant { padding: 4px 0; }
 
-/* Markdown 排版 */
+/* 对话正文：15px / 1.75（中文阅读态），与 13px 的 UI chrome 明确分层 */
+.msg-prose {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--theme-text);
+  overflow-wrap: anywhere;
+}
+.msg-prose > :first-child { margin-top: 0; }
+.msg-prose > :last-child { margin-bottom: 0; }
+.msg-prose p { margin: 6px 0; }
+.msg-prose h1, .msg-prose h2, .msg-prose h3 { margin: 14px 0 6px; line-height: 1.4; }
+.msg-prose h1 { font-size: 20px; }
+.msg-prose h2 { font-size: 17px; }
+.msg-prose h3 { font-size: 15px; }
+.msg-prose ul, .msg-prose ol { margin: 6px 0 6px 20px; }
+.msg-prose li { margin: 3px 0; }
+.msg-prose blockquote {
+  border-left: 3px solid var(--theme-accent);
+  padding-left: 12px;
+  margin: 8px 0;
+  color: var(--theme-text-secondary);
+}
+
+/* Markdown 排版（旧规则，供 .msg-assistant 等容器沿用） */
 .msg-assistant p, .msg-user p { margin: 4px 0; line-height: 1.6; }
 .msg-assistant h1, .msg-assistant h2, .msg-assistant h3 { margin: 12px 0 6px; }
 .msg-assistant ul, .msg-assistant ol { margin: 4px 0 4px 20px; }
@@ -244,28 +346,40 @@ pre {
   overflow-x: auto;
   font-size: 13px;
   margin: 8px 0;
-  line-height: 1.5;
+  line-height: 1.6;
 }
-code { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+code { font-family: var(--font-mono); }
 :not(pre) > code {
   background: var(--theme-hover);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 13px;
-  color: var(--theme-accent);
+  color: var(--theme-text);
 }
 
 /* 输入框 */
 textarea:focus { outline: none; }
 
+/* 启动页进度线：宽度 160px 的容器内从左生长（scaleX，不触发重排） */
+@keyframes splash-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
 /* 动画 */
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.animate-pulse { animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.animate-pulse { animation: pulse 1.2s ease-in-out infinite; }
+
+/* 尊重系统「减少动态效果」：只保留状态色变化，停掉循环动画 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* ── Markdown 预览排版（右侧文件预览 / 应用内 md 文件查看）──
    仅作用于 .markdown-body 容器：对话气泡沿用上方既有的 .msg-assistant 规则，
    二者互不影响（预览栏正文不套气泡，字号与行距按阅读态给到更宽松的值）。 */
-.markdown-body { color: var(--theme-text); }
+.markdown-body { color: var(--theme-text); font-size: 14px; line-height: 1.7; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3,
 .markdown-body h4, .markdown-body h5, .markdown-body h6 {

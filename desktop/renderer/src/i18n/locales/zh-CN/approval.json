@@ -26,5 +26,7 @@
   "allowAlways": "始终允许",
   "deny": "拒绝",
   "hotkeyTitle": "键盘快捷键",
-  "hotkeyHint": "1 拒绝 · 2 允许一次 · 3 本对话 · 4 始终允许"
+  "hotkeyHint": "1 拒绝 · 2 允许一次 · 3 本对话 · 4 始终允许",
+  "attachReason": "附加理由",
+  "reasonPlaceholder": "可选：说明原因或期望（如「用 npm 不要用 pnpm」）。拒绝时 Agent 会看到理由并调整做法。"
 }

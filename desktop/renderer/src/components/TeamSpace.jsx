@@ -206,7 +206,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
               placeholder={t('teamSpace.cardTitlePlaceholder')}
               className="flex-1 rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
             />
-            <button onClick={addCard} className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">{t('teamSpace.add')}</button>
+            <button onClick={addCard} className="rounded-lg bg-accent-solid px-3 py-1.5 text-sm text-on-accent">{t('teamSpace.add')}</button>
             <button onClick={() => setShowAdd(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm text-text2">{t('teamSpace.cancel')}</button>
           </div>
         ) : null}
@@ -290,7 +290,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
                 />
                 <button
                   onClick={() => decide(a.approvalId, 'approve')}
-                  className="rounded-lg bg-accent px-3 py-1 text-xs text-white"
+                  className="rounded-lg bg-accent-solid px-3 py-1 text-xs text-on-accent"
                 >
                   {t('teamSpace.approve')}
                 </button>

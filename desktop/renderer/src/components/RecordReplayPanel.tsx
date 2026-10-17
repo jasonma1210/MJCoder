@@ -164,7 +164,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
       {/* 录制表单 */}
       <div className="space-y-2">
         <textarea
-          className="w-full bg-bg border border-border rounded px-2 py-1.5 text-sm"
+          className="w-full bg-input border border-border rounded px-2 py-1.5 text-sm"
           rows={2}
           placeholder={t('settings.cuaObjectivePlaceholder')}
           value={form.objective}
@@ -173,21 +173,21 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
         />
         <div className="flex gap-2">
           <input
-            className="flex-1 bg-bg border border-border rounded px-2 py-1.5 text-sm"
+            className="flex-1 bg-input border border-border rounded px-2 py-1.5 text-sm"
             placeholder={t('settings.cuaAppNamePlaceholder')}
             value={form.appName}
             onChange={(e) => setForm({ ...form, appName: e.target.value })}
             disabled={!!running}
           />
           <input
-            className="w-32 bg-bg border border-border rounded px-2 py-1.5 text-sm"
+            className="w-32 bg-input border border-border rounded px-2 py-1.5 text-sm"
             placeholder={t('settings.cuaNamePlaceholder')}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             disabled={!!running}
           />
           <input
-            className="w-16 bg-bg border border-border rounded px-2 py-1.5 text-sm"
+            className="w-16 bg-input border border-border rounded px-2 py-1.5 text-sm"
             type="number" min={1} max={50}
             title={t('settings.cuaMaxStepsLabel')}
             value={form.maxSteps}
@@ -197,7 +197,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
         </div>
         <div className="flex gap-2 items-center">
           <select
-            className="flex-1 bg-bg border border-border rounded px-2 py-1.5 text-sm"
+            className="flex-1 bg-input border border-border rounded px-2 py-1.5 text-sm"
             value={form.modelKey}
             onChange={(e) => setForm({ ...form, modelKey: e.target.value })}
             disabled={!!running}
@@ -206,18 +206,18 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
             {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
           {!running ? (
-            <button className="px-3 py-1.5 text-sm bg-btn text-btnFg rounded hover:opacity-90" onClick={startRecord}>
+            <button className="px-3 py-1.5 text-sm bg-accent-solid text-on-accent rounded hover:opacity-90" onClick={startRecord}>
               {t('settings.cuaStartRecord')}
             </button>
           ) : (
-            <button className="px-3 py-1.5 text-sm border border-border rounded hover:bg-bg" onClick={stop}>
+            <button className="px-3 py-1.5 text-sm border border-border rounded hover:bg-hover" onClick={stop}>
               {t('settings.cuaStop')}
             </button>
           )}
         </div>
       </div>
 
-      {error && <p className="text-xs text-error">{error}</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
 
       {/* 逐次确认卡片：敏感动作必须当场确认，拒绝即停 */}
       {approval && (
@@ -225,7 +225,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
           <p className="text-sm text-warn">{approval.title}</p>
           <p className="text-xs text-text2 whitespace-pre-line">{approval.detail}</p>
           <div className="flex gap-2 pt-1">
-            <button className="px-2 py-1 text-xs bg-btn text-btnFg rounded" onClick={() => resolveApproval('once')}>
+            <button className="px-2 py-1 text-xs bg-accent-solid text-on-accent rounded" onClick={() => resolveApproval('once')}>
               {t('settings.cuaApproveOnce')}
             </button>
             <button className="px-2 py-1 text-xs border border-border rounded" onClick={() => resolveApproval('deny')}>
@@ -239,7 +239,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
       {events.length > 0 && (
         <div className="max-h-40 overflow-y-auto border border-border rounded p-2 space-y-0.5">
           {events.map((e, i) => (
-            <p key={i} className={`text-xs ${e.type === 'error' ? 'text-error' : 'text-text2'}`}>{eventLine(e)}</p>
+            <p key={i} className={`text-xs ${e.type === 'error' ? 'text-danger' : 'text-text2'}`}>{eventLine(e)}</p>
           ))}
         </div>
       )}
@@ -257,7 +257,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
               </p>
             </div>
             <button
-              className="px-2 py-1 text-xs bg-btn text-btnFg rounded disabled:opacity-50"
+              className="px-2 py-1 text-xs bg-accent-solid text-on-accent rounded disabled:opacity-50"
               disabled={!!running}
               onClick={() => startReplay(rec, 'on-request')}
             >
@@ -271,7 +271,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
             >
               {t('settings.cuaReplayAlways')}
             </button>
-            <button className="px-2 py-1 text-xs border border-border rounded text-error" disabled={!!running} onClick={() => removeRecording(rec.id)}>
+            <button className="px-2 py-1 text-xs border border-border rounded text-danger" disabled={!!running} onClick={() => removeRecording(rec.id)}>
               {t('settings.cuaDelete')}
             </button>
           </div>

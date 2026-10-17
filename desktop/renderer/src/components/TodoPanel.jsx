@@ -59,14 +59,14 @@ export default function TodoPanel({ runId, compact = false }) {
       }}
     >
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, color: T('--theme-text-secondary') }}>{tr('todoPanel.progress')}</span>
+        <span style={{ fontSize: 13, color: T('--theme-text-secondary') }}>{tr('todoPanel.progress')}</span>
         <div
           aria-hidden="true"
           style={{ flex: 1, height: 4, borderRadius: 2, background: T('--theme-border'), overflow: 'hidden' }}
         >
           <div style={{ width: `${pct}%`, height: '100%', background: T('--sem-accent'), transition: `width ${T('--dur-fast')} ${T('--ease-standard')}` }} />
         </div>
-        <span style={{ fontSize: 12, color: T('--theme-text-secondary'), fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: 13, color: T('--theme-text-secondary'), fontVariantNumeric: 'tabular-nums' }}>
           {doneCount}/{total}
         </span>
       </header>
@@ -81,7 +81,7 @@ export default function TodoPanel({ runId, compact = false }) {
               key={`${t.status}-${i}-${t.content.slice(0, 12)}`}
               style={{
                 display: 'flex', alignItems: 'flex-start', gap: 7,
-                fontSize: 13, lineHeight: 1.5,
+                fontSize: 14, lineHeight: 1.5, // 与 text-sm(14/21) 对齐；本组件刻意用内联样式，改字号需同步 config 字阶
                 color: done ? color : T('--theme-text'),
                 opacity: done ? 0.65 : 1,
                 textDecoration: done ? 'line-through' : 'none',

@@ -290,7 +290,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                   <div className="fixed inset-0 z-10" onClick={() => setSrcOpen(false)} />
                   <div className="absolute right-0 top-8 z-20 w-72 p-3 rounded-xl bg-surface border border-border shadow-[var(--shadow-pop)]">
                     <div className="text-xs font-medium mb-1">{t('ecosystem.sourceTitle')}</div>
-                    <p className="text-[11px] text-text2 leading-relaxed mb-2">
+                    <p className="text-xs text-text2 leading-relaxed mb-2">
                       {t('ecosystem.sourceDesc')}
                     </p>
                     <input
@@ -303,7 +303,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                       <button onClick={() => { setEcosystemApiBase(''); setApiBase(''); loadAll(); }}
                         className="text-xs text-text2 hover:text-text">{t('ecosystem.clear')}</button>
                       <button onClick={() => { setEcosystemApiBase(apiBase); loadAll(); }}
-                        className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90">{t('ecosystem.saveReload')}</button>
+                        className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">{t('ecosystem.saveReload')}</button>
                     </div>
                   </div>
                 </>
@@ -347,7 +347,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
           {/* 自定义连接器：目录只保留主流/加得上的服务，其余交给用户自己添加（页面级视图，非弹窗） */}
           {tab === 'connectors' && !custom && (
             <button onClick={openCustom}
-              className="h-8 shrink-0 inline-flex items-center gap-1.5 px-3 rounded-lg bg-accent text-white text-xs hover:opacity-90 whitespace-nowrap">
+              className="h-8 shrink-0 inline-flex items-center gap-1.5 px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 whitespace-nowrap">
               <IconEdit size={13} /> {t('ecosystem.custom.button')}
             </button>
           )}
@@ -397,18 +397,18 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                       <div className="text-sm font-medium truncate">{e.title_cn || e.name}</div>
                       <div className="text-xs text-text2 mt-1.5 leading-relaxed line-clamp-2">{e.category} · {e.mission || t('ecosystem.defaultMission')}</div>
                     </div>
-                    <span className="shrink-0 text-[10px] px-2 py-1 leading-none rounded bg-accent/15 text-accent whitespace-nowrap">
+                    <span className="shrink-0 text-caption px-2 py-1 leading-none rounded bg-accent-bg text-accent whitespace-nowrap">
                       {approvalText(e.approval_policy)}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1.5 mt-3">
                     {(e.industry || []).map((ind) => (
-                      <span key={ind} className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{ind}</span>
+                      <span key={ind} className="text-caption px-2 py-1 leading-none rounded bg-hover text-text2">{ind}</span>
                     ))}
                   </div>
                   {/* C2：详情展开 */}
                   {expandedId === `emp-${e.id}` && (
-                    <div className="mt-3 pt-3 border-t border-border text-[11px] text-text2 leading-relaxed">
+                    <div className="mt-3 pt-3 border-t border-border text-xs text-text2 leading-relaxed">
                       <p><span className="text-text">{t('ecosystem.missionLabel')}</span>{e.mission || t('ecosystem.toBeAdded')}</p>
                       {e.market_signal && <p className="mt-1"><span className="text-text">{t('ecosystem.marketSignalLabel')}</span>{e.market_signal}</p>}
                       <p className="mt-1"><span className="text-text">{t('ecosystem.approvalPolicyLabel')}</span>{approvalText(e.approval_policy, t('ecosystem.approvalOnRequest'))}</p>
@@ -422,7 +422,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                     </button>
                     {/* 招募：开新会话并把该角色设为当前会话 agent（实心主按钮，对标招聘类目录卡片） */}
                     <button onClick={() => handleRecruit(e)} disabled={busyId === e.id}
-                      className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 whitespace-nowrap text-xs px-4 rounded-lg bg-accent text-white hover:opacity-90 disabled:opacity-50">
+                      className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 whitespace-nowrap text-xs px-4 rounded-lg bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">
                       <IconUser size={13} /> {t('ecosystem.recruit')}
                     </button>
                   </div>
@@ -461,27 +461,27 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate flex items-center gap-1.5">
                             {c.display_name || c.name}
-                            {c.official && <span className="text-[9px] px-1 py-[2px] leading-none rounded bg-[var(--sem-success-bg)] text-success shrink-0">{t('ecosystem.official')}</span>}
+                            {c.official && <span className="text-caption px-1 py-[2px] leading-none rounded bg-[var(--sem-success-bg)] text-success shrink-0">{t('ecosystem.official')}</span>}
                           </div>
                           <div className="text-xs text-text2 mt-1.5">{c.vendor} · {c.category}</div>
                         </div>
                       </div>
-                      <div className="text-[11px] text-text2 mt-2.5 leading-relaxed line-clamp-2">{c.description}</div>
+                      <div className="text-xs text-text2 mt-2.5 leading-relaxed line-clamp-2">{c.description}</div>
                       <div className="flex flex-wrap gap-1.5 mt-3">
                         {(c.permissions || []).map((p, i) => (
-                          <span key={i} className="text-[10px] px-2 py-1 leading-none rounded bg-[var(--sem-warn-bg)] text-warn">
+                          <span key={i} className="text-caption px-2 py-1 leading-none rounded bg-[var(--sem-warn-bg)] text-warn">
                             {permissionText(p.level)}{p.scope && p.scope !== '*' ? `${t('ecosystem.scopeSep')}${p.scope}` : ''}
                           </span>
                         ))}
                         {(c.permissions || []).length === 0 && (
-                          <span className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{t('ecosystem.noPermissions')}</span>
+                          <span className="text-caption px-2 py-1 leading-none rounded bg-hover text-text2">{t('ecosystem.noPermissions')}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2.5 mt-auto pt-4">
                         {/* 启用开关：只管「+」菜单可见性（启用≠连接） */}
                         <button onClick={() => toggleConnector(c, !on)} role="switch" aria-checked={on}
                           className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                          <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+                          <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
                         </button>
                         <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
                           {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}
@@ -518,10 +518,10 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                     <div key={s.id} className="p-5 rounded-xl bg-surface border border-border flex flex-col">
                       <div className="text-sm font-medium truncate">{s.display_name || s.name}</div>
                       <div className="text-xs text-text2 mt-1.5">{s.category}</div>
-                      <div className="text-[11px] text-text2 mt-2.5 leading-relaxed line-clamp-2">{s.description}</div>
+                      <div className="text-xs text-text2 mt-2.5 leading-relaxed line-clamp-2">{s.description}</div>
                       <div className="flex flex-wrap gap-1.5 mt-3">
                         {(s.tools_required || []).map((tool) => (
-                          <span key={tool} className="text-[10px] px-2 py-1 leading-none rounded bg-hover text-text2">{tool}</span>
+                          <span key={tool} className="text-caption px-2 py-1 leading-none rounded bg-hover text-text2">{tool}</span>
                         ))}
                       </div>
                       <div className="flex items-center gap-2.5 mt-auto pt-4">
@@ -529,7 +529,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                         <button onClick={() => toggleSkillCatalog(s, !on)} disabled={busyId === String(s.id || s.name)}
                           role="switch" aria-checked={on}
                           className={`w-11 h-6 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                          <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+                          <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
                         </button>
                         <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
                           {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}

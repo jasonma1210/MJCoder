@@ -332,7 +332,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
         {/* R6：任务组操作区——按组状态条件显示「继续/执行/取消」，失败任务逐条给「重试」；
             R6.1：非 running 组附「删除」（二次确认弹窗） */}
         {groups.length > 0 && groups.map((g) => (
-          <div key={g.groupId} className="bg-bg border border-border rounded-xl p-3">
+          <div key={g.groupId} className="bg-input border border-border rounded-xl p-3">
             <div className="flex items-center gap-2">
               <span className={`text-xs shrink-0 ${g.status === 'failed' ? 'text-danger' : g.status === 'paused' ? 'text-warn' : 'text-text2'}`}>
                 {groupStatusLabelKey(g.status) ? t(groupStatusLabelKey(g.status)) : g.status}
@@ -397,16 +397,16 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
         ))}
         {/* R6.1（决策点 2）：done/cancelled 折叠为一行历史——不撑爆坞、可删除、默认收起 */}
         {historyGroups.length > 0 && (
-          <div className="bg-bg border border-border rounded-xl px-3 py-2">
-            <div className="text-[10px] text-text2 mb-1">{t('agentDock.historyGroupTitle')}</div>
+          <div className="bg-input border border-border rounded-xl px-3 py-2">
+            <div className="text-caption text-text2 mb-1">{t('agentDock.historyGroupTitle')}</div>
             {historyGroups.map((g) => (
               <div key={g.groupId} className="flex items-center gap-2 py-1">
                 <IconCheck size={11} className="text-text2 shrink-0" />
-                <span className="text-[10px] text-text2 shrink-0">{groupStatusLabelKey(g.status) ? t(groupStatusLabelKey(g.status)) : g.status}</span>
+                <span className="text-caption text-text2 shrink-0">{groupStatusLabelKey(g.status) ? t(groupStatusLabelKey(g.status)) : g.status}</span>
                 <span className="text-xs text-text2 truncate flex-1" title={g.goal}>{g.goal || g.groupId}</span>
                 <button
                   onClick={() => onDeleteGroup(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded border border-border text-text2 text-[10px] hover:bg-hover hover:text-danger"
+                  className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded border border-border text-text2 text-caption hover:bg-hover hover:text-danger"
                   title={t('agentDock.deleteGroupTitle')}
                 >
                   {deletingId === g.groupId ? <IconSpinner size={10} className="animate-spin" /> : t('agentDock.deleteGroup')}
@@ -416,7 +416,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
           </div>
         )}
         {agents.map((a) => (
-          <div key={a.key} className="bg-bg border border-border rounded-xl p-3">
+          <div key={a.key} className="bg-input border border-border rounded-xl p-3">
             <div className="flex items-center gap-2 mb-2">
               {/* R0 契约适配：待人工审查的终态 Agent 用警示图标替换运行中 spinner */}
               {a.needsReview

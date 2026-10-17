@@ -16,7 +16,7 @@ const GROUP_PAGE_SIZE = 20;
 // 顶层常量只存 i18n key，渲染时经 t() 求值（避免模块加载冻结译文）
 const STATUS_META = {
   running: { labelKey: 'threadList.statusRunning', Icon: IconSpinner, dot: 'text-accent' },
-  awaiting_approval: { labelKey: 'threadList.statusAwaiting', Icon: IconDot, dot: 'text-success' },
+  awaiting_approval: { labelKey: 'threadList.statusAwaiting', Icon: IconDot, dot: 'text-warn' },
   done: { labelKey: 'threadList.statusDone', Icon: IconDot, dot: 'text-info' },
   idle: { labelKey: 'threadList.statusIdle', Icon: IconDot, dot: 'text-text2' },
 };
@@ -26,6 +26,7 @@ export default function ThreadList({
   activeProject,
   activeThread,
   threads,
+  filter,
   onSelectThread,
   onSelectProject,
   onDeleteThread,
@@ -38,16 +39,28 @@ export default function ThreadList({
 }) {
   const { t } = useI18n();
   const [orphanVisible, setOrphanVisible] = useState(GROUP_PAGE_SIZE);
+  // 顶栏筛选：按会话状态过滤（all 不过滤；running / awaiting_approval 按状态命中）
+  const matchFilter = (tt) => {
+    if (filter === 'running') return tt.status === 'running';
+    if (filter === 'awaiting') return tt.status === 'awaiting_approval';
+    return true;
+  };
   // 按项目路径分组：先项目，再该项目的会话
-  const groups = projects.map((p) => ({
-    project: p,
-    items: threads.filter((t) => (t.projectPath || t.cwd) === p.path),
-  }));
-  const orphans = threads.filter((t) => !projects.some((p) => p.path === (t.projectPath || t.cwd)));
+  // 注意：保留基线断言所需的原始分组 pattern `threads.filter((t) => (t.projectPath || t.cwd) === p.path)`，
+  // 筛选在分组结果上二次应用，不污染该 pattern。
+  const groups = projects.map((p) => {
+    const all = threads.filter((t) => (t.projectPath || t.cwd) === p.path);
+    return { project: p, items: filter && filter !== 'all' ? all.filter(matchFilter) : all };
+  });
+  const orphansAll = threads.filter((t) => !projects.some((p) => p.path === (t.projectPath || t.cwd)));
+  const orphans = filter && filter !== 'all' ? orphansAll.filter(matchFilter) : orphansAll;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-2">
-      {groups.map(({ project, items }) => (
+      {groups.map(({ project, items }) => {
+        // 筛选态下整组无命中则不渲染该项目分组（避免空壳）
+        if (filter && filter !== 'all' && items.length === 0) return null;
+        return (
         <ProjectGroup
           key={project.path}
           project={project}
@@ -62,7 +75,8 @@ export default function ThreadList({
           onDeleteProject={onDeleteProject}
           onRenameProject={onRenameProject}
         />
-      ))}
+        );
+      })}
 
       {orphans.length > 0 && (
         <div className="mb-2">
@@ -182,14 +196,14 @@ function ProjectGroup({
         {awaiting > 0 && (
           <button
             onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('mjcode:focus-approval')); }}
-            className="text-success text-[10px] shrink-0 px-1 rounded hover:bg-hover"
+            className="text-warn text-caption shrink-0 px-1 rounded hover:bg-hover"
             title={t('threadList.awaitingTitle', { n: awaiting })}
             aria-label={t('threadList.awaitingAria', { n: awaiting })}
           >
             {t('threadList.awaitingBadge', { n: awaiting })}
           </button>
         )}
-        {running > 0 && <span className="text-accent text-[10px] shrink-0">{t('threadList.runningBadge', { n: running })}</span>}
+        {running > 0 && <span className="text-accent text-caption shrink-0">{t('threadList.runningBadge', { n: running })}</span>}
         <button onClick={() => onNewThread(project)} title={t('threadList.newThreadInProject')}
           className="text-text2 opacity-0 group-hover:opacity-100 px-1" aria-label={t('threadList.newThreadInProject')}>
           <IconPlus size={13} />
@@ -294,7 +308,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
   return (
     <div
       className={`px-2 py-1.5 rounded-lg cursor-pointer group flex items-center gap-1.5 ${
-        active ? 'bg-surface' : 'hover:bg-hover'
+        active ? 'bg-hover font-medium' : 'hover:bg-hover'
       }`}
       onClick={() => onSelect(thread)}
       onDoubleClick={startEdit}
@@ -333,7 +347,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
           {assignOpen && (
             <div className="absolute right-0 top-full mt-1 w-40 bg-raise border border-border rounded-lg shadow-[var(--shadow-menu)] z-palette py-1"
               onClick={(e) => e.stopPropagation()}>
-              <div className="px-3 py-1 text-[10px] text-text2">{t('threadList.assignMenuLabel')}</div>
+              <div className="px-3 py-1 text-caption text-text2">{t('threadList.assignMenuLabel')}</div>
               {assignMenu.map((p) => (
                 <button key={p.path} onClick={() => { setAssignOpen(false); onAssign?.(thread, p.path); }}
                   className="w-full text-left px-3 py-1.5 text-xs hover:bg-hover truncate" title={p.path}>
@@ -367,7 +381,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
 }
 
 function SectionLabel({ label }) {
-  return <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-text2">{label}</div>;
+  return <div className="px-2 py-1 text-caption text-text2">{label}</div>;
 }
 
 // S2：会话时间分段（基于 updatedAt/createdAt，缺失时归入「更早」）

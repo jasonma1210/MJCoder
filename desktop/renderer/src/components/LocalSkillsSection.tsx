@@ -76,7 +76,7 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
       </button>
       {open && (
         <div className="px-4 pb-3">
-          {msg && <p className="text-[11px] text-text2 mb-2">{msg}</p>}
+          {msg && <p className="text-xs text-text2 mb-2">{msg}</p>}
           {/* 内置技能 */}
           <p className="text-xs text-text2 mt-1 mb-1">{t('localSkills.builtinTitle')}</p>
           {BUILTIN_SKILLS.map((s) => {
@@ -85,11 +85,11 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
               <div key={s.id} className="flex items-center justify-between gap-3 py-2 border-b border-border last:border-0">
                 <div className="min-w-0">
                   <div className="text-xs font-medium truncate">{t(s.nameKey)}</div>
-                  <div className="text-[11px] text-text2 truncate">{t(s.descKey)}</div>
+                  <div className="text-xs text-text2 truncate">{t(s.descKey)}</div>
                 </div>
                 <button onClick={() => toggle(s.id, !on)} role="switch" aria-checked={on}
                   className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
                 </button>
               </div>
             );
@@ -97,7 +97,7 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
           {/* 文件技能（磁盘 SKILL.md） */}
           <p className="text-xs text-text2 mt-3 mb-1">{t('localSkills.fileTitle')}</p>
           {diskSkills.length === 0 ? (
-            <p className="text-[11px] text-text2 py-2 leading-relaxed">
+            <p className="text-xs text-text2 py-2 leading-relaxed">
               {t('localSkills.noFiles')}
             </p>
           ) : diskSkills.map((s) => {
@@ -106,11 +106,11 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
               <div key={s.dir} className="flex items-center justify-between gap-3 py-2 border-b border-border last:border-0">
                 <div className="min-w-0">
                   <div className="text-xs font-mono truncate">{s.name || s.dir}</div>
-                  {s.description && <div className="text-[11px] text-text2 truncate">{s.description}</div>}
+                  {s.description && <div className="text-xs text-text2 truncate">{s.description}</div>}
                 </div>
                 <button onClick={() => toggle(s.dir, !on)} role="switch" aria-checked={on}
                   className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
                 </button>
               </div>
             );

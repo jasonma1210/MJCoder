@@ -63,8 +63,51 @@ check('publish.owner/repo 指向真实仓库 jasonma1210/MJCoder',
 
 // ── 5. 打包链本身未被顺手改坏 ──
 check('build 脚本 = renderer 构建 + electron-builder', /build --prefix renderer && electron-builder/.test(pkg.scripts.build || ''));
-check('三平台产物配置齐全（dmg / nsis / AppImage）',
-  pkg.build?.mac?.target === 'dmg' && pkg.build?.win?.target === 'nsis' && pkg.build?.linux?.target === 'AppImage');
+// P0-3：macOS 自动更新产物——electron-updater 在 macOS 只消费 zip；dmg 供手动分发。
+// 二者必须同时存在，缺 zip 则更新检查恒 not found（曾因此结构性不可用）。
+check('macOS 产物含 dmg（分发）+ zip（自动更新消费）',
+  Array.isArray(pkg.build?.mac?.target)
+  && pkg.build.mac.target.includes('dmg') && pkg.build.mac.target.includes('zip'),
+  JSON.stringify(pkg.build?.mac?.target));
+check('win/linux 产物保持 nsis / AppImage',
+  pkg.build?.win?.target === 'nsis' && pkg.build?.linux?.target === 'AppImage',
+  `${pkg.build?.win?.target}/${pkg.build?.linux?.target}`);
+// P1-23：显式开启更新包签名校验，fail-closed——校验失败拒绝安装。
+// 2026-10-17 修正：verifyUpdateCodeSignature 是 **Windows 专有**字段
+// （schema: WindowsConfiguration.properties）。原实现写在 build.mac 下，
+// electron-builder 25 的 schema 校验会直接失败（unknown property），
+// 导致「测试绿、npm run build 红」——整个打包命令跑不起来。
+// macOS 侧由 Squirrel.Mac 原生校验更新包签名，没有对应开关，故只保留 Windows 侧断言。
+check('Windows 更新启用发布者签名校验（verifyUpdateCodeSignature）',
+  pkg.build?.win?.verifyUpdateCodeSignature === true,
+  String(pkg.build?.win?.verifyUpdateCodeSignature));
+check('macOS 配置不再包含该 Windows 专有字段（否则 schema 校验会拒绝整个构建）',
+  !('verifyUpdateCodeSignature' in (pkg.build?.mac || {})));
+
+// 防再入门禁：平台块里的每个字段都必须存在于 electron-builder 的 schema。
+// 这条是上面那次事故的直接产物——它能在「跑一次打包」之前就发现配置非法。
+const schemaVerdict = (() => {
+  const schemePath = path.join(root, 'node_modules', 'app-builder-lib', 'scheme.json');
+  if (!fs.existsSync(schemePath)) return { ok: true, detail: 'schema 不可用，跳过（依赖未装）' };
+  try {
+    const scheme = JSON.parse(fs.readFileSync(schemePath, 'utf8'));
+    const MAP = { mac: 'MacConfiguration', win: 'WindowsConfiguration', linux: 'LinuxConfiguration' };
+    const bad = [];
+    for (const [key, defName] of Object.entries(MAP)) {
+      const def = scheme.definitions[defName];
+      if (!def) return { ok: true, detail: `${defName} 未在 schema 中（版本差异，跳过）` };
+      const allowed = new Set(Object.keys(def.properties || {}));
+      for (const field of Object.keys(pkg.build?.[key] || {})) {
+        if (!allowed.has(field)) bad.push(`${key}.${field}`);
+      }
+    }
+    return { ok: bad.length === 0, detail: bad.length ? `非法字段：${bad.join(', ')}` : 'mac/win/linux 全部合法' };
+  } catch (e) {
+    return { ok: false, detail: `schema 校验异常：${e.message}` };
+  }
+})();
+check('build 平台字段均被 electron-builder schema 接受（防 unknown property）',
+  schemaVerdict.ok, schemaVerdict.detail);
 check('ecosystem 目录随包分发（连接器/数字员工目录依赖）',
   Array.isArray(pkg.build?.extraResources) && pkg.build.extraResources.some((r) => /ecosystem/.test(r.from || '')));
 check('files 白名单含 main/agent-core/renderer.dist（三者缺一即白屏或无引擎）',

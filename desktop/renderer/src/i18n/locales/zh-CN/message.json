@@ -26,5 +26,10 @@
   "collapse": "收起",
   "expand": "展开",
   "withToolCalls": "（含 {n} 次工具调用）",
-  "openFileHint": "在右侧预览栏打开该文件"
+  "openFileHint": "在右侧预览栏打开该文件",
+  "fileActions": "文件操作",
+  "addToChat": "添加到对话框",
+  "copyPath": "复制路径",
+  "pathCopied": "路径已复制",
+  "outputFiles": "本轮产出 {n} 个文件"
 }

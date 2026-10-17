@@ -140,7 +140,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
         <div className="flex gap-1 px-5 pt-3">
           {[['browse', t('market.tabBrowse')], ['installed', t('market.tabInstalled')]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
-              className={`h-9 inline-flex items-center px-3.5 rounded-lg text-sm ${tab === id ? 'bg-accent text-white' : 'text-text2 hover:bg-hover'}`}>
+              className={`h-9 inline-flex items-center px-3.5 rounded-lg text-sm ${tab === id ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:bg-hover'}`}>
               {label}
             </button>
           ))}
@@ -173,7 +173,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
               <div className="flex items-center gap-1 mb-4">
                 {TYPE_FILTERS.map((f) => (
                   <button key={f.id} onClick={() => setType(f.id)}
-                    className={`h-8 inline-flex items-center px-3 rounded-lg text-xs ${type === f.id ? 'bg-accent text-white' : 'text-text2 hover:bg-hover'}`}>
+                    className={`h-8 inline-flex items-center px-3 rounded-lg text-xs ${type === f.id ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:bg-hover'}`}>
                     {t(f.labelKey)}
                   </button>
                 ))}
@@ -189,7 +189,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                     placeholder="https://github.com/your-org/your-plugin.git"
                     className="flex-1 h-8 bg-transparent border border-border rounded-lg px-3 text-sm outline-none" />
                   <button onClick={installFromGitForm} disabled={busy === gitUrl.trim() || !gitUrl.trim()}
-                    className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm bg-accent text-white hover:opacity-90 disabled:opacity-40">
+                    className="h-8 inline-flex items-center justify-center px-3 rounded-lg text-sm bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-40">
                     {busy ? t('market.installing') : t('market.install')}
                   </button>
                 </div>
@@ -223,7 +223,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                         </button>
                         <button onClick={() => install(p.source, p.name)}
                           disabled={busy === p.name || installedNames.has(p.name)}
-                          className="h-8 inline-flex items-center justify-center gap-1 px-3 rounded-lg text-sm bg-accent text-white hover:opacity-90 disabled:opacity-40">
+                          className="h-8 inline-flex items-center justify-center gap-1 px-3 rounded-lg text-sm bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-40">
                           <IconDownload size={14} />
                           {installedNames.has(p.name) ? t('market.installed') : (busy === p.name ? t('market.installing') : t('market.install'))}
                         </button>

@@ -15,6 +15,9 @@ const LEVEL_META = {
 // B16：键盘 1=拒绝 2=允许一次 3=本对话 4=始终允许
 // P1-D：审批挂起/决策上报 onPendingChange（App 据此置线程状态 awaiting_approval/running）；
 //       监听 mjcode:focus-approval（侧栏「N 待审批」徽标点击）→ 展开并高亮闪现
+// P1-4：可选决策理由——「附加理由」默认收起（经验：必填会让用户放弃填写，反而阻塞
+//       高频审批）。理由随决议回传主进程：拒绝时拼进工具结果（模型看到「为什么被拒、
+//       该怎么做」，不再用等价命令无信息量重试）与审计行（用户事后可复盘）。
 //
 // 2026-10-15 修复：待审批改为 **FIFO 队列**。
 // 事故背景：原实现只有一个 pending 槽位。自动 DAG 下多个 Worker 并发申请审批时，
@@ -26,12 +29,22 @@ export default function ApprovalCard({ onPendingChange }) {
   const [queue, setQueue] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [flash, setFlash] = useState(false);
+  // P1-4：可选决策理由草稿（默认收起，见文件头注释）。
+  // 草稿经 ref 读取：避免 resolve 因 reasonText 变化新建引用，键盘监听随每次输入卸载重挂
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const [reasonText, setReasonText] = useState('');
+  const reasonTextRef = useRef('');
+  reasonTextRef.current = reasonText;
   // 回调走 ref：避免父组件每次渲染传入新函数导致审批监听重复订阅
   const pendingCbRef = useRef(onPendingChange);
   pendingCbRef.current = onPendingChange;
 
   // 当前展示的永远是队首（FIFO），保证先申请的先被回答
   const pending = queue[0] || null;
+  // 不可「记住」的审批（unconfined_exec / scheduled_create）：主进程不会把
+  // conversation/always 落成规则，UI 就不能给出这两个按钮——否则用户点了「本会话允许」
+  // 却发现下次还问，等于产品撒谎。默认 true（老请求不带该字段时按可记忆处理）。
+  const rememberable = pending?.rememberable !== false;
 
   useEffect(() => {
     if (!window.mjcode?.onApprovalRequest) return undefined;
@@ -71,14 +84,25 @@ export default function ApprovalCard({ onPendingChange }) {
     return () => window.removeEventListener('mjcode:focus-approval', onFocus);
   }, []);
 
+  // P1-4：队列推进（切换到下一条审批）时清空理由草稿——
+  // 不清的话上一条的理由会误带到下一条完全无关的审批上
+  useEffect(() => {
+    setReasonText('');
+    setReasonOpen(false);
+  }, [pending?.approvalId]);
+
   // P1-6：resolve 包 useCallback。它原先是无记忆的普通函数，每次渲染新建引用；
   // 一旦被 useEffect 列入依赖（键盘处理器需要它），就会让监听每轮渲染卸载重挂。
-  // 依赖只有 pending（其余是稳定 setter 与 ref），与键盘 effect 的触发条件一致。
+  // 依赖只有 pending（理由草稿走 ref，其余是稳定 setter 与 ref），与键盘 effect 的触发条件一致。
   const resolve = useCallback((decision) => {
     if (!pending?.approvalId) return;
+    // P1-4：有理由时随决议回传（主进程拼进拒绝结果与审计）；无理由时负载与旧版一致
     // P0-2：决策负载必须回带 approvalId——主进程按 id 精确分发，
     // 并发审批时决策才能落到正确的请求上（否则把「允许」发给另一条命令）
-    window.mjcode.resolveApproval({ approvalId: pending.approvalId, decision });
+    const reason = reasonTextRef.current.trim();
+    window.mjcode.resolveApproval(reason
+      ? { approvalId: pending.approvalId, decision, reason }
+      : { approvalId: pending.approvalId, decision });
     // 乐观出队：主进程的 tool:approval-end 回执到达时会再过滤一次，幂等
     setQueue((q) => q.filter((r) => r.approvalId !== pending.approvalId));
   }, [pending]);
@@ -93,7 +117,10 @@ export default function ApprovalCard({ onPendingChange }) {
       const el = e.target;
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
       if (typing) return;
-      const map = { 1: 'deny', 2: 'once', 3: 'conversation', 4: 'always' };
+      // rememberable=false（unconfined_exec / scheduled_create）：3/4 对它们无效，不绑快捷键
+      const map = rememberable
+        ? { 1: 'deny', 2: 'once', 3: 'conversation', 4: 'always' }
+        : { 1: 'deny', 2: 'once' };
       if (map[e.key]) {
         e.preventDefault();
         resolve(map[e.key]);
@@ -104,7 +131,8 @@ export default function ApprovalCard({ onPendingChange }) {
     // P1-6：resolve 必须列入依赖。此前遗漏 → 父组件传入新的 resolve（如审批卡因
     // 新一轮审批重建）时，键盘处理器仍闭包着旧的 resolve，用户按 Enter/Esc 的决策
     // 会送到已失效的 Promise 上，表现为「按了键但审批毫无反应」。
-  }, [pending, collapsed, resolve]);
+    // rememberable 同样要列：它决定 3/4 键是否绑定（不可记忆的工具不许用快捷键批量放行）。
+  }, [pending, collapsed, resolve, rememberable]);
 
   if (!pending) return null;
   const meta = LEVEL_META[pending.level] || LEVEL_META.L2;
@@ -140,19 +168,40 @@ export default function ApprovalCard({ onPendingChange }) {
                 </span>
               </div>
             )}
-            <pre className="px-4 py-3 text-xs font-mono overflow-x-auto max-h-40 whitespace-pre-wrap text-text2">
+            <pre className="mx-4 my-3 rounded-md border border-border bg-bg px-3 py-2.5 text-code font-mono overflow-x-auto max-h-40 whitespace-pre-wrap text-text2">
               {pending.detail || t('approval.noDetail')}
             </pre>
+            {/* P1-4：可选理由输入——默认收起，点「附加理由」展开。
+                拒绝时填一句（如「用 npm 别用 pnpm」），Agent 下一轮就能看到并调整做法。 */}
+            {reasonOpen && (
+              <div className="px-4 pb-2">
+                <textarea
+                  value={reasonText}
+                  onChange={(e) => setReasonText(e.target.value)}
+                  placeholder={t('approval.reasonPlaceholder')}
+                  rows={2}
+                  className="w-full px-2 py-1.5 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
+                />
+              </div>
+            )}
             <div className="flex flex-wrap gap-2 px-4 pb-3.5">
+              <button onClick={() => setReasonOpen((v) => !v)}
+                className="px-2 py-1.5 rounded-lg text-xs text-text2 hover:text-text border border-transparent hover:border-border">
+                {reasonOpen ? t('approval.collapse') : t('approval.attachReason')}
+              </button>
               <button onClick={() => resolve('once')}
-                className="px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90">{t('approval.allowOnce')}</button>
-              <button onClick={() => resolve('conversation')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
+                className="px-3 py-1.5 rounded-lg text-xs bg-accent-solid text-on-accent hover:brightness-110">{t('approval.allowOnce')}</button>
+              {rememberable && (
+                <button onClick={() => resolve('conversation')}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
+              )}
               <button onClick={() => resolve('deny')}
                 className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.deny')}</button>
-              <button onClick={() => resolve('always')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
-              <span className="text-[10px] text-text2 self-center ml-auto" title={t('approval.hotkeyTitle')}>{t('approval.hotkeyHint')}</span>
+              {rememberable && (
+                <button onClick={() => resolve('always')}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
+              )}
+              <span className="text-caption text-text2 self-center ml-auto" title={t('approval.hotkeyTitle')}>{t('approval.hotkeyHint')}</span>
             </div>
           </>
         )}

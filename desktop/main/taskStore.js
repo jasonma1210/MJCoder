@@ -108,11 +108,20 @@ class TaskStore {
     return r ? rowToTask(r) : null;
   }
 
-  setTaskStatus(groupId, taskId, status, { error, result, workerId, skipRetryCount } = {}) {
+  // force: 终态强制落位（workerPool.js:382 组收尾场景）——非法迁移但目标是终态
+  // （done/failed/skipped）时放行并留痕。此前签名无 force：调用方传了也被忽略，
+  // 迁移被拒 → 任务卡在 queued → 组「无待执行任务」判定永不成立 → 界面永久转圈（P0-10）。
+  setTaskStatus(groupId, taskId, status, { error, result, workerId, skipRetryCount, force } = {}) {
     const t = this.getTask(groupId, taskId);
     if (!t) throw new Error(`子任务不存在：${groupId}/${taskId}`);
-    if (t.status !== status && !canTransition('task', t.status, status)) {
-      throw new Error(`非法任务状态迁移：${t.status} → ${status}（${groupId}/${taskId}）`);
+    const transitionLegal = t.status === status || canTransition('task', t.status, status);
+    if (!transitionLegal) {
+      const terminal = status === 'done' || status === 'failed' || status === 'skipped';
+      if (force && terminal) {
+        console.warn(`[taskStore] force 强制落位：${t.status} → ${status}（${groupId}/${taskId}）——组收尾需要`);
+      } else {
+        throw new Error(`非法任务状态迁移：${t.status} → ${status}（${groupId}/${taskId}）`);
+      }
     }
     const now = this.now();
     // retry_count 语义 = 自动重试次数：强制关闭（skipRetryCount）不计入
@@ -146,10 +155,21 @@ class TaskStore {
 
   // 失败处置：可重试 → 回 queued；不可重试 → failed（调用方决定组级动作）
   // result：部分结果（如 Agent 未完成收尾时已有的产出摘要），失败也保留供 UI/重规划参考
+  // P1-13：自动重试前查副作用核对闸（hasPriorUncertainEffects）——账本里残留更早运行的
+  // uncertain 记录（崩溃/强杀恢复）时，自动回 queued 会重复执行同一批写操作/发请求。
+  // 此时置 failed 并在错误信息中说明核对入口，重试交人工触发（IPC 层带 confirmReview）。
   handleFailure(groupId, taskId, errorMsg, result) {
     const t = this.getTask(groupId, taskId);
     this.setTaskStatus(groupId, taskId, 'failed', { error: errorMsg, result: result || null });
     if (t.retryCount < t.maxRetry) {
+      if (this.hasPriorUncertainEffects(groupId, taskId)) {
+        console.warn(`[taskStore] 任务 ${groupId}/${taskId} 自动重试被副作用核对闸拦截（残留更早运行的 uncertain 账本），置 failed 待人工重试`);
+        this.setTaskStatus(groupId, taskId, 'failed', {
+          error: `${errorMsg}；检测到上次未确认的副作用记录，自动重试已拦截——请先核对副作用后手动重试`,
+          result: result || null, force: true,
+        });
+        return { retried: false, blockedByReview: true };
+      }
       this.setTaskStatus(groupId, taskId, 'queued');
       return { retried: true };
     }
@@ -229,6 +249,20 @@ class TaskStore {
   // 组内副作用仍为 uncertain 的任务清单（needsReview 人工核对的输入）
   listUncertainEffects(groupId) {
     return this.db.prepare(`SELECT task_id FROM side_effects WHERE group_id = ? AND state = 'uncertain'`).all(groupId).map((r) => r.task_id);
+  }
+
+  // P1-13：是否存在「早于最近一次领取」的未闭合副作用记录。
+  // 正常运行到达终态时账本会被 resolveEffect 闭合；残留的更早记录只可能来自
+  // 崩溃/强杀恢复（那次运行没走到终态，副作用是否落盘不可知）。自动重试前必须人工核对，
+  // 否则重复执行同一批写操作/发请求（重复 pr / 重复转账类事故面）。
+  // 注意不能用 needsRetryReview（它把**本次领取**刚记的 uncertain 也算进去——
+  // 每次失败都会命中，自动重试功能整体失效）。
+  hasPriorUncertainEffects(groupId, taskId) {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM side_effects
+      WHERE group_id = ? AND task_id = ? AND state = 'uncertain'
+      AND created_at < (SELECT MAX(created_at) FROM side_effects WHERE group_id = ? AND task_id = ?)`)
+      .get(groupId, taskId, groupId, taskId);
+    return (row?.n || 0) > 0;
   }
 
   // A5（2026-10-16）：重试前置核对的判定——纯查询，供 IPC 层与测试共用。

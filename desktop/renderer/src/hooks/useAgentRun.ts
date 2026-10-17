@@ -15,13 +15,28 @@ import { resumeDecision } from '../../../shared/resumeIntent.mjs';
 // 发送/中止/引导/排队/清空/规划模式/运行模式/上下文压缩 + 快捷键监听。
 // 状态与回调经 deps 对象注入（解构后函数体与搬移前逐字一致）；
 // 函数每次渲染重建（与原组件内函数声明语义一致：queue 接力/steer 补发持当轮闭包）。
+// P0-2a：读取「自动沉淀」开关（localStore preference：memory.autoCapture）。
+// 缺省 false = 默认关闭；读取失败同样按关闭处理（fail-closed：不写比错写安全——
+// 记忆污染的代价是持续污染后续所有会话的上下文）。
+async function autoCaptureEnabled() {
+  try {
+    const v = await window.mjcode?.localGetPreference?.({ key: 'memory.autoCapture' });
+    return v === true;
+  } catch (err) {
+    console.warn('[chat] memory autoCapture preference read failed, treating as off:', err);
+    return false;
+  }
+}
+
 export default function useAgentRun(d) {
   const {
     input, loading, selectedModel, project, projectPicked, thread, cwd, mcpTools, enabledSkills,
     fileSkills, memories, agentsMd, approvalSettings, planMode, runMode, worktree, sessionExtras,
     messages, compacting, plan, voice,
+    // 附件 chips（拖入/粘贴/添加到对话框）：状态归 ChatArea，经 deps 注入（与 input 同架构）
+    attachments = [], setAttachments,
     setInput, setModelWarning, setPlan, setPlanReport, setDecomposing, setMessages, setLastFailed, setLoading,
-    setToolCalls, setRunSummary, setRunUsage, setQueued, setStreamingText, setReasoningText,
+    setToolCalls, setRunSummary, setRunUsage, setQueued, setStreamingText, setReasoningText, setRunFiles,
     setWindowStart, setCompacting, setPlanMode, setRunMode, setModeMsg, setWorktree,
     abortRef, activeThreadIdRef, activeRunIdRef, runStartRef, agentFilesRef, messagesRef, steerPendingRef,
     onNewMessage, onThreadStatus, onAgentFilesChange, onThreadCreated, onAutoProject, onSubagentEvent,
@@ -56,7 +71,51 @@ export default function useAgentRun(d) {
     return () => window.removeEventListener('mjcode:insert-path', onInsert);
   }, []);
 
+  // 差集 A：Diff 行内评论回灌——DiffReviewPanel 提交评论（主进程存储）后派发本事件，
+  // 此处复用 send 通路触发下一轮模型调用：空闲即发；运行中入队（下一轮第一条消息，
+  // 经 finalizeRun 的 setQueued 接力）。skipDecompose：反馈消息不过大任务拆分闸门。
+  useEffect(() => {
+    const onDiffComment = (e) => {
+      const text = e.detail?.text;
+      if (!text) return;
+      if (loading) queueNext(text);
+      else send(text, undefined, { skipDecompose: true });
+    };
+    window.addEventListener('mjcode:diff-comment', onDiffComment);
+    return () => window.removeEventListener('mjcode:diff-comment', onDiffComment);
+    // send/queueNext 每次渲染重建（函数声明语义）；loading 变化时重挂以取最新闭包
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   // A12：拖拽/粘贴文件 → 路径引用（Electron ≥32 需经 preload webUtils 解析路径）
+  // 附件 chips（对标 WorkBuddy）：拖入/粘贴/「添加到对话框」的文件以 chip 呈现，
+  // 发送时统一转为 `@路径` 上下文行（AI 经 read_file 读取的既有约定），不让裸路径污染输入框文本。
+  const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+  function addPaths(paths) {
+    const list = (paths || []).map(String).filter(Boolean);
+    if (!list.length) return 0;
+    setAttachments((prev) => {
+      const seen = new Set(prev.map((a) => a.path));
+      const next = [...prev];
+      for (const p of list) {
+        if (seen.has(p)) continue;
+        next.push({ path: p, name: p.split('/').pop() || p, isImage: IMAGE_EXT_RE.test(p) });
+      }
+      return next;
+    });
+    return list.length;
+  }
+
+  // 「添加到对话框」（消息内文件 chip / 右栏预览）：与 mjcode:insert-path 同款事件总线约定，
+  // 避免从 App→RightPane→FilesPanel→FileViewerPane 四层钻 props
+  useEffect(() => {
+    const onAdd = (e) => { if (e.detail?.path) addPaths([String(e.detail.path)]); };
+    window.addEventListener('mjcode:add-attachment', onAdd);
+    return () => window.removeEventListener('mjcode:add-attachment', onAdd);
+    // addPaths 只用 setState 函数式更新，空依赖安全
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function ingestFiles(fileList) {
     const paths = [];
     for (const f of Array.from(fileList || [])) {
@@ -71,10 +130,7 @@ export default function useAgentRun(d) {
         console.warn('[chat] file write failed:', err);
       }
     }
-    if (paths.length) {
-      setInput((prev) => (prev ? `${prev}\n${paths.map((p) => `@${p}`).join('\n')}` : paths.map((p) => `@${p}`).join('\n')));
-    }
-    return paths.length;
+    return addPaths(paths);
   }
 
   // Ctrl+M 按住说话（对标 Codex）：按下开始、松开结束
@@ -105,17 +161,40 @@ export default function useAgentRun(d) {
   async function pickFiles() {
     try {
       const r = await window.mjcode.pickFiles();
-      if (r.ok && r.paths?.length) {
-        setInput((prev) => (prev ? `${prev}\n${r.paths.map(p => `@${p}`).join('\n')}` : r.paths.map(p => `@${p}`).join('\n')));
-      }
+      if (r.ok && r.paths?.length) addPaths(r.paths);
     } catch (err) {
       console.warn('[chat] file pick failed:', err);
     }
   }
 
   async function send(text, forcedThread, opts = {}) {
-    const content = text || input;
+    const raw = text || input;
+    // 附件 chips → `@路径` 上下文行（AI 经 read_file 读取的既有约定）；/mem 指令按原始输入判定
+    let content = raw;
+    if (attachments.length) {
+      content = `${raw}${raw ? '\n' : ''}${attachments.map((a) => `@${a.path}`).join('\n')}`;
+    }
     if (!content.trim()) return;
+    // P0-2a：/mem 显式记忆指令——自动沉淀默认关闭后，这是用户主动留存的入口。
+    // 语义：`/mem <内容>` 直接把内容写入项目记忆（来源 user_input，最高可信，落 global_knowledge 域），
+    // 不触发模型运行；仅输入 `/mem` 时补全前缀等待补充内容。
+    if (raw === '/mem' || raw.startsWith('/mem ') || raw.startsWith('/mem\n')) {
+      const memText = raw.slice(4).trim();
+      if (!memText) { setInput('/mem '); return; }
+      if (!project?.path) {
+        toast({ message: tGlobal('runtime.memNeedProject') });
+        return;
+      }
+      try {
+        await window.mjcode?.localAddMemory?.({ projectPath: project.path, content: memText, source: 'user_input' });
+        setInput('');
+        toast({ message: tGlobal('runtime.memSaved') });
+      } catch (err) {
+        console.warn('[chat] explicit memory write failed:', err);
+        toast({ message: tGlobal('runtime.memSaveFailed', { error: String(err?.message || err) }) });
+      }
+      return;
+    }
     // steer 补发路径（opts.force）在本轮已 abort 之后运行，不与旧轮并发，可绕过 loading 检查；
     // 其余常规路径维持「运行中不发新请求」的语义
     if (loading && !opts.force) return;
@@ -146,6 +225,10 @@ export default function useAgentRun(d) {
       }
       setDecomposing(false);
     }
+
+    // 附件已随消息送出（转为 @path 上下文行）：此处清空 chips，避免下一轮重复携带。
+    // 位置在拆分闸门之后：拆分卡片弹出时保留 chips，用户确认步骤后发送仍会携带。
+    if (attachments.length) setAttachments([]);
 
     // 自动创建会话（项目路径用于「项目 → 会话」归属）
     // 目录归属修复（2026-10-14 复盘，务必修复项）：新建任务时若用户**没有主动**「打开或创建目录」
@@ -194,15 +277,26 @@ export default function useAgentRun(d) {
       ? worktree.path
       : (effectiveProject?.path || cwd);
     if (!currentThread) {
-      currentThread = await api.createThread({
-        provider_id: selectedModel.provider?.id,
-        model_id: selectedModel.model?.id,
-        provider_name: selectedModel.provider?.name,
-        model_name: selectedModel.model?.model_id,
-        cwd: executionRoot,
-        project_path: effectiveProject?.path || '',
-        title: content.slice(0, 50),
-      });
+      // 存储异常必须复位 loading：此前 createThread/sendMessage 抛错时本轮已把 loading 置 true，
+      // 异常直穿 → loading 永久卡死，用户再也发不出消息（此处 rs 尚未注册、abortRef 可能还是上一轮的
+      // 旧 controller，所以不能用 abort 兜底，只能就地复位）。
+      try {
+        currentThread = await api.createThread({
+          provider_id: selectedModel.provider?.id,
+          model_id: selectedModel.model?.id,
+          provider_name: selectedModel.provider?.name,
+          model_name: selectedModel.model?.model_id,
+          cwd: executionRoot,
+          project_path: effectiveProject?.path || '',
+          title: content.slice(0, 50),
+        });
+      } catch (err) {
+        console.error('[chat] create thread failed, run blocked:', err);
+        setLoading(false);
+        setLastFailed({ text: content });
+        toast({ message: tGlobal('runtime.threadCreateFailed', { error: String(err?.message || err) }) });
+        return;
+      }
       onNewMessage();
       // 关键：把新会话设为当前会话，否则 ChatArea 仍渲染欢迎页，
       // 首条消息与流式输出全部不可见，必须手动再点一次列表（真机事故）
@@ -216,10 +310,21 @@ export default function useAgentRun(d) {
     setLoading(true);
     setToolCalls([]);
     setRunSummary(null); // 新一轮开始：上一轮的结束信息条收起
+    setRunFiles?.([]); // 上一轮的产出文件卡片同步清空，避免挂到新回复下面
     setRunUsage({ tokensIn: 0, tokensOut: 0 }); // T1-5：本轮实时消耗清零
     runStartRef.current = Date.now();
     onThreadStatus?.('running');
-    await api.sendMessage(currentThread.id, userMsg);
+    try {
+      await api.sendMessage(currentThread.id, userMsg);
+    } catch (err) {
+      // 同上：消息没写进本机会话就不该继续跑——复位 loading / 线程状态，保留输入供重试
+      console.error('[chat] persist user message failed, run blocked:', err);
+      setLoading(false);
+      onThreadStatus?.('idle');
+      setLastFailed({ text: content });
+      toast({ message: tGlobal('runtime.messageSendFailed', { error: String(err?.message || err) }) });
+      return;
+    }
 
     // 以 ref 读最新历史：queue 接力 / steer 补发经由旧闭包调用时，
     // 闭包 messages 缺上一轮 assistant 回复，模型看不到自己刚说过什么
@@ -244,6 +349,12 @@ export default function useAgentRun(d) {
           // 续跑只需接续历史（中断时引擎来不及产出摘要，summary 为空）
           resumeContext = '任务中断原因：引擎进程异常退出（已完成的消息与工具结果均已保留）。' // i18n-literal
             + '请从中断处继续执行，不要重复已完成的工作。'; // i18n-literal
+        } else if (cp.kind === 'timeout') {
+          // C5：模型调用超时（供应商/网络无响应）也存断点——与预算触顶分开说，否则用户会去
+          // 调大 token 预算（改错方向）。断点摘要不拼进来：超时时 summary 是中断前最后输出，
+          // 不是结构化摘要，直接当「摘要」展示会误导。
+          resumeContext = '任务中断原因：模型调用超时（网络或供应商侧无响应，已保存断点）。' // i18n-literal
+            + '请从中断处继续，不要重复已完成的工作；如反复超时，可换模型或检查网络。'; // i18n-literal
         } else {
           const total = cp.usage ? (cp.usage.prompt_tokens || 0) + (cp.usage.completion_tokens || 0) : 0;
           resumeContext = `任务暂停原因：单任务 token 预算触顶（已自动压缩续跑 ${cp.rescues || 0} 次，累计消耗 ${total} tokens）。` // i18n-literal
@@ -341,20 +452,28 @@ export default function useAgentRun(d) {
       rs.finalMsg = assistantMsg;
       rs.applied = wasActive; // 活跃路径马上追加进可见列表；后台路径留给切回时的拉取/补挂
       if (wasActive) setMessages((m) => [...m, assistantMsg]);
-      // 两阶段记忆 POC（stage1）：会话完成即留存原始记忆
-      if (project?.path && window.mjcode?.localAddMemory && !aborted) {
+      // P0-2a：两阶段记忆 POC 的每轮自动沉淀改为**受设置项控制，默认关闭**——
+      // 此前每轮对话结束都无差别写入长期记忆（问→结论截断拼接），形成
+      // 「不可信内容 → 模型结论 → 长期记忆 → 后续 prompt」的污染正反馈。
+      // 现仅在用户于设置页显式开启 memory.autoCapture 后才写入；用户主动留存走 /mem 指令。
+      if (project?.path && window.mjcode?.localAddMemory && !aborted && await autoCaptureEnabled()) {
         try {
-          window.mjcode.localAddMemory({
+          await window.mjcode.localAddMemory({
             projectPath: project.path,
             content: `问「${content.slice(0, 80)}」→ 结论：${finalText.slice(0, 200)}`, // i18n-literal（记忆沉淀内容随会话语言）
+            source: 'model_conclusion', // P0-2b：显式标注来源（模型结论档可信度）
           });
         } catch (err) { console.warn('[chat] memory persist failed:', err); }
       }
       onNewMessage();
+      // 本轮产出文件：快照挂到 rs（后台完成的运行切回来也能恢复卡片），并清空 ref——
+      // 此前 ref 只在「仍在本会话」时清，后台结束时不清，下一轮会把上一轮的文件带进来。
+      rs.files = [...agentFilesRef.current];
+      agentFilesRef.current = new Set();
       if (wasActive) {
         setRunSummary(rs.runSummary);
-        onAgentFilesChange?.([...agentFilesRef.current]);
-        agentFilesRef.current = new Set();
+        setRunFiles?.(rs.files);
+        onAgentFilesChange?.(rs.files);
       }
       if (!aborted) {
         onThreadStatus?.('done');
@@ -534,6 +653,7 @@ export default function useAgentRun(d) {
     setWindowStart(0);
     setToolCalls([]);
     setStreamingText('');
+    setRunFiles?.([]); // 产出卡片随上下文一起清空（否则会挂在一段已清空的对话下面）
   }
 
   // /plan 开关：进入规划模式后禁用全部写工具，Agent 只能读与规划

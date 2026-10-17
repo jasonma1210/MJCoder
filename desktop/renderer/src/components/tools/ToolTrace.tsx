@@ -81,16 +81,16 @@ function BigOutputBlock({ refObj, className }: { refObj: BigRef; className?: str
   };
   return (
     <>
-      <div className="text-[10px] text-text2 mt-1 mb-0.5">
+      <div className="text-caption text-text2 mt-1 mb-0.5">
         {t('toolTrace.bigOutputNote', { kb: (refObj.bytes / 1024).toFixed(0) })}
       </div>
       {state === 'idle' && (
-        <button onClick={load} className="text-[10px] text-accent hover:underline mb-1">{t('toolTrace.loadFullOutput')}</button>
+        <button onClick={load} className="text-caption text-accent hover:underline mb-1">{t('toolTrace.loadFullOutput')}</button>
       )}
-      {state === 'loading' && <div className="text-[10px] text-text2 mb-1">{t('toolTrace.loading')}</div>}
-      {state === 'error' && <div className="text-[10px] text-danger mb-1">{err}</div>}
+      {state === 'loading' && <div className="text-caption text-text2 mb-1">{t('toolTrace.loading')}</div>}
+      {state === 'error' && <div className="text-caption text-danger mb-1">{err}</div>}
       {state === 'ready' && (
-        <VirtualText text={text} className={`text-[11px] font-mono p-2 rounded border ${className}`} height={320} />
+        <VirtualText text={text} className={`text-code font-mono p-2 rounded border ${className}`} height={320} />
       )}
     </>
   );
@@ -113,7 +113,7 @@ function PlainOutputBlock({ text, className, max = 500 }: { text: unknown; class
     <>
       <pre className={className}>{expanded ? full : full.slice(0, max)}{truncated && !expanded ? '…' : ''}</pre>
       {truncated && (
-        <button onClick={() => setExpanded((v) => !v)} className="text-[10px] text-text2 hover:text-text mb-1">
+        <button onClick={() => setExpanded((v) => !v)} className="text-caption text-text2 hover:text-text mb-1">
           {expanded ? t('toolTrace.collapseOutput') : t('toolTrace.expandFullOutput', { n: full.length })}
         </button>
       )}
@@ -124,7 +124,7 @@ function PlainOutputBlock({ text, className, max = 500 }: { text: unknown; class
 /** 文件路径 chip（read_file/list_dir/glob/grep 等路径类工具的关键参数展示） */
 function PathChip({ text }: { text: string }) {
   return (
-    <span className="font-mono text-[11px] bg-hover rounded px-1.5 py-0.5 max-w-full truncate" title={text}>{text}</span>
+    <span className="font-mono text-code bg-hover rounded px-1.5 py-0.5 max-w-full truncate" title={text}>{text}</span>
   );
 }
 
@@ -135,7 +135,7 @@ function DiffLines({ text, max = 24 }: { text: string; max?: number }) {
   const lines = asStr(text).split('\n').filter((l, i, arr) => !(i === arr.length - 1 && l === ''));
   const shown = expanded ? lines : lines.slice(0, max);
   return (
-    <div className="mt-1 font-mono text-[11px] rounded overflow-hidden border border-border">
+    <div className="mt-1 font-mono text-code rounded overflow-hidden border border-border">
       {shown.map((l, i) => {
         const cls = l.startsWith('+') ? 'bg-success-bg text-success'
           : l.startsWith('-') ? 'bg-danger-bg text-danger'
@@ -169,7 +169,7 @@ function SourceLinks({ items }: { items: unknown }) {
         const title = asStr(o?.title) || url;
         if (!url) return null;
         return (
-          <div key={i} className="text-[11px] leading-snug">
+          <div key={i} className="text-xs leading-snug">
             <a href={url} target="_blank" rel="noreferrer" className="text-accent hover:underline break-all">{title}</a>
             {asStr(o?.snippet) && <div className="text-text2 line-clamp-2">{asStr(o?.snippet)}</div>}
           </div>
@@ -187,8 +187,8 @@ function FullArgs({ args }: { args: Obj }) {
   if (!text || text === '{}') return null;
   return (
     <div className="mt-1">
-      <div className="text-[10px] text-text2 mb-0.5">{t('toolTrace.fullArgs')}</div>
-      <pre className="text-[11px] font-mono bg-hover rounded p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{text}</pre>
+      <div className="text-caption text-text2 mb-0.5">{t('toolTrace.fullArgs')}</div>
+      <pre className="text-code font-mono bg-hover rounded p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{text}</pre>
     </div>
   );
 }
@@ -268,7 +268,7 @@ function SandboxNoticeBlock({ result }: { result: Obj | null }) {
   const n = sandboxNoticeOf(result);
   if (!n) return null;
   return (
-    <div className="mt-1 text-[11px] leading-relaxed p-2 rounded border border-warn bg-warn-bg text-text">
+    <div className="mt-1 text-xs leading-relaxed p-2 rounded border border-warn bg-warn-bg text-text">
       <p className="font-medium text-warn">{t(n.titleKey)}</p>
       <p className="text-text2 mt-0.5">{t(n.reasonKey, { detail: n.detail || t('runtime.unknownError') })}</p>
       <p className="text-text2 mt-0.5">{t(n.actionKey)}</p>
@@ -286,7 +286,7 @@ function SandboxNoticeBlock({ result }: { result: Obj | null }) {
 function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null }) {
   const { t } = useI18n();
   const out = (text: unknown, cls: string, max = 500) => (
-    <OutputBlock className={`mt-1 text-[11px] font-mono p-2 rounded whitespace-pre-wrap border ${cls}`} text={text} max={max} />
+    <OutputBlock className={`mt-1 text-code font-mono p-2 rounded whitespace-pre-wrap border ${cls}`} text={text} max={max} />
   );
   switch (name) {
     case 'edit_file': return <SearchReplaceDiff search={asStr(a.search)} replace={asStr(a.replace)} />;
@@ -311,7 +311,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
           {(items as unknown[]).slice(0, 40).map((it, i) => (
             <PathChip key={i} text={asStr(asObj(it)?.name) || asStr(it)} />
           ))}
-          {items.length > 40 && <span className="text-[10px] text-text2 self-center">{t('toolTrace.moreItems', { n: items.length })}</span>}
+          {items.length > 40 && <span className="text-caption text-text2 self-center">{t('toolTrace.moreItems', { n: items.length })}</span>}
         </div>
       );
     }
@@ -321,7 +321,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
       return (
         <div className="mt-1 flex flex-wrap gap-1">
           {(files as unknown[]).slice(0, 24).map((f, i) => <PathChip key={i} text={asStr(f)} />)}
-          {files.length > 24 && <span className="text-[10px] text-text2 self-center">{t('toolTrace.moreFiles', { n: files.length })}</span>}
+          {files.length > 24 && <span className="text-caption text-text2 self-center">{t('toolTrace.moreFiles', { n: files.length })}</span>}
         </div>
       );
     }
@@ -336,13 +336,13 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
       return (
         <>
           {asStr(res?.url) && <div className="mt-1"><PathChip text={asStr(res?.url)} /></div>}
-          {asStr(res?.title) && <div className="mt-1 text-[11px] text-text2">{t('toolTrace.browserPageTitle')}: {asStr(res?.title)}</div>}
+          {asStr(res?.title) && <div className="mt-1 text-xs text-text2">{t('toolTrace.browserPageTitle')}: {asStr(res?.title)}</div>}
         </>
       );
     case 'browser_screenshot':
       return res?.previewUrl ? (
         <div className="mt-1">
-          <div className="text-[10px] text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+          <div className="text-caption text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
           <img src={asStr(res.previewUrl)} alt={t('toolTrace.browserEvidence')} className="max-w-full rounded border border-border" loading="lazy" />
         </div>
       ) : null;
@@ -352,39 +352,39 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
       return (
         <>
           {asStr(res?.url) && <div className="mt-1"><PathChip text={asStr(res?.url)} /></div>}
-          {asStr(res?.title) && <div className="mt-1 text-[11px] text-text2">{t('toolTrace.browserPageTitle')}: {asStr(res?.title)}</div>}
+          {asStr(res?.title) && <div className="mt-1 text-xs text-text2">{t('toolTrace.browserPageTitle')}: {asStr(res?.title)}</div>}
         </>
       );
     case 'chrome_screenshot':
       return res?.previewUrl ? (
         <div className="mt-1">
-          <div className="text-[10px] text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+          <div className="text-caption text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
           <img src={asStr(res.previewUrl)} alt={t('toolTrace.browserEvidence')} className="max-w-full rounded border border-border" loading="lazy" />
         </div>
       ) : null;
     case 'chrome_extract': return out(res?.text ?? '', 'bg-hover border-border text-text2', 1200);
     case 'chrome_tabs': {
       const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
-      if (!tabs.length) return <div className="mt-1 text-[11px] text-text2">{t('toolTrace.chromeNoTabs')}</div>;
+      if (!tabs.length) return <div className="mt-1 text-xs text-text2">{t('toolTrace.chromeNoTabs')}</div>;
       return (
         <div className="mt-1 flex flex-col gap-0.5">
           {tabs.slice(0, 12).map((tab) => (
-            <div key={tab.id} className="flex items-center gap-1.5 text-[11px] min-w-0">
+            <div key={tab.id} className="flex items-center gap-1.5 text-xs min-w-0">
               <span className="text-text2 font-mono shrink-0">#{tab.id}</span>
               {tab.active && <span className="text-accent shrink-0">{t('toolTrace.activeTab')}</span>}
               <span className="truncate">{asStr(tab.title)}</span>
               <span className="text-text2 truncate">{asStr(tab.url)}</span>
             </div>
           ))}
-          {tabs.length > 12 && <span className="text-[10px] text-text2">{t('toolTrace.moreItems', { n: tabs.length })}</span>}
+          {tabs.length > 12 && <span className="text-caption text-text2">{t('toolTrace.moreItems', { n: tabs.length })}</span>}
         </div>
       );
     }
     case 'chrome_status':
       return (
-        <div className="mt-1 text-[11px]">
+        <div className="mt-1 text-xs">
           {res?.connected
-            ? <span className="text-ok">{t('toolTrace.chromeConnected')} · {asStr(res?.browser).slice(0, 60)}</span>
+            ? <span className="text-success">{t('toolTrace.chromeConnected')} · {asStr(res?.browser).slice(0, 60)}</span>
             : <span className="text-warn">{t('toolTrace.chromeDisconnected')}</span>}
         </div>
       );
@@ -399,7 +399,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
             <div className="mt-1 space-y-2">
               {imgs.slice(0, 8).map((im, i) => (
                 <div key={i}>
-                  <div className="text-[10px] text-text2 mb-0.5">{asStr(im?.name) || t('toolTrace.codeImage')} ({((Number(im?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+                  <div className="text-caption text-text2 mb-0.5">{asStr(im?.name) || t('toolTrace.codeImage')} ({((Number(im?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
                   {asStr(im?.previewUrl) && <img src={asStr(im.previewUrl)} alt={asStr(im?.name) || t('toolTrace.codeImage')} className="max-w-full rounded border border-border" loading="lazy" />}
                 </div>
               ))}
@@ -414,11 +414,11 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
       return (
         <>
           {kind && kind !== 'normal' && (
-            <div className="mt-1 text-[11px] text-warn">
+            <div className="mt-1 text-xs text-warn">
               {t('toolTrace.earlyStop', { reason: kind === 'tokens' ? t('toolTrace.stopTokens') : kind === 'rounds' ? t('toolTrace.stopRounds') : kind === 'repeat' ? t('toolTrace.stopRepeat') : t('toolTrace.stopAborted') })}
             </div>
           )}
-          {tokens > 0 && <div className="mt-1 text-[11px] text-text2">{t('toolTrace.subagentTokens', { n: tokens.toLocaleString() })}</div>}
+          {tokens > 0 && <div className="mt-1 text-xs text-text2">{t('toolTrace.subagentTokens', { n: tokens.toLocaleString() })}</div>}
           {out(res?.result ?? '', 'bg-hover border-border text-text2', 600)}
         </>
       );
@@ -460,24 +460,24 @@ export default function ToolTrace({ name, args, result }: ToolTraceProps) {
         <span className={failed ? 'text-danger shrink-0' : 'text-accent shrink-0'}>{toolNameCN(name)}</span>
         <span className="text-text2 truncate flex-1 min-w-0"><ParamSummary name={name} a={a} /></span>
         {/* 状态徽标：失败 / 退出码 / 运行中 */}
-        {failed && <span className="shrink-0 text-[10px] text-danger bg-danger-bg border border-danger rounded px-1.5 py-0.5">{t('toolTrace.failed')}</span>}
+        {failed && <span className="shrink-0 text-caption text-danger bg-danger-bg border border-danger rounded px-1.5 py-0.5">{t('toolTrace.failed')}</span>}
         {!failed && exitCode != null && (
-          <span className={`shrink-0 text-[10px] rounded px-1.5 py-0.5 border ${exitCode === 0 ? 'text-text2 border-border' : 'text-warn border-border'}`}>{t('toolTrace.exitCode', { code: exitCode })}</span>
+          <span className={`shrink-0 text-caption rounded px-1.5 py-0.5 border ${exitCode === 0 ? 'text-text2 border-border' : 'text-warn border-border'}`}>{t('toolTrace.exitCode', { code: exitCode })}</span>
         )}
         {!failed && exitCode == null && (running ? (
-          <span className="shrink-0 text-[10px] text-text2 inline-flex items-center gap-1"><IconSpinner size={10} className="animate-spin" />{t('toolTrace.running')}</span>
-        ) : res ? <span className="shrink-0 text-[10px] text-success">{t('toolTrace.done')}</span> : null)}
+          <span className="shrink-0 text-caption text-text2 inline-flex items-center gap-1"><IconSpinner size={10} className="animate-spin" />{t('toolTrace.running')}</span>
+        ) : res ? <span className="shrink-0 text-caption text-success">{t('toolTrace.done')}</span> : null)}
         {hasDetail && (open ? <IconChevronDown size={12} className="text-text2 shrink-0" /> : <IconChevronRight size={12} className="text-text2 shrink-0" />)}
       </button>
       {failed && !!res?.error && (
-        <OutputBlock className="mx-3 mb-2 text-[11px] font-mono text-danger bg-danger-bg border border-danger p-2 rounded whitespace-pre-wrap" text={String(res.error)} />
+        <OutputBlock className="mx-3 mb-2 text-code font-mono text-danger bg-danger-bg border border-danger p-2 rounded whitespace-pre-wrap" text={String(res.error)} />
       )}
       {open && (
         <div className="px-3 pb-2 border-t border-border pt-1.5">
           <DetailBody name={name} a={a} res={res} />
           <FullArgs args={a} />
           {!res && !!rawStr && (
-            <OutputBlock className="mt-1 text-[11px] font-mono text-text2 bg-hover border border-border p-2 rounded whitespace-pre-wrap" text={rawStr} />
+            <OutputBlock className="mt-1 text-code font-mono text-text2 bg-hover border border-border p-2 rounded whitespace-pre-wrap" text={rawStr} />
           )}
         </div>
       )}
@@ -521,16 +521,16 @@ export function ToolTraceGroup({ calls, toolResults, label, defaultOpen = false 
   return (
     <div className="mb-2">
       <div className="flex items-center gap-2 mb-1.5">
-        {label && <span className="text-[11px] text-text2 shrink-0">{label}</span>}
+        {label && <span className="text-xs text-text2 shrink-0">{label}</span>}
         {!open ? (
           <button onClick={() => setOpen(true)}
-            className="flex items-center gap-1.5 text-[11px] text-text2 hover:text-text bg-surface border border-border rounded-lg px-2.5 py-1.5">
+            className="flex items-center gap-1.5 text-xs text-text2 hover:text-text bg-surface border border-border rounded-lg px-2.5 py-1.5">
             <IconWrench size={11} className="text-accent" />
             {t('toolTrace.callCount', { n: items.length })}{failedCount > 0 ? <span className="text-danger">{t('toolTrace.failedCount', { n: failedCount })}</span> : null}
             <span className="text-text2/70">{t('toolTrace.clickExpand')}</span>
           </button>
         ) : (
-          <button onClick={() => setOpen(false)} className="text-[10px] text-text2 hover:text-text">
+          <button onClick={() => setOpen(false)} className="text-caption text-text2 hover:text-text">
             {t('toolTrace.collapseTrace')}
           </button>
         )}

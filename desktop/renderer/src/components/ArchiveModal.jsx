@@ -58,12 +58,12 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
   return (
     <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onMouseDown={onClose}>
       <div
-        className="w-[560px] max-w-[calc(100vw-2rem)] max-h-[70vh] flex flex-col rounded-2xl bg-bg border border-border shadow-[var(--shadow-modal)]"
+        className="w-[560px] max-w-[calc(100vw-2rem)] max-h-[70vh] flex flex-col rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
-            <h2 className="text-base font-semibold">{t('archive.title')}</h2>
+            <h2 className="text-lg font-semibold">{t('archive.title')}</h2>
             <p className="text-xs text-text2 mt-0.5">{t('archive.subtitle')}</p>
           </div>
           <button onClick={onClose} className="text-text2 hover:text-text" aria-label={t('archive.close')}><IconX size={16} /></button>

@@ -70,7 +70,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
     <div className="fixed inset-0 z-palette flex items-start justify-center pt-[12vh]" onClick={onClose}>
       <div className="absolute inset-0 bg-[var(--sem-overlay)]" />
       <div
-        className="relative w-[560px] max-w-[90vw] bg-bg border border-border rounded-xl shadow-2xl overflow-hidden"
+        className="relative w-[min(560px,calc(100vw-2rem))] bg-raise border border-border rounded-xl shadow-[var(--shadow-pop)] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
@@ -88,7 +88,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
             placeholder={tr('palette.searchPlaceholder')}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-text2"
           />
-          <span className="text-[11px] text-text2">{tr('palette.escClose')}</span>
+          <span className="text-xs text-text2">{tr('palette.escClose')}</span>
         </div>
 
         <div className="max-h-[52vh] overflow-y-auto py-1">
@@ -100,7 +100,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
             let idx = -1; // O5：分组渲染，扁平序号驱动键盘上下选择
             return groups.map((g) => (
               <div key={g.kind}>
-                <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wider text-text2">{g.kind}</div>
+                <div className="px-4 pt-2 pb-1 text-caption text-text2">{g.kind}</div>
                 {g.items.map((it) => {
                   idx += 1;
                   const i = idx;
@@ -113,7 +113,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
                     >
                       <span className="shrink-0">{it.icon}</span>
                       <span className="truncate flex-1">{it.label}</span>
-                      {it.hint && <span className="text-[11px] text-text2 truncate max-w-[180px]">{it.hint}</span>}
+                      {it.hint && <span className="text-xs text-text2 truncate max-w-[180px]">{it.hint}</span>}
                     </button>
                   );
                 })}
@@ -122,7 +122,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
           })()}
         </div>
 
-        <div className="flex items-center gap-3 px-4 h-9 border-t border-border text-[11px] text-text2">
+        <div className="flex items-center gap-3 px-4 h-9 border-t border-border text-xs text-text2">
           <span>{tr('palette.hintNavigate')}</span><span>{tr('palette.hintEnter')}</span><span>{tr('palette.hintToggle')}</span>
         </div>
       </div>

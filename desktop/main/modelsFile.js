@@ -19,8 +19,30 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+// P1-14：原子写原语（tmp+fsync+rename）——全项目单一事实来源，与 localStore 同源
+const { writeFileDurableWithMode } = require('./data/durableWrite');
 
 const MODELS_FILE_ENV = 'MJCODE_MODELS_FILE';
+
+// P2-17：凭证操作审计（credential_read / credential_write / credential_delete）。
+// 纪律：详情**绝不包含 Key 明文**——只记来源（models.json）、服务名/模型名与操作结果；
+// 审计依赖 electron（app.getPath），modelsFile 本身零依赖可单测，故惰性 require +
+// 失败静默（审计不可用绝不阻塞凭证操作主流程，与 auditLog 自身纪律一致）。
+function auditCredential(action, detail, result = 'recorded') {
+  try {
+    const { audit } = require('./audit/auditLog');
+    audit(action, 'models.json', detail, result);
+  } catch { /* 审计模块不可用（纯 Node 测试环境等）时静默跳过 */ }
+}
+
+// 从 raw 文本提取服务名清单（脱敏审计用；解析失败时退化为条数统计，不抛错）
+function serviceNamesOf(raw) {
+  try {
+    const list = JSON.parse(String(raw || ''));
+    if (!Array.isArray(list)) return [];
+    return list.map((e) => String(e?.name || e?.vendor || e?.url || e?.base_url || '')).filter(Boolean).slice(0, 20);
+  } catch { return []; }
+}
 
 function modelsFilePath() {
   if (process.env[MODELS_FILE_ENV]) return String(process.env[MODELS_FILE_ENV]);
@@ -250,30 +272,58 @@ function templateContent() {
 }
 
 // 确保文件存在（不存在则写模板，目录 0700 / 文件 0600）；返回 { path, created }
+// P1-14（2026-10-17）：模板写改走原子写原语（tmp+fsync+rename）——裸 writeFileSync
+// 写一半崩溃即留下截断文件，下次 sync 解析失败会级联清空全部文件来源模型。
 function ensureModelsFile(filePath = modelsFilePath()) {
   if (fs.existsSync(filePath)) return { path: filePath, created: false };
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, templateContent(), { mode: 0o600 });
+  const res = writeFileDurableWithMode(filePath, templateContent(), 0o600);
+  if (!res.ok) throw new Error(`模型配置文件初始化失败：${res.error}`);
+  auditCredential('credential_write', '初始化 models.json（模板）', res.modeApplied ? 'recorded' : 'error');
   return { path: filePath, created: true };
 }
 
 // 读取文件原文（不存在返回 null）
+// P2-17：凭证读审计（只记结果与条数，不记内容）
 function readModelsFile(filePath = modelsFilePath()) {
+  let raw = null;
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    raw = fs.readFileSync(filePath, 'utf8');
   } catch {
+    auditCredential('credential_read', '读取 models.json：不存在或不可读');
     return null;
   }
+  auditCredential('credential_read', `读取 models.json：ok（${serviceNamesOf(raw).length} 个服务条目）`);
+  return raw;
 }
 
+// P1-14 修复（2026-10-17）：明文 Key 文件写改原子写 + 写前备份。
+// 背景：原 fs.writeFileSync 直接落目标文件——① 写一半崩溃/磁盘满留下截断 JSON；
+// ② 下次 sync 解析失败 → keep=[] → pruneFileProviders([]) 把**全部**文件来源模型
+// 清空（一次写坏 → 全部模型来源消失的级联，用户只能凭记忆重新配置）。
+// 现：tmp+fsync+rename 原子写（durableWrite 单一事实来源）+ 旧内容先备份 .bak
+// （只保留一代）；写失败如实抛错（调用方 IPC 层已 catch 回传），.bak 是恢复凭据。
 function writeModelsFile(raw, filePath = modelsFilePath()) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, raw, { mode: 0o600 });
-  try { fs.chmodSync(filePath, 0o600); } catch (e) {
-    // P0-16 修复（2026-10-16）：原为纯空吞（注释只说"只读介质等场景忽略"）。
-    // 文件内含 provider 密文与结构信息，0600 失效须显式留痕。
-    console.error(`[models] 模型配置文件权限收紧失败（0600 未生效）: ${e.message}`);
+  // 写前备份：旧内容留副本（覆盖上一代 .bak）——新内容写坏时用户有处可恢复
+  try {
+    if (fs.existsSync(filePath)) fs.copyFileSync(filePath, `${filePath}.bak`);
+  } catch (e) {
+    console.warn('[models] 旧配置备份失败（继续写入）:', e.message);
   }
+  const res = writeFileDurableWithMode(filePath, raw, 0o600);
+  if (!res.ok) {
+    auditCredential('credential_write', `写回 models.json 失败：${res.error}`, 'error');
+    throw new Error(`模型配置文件写入失败：${res.error}（旧内容已备份至 ${filePath}.bak）`);
+  }
+  if (!res.modeApplied) {
+    // 0600 失效须显式留痕：文件内含明文 Key，权限失效 = 同机其他账户可读
+    console.error(`[models] 模型配置文件权限收紧失败（0600 未生效）：${res.error || 'chmod 失败'}`);
+    auditCredential('credential_write', '写回 models.json：ok 但 0600 权限未生效', 'error');
+    return;
+  }
+  const names = serviceNamesOf(raw);
+  auditCredential('credential_write', `写回 models.json：ok（${names.length} 个服务：${names.join(', ') || '无'}）`);
 }
 
 // 同步：parse → 对账进 store（addProvider/updateFileProvider）→ 剪除已从文件消失的条目 → vault 注入。
@@ -281,6 +331,14 @@ function writeModelsFile(raw, filePath = modelsFilePath()) {
 // 返回 { ok, synced, removed, errors, path }
 function syncFileModels({ store, encrypt, vault, raw, filePath = modelsFilePath(), env = process.env } = {}) {
   const { providers, errors } = parseModelsFile(raw, { env });
+  // P1-14 修复（2026-10-17）：解析失败（坏 JSON / 条目全非法）时**绝不剪除**。
+  // 原实现此时 keep=[] → pruneFileProviders([]) 把全部文件来源模型清空——
+  // 「一次写坏 → 清空全部模型来源」级联。现在保留 store 现状并如实报错，
+  // 用户修复文件（或从 .bak 恢复）后下次同步自然恢复，中途不丢任何模型。
+  if (providers.length === 0 && errors.length > 0) {
+    console.error(`[models] 配置文件解析失败，保留现有模型来源不清空：${errors.map((e) => e.error).join('；')}`);
+    return { ok: false, synced: 0, removed: [], errors, path: filePath, parseFailed: true };
+  }
   const keep = [];
   for (const fp of providers) {
     if (!store.findProviderByFileKey(fp.fileKey)) {
@@ -299,8 +357,17 @@ function syncFileModels({ store, encrypt, vault, raw, filePath = modelsFilePath(
     });
     if (vault) vault.set(Number(p.id), { api_key: fp.apiKey || '', base_url: fp.base_url });
     keep.push(fp.fileKey);
+    // P2-17：凭证写审计（服务名 + 模型数，绝不含 Key 明文）
+    auditCredential('credential_write', `同步模型服务「${fp.name || fp.base_url}」（${fp.models.length} 个模型，来源 models.json）`);
   }
+  // P2-17：剪除前记录将被删除的服务名（凭证删除审计，只记名不记 Key）
+  const doomed = (store.listProviders?.() || [])
+    .filter((x) => x.source === 'file' && x.fileKey && !keep.includes(x.fileKey))
+    .map((x) => x.name || x.base_url);
   const removed = store.pruneFileProviders(keep);
+  for (const name of doomed) {
+    auditCredential('credential_delete', `模型服务「${name}」已从 models.json 消失，本地凭证随 provider 移除`);
+  }
   return { ok: errors.length === 0, synced: providers.length, removed, errors, path: filePath };
 }
 

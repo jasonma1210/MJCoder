@@ -68,7 +68,9 @@ export const todosDataSchema = z.object({
 
 export const suspendedDataSchema = z.object({
   saved: z.boolean(),
-  kind: z.enum(['tokens', 'rounds']),
+  // 'timeout'：模型调用超时（供应商挂起）时先存断点再抛错——断点同样可被「继续」接续。
+  // 不收进此枚举会让该事件被安全降级成 error 事件，用户看到一条契约失败提示。
+  kind: z.enum(['tokens', 'rounds', 'timeout']),
   summary: z.string(),
   usage: z.any().optional(),
   roundsUsed: z.number(),

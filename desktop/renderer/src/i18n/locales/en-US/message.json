@@ -26,5 +26,10 @@
   "collapse": "Collapse",
   "expand": "Expand",
   "withToolCalls": " (includes {n} tool calls)",
-  "openFileHint": "Open this file in the preview pane"
+  "openFileHint": "Open this file in the preview pane",
+  "fileActions": "File actions",
+  "addToChat": "Add to chat",
+  "copyPath": "Copy path",
+  "pathCopied": "Path copied",
+  "outputFiles": "Output files ({n})"
 }

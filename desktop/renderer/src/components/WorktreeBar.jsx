@@ -55,25 +55,25 @@ export default function WorktreeBar({ worktree, onClosed, onMsg }) {
   }
 
   return (
-    <div className="max-w-3xl w-full mx-auto mb-3 flex items-center gap-2 flex-wrap bg-accent-soft border border-accent/40 rounded-lg px-3 py-2">
+    <div className="max-w-3xl w-full mx-auto mb-3 flex items-center gap-2 flex-wrap bg-accent-bg border border-accent/40 rounded-lg px-3 py-2">
       <IconGitBranch size={13} className="text-accent shrink-0" />
       <span className="text-xs text-text truncate" title={`${worktree.branch || ''} → ${worktree.path}`}>
         {t('worktree.label', { name: worktree.branch || worktree.path })}
       </span>
-      <span className="text-[11px] text-text2">{t('worktree.hint')}</span>
+      <span className="text-xs text-text2">{t('worktree.hint')}</span>
       <div className="flex items-center gap-1.5 ml-auto">
         <button onClick={() => act('sync')} disabled={busy}
-          className="text-[11px] px-2 py-1 rounded-md border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1"
+          className="text-xs px-2 py-1 rounded-md border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1"
           title={t('worktree.mergeBackHint')}>
           <IconCheck size={11} />{t('worktree.mergeBack')}
         </button>
         <button onClick={() => act('promote')} disabled={busy}
-          className="text-[11px] px-2 py-1 rounded-md border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1"
+          className="text-xs px-2 py-1 rounded-md border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1"
           title={t('worktree.promoteHint')}>
           <IconGitBranch size={11} />{t('worktree.promote')}
         </button>
         <button onClick={() => act('remove')} disabled={busy}
-          className="text-[11px] px-2 py-1 rounded-md border border-danger text-danger hover:bg-danger-bg disabled:opacity-50 flex items-center gap-1"
+          className="text-xs px-2 py-1 rounded-md border border-danger text-danger hover:bg-danger-bg disabled:opacity-50 flex items-center gap-1"
           title={t('worktree.removeHint')}>
           <IconX size={11} />{t('worktree.cleanup')}
         </button>

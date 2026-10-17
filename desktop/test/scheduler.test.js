@@ -27,6 +27,7 @@ stubModule.exports = {
 require.cache[electronPath] = stubModule;
 
 const { cronValid, cronMatches } = require('../main/scheduler.js');
+const { localDate } = require('../main/scheduledOutput.js');
 
 check('合法 cron 表达式', () => {
   for (const expr of ['0 9 * * *', '*/5 * * * *', '0 9 * * 1-5', '30 8 1,15 * *', '0 0 * * 0', '59 23 31 12 6']) {
@@ -82,6 +83,7 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
 
 (async () => {
   fs.rmSync('/tmp/mjcode-test/scheduled-tasks.json', { force: true });
+  fs.rmSync('/tmp/mjcode-test/.MJCoder', { recursive: true, force: true });
 
   // 1. Agent 通道优先：runAgentTask 被调用，运行记录带 channel/tools/tokens
   let agentCalls = [];
@@ -98,6 +100,14 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
   const { task: t1 } = await saveHandler({}, { name: '跑测试', prompt: '运行单测并汇总', schedule: '0 9 * * *' });
   const r1 = await scheduler.runTask(t1.id, 'manual');
   checkOk('Agent 通道优先：任务成功且取到 Agent 输出', r1.ok === true && r1.output === 'agent-done', JSON.stringify(r1));
+  checkOk('P0-8b：成功状态写回任务对象（UI 卡片直读的三个字段）',
+    t1.last_status === 'success' && !!t1.last_run_at && t1.last_result === 'agent-done',
+    JSON.stringify({ status: t1.last_status, at: t1.last_run_at, result: t1.last_result }));
+  // 2026-10-17：输出归档——stub 的 documents 目录是 /tmp/mjcode-test
+  const archiveFile = `/tmp/mjcode-test/.MJCoder/tasks/${'跑测试'}/${localDate()}.md`;
+  checkOk('运行输出归档到 <Documents>/.MJCoder/tasks/<任务名>/<日期>.md',
+    fs.existsSync(archiveFile) && fs.readFileSync(archiveFile, 'utf8').includes('agent-done'),
+    archiveFile);
   checkOk('runAgentTask 收到 prompt/model/signal', agentCalls.length === 1
     && agentCalls[0].prompt === '运行单测并汇总'
     && agentCalls[0].model.model === 'test-model'
@@ -117,9 +127,17 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
   await p2;
 
   // 3. 失败记录：runAgentTask 抛错 → status=failed 且 error 落库
-  scheduler.startScheduler({ runAgentTask: async () => { throw new Error('API 429: rate limit'); }, notify: noop });
+  // P0-8b：错误消息加长到 600 字符，验证 last_result 截断到 500。
+  // startScheduler 会重载 store（任务对象整体替换），断言落盘文件里的任务副本
+  scheduler.startScheduler({ runAgentTask: async () => { throw new Error(`API 429: rate limit ${'x'.repeat(600)}`); }, notify: noop });
   const r3 = await scheduler.runTask(t1.id, 'manual');
   checkOk('Agent 执行失败被记录', r3.ok === false && String(r3.error).includes('429'), JSON.stringify(r3));
+  const persistedAfterFail = JSON.parse(fs.readFileSync('/tmp/mjcode-test/scheduled-tasks.json', 'utf8'))
+    .tasks.find((x) => x.id === t1.id);
+  checkOk('P0-8b：失败状态写回任务对象（落盘）且 last_result 截断到 500',
+    persistedAfterFail.last_status === 'failed' && String(persistedAfterFail.last_result).includes('429')
+    && persistedAfterFail.last_result.length === 500,
+    `status=${persistedAfterFail.last_status} len=${persistedAfterFail.last_result?.length}`);
 
   // 4. 墙钟超时：mock 尊重 signal.abort，taskTimeoutMs=30ms
   scheduler.startScheduler({
@@ -146,6 +164,81 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
   checkOk('无 Agent 通道时回落 chatOnce', r6.ok === true && r6.output === 'chat-done' && chatCalls === 1, JSON.stringify(r6));
   const runs6 = await runsHandler({}, { id: t1.id });
   checkOk('回落记录 channel=chat', runs6.runs[0].channel === 'chat');
+
+  // ── P0-8a：启动补跑扫描（错过标记 / 同日宽限补跑 / 超长缺失只标记 / 窗口内无到期不动）──
+  // 固定 now 消除时钟依赖：2026-10-17 是周六，10-15 周四、10-16 周五为工作日
+  const FIXED_NOW = new Date(2026, 9, 17, 10, 0, 0); // 今天 10:00（每日 09:00 已过期）
+  let scanAgentCalls = [];
+  scheduler.startScheduler({
+    runAgentTask: async ({ prompt }) => { scanAgentCalls.push(prompt); return { output: 'catchup-done' }; },
+    notify: noop,
+    taskTimeoutMs: 5000,
+  });
+  scheduler.setModel(TEST_MODEL);
+
+  // A：工作日任务，3 天前（周三 09:00）最后触发 → 10-15/10-16 两次到期，最近一次是昨天 → missed
+  const { task: tA } = await saveHandler({}, { name: '工作日跑测试', prompt: 'prompt-weekday', schedule: '0 9 * * 1-5' });
+  tA.last_fired = new Date(2026, 9, 14, 9, 0).toISOString();
+  // B：每日任务，昨天 09:00 最后触发 → 今天 09:00 到期且与今天同日 → 宽限补跑一次
+  const { task: tB } = await saveHandler({}, { name: '每天跑测试', prompt: 'prompt-daily', schedule: '0 9 * * *' });
+  tB.last_fired = new Date(2026, 9, 16, 9, 0).toISOString();
+  // C：每日任务，30 天未运行 → 超过 7 天回放上限 → 只标记 missed，不补跑
+  const { task: tC } = await saveHandler({}, { name: '长期缺席任务', prompt: 'prompt-long-absent', schedule: '0 9 * * *' });
+  tC.last_fired = new Date(2026, 8, 17, 9, 0).toISOString(); // 9 月 17 日（30 天前）
+  // D：年度任务（1 月 1 日），10 个月未运行 → 窗口截断内无到期分钟 → 不标记，仅推进游标
+  const { task: tD } = await saveHandler({}, { name: '年度任务', prompt: 'prompt-yearly', schedule: '0 9 1 1 *' });
+  tD.last_fired = new Date(2025, 0, 1, 9, 0).toISOString();
+
+  await scheduler.scanMissedTasks(FIXED_NOW);
+
+  checkOk('P0-8a：昨天及更早到期 → 标记 missed 并写明错过次数（绝不静默）',
+    tA.missed === true && tA.last_status === 'missed' && /错过 2 次/.test(String(tA.last_result)),
+    JSON.stringify({ missed: tA.missed, status: tA.last_status, result: tA.last_result }));
+  const runsB = await runsHandler({}, { id: tB.id });
+  checkOk('P0-8a：今天日内到期 → 补跑一次（trigger=catchup）且清掉 missed',
+    scanAgentCalls.length === 1 && scanAgentCalls[0] === 'prompt-daily'
+    && runsB.runs[0].trigger === 'catchup'
+    && tB.last_status === 'success' && tB.missed === false,
+    JSON.stringify({ calls: scanAgentCalls, trigger: runsB.runs[0]?.trigger, status: tB.last_status }));
+  checkOk('P0-8a：超长缺失（>7 天）→ 只标记不补跑',
+    tC.missed === true && tC.last_status === 'missed' && /超过 30 天/.test(String(tC.last_result))
+    && !scanAgentCalls.includes('prompt-long-absent'),
+    JSON.stringify({ result: tC.last_result, calls: scanAgentCalls }));
+  checkOk('P0-8a：窗口内无到期分钟 → 不误标记 missed，仅推进 last_fired 游标',
+    !tD.missed && tD.last_fired === new Date(2026, 9, 17, 10, 0, 0).toISOString(),
+    JSON.stringify({ missed: tD.missed, last_fired: tD.last_fired }));
+
+  // ── 2026-10-17：假成功识别（模型自述做不到时不得标 success）──
+  // 事故：定时任务漏注入 web 工具 → 模型回「无法完成…如实说明」→ 因未抛异常被判成功，
+  // UI 上显示「成功」，内容却是做不到。这条断言把「没抛异常 ≠ 成功」钉住。
+  const { task: tF } = await saveHandler({}, { name: '假成功任务', prompt: '搜索最新 AI 新闻', schedule: '0 9 * * *' });
+  scheduler.startScheduler({
+    runAgentTask: async () => ({ output: '无法完成本次任务，如实说明情况：web_search 工具不存在', toolCalls: 0, usage: null }),
+    notify: noop,
+  });
+  const r7 = await scheduler.runTask(tF.id, 'manual');
+  checkOk('自述无法完成 + 零工具调用 → 判失败（不再假成功）',
+    r7.ok === false && /无法完成/.test(String(r7.error)),
+    JSON.stringify({ ok: r7.ok, error: r7.error }));
+  // startScheduler 会重载 store（任务对象整体替换），断言落盘副本而非内存引用
+  const persistedAfterFake = JSON.parse(fs.readFileSync('/tmp/mjcode-test/scheduled-tasks.json', 'utf8'))
+    .tasks.find((x) => x.id === tF.id);
+  checkOk('失败态写回任务对象（last_status=failed，卡片不再显示「成功」）',
+    persistedAfterFake.last_status === 'failed' && /无法完成/.test(String(persistedAfterFake.last_result)),
+    JSON.stringify({ status: persistedAfterFake?.last_status, result: persistedAfterFake?.last_result }));
+
+  // 反向：真调用过工具时，结尾出现「无法获取」等措辞不该推翻整轮成功
+  scheduler.startScheduler({
+    runAgentTask: async () => ({ output: '已搜到 5 条，其中 2 条无法获取正文，摘要在下……', toolCalls: 3, usage: null }),
+    notify: noop,
+  });
+  const r8 = await scheduler.runTask(tF.id, 'manual');
+  checkOk('有工具调用时保留成功（「无法获取」措辞不误判）', r8.ok === true, JSON.stringify(r8));
+
+  // 空输出也算失败（模型什么都没产出，不能标成功）
+  scheduler.startScheduler({ runAgentTask: async () => ({ output: '   ', toolCalls: 0 }), notify: noop });
+  const r9 = await scheduler.runTask(tF.id, 'manual');
+  checkOk('空输出 → 判失败并给出原因', r9.ok === false && /空结果/.test(String(r9.error)), JSON.stringify(r9));
 
   scheduler.stopScheduler();
   fs.rmSync('/tmp/mjcode-test/scheduled-tasks.json', { force: true });

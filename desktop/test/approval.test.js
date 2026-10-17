@@ -141,5 +141,57 @@ check('P0-S1 沙箱层放行常规命令',
 check('P0-S1 full-access 显式 opt-in 不拦',
   sandboxMod.checkCommandGuard('full-access', 'rm -rf /', 'linux', false).blocked === false);
 
+// ── P2-8：非黑名单写法的破坏性命令（语言运行时一行式删除 / find -delete / tar --delete）──
+const P2_8_MUST_BLOCK = [
+  ['python 一行式删目录', 'python3 -c "import shutil; shutil.rmtree(\'/Users/x/Documents\')"'],
+  ['node 一行式删目录', 'node -e "require(\'fs\').rmSync(\'/Users/x\', {recursive:true})"'],
+  ['node -e unlink', 'node -e "fs.unlinkSync(\'/etc/hosts\')"'],
+  ['ruby 一行式删目录', 'ruby -e "require \'fileutils\'; FileUtils.rm_rf(\'/var/data\')"'],
+  ['find -delete', 'find /Users/x -name "*.log" -delete'],
+  ['find -exec rm', 'find . -name node_modules -type d -exec rm -rf {} +'],
+  ['tar --delete 原地改写归档', 'tar --delete -f backup.tar important.txt'],
+];
+for (const [label, cmd] of P2_8_MUST_BLOCK) {
+  check(`P2-8 拦截：${label}`, approval.toolLevel('shell', { command: cmd }) === 'L1',
+    '语言运行时一行式删除不得在默认档零审批直跑');
+}
+
+// P2-8 必须放行（防误报）：普通 python/node 用法不得被拦
+const P2_8_MUST_ALLOW = [
+  ['python 普通脚本', 'python3 train.py --epochs 10'],
+  ['node 普通脚本', 'node server.js'],
+  ['python 打印（无破坏 API）', 'python3 -c "print(\'hello world\')"'],
+  ['node 版本参数', 'node -v'],
+  ['npm 脚本（含 node 字样）', 'npm run node-test'],
+];
+for (const [label, cmd] of P2_8_MUST_ALLOW) {
+  check(`P2-8 放行：${label}`, approval.toolLevel('shell', { command: cmd }) !== 'L1',
+    '常规语言运行时用法不得被误拦');
+}
+
+// ── P1-2：CUA 界面动作分级（复用审批中心单一事实来源）──
+check('P1-2 CUA 支付动作 → L1', approval.toolLevel('cua_action', { target: '立即支付' }) === 'L1');
+check('P1-2 CUA 删除动作 → L1', approval.toolLevel('cua_action', { text: '删除记录' }) === 'L1');
+check('P1-2 CUA 验证码 → L1', approval.toolLevel('cua_action', { target: 'captcha 输入框' }) === 'L1');
+check('P1-2 CUA 普通点击 → L2', approval.toolLevel('cua_action', { target: '登录' }) === 'L2');
+check('P1-2 CUA on-request + 普通动作 → 询问',
+  approval.needsApproval({ tool: 'cua_action', args: { target: '登录' }, approvalMode: 'on-request' }).need === true);
+check('P1-2 CUA auto-safe + 普通动作 → 不询问',
+  approval.needsApproval({ tool: 'cua_action', args: { target: '登录' }, approvalMode: 'auto-safe' }).need === false);
+check('P1-2 CUA auto-safe + 敏感动作 → 仍询问（L1 不放行）',
+  approval.needsApproval({ tool: 'cua_action', args: { target: '立即支付' }, approvalMode: 'auto-safe' }).need === true);
+check('P1-2 CUA 敏感动作不被 always 规则豁免（L1 纪律）',
+  approval.needsApproval({
+    tool: 'cua_action', args: { target: '立即支付' }, approvalMode: 'on-request',
+    alwaysRules: [{ tool: 'cua_action', pattern: '*', scope: 'always' }],
+  }).need === true);
+
+// ── P2-8：Code Mode 危险代码判定收敛后行为不变 ──
+check('P2-8 代码起进程 → L1', approval.toolLevel('code_exec', { code: 'require("child_process").exec("ls")' }) === 'L1');
+check('P2-8 代码内嵌 rm -rf → L1', approval.toolLevel('code_exec', { code: 'const s = "rm -rf /"; eval(s)' }) === 'L1');
+check('P2-8 普通代码 → L3', approval.toolLevel('code_exec', { code: 'const a = 1 + 1; a' }) === 'L3');
+check('P2-8 isDangerousCode 与 dangerousPatterns 同源',
+  approval.isDangerousCode === dangerous.isDangerousCode);
+
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
 process.exit(fail === 0 ? 0 : 1);

@@ -40,10 +40,18 @@ check('setProviderModel 更新模型', store.listProviders()[0].modelId === 'dee
 store.archiveThread(t.id);
 check('归档后列表不可见', store.listThreads().length === 0);
 
-// ── 记忆上限 ──
-for (let i = 0; i < 55; i++) store.addMemory({ projectPath: '/p', content: `记忆 ${i}` });
-check('记忆上限 50 条（淘汰最旧）', store.listMemories('/p', 100).length === 50);
-check('记忆按项目过滤', store.listMemories('/other', 10).length === 0);
+// ── P0-2a：记忆自动沉淀设置语义（缺省 false = 默认关闭）──
+// 旧 JSON 记忆 API（addMemory/listMemories/touchMemories）已随 P3-4/P1-16 删除——
+// 记忆唯一事实来源是 SQLite（MemoryManager，行为测试见 test/memory.test.js）；
+// 历史文件中的 memories 字段仅保留供主进程一次性导入，导入后即清空。
+check('memory.autoCapture 缺省未设置（默认关闭，渲染层按 falsy 处理）',
+  store.getPreference('memory.autoCapture') === undefined);
+store.setPreference('memory.autoCapture', true);
+check('memory.autoCapture 可显式开启且同步落盘',
+  store.getPreference('memory.autoCapture') === true
+  && new LocalStore(dir).getPreference('memory.autoCapture') === true);
+store.setPreference('memory.autoCapture', false);
+check('memory.autoCapture 可显式关闭', store.getPreference('memory.autoCapture') === false);
 
 // ── P1-M：损坏韧性——先 .bak 恢复，无 .bak 才重置（此前一损坏就静默空库）──
 // 此时共享 dir 的 .bak 已由历次 flush 生成（含 provider）

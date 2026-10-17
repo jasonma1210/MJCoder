@@ -182,6 +182,62 @@ function makeStore() {
   const rmProvider = removeProviderFromRaw(mig.raw, parseModelsFile(mig.raw).providers.find((g) => g.base_url === 'https://api.xiaomimimo.com/v1').fileKey);
   check('写回：删除整组 provider', rmProvider.ok && parseModelsFile(rmProvider.raw).providers.length === 1);
 
+  // ── 13. P1-14：明文 Key 文件原子写 + .bak 备份 + 防级联清空 ──
+  const { writeModelsFile, readModelsFile } = require('../main/modelsFile');
+  const atomicDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-mf-atomic-'));
+  const atomicPath = path.join(atomicDir, 'models.json');
+  const content1 = serializeProviders(parseModelsFile(JSON.stringify([
+    { name: 'svc-a', url: 'https://a.com/v1', apiKey: 'sk-a', models: ['m1'] },
+  ])).providers);
+  const content2 = serializeProviders(parseModelsFile(JSON.stringify([
+    { name: 'svc-b', url: 'https://b.com/v1', apiKey: 'sk-b', models: ['m2'] },
+  ])).providers);
+
+  writeModelsFile(content1, atomicPath);
+  check('P1-14 原子写：首次写入内容正确', readModelsFile(atomicPath) === content1);
+  check('P1-14 原子写：无残留 tmp 文件',
+    !fs.readdirSync(atomicDir).some((f) => f.endsWith('.tmp')), fs.readdirSync(atomicDir).join(','));
+  check('P1-14 原子写：文件权限 0600',
+    (fs.statSync(atomicPath).mode & 0o777) === 0o600, `mode=${(fs.statSync(atomicPath).mode & 0o777).toString(8)}`);
+
+  writeModelsFile(content2, atomicPath);
+  check('P1-14 备份：二次写入后 .bak 保留上一次内容',
+    fs.existsSync(`${atomicPath}.bak`) && fs.readFileSync(`${atomicPath}.bak`, 'utf8') === content1);
+  check('P1-14 备份：目标文件为新内容', readModelsFile(atomicPath) === content2);
+
+  // 写失败（目标路径被占为目录）→ 抛错且 .bak 不被动
+  const blockDir = path.join(atomicDir, 'blocked');
+  fs.mkdirSync(blockDir);
+  let writeErr = null;
+  try { writeModelsFile(content2, blockDir); } catch (e) { writeErr = e; }
+  check('P1-14 写失败：如实抛错（不静默吞）', !!writeErr && /写入失败/.test(writeErr.message));
+  check('P1-14 写失败：错误信息指引 .bak 恢复', !!writeErr && writeErr.message.includes('.bak'));
+
+  // 防级联：解析失败时保留 store 内全部文件来源模型，不清空
+  const cascadeStore = makeStore();
+  const cascadeVault = new Map();
+  const goodRaw = JSON.stringify([{ id: 'keep-1', url: 'https://keep.com/v1', apiKey: 'k-keep' }]);
+  const firstSync = syncFileModels({ store: cascadeStore, encrypt, vault: cascadeVault, raw: goodRaw, filePath: '/tmp/never-written.json' });
+  check('P1-14 防级联：正常同步先导入 1 个 provider', firstSync.synced === 1 && cascadeStore.listProviders().length === 1);
+  const badSync = syncFileModels({ store: cascadeStore, encrypt, vault: cascadeVault, raw: '{broken json!!', filePath: '/tmp/never-written.json' });
+  check('P1-14 防级联：坏 JSON 同步返回 parseFailed 且 ok=false',
+    badSync.parseFailed === true && badSync.ok === false && badSync.errors.length > 0);
+  check('P1-14 防级联：坏 JSON 不清空模型来源（provider 仍在）',
+    cascadeStore.listProviders().length === 1 && cascadeStore.listProviders()[0].base_url === 'https://keep.com/v1');
+  check('P1-14 防级联：坏 JSON 不产生剪除记录', badSync.removed.length === 0);
+
+  // 条目全非法（非对象/缺 url）同样不清空
+  const allBadSync = syncFileModels({ store: cascadeStore, encrypt, vault: cascadeVault, raw: JSON.stringify([{ nope: 1 }, { id: 'x' }]), filePath: '/tmp/never-written.json' });
+  check('P1-14 防级联：条目全非法也不清空（parseFailed）',
+    allBadSync.parseFailed === true && cascadeStore.listProviders().length === 1);
+
+  // 用户主动清空文件（合法空数组）仍按剪除语义生效——防级联不伤害「有意删除」
+  const emptySync = syncFileModels({ store: cascadeStore, encrypt, vault: cascadeVault, raw: '[]', filePath: '/tmp/never-written.json' });
+  check('P1-14 防级联：合法空数组仍执行剪除（用户有意删除不受影响）',
+    emptySync.parseFailed === undefined && emptySync.removed.length === 1 && cascadeStore.listProviders().length === 0);
+
+  fs.rmSync(atomicDir, { recursive: true, force: true });
+
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error('FAIL:', e); process.exit(1); });

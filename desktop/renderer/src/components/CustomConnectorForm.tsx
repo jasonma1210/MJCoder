@@ -82,14 +82,14 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
           {t('ecosystem.custom.cancel')}
         </button>
         <button onClick={save} disabled={busy || !result.ok}
-          className="h-8 px-4 rounded-lg bg-accent text-white text-xs hover:opacity-90 disabled:opacity-40 shrink-0">
+          className="h-8 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40 shrink-0">
           {busy ? t('ecosystem.custom.saving') : t('ecosystem.custom.save')}
         </button>
       </div>
 
       {/* 配置文件路径：与 WorkBuddy 的「配置 MCP」页一致，明确告诉用户保存在哪 */}
       {configPath && (
-        <div className="mt-3 flex items-center gap-2 text-[11px] text-text2">
+        <div className="mt-3 flex items-center gap-2 text-xs text-text2">
           <span className="shrink-0">{t('ecosystem.custom.configPathLabel')}</span>
           <span className="font-mono truncate">{configPath}</span>
           <button onClick={openConfig} className="text-accent hover:underline shrink-0">
@@ -103,7 +103,7 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
           <label className="text-xs text-text2 block mb-1">{t('ecosystem.custom.nameLabel')}</label>
           <input value={draft.name} onChange={(e) => set({ name: e.target.value })}
             placeholder="my-mcp-server" className={INPUT} />
-          <p className="text-[11px] text-text2 mt-1">{t('ecosystem.custom.nameHint')}</p>
+          <p className="text-xs text-text2 mt-1">{t('ecosystem.custom.nameHint')}</p>
         </div>
 
         <div>
@@ -134,7 +134,7 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
               <label className="text-xs text-text2 block mb-1">{t('ecosystem.custom.envLabel')}</label>
               <textarea rows={3} value={draft.env} onChange={(e) => set({ env: e.target.value })}
                 placeholder={'API_KEY=xxxx\nBASE_URL=https://example.com'} className={AREA} />
-              <p className="text-[11px] text-text2 mt-1">{t('ecosystem.custom.envHint')}</p>
+              <p className="text-xs text-text2 mt-1">{t('ecosystem.custom.envHint')}</p>
             </div>
           </>
         ) : (
@@ -148,14 +148,14 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
               <label className="text-xs text-text2 block mb-1">{t('ecosystem.custom.headersLabel')}</label>
               <textarea rows={3} value={draft.headers} onChange={(e) => set({ headers: e.target.value })}
                 placeholder={'Authorization: Bearer xxxx'} className={AREA} />
-              <p className="text-[11px] text-text2 mt-1">{t('ecosystem.custom.headersHint')}</p>
+              <p className="text-xs text-text2 mt-1">{t('ecosystem.custom.headersHint')}</p>
             </div>
           </>
         )}
 
         {/* 校验结果：提交后（touched）或已有连接结果时展示 */}
         {touched && result.issues.length > 0 && (
-          <ul className="text-[11px] text-danger space-y-1">
+          <ul className="text-xs text-danger space-y-1">
             {result.issues.map((it, i) => (
               <li key={i} className="flex items-start gap-1.5">
                 <IconAlert size={12} className="shrink-0 mt-0.5" />
@@ -176,7 +176,7 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
           </p>
         )}
         {status === 'idle' && !touched && (
-          <p className="inline-flex items-center gap-1.5 text-[11px] text-text2">
+          <p className="inline-flex items-center gap-1.5 text-xs text-text2">
             <IconPlug size={12} /> {t('ecosystem.custom.saveNote')}
           </p>
         )}
@@ -185,7 +185,7 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
       {/* 帮助：把「怎么拿到配置」说清楚，避免用户在此页卡住 */}
       <div className="mt-4 pt-3 border-t border-border flex items-center gap-2">
         <IconGlobe size={12} className="text-text2 shrink-0" />
-        <span className="text-[11px] text-text2">{t('ecosystem.custom.help')}</span>
+        <span className="text-xs text-text2">{t('ecosystem.custom.help')}</span>
       </div>
     </div>
   );

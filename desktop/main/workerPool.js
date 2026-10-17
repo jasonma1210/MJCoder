@@ -165,9 +165,13 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
   {
     let result = null;
     let errorMsg = null;
+    // P1-9：捕获中止原因——runAgent 被中止后可能带部分产出**正常返回**（不抛错），
+    // 此前终态判定只看 summary 里的引擎标记正则，墙钟超时的部分产出被伪装成 done。
+    let abortReason = null;
     try {
       const core = await deps.loadAgentCore();
       const handlers = deps.createToolHandlers({ signal: controller.signal });
+      controller.signal.addEventListener('abort', () => { abortReason = controller.signal.reason?.message || String(controller.signal.reason || '运行已中止'); }, { once: true });
       // 墙钟超时：到点中止本轮 Agent（工具调用在下一轮 chat 才感知，符合设计取舍）
       const timer = setTimeout(() => controller.abort(new Error(`任务超时（${Math.round(task.timeoutMs / 60000)} 分钟）`)), task.timeoutMs);
       // 活动流：工具调用 → task_activity 事件（Agent 胶囊/面板实时展示执行流程）
@@ -190,7 +194,7 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
       };
       try {
         const finalText = await core.runAgent({
-          messages: [{ role: 'user', content: deps.buildTaskPrompt(group, task) }],
+          messages: [{ role: 'user', content: await deps.buildTaskPrompt(group, task) }],
           // 2026-10-15 修复：此处原先直接传 deps.resolveModel()（扁平形），而 runAgent
         // 读 model.provider.id（嵌套形）→ 每个子任务第 1 轮即崩
         // `Cannot read properties of undefined (reading 'id')`，整组随后降级/重规划。
@@ -241,6 +245,16 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         // V06：不再无条件丢弃隔离副本——将重试（新副本覆盖）才清理；终态失败先归档保留产物
         if (retried) { if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {}); }
         else await archiveIsoIfNeeded(entry, group, task, errorMsg);
+      } else if (abortReason != null) {
+        // P1-9：超时/外部中止不得判 done——带部分产出正常返回也按失败落库（不重试：
+        // 墙钟超时自动重试会再烧一整轮，改由用户核对后手动重试；重试次数不消耗）。
+        deps.store.setTaskStatus(group.group_id, task.taskId, 'failed', {
+          error: abortReason, skipRetryCount: true,
+          result: result ? { summary: result.summary, artifacts: result.artifacts, tokensUsed: result.tokensUsed, partial: true } : null,
+        });
+        deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: 'failed', error: abortReason });
+        maybePauseOnCritical(group.group_id, task, false); // 关键任务超时同样按失败暂停组（下游不再空跑）
+        await archiveIsoIfNeeded(entry, group, task, abortReason);
       } else {
         // Agent 引擎的「未完成收尾」标记（重复失败熔断 / 预算耗尽）→ 任务判 failed，
         // 走失败处置（重试回队 / 关键失败暂停组），不得伪装成 done
@@ -338,6 +352,9 @@ function abortTask(groupId, taskId) {
 }
 
 // 组级强停（AgentDock「全部停止」/对话中止联动）：中止该组全部在役任务
+// P1-8：排队中的任务一并处置——此前只中止在役 run，queued/pending 任务再无 Worker
+// 认领却永远留在 queued，组收尾判定「无待执行任务」永不成立，「全部停止」后界面永久转圈。
+// 统一置 skipped（终态、错误信息可读），组置 cancelled；返回值保持为在役中止数（IPC 兼容）。
 function abortGroup(groupId) {
   let n = 0;
   for (const [runKey, entry] of activeRuns.entries()) {
@@ -347,6 +364,24 @@ function abortGroup(groupId) {
       n += 1;
     }
   }
+  let skipped = 0;
+  try {
+    for (const t of deps.store.listTasks(groupId)) {
+      if (t.status === 'queued' || t.status === 'pending') {
+        try {
+          deps.store.setTaskStatus(groupId, t.taskId, 'skipped', { error: '组已被用户强制停止', force: true });
+          skipped += 1;
+        } catch (e) {
+          console.warn(`[workerPool] 组停时任务 ${t.taskId} 置 skipped 失败:`, e.message);
+        }
+      }
+    }
+    deps.store.setGroupStatus(groupId, 'cancelled', { error: '已被用户强制停止' });
+    deps.emit?.({ type: 'group_update', groupId, status: 'cancelled', error: '已被用户强制停止' });
+  } catch (e) {
+    console.warn(`[workerPool] 组 ${groupId} 强停收尾失败:`, e.message);
+  }
+  if (skipped > 0) console.warn(`[workerPool] 组 ${groupId} 强停：在役中止 ${n}，排队跳过 ${skipped}`);
   return n;
 }
 

@@ -1,5 +1,5 @@
 import FilePreview from './FilePreview';
-import { IconFile, IconX } from './icons';
+import { IconFile, IconPlus, IconX } from './icons';
 import { useI18n } from '../i18n';
 
 // 右侧「预览」标签：多文件标签页 + 应用内预览（对标 WorkBuddy 右侧文件预览栏）
@@ -13,6 +13,18 @@ function baseName(p) {
   return String(p || '').split('/').pop() || String(p || '');
 }
 
+/**
+ * 预览容器：多文件标签 + 当前文件正文。
+ * JSDoc 类型注解是必需的（不是装饰）：`files = []` 的默认值会让 TS 把该 prop 推断为 never[]，
+ * 于是 .tsx 调用方（FilesPanel）传入 string[] 会报 TS2322。注解后跨文件类型即正确。
+ * @param {{
+ *   files?: string[],
+ *   active?: string | null,
+ *   projectPath?: string,
+ *   onSelect?: (path: string) => void,
+ *   onClose?: (path: string) => void,
+ * }} props
+ */
 export default function FileViewerPane({ files = [], active, projectPath, onSelect, onClose }) {
   const { t } = useI18n();
   if (!files.length) return null;
@@ -26,7 +38,7 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
           return (
             <div
               key={f}
-              className={`group flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-t-lg text-[11px] max-w-[180px] shrink-0 ${
+              className={`group flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-t-lg text-xs max-w-[180px] shrink-0 ${
                 isActive ? 'bg-bg text-text border border-border border-b-transparent -mb-px' : 'text-text2 hover:bg-hover'
               }`}
             >
@@ -49,6 +61,18 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
             </div>
           );
         })}
+        {/* F4：把当前预览文件添加到对话框（mjcode:add-attachment 事件总线 → 输入框附件 chip） */}
+        {active && (
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('mjcode:add-attachment', { detail: { path: active } }))}
+            title={t('message.addToChat')}
+            aria-label={t('message.addToChat')}
+            className="ml-auto shrink-0 self-center flex items-center gap-1 px-2 h-6 rounded-lg text-caption text-text2 hover:text-text hover:bg-hover"
+          >
+            <IconPlus size={11} />
+            <span className="whitespace-nowrap">{t('message.addToChat')}</span>
+          </button>
+        )}
       </div>
 
       {active

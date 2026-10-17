@@ -5,7 +5,7 @@ import { useI18n } from '../i18n';
 export default function InlineAlert({ type = 'info', children, onDismiss }) {
   const { t } = useI18n();
   const styles = {
-    info: 'border-border text-text2',
+    info: 'border-info/40 bg-info-bg text-info',
     warn: 'border-warn text-warn bg-warn-bg',
     error: 'border-danger text-danger bg-danger-bg',
   };

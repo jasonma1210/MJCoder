@@ -22,6 +22,8 @@ export const IconChart = (p) => <S {...p}><path d="M3 3v18h18" /><rect x="7" y="
 export const IconSettings = (p) => <S {...p}><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></S>;
 export const IconPuzzle = (p) => <S {...p}><path d="M8 3h3a2 2 0 0 1 2 2 1.5 1.5 0 0 0 3 0 2 2 0 0 1 2-2h1v4a2 2 0 0 0 0 4v4h-4a2 2 0 0 1-2-2 1.5 1.5 0 0 0-3 0 2 2 0 0 1-2 2H4v-4a2 2 0 0 0 0-4V3h4z" /></S>;
 export const IconEdit = (p) => <S {...p}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></S>;
+// 删除（排队任务卡片）：与 IconEdit 同一线性风格
+export const IconTrash = (p) => <S {...p}><path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /><path d="M10 11v6M14 11v6" /></S>;
 export const IconClock = (p) => <S {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></S>;
 export const IconCpu = (p) => <S {...p}><rect x="5" y="5" width="14" height="14" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></S>;
 export const IconPlug = (p) => <S {...p}><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></S>;
@@ -55,3 +57,19 @@ export const IconChevronLeft = (p) => <S {...p}><path d="m15 6-6 6 6 6" /></S>;
 export const IconBot = (p) => <S {...p}><rect x="4" y="8" width="16" height="12" rx="2" /><path d="M12 8V4M8 4h8" /><circle cx="9" cy="14" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="14" r="1" fill="currentColor" stroke="none" /></S>;
 export const IconBranch = (p) => <S {...p}><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="6" r="2.5" /><path d="M6 8.5v7M18 8.5c0 4-3 5.5-6 5.5" /></S>;
 export const IconCopy = (p) => <S {...p}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></S>;
+// 三栏布局折叠/展开（左栏与右栏各一个，箭头指向「收起」方向）
+export const IconPanelLeft = (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /><path d="m7.5 10-1.5 2 1.5 2" /></S>;
+export const IconPanelRight = (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /><path d="m16.5 10 1.5 2-1.5 2" /></S>;
+// 面板最大化 / 还原（对标 Codex 右栏右上角的展开图标）
+export const IconMaximize = (p) => <S {...p}><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 3h3a2 2 0 0 1 2 2v3" /><path d="M8 21H5a2 2 0 0 1-2-2v-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></S>;
+export const IconMinimize = (p) => <S {...p}><path d="M4 8h3a2 2 0 0 0 2-2V3" /><path d="M20 8h-3a2 2 0 0 1-2-2V3" /><path d="M4 16h3a2 2 0 0 1 2 2v3" /><path d="M20 16h-3a2 2 0 0 0-2 2v3" /></S>;
+// 列表视图（文件树 / 搜索结果切换）
+export const IconList = (p) => <S {...p}><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></S>;
+// 搜索结果 / 文件树切换（image3 文件面板右上角的分栏图标）
+export const IconTree = (p) => <S {...p}><path d="M4 6h6M4 12h6M4 18h6" /><path d="M14 6h6M14 12h6" /><path d="M14 18h6" /></S>;
+// 顶栏筛选（对标 WorkBuddy 头部第三枚左键）：按状态过滤会话
+export const IconFilter = (p) => <S {...p}><path d="M3 5h18l-7 8v5l-4 3v-8z" /></S>;
+// 发送（侧边对话输入框回车等价，纸飞机）
+export const IconSend = (p) => <S {...p}><path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" /></S>;
+// 在系统浏览器中打开（内置浏览器顶栏）
+export const IconExternalLink = (p) => <S {...p}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6" /></S>;

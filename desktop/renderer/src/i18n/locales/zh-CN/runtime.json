@@ -59,5 +59,10 @@
   "sandboxNextStepResultUnknown": "安全下一步：不要据此判断命令成功。需要真实结果时，请在终端自行执行同一命令，或改用非沙箱模式（该模式会被明确标记为未隔离）。",
   "sandboxPolicyLine": "当前档位：{policy}｜隔离状态：{sandboxed}",
   "sandboxIsolatedYes": "已隔离",
-  "sandboxIsolatedNo": "未隔离"
+  "sandboxIsolatedNo": "未隔离",
+  "memNeedProject": "请先选择项目，再写入记忆",
+  "memSaved": "已写入项目记忆",
+  "memSaveFailed": "记忆写入失败：{error}",
+  "threadCreateFailed": "创建会话失败，已停止本次运行：{error}\n请重试；若持续失败，请检查本机会话存储是否可写。",
+  "messageSendFailed": "消息写入本机会话失败，已停止本次运行：{error}\n输入内容已保留，可直接重试。"
 }
