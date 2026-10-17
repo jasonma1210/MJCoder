@@ -13,6 +13,9 @@ const workerIsolation = require('./workerIsolation');
 const { toAgentModel } = require('./modelShape');
 const { stricterApproval } = require('./approvalPolicy');
 const path = require('path');
+// P2-8 / V-L1：V 层（评估接口）宿主侧编排。本通道**默认 off**（无人值守不打断，
+// 设计 §2.2）；opt-in 由 deps.getVerifyConfig() 显式下发 level='l1' 才生效。
+const verifyRun = require('./verifyRun');
 
 let deps = null;
 let maxConcurrent = 4; // 默认并发 4：主流大模型服务普遍支持 4 路并发请求
@@ -171,11 +174,23 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
     try {
       const core = await deps.loadAgentCore();
       const handlers = deps.createToolHandlers({ signal: controller.signal });
+      // ── P2-8 / V-L1：Worker 通道 V 层（默认 off；opt-in 经 deps.getVerifyConfig()）──
+      // 判定事实来源：ledger（引擎 verify_ledger，经下方 onTrace 收）+ diff（runCwd 的
+      // git status，非 git 工作区返回 null → R5 降级 SKIP，不阻断任务）。
+      const vrun = verifyRun.createVerificationRun({
+        runId: `worker:${runKey}`,
+        conversationId: `task:${group.group_id}:${task.taskId}`,
+        cwd: runCwd || '',
+        config: (typeof deps.getVerifyConfig === 'function' ? deps.getVerifyConfig() : null),
+        emit: null, // Worker 无 agent:event 通道；结果只进 trace + verdicts.jsonl
+        defaultLevel: 'off',
+      });
       controller.signal.addEventListener('abort', () => { abortReason = controller.signal.reason?.message || String(controller.signal.reason || '运行已中止'); }, { once: true });
       // 墙钟超时：到点中止本轮 Agent（工具调用在下一轮 chat 才感知，符合设计取舍）
       const timer = setTimeout(() => controller.abort(new Error(`任务超时（${Math.round(task.timeoutMs / 60000)} 分钟）`)), task.timeoutMs);
       // 活动流：工具调用 → task_activity 事件（Agent 胶囊/面板实时展示执行流程）
       const onToolCall = (tc) => {
+        vrun.onToolCall(tc); // V 层旁路（off 时为空操作）：缓存最近一次测试命令输出
         deps.emit?.({
           type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name,
           kind: 'tool', text: `${tc?.name || ''} ${summarizeArgs(tc?.args)}`.trim(),
@@ -193,7 +208,19 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         usedTokens += reported + estimated;
       };
       try {
-        const finalText = await core.runAgent({
+        // P1-11b：任务-模型分档（**可选 + 回落**）。`modelOverrides.worker` 缺省、形状不全或任何异常
+        // → 静默回落主模型（分档是成本优化，绝不能让配置错误把整组 Worker 弄崩）。
+        // 注意形态：基线**必须**保持 `model: toAgentModel(deps.resolveModel())` 这一行
+        //（test/model-shape.test.js 的源码护栏即此语义），分档在其后覆盖。
+        let workerOv = null;
+        if (typeof deps.getModelOverrides === 'function') {
+          const slot = (deps.getModelOverrides() || {}).worker;
+          if (slot && slot.model) {
+            if (slot.providerId) workerOv = slot;
+            else console.warn('[workerPool] modelOverrides.worker 缺少 providerId，已回落主模型');
+          }
+        }
+        const runOpts = {
           messages: [{ role: 'user', content: await deps.buildTaskPrompt(group, task) }],
           // 2026-10-15 修复：此处原先直接传 deps.resolveModel()（扁平形），而 runAgent
         // 读 model.provider.id（嵌套形）→ 每个子任务第 1 轮即崩
@@ -215,12 +242,41 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
           tokenBudget: 200000,
           toolHandlers: handlers,
           onToolCall,
+          // P2-8 / V-L1：只为收 verify_ledger（其余 trace 事件本通道不落盘，保持零额外写盘）
+          onTrace: (evt) => vrun.onLedger(evt),
           onMessage: onUsage,
           systemPrompt: '你是 MJ Coder 的并行任务 Worker：只完成分配给你的子任务，产出精炼、可执行的结论。'
             + '完成前必须自测验证：能运行测试/命令验证的就实际运行，写完的文件就回读确认关键内容存在；验证不过要修复后再收尾。'
             + '结束时用一段「summary」总结做了什么、验证结果与关键产物（文件路径等）；不要反问，不要输出无关寒暄。',
-        });
-        result = { summary: String(finalText || ''), artifacts: extractPaths(finalText), tokensUsed: usedTokens };
+        };
+        // P1-11b：分档覆盖基线模型（形状异常 → 保持主模型）
+        if (workerOv) {
+          try {
+            runOpts.model = toAgentModel(workerOv);
+          } catch (e) {
+            console.warn('[workerPool] modelOverrides.worker 形状不可用，已回落主模型:', e.message);
+            workerOv = null;
+          }
+        }
+        // P0-3①：思考强度随模型透传——agent-core 从 `model.model.reasoning_effort` 取，再下发到
+        // 非流式通道的 `reasoning_effort`。分档自带则用分档的，否则沿用主模型（resolveModel 是纯 getter）。
+        const effortSrc = workerOv || deps.resolveModel();
+        const effort = effortSrc.reasoningEffort || effortSrc.reasoning_effort || '';
+        if (effort) runOpts.model = { ...runOpts.model, model: { ...runOpts.model.model, reasoning_effort: effort } };
+        const finalText = await core.runAgent(runOpts);
+        // P2-8 / V-L1：off 时 finish 直接返回原文（零行为变化）；开启后 BLOCK 只在
+        // summary 末尾追加对账提示——**不改变任务成败判据**（改判据会让无人值守任务
+        // 因为一句自述措辞反复重试，成本远大于收益；是否升级为失败留给后续批次决定）。
+        // try/catch 是硬要求：V 层任何故障都绝不能把任务翻成 failed（那等于让「评估器」
+        // 有权判死一个其实已完成的任务，是本次改造最不能接受的副作用）。
+        let summaryText = finalText;
+        try {
+          const vr = await vrun.finish(finalText);
+          if (typeof vr?.finalText === 'string') summaryText = vr.finalText;
+        } catch (e) {
+          console.warn('[workerPool] V 层判定异常（不影响任务结果）:', e?.message || e);
+        }
+        result = { summary: String(summaryText || ''), artifacts: extractPaths(summaryText), tokensUsed: usedTokens };
       } finally {
         clearTimeout(timer);
       }

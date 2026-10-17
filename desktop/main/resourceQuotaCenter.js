@@ -15,6 +15,36 @@ const { EventEmitter } = require('events');
 const OVERLOAD_THRESHOLD = 5;      // 连续错误次数 → 熔断
 const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000;
 
+// P0-1⑤: Ollama 上下文窗口探测常量
+// H-1：官方 `OLLAMA_CONTEXT_LENGTH` 代码默认 0=未指定，运行时按显存自适应 4k/32k/256k
+// → 任何写死的窗口值都是错的，唯一可信来源是 /api/show 里模型自身的 num_ctx（运行时实际值）。
+const OLLAMA_BASE_URL = 'http://localhost:11434';
+const OLLAMA_PROBE_TIMEOUT_MS = 1500;   // 探测只做尽力而为：超时短，失败静默降级，绝不拖慢启动
+const OLLAMA_NUM_CTX_FALLBACK = 4096;   // 探测失败取值 = 官方最小档（宁低不高）
+const OLLAMA_PROBE_MAX_MODELS = 12;     // 单次最多探测的模型数（模型库很大时也不拖时间）
+
+// `parameters` 是 Ollama 的换行分隔文本（如 "num_ctx\t32768"），取 num_ctx 行
+function parseNumCtx(parameters) {
+  if (typeof parameters !== 'string' || !parameters) return 0;
+  const m = parameters.match(/^[ \t]*num_ctx[ \t]+(\d+)[ \t]*$/m);
+  return m ? Number(m[1]) : 0;
+}
+
+// `model_info` 的上下文长度键是**架构键**（llama.context_length / qwen2.context_length），
+// 不是 general.*（general.architecture 只给架构名）。H-1 明确点出这个坑。
+function parseContextLength(modelInfo) {
+  if (!modelInfo || typeof modelInfo !== 'object') return 0;
+  const arch = typeof modelInfo['general.architecture'] === 'string' ? modelInfo['general.architecture'] : '';
+  if (arch) {
+    const v = Number(modelInfo[`${arch}.context_length`]);
+    if (v > 0) return v;
+  }
+  for (const [k, v] of Object.entries(modelInfo)) {
+    if (/\.context_length$/.test(k) && Number(v) > 0) return Number(v);
+  }
+  return 0;
+}
+
 class ResourceQuotaCenter extends EventEmitter {
   constructor({ providerLimit = 8, fgReserve = 2 } = {}) {
     super();
@@ -124,18 +154,58 @@ class ResourceQuotaCenter extends EventEmitter {
   }
 
   // ── P3-4：本地后端探测（Ollama）——探测结果进快照；接入方式=自定义 provider（baseUrl http://localhost:11434/v1）──
+  // P0-1⑤: 同时探测每个模型的真实上下文窗口（num_ctx 优先 / model_info.<arch>.context_length 次之）。
+  // 全部失败静默降级为 4096（fallback-4k），不影响 ollama 可用性判断。
+  async probeOllamaWindows(names) {
+    const targets = (names || []).slice(0, OLLAMA_PROBE_MAX_MODELS);
+    const probeOne = async (name) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), OLLAMA_PROBE_TIMEOUT_MS);
+      try {
+        let res = await fetch(`${OLLAMA_BASE_URL}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+          signal: ctrl.signal,
+        });
+        // 老版本 Ollama 只接受 GET /api/show?name=…（POST 回 404/405）
+        if (!res.ok && (res.status === 404 || res.status === 405)) {
+          res = await fetch(`${OLLAMA_BASE_URL}/api/show?name=${encodeURIComponent(name)}`, { signal: ctrl.signal });
+        }
+        if (!res.ok) return { name, numCtx: OLLAMA_NUM_CTX_FALLBACK, contextLength: 0, source: 'fallback-4k' };
+        const j = await res.json().catch(() => ({}));
+        const numCtx = parseNumCtx(j?.parameters);
+        const contextLength = parseContextLength(j?.model_info);
+        if (numCtx > 0) return { name, numCtx, contextLength, source: 'api-show' };
+        // num_ctx 未显式设置时，模型上限（contextLength）不是运行时生效值 → 仍按最小档保守处理，
+        // 但把上限一并发出去，便于 UI 提示「可校正到 N」（P1-12 的一键校正入口）
+        return { name, numCtx: OLLAMA_NUM_CTX_FALLBACK, contextLength, source: 'fallback-4k' };
+      } catch {
+        return { name, numCtx: OLLAMA_NUM_CTX_FALLBACK, contextLength: 0, source: 'fallback-4k' };
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    // 并行探测：总耗时被单次超时界定（≤1.5s），不会随模型数线性增长
+    return Promise.all(targets.map(probeOne));
+  }
+
   async detectLocalBackend() {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 800);
-      const res = await fetch('http://localhost:11434/api/tags', { signal: ctrl.signal });
+      const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: ctrl.signal });
       clearTimeout(timer);
       if (res.ok) {
         const j = await res.json().catch(() => ({}));
-        this.localBackend = { ollama: true, models: (j.models || []).length, checkedAt: Date.now() };
-      } else { this.localBackend = { ollama: false, models: 0, checkedAt: Date.now() }; }
+        const names = (j.models || []).map((m) => String(m?.name || m?.model || '')).filter(Boolean);
+        const modelWindows = await this.probeOllamaWindows(names);
+        // 字段说明：models 保持「数量」语义（AgentDock.jsx:484 直接当计数渲染，改数组会显示 [object Object]）；
+        // 窗口明细放 modelWindows，逐项 { name, numCtx, contextLength, source }。
+        this.localBackend = { ollama: true, models: names.length, modelWindows, checkedAt: Date.now() };
+      } else { this.localBackend = { ollama: false, models: 0, modelWindows: [], checkedAt: Date.now() }; }
     } catch {
-      this.localBackend = { ollama: false, models: 0, checkedAt: Date.now() };
+      this.localBackend = { ollama: false, models: 0, modelWindows: [], checkedAt: Date.now() };
     }
     this.emit('change', this.snapshot());
     return this.localBackend;

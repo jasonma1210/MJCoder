@@ -34,6 +34,33 @@ function initToolExec(d) {
   registerIpc();
 }
 
+// ── P2-7：「执行后告知」的调用点封装（正交布尔偏好，缺省关闭 → 零破坏）──
+//
+// 三件事必须一起成立才有意义：
+//   · 审计已在各分支无条件留痕（本函数不发 audit，也绝不用通知替代审计）；
+//   · 只在「没弹卡就执行了」的动作上发（弹过卡的用户刚点过确认，再发是打扰）——
+//     该判定在 approval.notifyExecuted 内部（它会重算 needsApproval，语义单点是它）；
+//   · L1 高危不发（通知不能替代阻断），approval.notifyExecuted 内部会拒并留日志。
+function notifyExecutedIfEnabled(tool, args, startedAt, result) {
+  try {
+    approval.notifyExecuted({
+      enabled: approvalSettings.getUserApprovalNotice(),
+      tool,
+      args,
+      approvalMode: (args && args.approvalMode) || 'on-request',
+      conversationId: args && args.conversationId,
+      alwaysRules: deps && typeof deps.getAlwaysRules === 'function' ? deps.getAlwaysRules() : [],
+      conversationRules: (deps && deps.conversationRules) || [],
+      ok: !(result && (result.error || result.blocked || result.ok === false)),
+      ms: Date.now() - startedAt,
+      error: (result && result.error) || '',
+    });
+  } catch (e) {
+    // 通知是「补充信息」：它失败绝不能污染已经发生的执行结果
+    console.warn('[approval] 执行后告知发送失败（不影响执行结果）:', e.message);
+  }
+}
+
 // 打包版 GUI 进程（Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
 // homebrew（node/npm/git 等用户工具）全部找不到——真机复盘：模型被迫每轮先
 // `export PATH=...` 自救，白烧轮次。统一为子 shell 注入完整 PATH，沙箱内外一致。
@@ -43,6 +70,8 @@ function initToolExec(d) {
 // 且取 HOME 在 Windows 上取不到（应取 USERPROFILE）。抽模块同时避免本文件
 // 触及 800 行 max-lines 上限（该门禁正是为防上帝文件而设）。
 const { shellEnv, SHELL_PATH } = require('./shellEnv');
+// P2-7：用户偏好「执行后告知」（正交布尔，缺省关闭）+ 审批中心的通知出口
+const approvalSettings = require('../approvalSettings');
 // N2 执行契约（cwd 信任 + 真实进程终态描述 + 工具路径解析）抽到 ./execCwd.js
 const { shellErrorNote, resolveToolCwd, defaultToolCwd, resolveToolPath } = require('./execCwd');
 // P0-1：detached 子进程执行器（execFile 的 detached 选项被 Node 静默丢弃，见该模块注释）
@@ -52,6 +81,10 @@ const { diagnoseEditMiss, nearestContext } = require('./editMissDiagnostics');
 const shellProfile = require('../cmd/shellProfile');
 // 文件预览单元（file:preview，2026-10-16 拆出）
 const preview = require('./previewTool');
+// P1-2：超时数字单一事实来源（与 webTools.js / 引擎看门狗对账；见 tools/timeouts.js 的不变式说明）
+const { SHELL_DEFAULT_TIMEOUT_MS } = require('./timeouts');
+// 非沙箱兜底执行路径（P1-2 前置抽离：本文件 800 行门禁，改默认超时前必须先抽）
+const { runUnconfinedShell } = require('./execFallback');
 
 // 命令失败审查修复（真机复盘 2026-10-14）：
 // 1）execFile 的 err.message 是 "Command failed: <file> <args 全文>"——沙箱路径下 args 含整个
@@ -64,8 +97,11 @@ const preview = require('./previewTool');
 // （shellErrorNote 已抽至 ./execCwd.js，2026-10-16）
 
 // P0-D：工具实现提取为命名函数——IPC 处理器与定时任务 Agent 执行通道共用同一实现
-async function toolShell(args) {
-  const { timeout = 60000, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy } = args;
+async function runShellTool(args) {
+  // P1-2：默认 60s → SHELL_DEFAULT_TIMEOUT_MS(480s)。三层超时不变式「实现侧 < 看门狗」此前是反的：
+  // 引擎看门狗给 shell 600s，实现侧 60s 就自己断了 ⇒ 引擎的超时表永远轮不到报错（空转）。
+  // 引擎显式下发的 args.timeout 依旧优先（上层可为单次调用收紧）。
+  const { timeout = SHELL_DEFAULT_TIMEOUT_MS, approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy } = args;
   // N2 argv 优先（方案 §8.1）：模型可传 argv 数组（executable + args）——
   // 直接 execFile，完全不经过 shell（无拼接/展开/注入面），空格与 $ 等字面量按原样传递。
   // 给 argv 时忽略字符串 command；审批/守卫/审计用 argv 的空格连接形态展示。
@@ -119,80 +155,10 @@ async function toolShell(args) {
     ? (sandbox.osSandboxUsable(policy, cwd).reason || 'bubblewrap 不可用')
     : (sb.reason || (process.platform === 'win32' ? 'Windows 受限用户沙箱未就绪' : 'seatbelt 不可用'));
 
-  // 守卫 + 直跑：无 OS 级沙箱（或沙箱未就绪/执行失败）时的统一落点。
-  // V03（2026-10-16）：受限策略（read-only/workspace-write）下 OS 沙箱不可满足 = 能力不可用，
-  // 默认 **阻断**，不再「黑名单守卫后裸跑」——黑名单是提示分类器，不是安全边界，
-  // 此前等价于沙箱一失效就静默降级为宿主普通权限执行（权限提升且用户不可见）。
-  // 两条显式逃生口（均不留痕为「已隔离」）：
-  //   1) 环境变量 MJCODE_ALLOW_UNCONFINED_FALLBACK=1：开发态显式豁免（仍过黑名单守卫）；
-  //   2) 当场弹一次 unconfined_exec 审批（L1）：用户显式批准本次非沙箱执行，决策不沉淀任何规则。
-  const runFallback = async (resolve) => {
-    if (policy !== 'full-access') {
-      const envFallback = process.env.MJCODE_ALLOW_UNCONFINED_FALLBACK === '1';
-      if (!envFallback) {
-        if (!deps || typeof deps.requestApproval !== 'function') {
-          audit('shell', command, `沙箱不可用且无审批通道，fail-closed 阻断（${fallbackReason}）`, 'blocked');
-          resolve({
-            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），且本次调用无审批通道，已按 fail-closed 阻断执行。`,
-            exitCode: -1, error: 'sandbox-unavailable-blocked', errorCode: 'sandbox-unavailable',
-            blocked: true, sandboxed: false, sandbox: { policy, sandboxed: false, reason: fallbackReason }, ...cwdMeta,
-          });
-          return;
-        }
-        const { decision, reason } = await awaitApproval(deps.requestApproval, 'unconfined_exec', { command });
-        if (decision !== 'once') {
-          audit('shell', command, `非沙箱执行未获显式批准（decision=${decision}${reason ? `，理由：${reason}` : ''}）`, 'blocked');
-          resolve({
-            stdout: '', stderr: `受限沙箱不可用（${fallbackReason}），非沙箱执行未获显式批准，已阻断。${reason ? `理由：${reason}` : ''}`,
-            exitCode: -1, error: 'sandbox-unavailable-blocked', errorCode: 'sandbox-unavailable',
-            blocked: true, sandboxed: false, sandbox: { policy, sandboxed: false, reason: fallbackReason }, ...cwdMeta,
-          });
-          return;
-        }
-        console.warn(`[sandbox] 用户显式批准单次非沙箱执行（${fallbackReason}）policy=${policy}`);
-      } else {
-        // P1-5：环境变量豁免同留审计痕——「谁在何时豁免了沙箱」必须可复盘，不能只进 console
-        audit('shell', command, `unconfined-env 豁免（MJCODE_ALLOW_UNCONFINED_FALLBACK=1，${fallbackReason}）`, 'auto');
-        console.warn(`[sandbox] MJCODE_ALLOW_UNCONFINED_FALLBACK=1：显式豁免单次审批，非沙箱执行（${fallbackReason}）policy=${policy}`);
-      }
-      // 黑名单守卫保留为纵深防御（非安全边界）：即使走到非沙箱执行，命中危险模式的命令仍然拒绝
-      // 已确认走到这里 = 本次没有 OS 级沙箱兜底，显式传 backendAvail=false，避免再走平台推断
-      const guard = sandbox.checkCommandGuard(policy, command, process.platform, false, false);
-      if (guard.blocked) {
-        audit('shell', command, guard.reason, 'blocked');
-        resolve({ stdout: '', stderr: guard.reason, exitCode: -1, error: guard.reason, errorCode: 'command-guard-blocked', blocked: true, sandbox: { policy, sandboxed: false, reason: 'no-os-sandbox' }, ...cwdMeta });
-        return;
-      }
-      console.warn(`[sandbox] 非沙箱执行（${fallbackReason}）policy=${policy}`);
-    }
-    // N2：argv 优先——execFile 直接执行，无 shell 面；字符串命令走显式 ShellProfile（非交互 /bin/sh -c）
-    const finishShell = (error, stdout, stderr) => {
-      const result = {
-        stdout: (stdout || '').slice(0, 50000), stderr: (stderr || '').slice(0, 10000),
-        exitCode: typeof error?.code === 'number' ? error.code : (error ? -1 : 0),
-        // N2：真实进程终态——signal/killed 透出，不折叠成裸 -1；P0-6：非沙箱兜底如实标记未隔离+原因
-        signal: error?.signal || null, killed: !!error?.killed,
-        sandboxed: false, sandboxBackend: 'none', sandboxReason: fallbackReason,
-        error: shellErrorNote(error),
-        ...cwdMeta,
-      };
-      audit('shell', command, `cwd=${cwd} exitCode=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
-      resolve(result);
-    };
-    if (argvList) {
-      const child = execFileDetached(argvList[0], argvList.slice(1), { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
-      deps.registerChild(child);
-    } else {
-      const sp = shellProfile.resolveShellProfile();
-      if (!sp.ok) {
-        audit('shell', command, `shell 不可用：${sp.reason}`, 'blocked');
-        resolve({ stdout: '', stderr: `shell 不可用：${sp.reason}`, exitCode: -1, error: 'shell-unavailable', errorCode: 'shell-unavailable', blocked: true, ...cwdMeta });
-        return;
-      }
-      const child = execFileDetached(sp.exe, [...sp.args, command], { cwd, timeout, maxBuffer: 5 * 1024 * 1024, env: shellEnv() }, finishShell);
-      deps.registerChild(child);
-    }
-  };
+  // 非沙箱兜底（策略闸 → 命令守卫 → 直跑）已抽到 ./execFallback.js（P1-2 前置腾行，行为不变）
+  const runFallback = (resolve) => runUnconfinedShell({
+    resolve, deps, policy, command, argvList, cwd, cwdMeta, timeout, fallbackReason, neededApproval, ruleMatched,
+  });
 
   // ── macOS：Seatbelt ──
   // N3：先做真实可用性探测（sandbox-exec 存在 ≠ 能 apply；嵌套沙箱环境一律 Operation not permitted）。
@@ -283,6 +249,20 @@ async function toolShell(args) {
   return new Promise((resolve) => runFallback(resolve).catch((e) => resolve({ stdout: '', stderr: `命令执行异常：${e?.message || e}`, exitCode: -1, error: String(e?.message || e), errorCode: 'exec-failed' })));
 }
 
+// P2-7：shell 的执行有四个返回点（seatbelt / bwrap / windows / 兜底），
+// 逐个插通知会漏，所以用外壳统一包一层：先把真实实现跑完，再按需发「执行后告知」。
+// 注意 approvalMode/审批目标要与内层一致：内层用 `command`（argv 形态时是 argv 的连接串），
+// 这里必须复算同样的值，否则 needsApproval 重算结果可能不同（漏发或多发）。
+async function toolShell(args = {}) {
+  const startedAt = Date.now();
+  const result = await runShellTool(args);
+  const command = Array.isArray(args.argv) && args.argv.length > 0
+    ? args.argv.map((v) => String(v)).filter((s) => s.length > 0).join(' ')
+    : args.command;
+  notifyExecutedIfEnabled('shell', { ...args, command }, startedAt, result);
+  return result;
+}
+
 async function toolReadFile({ path: p, cwd, offset, limit }) {
   // cwd 贯通：相对路径以项目目录为基准解析（此前按主进程 CWD 解析必然失败）
   const target = resolveToolPath(p, cwd);
@@ -335,6 +315,7 @@ function outsideWriteTarget(toolName, args) {
 }
 
 async function runWriteTool(toolName, args) {
+  const writeStartedAt = Date.now(); // P2-7：执行后告知要报耗时
   const { approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy, ...rest } = args;
   const toolKey = { writeFile: 'write_file', editFile: 'edit_file', applyPatch: 'apply_patch' }[toolName];
   let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
@@ -400,6 +381,8 @@ async function runWriteTool(toolName, args) {
     }
   }
   audit(toolKey, rest.path || '(patch)', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, 'recorded');
+  // P2-7：写类工具是「执行后告知」最常见的对象（一次静默覆盖就是一次不可见的数据变更）
+  notifyExecutedIfEnabled(toolKey, { ...rest, approvalMode, conversationId }, writeStartedAt, result);
   return result;
 }
 function targetMissing(err) { return err?.code === 'ENOENT' || err?.code === 'EISDIR'; }
@@ -609,6 +592,7 @@ async function toolGlob({ pattern, path: p, cwd } = {}) {
 // ── Git 工具（execFile argv 化 + cwd 贯通）──
 // git 提交/暂存属于 L2 写操作，走审批中心
 async function gitWithApproval(toolKey, args, gitArgs) {
+  const gitStartedAt = Date.now(); // P2-7：执行后告知要报耗时
   const { approvalMode = 'on-request', conversationId, cwd, requireApproval = true } = args;
   let neededApproval = false;
   let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
@@ -627,6 +611,7 @@ async function gitWithApproval(toolKey, args, gitArgs) {
   }
   const result = await runGit(gitArgs, cwd);
   audit(toolKey, args.message || args.files || '', `${result.error ? `error: ${result.error}` : 'ok'} rule=${ruleMatched}`, neededApproval ? 'approved' : 'auto');
+  notifyExecutedIfEnabled(toolKey, args, gitStartedAt, result);
   return result;
 }
 

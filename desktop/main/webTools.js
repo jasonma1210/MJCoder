@@ -15,8 +15,11 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+// P1-2：超时数字的单一事实来源（此前此文件写 15000，与引擎看门狗的 60000 相差 4 倍）
+const { WEB_FETCH_IMPL_TIMEOUT_MS } = require('./tools/timeouts');
 
-const DEFAULT_TIMEOUT_MS = 15000;
+// P1-2：web_fetch 实现侧 15s → 30s（DNS+TLS+首字节+2MB 正文的 P99；与引擎 60s 保持 2 倍关系）
+const DEFAULT_TIMEOUT_MS = WEB_FETCH_IMPL_TIMEOUT_MS;
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2MB 上限
 const DEFAULT_TEXT_LIMIT = 15000;
 

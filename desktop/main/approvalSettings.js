@@ -16,16 +16,27 @@
 // 设置落点：渲染层 `mj_approval_settings`（localStorage）在变更时同步一份到
 //   `localStore.preferences['approval_settings']`，主进程由此读取。
 //   这样即使本次进程内从未发生过交互（例如开机即到点触发定时任务），也能拿到用户的选择。
-const APPROVAL_ORDER = { never: 0, 'auto-safe': 1, 'on-request': 2, always: 3 };
-const SANDBOX_ORDER = { 'read-only': 0, 'workspace-write': 1, 'full-access': 2 };
-const DEFAULT_APPROVAL = 'on-request';
-const DEFAULT_SANDBOX = 'workspace-write';
+// P2-7 顺带清债：本文件原有一份与 approvalPolicy.js 完全相同的 APPROVAL_ORDER / SANDBOX_ORDER /
+// 默认值副本（仓库里同一张表的第三份）。重复表的典型后果是「一边加了档位另一边不认识」→
+// 静默回落默认档，用户设置看起来保存成功却没生效。现统一引用 approvalPolicy.js（单一事实来源），
+// 本文件不再自建顺序表。
+const {
+  APPROVAL_ORDER, SANDBOX_ORDER, DEFAULT_APPROVAL, DEFAULT_SANDBOX,
+} = require('./approvalPolicy');
+// P2-7：执行后告知的出口注入（本文件是审批域的初始化入口，sink 在这里接线最合适）
+const approval = require('./approval');
 
 let getLocalStore = () => null;
 
 function initApprovalSettings(deps = {}) {
   // 只存 getter（localStore 在 whenReady 之后才有值），不要在 init 时取值
   getLocalStore = typeof deps.getLocalStore === 'function' ? deps.getLocalStore : () => null;
+  // P2-7：把「执行后告知」的通知出口接到宿主事件通道（emitTaskEvent，既有通道，不新开 IPC）。
+  // 只在**显式注入** emit 时才接管 sink：这样即使 init 顺序变化（例如先由别处接线、后调本函数），
+  // 也不会把已接好的出口清成 null。未注入时 approval.js 会落 warn 说明「未接线」。
+  if (typeof deps.emit === 'function') {
+    approval.setNoticeSink((notice) => deps.emit({ ...notice, ts: Date.now() }));
+  }
 }
 
 function readPersisted() {
@@ -53,6 +64,22 @@ function getUserSandboxPolicy() {
 }
 
 /**
+ * P2-7：用户是否开启「执行后告知」（正交布尔，缺省 **false**）。
+ *
+ * 为什么是独立布尔而不是第五档：档位枚举是跨 5 处契约（contract/policy/settings/ecosystem/UI），
+ * 加档漏改任何一处都会导致运行期 `agent:run` 被契约拒绝；而「执行后告知」本质是
+ * 「执行完告诉我一声」，与「执行前问不问」正交，可叠加在任何档位上（含 always）。
+ * 详见 main/approval.js 文件头的偏离说明。
+ *
+ * 默认 false：为 false 时全链路不产生任何通知，行为与改造前一致（零破坏）。
+ */
+function getUserApprovalNotice() {
+  const v = readPersisted();
+  // 只认严格布尔 true：字符串 'true'/'1' 一律视为关闭（避免持久化侧类型漂移放大成隐私/性能问题）
+  return v && v.approval_notice === true;
+}
+
+/**
  * 取「请求档 与 用户设置档」中更严者。无人值守路径的入参钳制统一走这里，
  * 避免各处再各自实现一遍顺序表（approvalPolicy.js 是唯一事实源）。
  * @param {string|undefined} requested 调用方/模型传入的档位（可能被注入成更松的档）
@@ -68,6 +95,8 @@ module.exports = {
   initApprovalSettings,
   getUserApprovalMode,
   getUserSandboxPolicy,
+  // P2-7：执行后告知（正交布尔偏好）
+  getUserApprovalNotice,
   clampWithSettings,
   DEFAULT_APPROVAL,
   DEFAULT_SANDBOX,

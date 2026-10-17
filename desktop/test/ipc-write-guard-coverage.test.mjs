@@ -48,6 +48,12 @@ const GUARDED_CHANNELS = [
   'skills:importFromDir',
   'app:openInIDE',
   'websearch:setConfig',
+  // 2026-10-18（WP-D）：数字员工实体化的三个写通道（落盘 employee 包 + RBAC 校验）。
+  // 三者本身已带 guard.assertStrings/assertObject + rbac.assertCan，纳入清单是**防腐化**：
+  // 将来有人改这几个通道时，套件会强制要求保留守卫（否则清单腐化检查会红）。
+  'ecosystem:employeeCreate',
+  'ecosystem:employeeUpdate',
+  'ecosystem:employeeDelete',
   // main/ipc/gitHunks.js
   'tool:gitApplyHunk',
   'tool:gitApplyHunkCached',

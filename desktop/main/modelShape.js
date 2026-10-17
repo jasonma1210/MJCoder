@@ -16,7 +16,21 @@
 // 修法：转换逻辑只此一份，三条调用链统一引用；任何形状都能进，出参形状由调用点决定。
 // 新增调用链时只需 require 本模块，不复写转换——从结构上杜绝再次漂移。
 
-const DEFAULT_CONTEXT_WINDOW = 128000;
+// P0-1⑦: 默认窗口统一由 main/modelWindows.js 拥有（此前本文件写死 128000）。
+// 「两侧错配代价不对称」——低估只早压（浪费 token），高估则压缩永不触发（直接击穿上下文）
+// → 表外未知模型取 32768；主力模型由映射表覆盖，不靠这个默认值兜。
+const { DEFAULT_CONTEXT_WINDOW, resolveWindow } = require('./modelWindows');
+
+// 声明值优先；未声明时按 (providerKind, modelId) 查映射表，最后才落默认档。
+// 为什么转换层就要查：Worker / 定时任务 / 编排组的模型对象是扁平形
+// （main.js 的 resolveTaskModel 只产 { providerId, isGlobal, baseUrl, model }），
+// 若一律补默认档，128K 的主模型在 Worker 里会被按 32K 提前压缩 4 倍。
+function windowOf({ declared, providerId, baseUrl, modelId }) {
+  const d = Number(declared) > 0 ? Number(declared) : 0;
+  if (d > 0) return d;
+  const resolved = resolveWindow({ providerId, baseUrl, modelId });
+  return Number(resolved?.window) > 0 ? Number(resolved.window) : DEFAULT_CONTEXT_WINDOW;
+}
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -48,8 +62,15 @@ function toAgentModel(m) {
       },
       model: {
         model_id: m.model?.model_id ?? '',
-        context_window: Number(m.model?.context_window) > 0
-          ? Number(m.model.context_window) : DEFAULT_CONTEXT_WINDOW,
+        context_window: windowOf({
+          declared: m.model?.context_window,
+          providerId: m.provider.id,
+          baseUrl: m.provider.base_url,
+          modelId: m.model?.model_id ?? '',
+        }),
+        // P0-3②: 思考强度必须随形状转换带上——否则 Worker / 定时任务 / 编排组
+        // 恒为服务端默认（引擎侧已按 model.model.reasoning_effort 下发，缺这里就断链）
+        reasoning_effort: m.model?.reasoning_effort || m.model?.reasoningEffort || '',
       },
     };
   }
@@ -65,7 +86,14 @@ function toAgentModel(m) {
     },
     model: {
       model_id: modelId,
-      context_window: Number(m.contextWindow) > 0 ? Number(m.contextWindow) : DEFAULT_CONTEXT_WINDOW,
+      context_window: windowOf({
+        declared: m.contextWindow ?? m.context_window,
+        providerId: m.providerId,
+        baseUrl: m.baseUrl || m.base_url,
+        modelId,
+      }),
+      // P0-3②: 扁平形的思考强度字段名有两种历史写法（reasoning_effort / reasoningEffort）
+      reasoning_effort: m.reasoning_effort || m.reasoningEffort || '',
     },
   };
 }

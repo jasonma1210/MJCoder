@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "schema_version": "v1",
+  "files": {
+    "raw/mjcode-harness-audit-2026-10-18.md": {
+      "sha256": "bf70987ce666689e9e4f9e88e942e812d10d33ce4f0cabdda5ed7bd53cde50ec",
+      "compiled_at": null,
+      "compiled": true
+    }
+  },
+  "page_count": 10
+}

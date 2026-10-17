@@ -17,11 +17,21 @@
 // 各自超时；握手完成后的进程退出/SSE 断开才算「运行期崩溃」并回报上层。
 
 const { spawn } = require('child_process');
+// P1-8：协议版本/客户端能力的单一事实来源（mcpAuth.js 的 401 探测也引用同一份）
+const {
+  PROTOCOL_VERSION, MIN_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
+  CLIENT_CAPABILITIES, CLIENT_INFO, isSupportedProtocolVersion,
+} = require('./mcpProtocol');
 
 const servers = new Map(); // name -> server 实例（跨传输统一注册表）
 
-const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_TIMEOUT_MS = 30000;
+// P1-8：tools/list 分页上限——服务端若返回恒真的 nextCursor（实现 bug），无上限会死循环
+const MAX_TOOL_PAGES = 20;
+// H-4：工具名规范为 1–128 字符、仅 [A-Za-z0-9_.-]（SHOULD）。越界名字一律清洗后暴露给模型，
+// 真实名字保留在 server.toolNameMap 里供 tools/call 还原。
+const TOOL_NAME_MAX = 128;
+const TOOL_NAME_BAD_CHARS = /[^A-Za-z0-9_.-]/g;
 
 // ── JSON-RPC 请求（跨传输通用）──
 function mcpRpc(server, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -54,6 +64,8 @@ function mcpRpc(server, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
         const err = new Error(`MCP 请求发送失败：${e.message}`);
         // T7：needsAuth 标记必须穿过重包装，否则上层无法区分「要授权」与「网络故障」
         if (e.mcpAuthRequired) err.mcpAuthRequired = true;
+        // H-4：会话失效标记同理——丢了它就无法触发「重新 initialize 后重试一次」
+        if (e.mcpSessionExpired) err.mcpSessionExpired = true;
         reject(err);
       });
   });
@@ -70,6 +82,213 @@ function dispatchMessage(server, msg) {
   }
   if (typeof server.onNotify === 'function') {
     try { server.onNotify(msg); } catch (e) { /* 通知处理失败不影响主流程 */ }
+  }
+}
+
+// ── P1-8：工具名清洗 / 映射（H-4：1–128 字符、仅 [A-Za-z0-9_.-]）──
+//
+// 为什么必须有这一层：工具名直接被拼进 `mcp__<server>__<tool>` 交给模型，
+// 而模型厂商对 function.name 的字符集要求比 MCP 规范更严（部分供应商直接 400）。
+// 清洗必须**可逆**：调用时用真实名字发给服务端，否则服务端收到的是被替换过的名字 → unknown tool。
+function sanitizeToolName(name) {
+  const cleaned = String(name || '').trim().replace(TOOL_NAME_BAD_CHARS, '_').slice(0, TOOL_NAME_MAX);
+  return cleaned || 'tool';
+}
+
+// 登记工具：返回暴露给模型的列表，并把 exposedName → originalName 存进映射表
+function registerTools(server, rawTools) {
+  const map = new Map();
+  const used = new Set();
+  const tools = [];
+  for (const t of rawTools || []) {
+    if (!t || typeof t !== 'object') continue;
+    const original = String(t.name || '');
+    if (!original) continue;
+    let exposed = sanitizeToolName(original);
+    if (used.has(exposed)) {
+      // 清洗后重名（如 `a b` 与 `a/b` 都变 `a_b`）：加序号区分，避免模型调用时歧义
+      let i = 2;
+      while (used.has(`${exposed}_${i}`)) i += 1;
+      exposed = `${exposed}_${i}`.slice(0, TOOL_NAME_MAX);
+    }
+    used.add(exposed);
+    map.set(exposed, original);
+    tools.push(exposed === original ? t : { ...t, name: exposed, originalName: original });
+  }
+  server.tools = tools;
+  server.toolNameMap = map;
+  return tools;
+}
+
+/** 暴露名 → 服务端真实工具名（未登记时按原名透传，兼容测试/裸调用） */
+function resolveToolName(server, name) {
+  const map = server && server.toolNameMap;
+  if (map && map.has(name)) return map.get(name);
+  return name;
+}
+
+// ── P1-8④：服务端主动消息处理（此前 onNotify 恒 null，dispatchMessage 的通知分支永不进入）──
+function handleServerMessage(server, msg, { onLog } = {}) {
+  const log = typeof onLog === 'function' ? onLog : () => {};
+  // 迟到的响应（请求已超时、pending 已清理）：静默忽略，不刷日志
+  if (msg.id !== undefined && !msg.method) return;
+  // 服务端 → 客户端的**请求**（有 id 且有 method，但不在 pending 里）：
+  // 我们没实现 roots/sampling/elicitation，必须立刻回 -32601 让它失败，
+  // 绝不能静默丢弃——静默会让服务端一直等我们应答，表现为「调用挂死」。
+  if (msg.id !== undefined && msg.method) {
+    const payload = JSON.stringify({
+      jsonrpc: '2.0', id: msg.id,
+      error: { code: -32601, message: `客户端未实现 ${msg.method}（未声明该能力）` },
+    });
+    Promise.resolve(server.transport.send(payload, msg.id)).catch(() => { /* 回执失败不影响主流程 */ });
+    log(`服务端请求 ${msg.method} 未实现，已回 -32601`);
+    return;
+  }
+  const method = String(msg.method || '');
+  if (method === 'notifications/tools/list_changed') {
+    // 工具集变更（服务端热更新）：重拉并换装，模型下一轮就能看到新工具
+    server.toolsChangedAt = Date.now();
+    refreshTools(server)
+      .then((tools) => console.log(`[MCP ${server.name}] 工具列表已变更，重新拉取 ${tools.length} 个工具`))
+      .catch((e) => console.warn(`[MCP ${server.name}] 工具列表刷新失败:`, e.message));
+    return;
+  }
+  if (method === 'notifications/message') {
+    const p = msg.params || {};
+    const data = typeof p.data === 'string' ? p.data : JSON.stringify(p.data);
+    log(`[${p.level || 'info'}] ${data}`);
+    return;
+  }
+  if (method === 'notifications/progress') {
+    // 请求级进度：pending 只按 id 索引，progressToken 路由本轮未实现（列入遗留）。
+    // 只记录最近一条，避免长任务把内存撑起来。
+    const p = msg.params || {};
+    server.lastProgress = { token: p.progressToken, progress: p.progress, total: p.total, ts: Date.now() };
+    return;
+  }
+  log(`未处理的服务端消息：${method || '(无 method)'}`);
+}
+
+// ── P1-8：握手 / 工具列表（initialize → notifications/initialized → tools/list 分页）──
+
+async function notifyInitialized(server) {
+  // 2026-10-17：streamableHttp 与 stdio 一样，initialize 之后必须发 initialized 通知。
+  // 此前只对 stdio 发：宽容的服务端（24haowan）不校验，严格的服务端会拒绝后续 tools/list。
+  try {
+    await server.transport.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
+  } catch (e) {
+    console.warn('[MCP] initialized 通知发送失败（不影响主流程）:', e.message);
+  }
+}
+
+/**
+ * 握手并**采纳服务端返回值**（P1-8②③）。
+ * 返回值里带 protocolVersion / capabilities / serverInfo —— 原实现直接丢弃，
+ * 导致 server.capabilities 恒为发出值、上层无法得知服务端到底支持什么。
+ * @param {object} server
+ * @param {string} [version] 本次提议的协议版本（降级重试时传 MIN_PROTOCOL_VERSION）
+ */
+async function performHandshake(server, version = PROTOCOL_VERSION) {
+  // 提议版本如实记录（降级后记 MIN，而不是永远记 2025-11-25）
+  server.proposedProtocolVersion = version;
+  const initRes = await mcpRpc(server, 'initialize', {
+    protocolVersion: version,
+    capabilities: { ...CLIENT_CAPABILITIES },
+    clientInfo: { ...CLIENT_INFO },
+  });
+  const peerVersion = initRes && typeof initRes.protocolVersion === 'string' ? initRes.protocolVersion : '';
+  if (peerVersion && !isSupportedProtocolVersion(peerVersion)) {
+    // H-4：服务端回不支持的版本 → disconnect（不自行降级重试），由 connectMcpServer 的 catch 收尾
+    const err = new Error(
+      `MCP 协议版本不受支持：服务端返回 ${peerVersion}，本客户端支持 ${SUPPORTED_PROTOCOL_VERSIONS.join(' / ')}。`
+      + '按 MCP 规范已断开该连接，请升级该 MCP 服务或其网关。',
+    );
+    err.mcpVersionUnsupported = true;
+    throw err;
+  }
+  // 落状态时以**服务端实际返回值**为准：peerVersion 为空（服务端未声明版本）时保持空，
+  // 不拿我们自己提议的版本冒充协商结果（提议值单独记在 proposedProtocolVersion）。
+  server.protocolVersion = peerVersion;
+  server.capabilities = (initRes && initRes.capabilities) || {};
+  server.serverInfo = (initRes && initRes.serverInfo) || {};
+  if (initRes && typeof initRes.instructions === 'string') server.instructions = initRes.instructions;
+  if (peerVersion && peerVersion !== version) {
+    console.warn(`[MCP ${server.name}] 服务端协议版本 ${peerVersion}（本端提议 ${version}），按规范采纳服务端返回值`);
+  }
+  await notifyInitialized(server);
+  return initRes;
+}
+
+/**
+ * 判断错误是否是「服务端直接拒绝握手」的版本兼容性问题（区别于「回了个不支持的版本号」）。
+ * 只有前者允许用 MIN_PROTOCOL_VERSION 重试一次；后者一律按 H-4 disconnect。
+ */
+function isProtocolVersionRejection(err) {
+  if (!err) return false;
+  if (err.mcpVersionUnsupported) return false; // 协商失败（已回版本号）→ 不重试
+  if (err.mcpAuthRequired || err.mcpSessionExpired) return false;
+  const m = String(err.message || '');
+  const mentionsVersion = /protocolversion|protocol\s*version|protocol|version/i.test(m);
+  const mentionsReject = /unsupported|not\s*support|invalid|unknown|mismatch|reject|unrecogni[sz]ed/i.test(m);
+  return mentionsVersion && mentionsReject;
+}
+
+/**
+ * 握手 + **最多一次**的 legacy 降级（team-lead 2026-10-17 裁决，修正 H-4 的绝对化表述）。
+ * 触发条件三条全满足：① initialize 自身抛错（不是「回了不支持的版本号」）；
+ * ② 错误文本能匹配 protocol/version + unsupported 语义；③ 本次连接尚未重试过。
+ * 降级后必须留痕（server.legacy + console.warn），不静默、不无限次。
+ */
+async function negotiateHandshake(server) {
+  try {
+    return await performHandshake(server, PROTOCOL_VERSION);
+  } catch (err) {
+    if (server.legacyRetried || !isProtocolVersionRejection(err)) throw err;
+    server.legacyRetried = true;
+    console.warn(
+      `[MCP ${server.name}] initialize 被拒（${String(err.message || '').slice(0, 120)}）；`
+      + `按兼容性降级用 ${MIN_PROTOCOL_VERSION} 重试一次（不是静默降级，将留痕）`,
+    );
+    const res = await performHandshake(server, MIN_PROTOCOL_VERSION);
+    server.legacy = true;
+    console.warn(`[MCP ${server.name}] 该服务已降级为 ${MIN_PROTOCOL_VERSION} legacy 模式（协商结果：${server.protocolVersion || '服务端未声明'}）`);
+    return res;
+  }
+}
+
+// tools/list 翻页到底（H-4：nextCursor 必须翻，上限 MAX_TOOL_PAGES 防服务端死循环）
+async function fetchAllTools(server) {
+  const all = [];
+  let cursor = '';
+  for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+    const res = await mcpRpcWithSessionRetry(server, 'tools/list', cursor ? { cursor } : {});
+    if (Array.isArray(res && res.tools)) all.push(...res.tools);
+    cursor = (res && res.nextCursor) || '';
+    if (!cursor) return all;
+  }
+  console.warn(`[MCP ${server.name}] tools/list 分页达到上限 ${MAX_TOOL_PAGES} 页，已停止翻页（可能有工具未加载）`);
+  return all;
+}
+
+/** 重拉工具列表并换装（连接期与 notifications/tools/list_changed 共用） */
+async function refreshTools(server) {
+  return registerTools(server, await fetchAllTools(server));
+}
+
+/**
+ * 带会话恢复的 RPC（H-4：HTTP 传输收到 404 MUST 重新 initialize（不带 session id））。
+ * 仅对「传输层明确报告会话失效」的错误重试一次，其余错误原样抛出。
+ */
+async function mcpRpcWithSessionRetry(server, method, params, timeoutMs) {
+  try {
+    return await mcpRpc(server, method, params, timeoutMs);
+  } catch (err) {
+    if (!err || !err.mcpSessionExpired || method === 'initialize') throw err;
+    console.warn(`[MCP ${server.name}] 会话已失效（HTTP 404），按规范重新握手后重试 ${method}`);
+    if (server.transport && typeof server.transport.resetSession === 'function') server.transport.resetSession();
+    // 重新握手沿用上次协商用的提议版本（若已降级为 legacy，不要又提回 2025-11-25）
+    await performHandshake(server, server.proposedProtocolVersion || PROTOCOL_VERSION);
+    return mcpRpc(server, method, params, timeoutMs);
   }
 }
 
@@ -143,6 +362,14 @@ function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
       if (sid) sessionId = sid;
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // H-4：会话失效（服务端已丢弃 Mcp-Session-Id，常见于服务重启/会话超时）→ 404。
+        // 规范要求：MUST 重新 initialize（不带 session id）后重试。这里只把「会话失效」标记出来，
+        // 由 mcpClient 的 mcpRpcWithSessionRetry 统一重新握手，避免传输层自己发起握手造成递归。
+        if (res.status === 404 && sessionId && requestId !== undefined) {
+          const err = new Error(`MCP 会话已失效（HTTP 404${text ? `: ${text.slice(0, 120)}` : ''}），将重新握手`);
+          err.mcpSessionExpired = true;
+          throw err;
+        }
         // 通知（无 id）没有响应：JSON-RPC 规范里它的失败不影响主流程。
         // 实测部分服务端对 notifications/initialized 直接回 404/405（只有真实请求才建会话），
         // 若按错误抛出会把「通知被拒」误报成「连接失败」。
@@ -165,6 +392,8 @@ function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
       catch (e) { if (onLog) onLog(`非 JSON 响应: ${text.slice(0, 120)}`); }
     },
     close() { /* HTTP 无子进程；会话随进程结束（DELETE 语义属服务端可选实现，不强制） */ },
+    // H-4：重新 initialize 前必须清掉旧会话 id，否则新握手仍带着已失效的会话
+    resetSession() { sessionId = ''; },
     alive() { return true; },
     stderrTail: '',
   };
@@ -211,7 +440,7 @@ async function consumeSse(res, onData, onNamedEvent) {
   if (buf.trim()) handleEvent(buf); // 流结束时没有尾随空行
 }
 
-// ── SSE 传输（旧版 HTTP+SSE，MCP 2024-11-05 的 http 形态）──
+// ── SSE 传输（旧版 HTTP+SSE，即 MIN_PROTOCOL_VERSION 那一代的 http 形态）──
 //
 // 与 streamableHttp 的区别（为什么必须单独一个 transport）：
 //   · streamableHttp：一个 POST 携带一条消息，响应在同一次 POST 里回来（JSON 或 SSE 流）；
@@ -354,9 +583,23 @@ async function connectMcpServer({
     pending: new Map(),
     nextId: 1,
     tools: [],
+    // P1-8：清洗名 → 真实工具名（H-4 要求客户端有映射层）；未清洗时为空 Map
+    toolNameMap: new Map(),
     stderrTail: '',
     handshakeDone: false,
-    onNotify: null,
+    // P1-8②③：握手协商结果（由 performHandshake 写入，上层可查询）
+    // protocolVersion 只放**服务端实际返回值**；我们提议的值单独存，避免把提议当协商结果。
+    protocolVersion: '',
+    proposedProtocolVersion: '',
+    // legacy：服务端拒绝 2025-11-25 后已降级为 MIN_PROTOCOL_VERSION（仅一次，留痕可查）
+    legacy: false,
+    legacyRetried: false,
+    capabilities: {},
+    serverInfo: {},
+    toolsChangedAt: 0,
+    lastProgress: null,
+    // P1-8④：此前恒 null → dispatchMessage 的通知分支永不进入（服务端通知全被丢弃）
+    onNotify: (msg) => handleServerMessage(server, msg, { onLog }),
   };
   transportObj.serverRef = server; // 传输层回环到分发器
   // SSE 需要主动建流（GET），且必须在 serverRef 就绪之后——否则 endpoint/消息事件到达时无处分发
@@ -372,15 +615,20 @@ async function connectMcpServer({
       try { cb({ error: { message } }); } catch (e) { /* 回调所属请求已结束 */ }
     }
   };
+  // stderr 尾巴由**传输层**写入（transport.stderrTail），server.stderrTail 从来没人写。
+  // 此前读 server.stderrTail 恒为空 ⇒ 「握手阶段退出」与「启动失败」的真实原因被吞掉，
+  // 用户只看到 code=1 而看不到服务端自己打印的报错。统一从传输层取。
+  const stderrTailOf = () => String((transportObj && transportObj.stderrTail) || server.stderrTail || '');
   if (transportObj.kind === 'stdio') {
     transportObj.child.on('close', (code) => {
       servers.delete(name);
       const wasConnected = server.handshakeDone === true;
       console.log(`[MCP ${name}] 进程退出 code=${code}${wasConnected ? '（运行期崩溃，工具已失效）' : '（握手阶段退出）'}`);
       if (wasConnected) {
+        if (server.disconnecting) return; // 主动断开：不上报 crashed
         if (onStatus) onStatus(name, 'crashed', code);
       } else {
-        const tail = String(server.stderrTail || '').trim().slice(0, 300);
+        const tail = stderrTailOf().trim().slice(0, 300);
         failHandshake(`MCP 服务进程在握手阶段退出（code=${code}）${tail ? `：${tail}` : ''}`);
       }
     });
@@ -388,6 +636,7 @@ async function connectMcpServer({
       servers.delete(name);
       console.error(`[MCP ${name}] 启动失败:`, err.message);
       if (server.handshakeDone === true) {
+        if (server.disconnecting) return; // 主动断开：不上报 crashed
         if (onStatus) onStatus(name, 'crashed', null);
       } else {
         // spawn ENOENT 就是这条路径：命令/解释器不存在
@@ -398,24 +647,24 @@ async function connectMcpServer({
   servers.set(name, server);
 
   try {
-    // 1. initialize → 2. notifications/initialized → 3. tools/list（三步分离，各自超时）
-    await mcpRpc(server, 'initialize', {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'mj-coder', version: '1.0' },
-    });
-    // 2026-10-17：streamableHttp 与 stdio 一样，initialize 之后必须发 initialized 通知。
-    // 此前只对 stdio 发：宽容的服务端（24haowan）不校验，严格的服务端会拒绝后续 tools/list。
-    Promise.resolve(transportObj.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })))
-      .catch((e) => { console.warn('[MCP] initialized 通知发送失败（不影响主流程）:', e.message); });
-    const listRes = await mcpRpc(server, 'tools/list', {});
-    server.tools = listRes?.tools || [];
+    // 1. initialize（采纳服务端返回的版本/能力/自述；被拒时最多一次 legacy 降级）→ 2. initialized → 3. tools/list
+    await negotiateHandshake(server);
+    await refreshTools(server);
     server.handshakeDone = true;
-    return { ok: true, server: name, kind: server.kind, toolCount: server.tools.length, tools: server.tools };
+    return {
+      ok: true, server: name, kind: server.kind, toolCount: server.tools.length, tools: server.tools,
+      protocolVersion: server.protocolVersion, proposedProtocolVersion: server.proposedProtocolVersion,
+      legacy: server.legacy, serverInfo: server.serverInfo, capabilities: server.capabilities,
+    };
   } catch (err) {
+    // H-4：版本不受支持 → 这里就是规范要求的 disconnect（关传输 + 摘注册表）
     transportObj.close();
     servers.delete(name);
-    return { ok: false, error: err.message, needsAuth: err.mcpAuthRequired === true, stderr: server.stderrTail };
+    return {
+      ok: false, error: err.message, needsAuth: err.mcpAuthRequired === true,
+      unsupportedVersion: err.mcpVersionUnsupported === true, legacy: !!server.legacy,
+      stderr: stderrTailOf(),
+    };
   }
 }
 
@@ -424,7 +673,13 @@ function listMcpServers() { return [...servers.keys()]; }
 
 function disconnectMcpServer(name) {
   const s = servers.get(name);
-  if (s) { s.transport.close(); servers.delete(name); }
+  if (s) {
+    // 主动断开不是崩溃：打标记后让 close 回调不再上报 crashed，
+    // 否则「用户点了断开」会在渲染层显示成红色故障（P0-5④ 的状态消费会把两者混为一谈）。
+    s.disconnecting = true;
+    s.transport.close();
+    servers.delete(name);
+  }
 }
 
 // 应用退出：终止全部 stdio 子进程（SIGTERM → 1s 后 SIGKILL），防孤儿进程占端口
@@ -436,6 +691,8 @@ function killAllMcpServers() {
     try {
       const child = t.child;
       if (child.exitCode !== null || child.signalCode !== null) continue;
+      // 应用退出不是崩溃：避免退出瞬间给渲染层刷一批「服务已崩溃」的红色状态
+      s.disconnecting = true;
       child.kill('SIGTERM');
       killed += 1;
       setTimeout(() => {
@@ -452,8 +709,9 @@ function killAllMcpServers() {
 }
 
 module.exports = {
-  mcpRpc, dispatchMessage,
+  mcpRpc, mcpRpcWithSessionRetry, dispatchMessage, handleServerMessage,
   createStdioTransport, createHttpTransport, consumeSse,
   connectMcpServer, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
-  PROTOCOL_VERSION, DEFAULT_TIMEOUT_MS,
+  refreshTools, sanitizeToolName, resolveToolName,
+  PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, DEFAULT_TIMEOUT_MS,
 };

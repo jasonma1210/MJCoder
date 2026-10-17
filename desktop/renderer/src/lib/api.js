@@ -75,8 +75,15 @@ async function localProviders() {
     ...p,
     // source: 'file' = ~/.mjcode/models.json 同步（UI 只读展示）；其余为本机手工添加
     source: p.source || 'local',
+    // P0-3③：caps（supportsReasoning / supportedEfforts）必须原样透传到渲染层，
+    // 否则 ModelSelector 的能力门控拿不到数据 → 门控永不触发（数据缺就是缺，不补默认值）
     models: (p.models || (p.modelId ? [{ modelId: p.modelId, displayName: p.modelId }] : []))
-      .map((m) => ({ id: m.modelId, model_id: m.modelId, display_name: m.displayName || m.modelId })),
+      .map((m) => ({
+        id: m.modelId,
+        model_id: m.modelId,
+        display_name: m.displayName || m.modelId,
+        ...(m.caps && typeof m.caps === 'object' ? { caps: m.caps } : {}),
+      })),
   }));
 }
 

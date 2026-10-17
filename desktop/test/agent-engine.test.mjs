@@ -331,9 +331,14 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
     onDone: (t, u, a) => { emptyNudgeDone = { t, u, a }; },
   });
   check('空收尾守卫：空响应后注入续跑指令再请求（共 2 次 chat）', chatCalls.length === 2, `chat ${chatCalls.length} 次`);
-  check('空收尾守卫：续跑指令拼进当轮 system（不污染会话历史）',
-    String(chatCalls[1]?.messages?.[0]?.content || '').includes('空响应'),
-    String(chatCalls[1]?.messages?.[0]?.content || '').slice(-60));
+  // 2026-10-18（P1-4）：续跑/续期/截断三种旁路指令统一改为追加**末条 user 消息**，
+  // 不再拼进首条 system（拼 system 会当轮把稳定前缀打废；中段 system 是 DeepSeek 系硬坑）。
+  // 断言改为「末条消息 role=user 且含续跑文案」，而不是「首条 system 含」。
+  const nudgeMsgs = chatCalls[1]?.messages || [];
+  const nudgeLast = nudgeMsgs[nudgeMsgs.length - 1];
+  check('空收尾守卫：续跑指令走末条 user 消息（不污染会话历史、不动前缀）',
+    nudgeLast?.role === 'user' && String(nudgeLast.content || '').includes('空响应'),
+    `lastRole=${nudgeLast?.role} text=${String(nudgeLast?.content || '').slice(-60)}`);
   check('空收尾守卫：续跑后正常返回总结文本', emptyNudgeDone?.t === '任务已完成：改了 a.js 并通过测试');
 
   // R2：连续 3 轮空响应（超过 2 次续跑上限）→ 返回「任务未完全完成」兜底文案

@@ -28,6 +28,11 @@ const DEFAULTS = {
 
 const TICK_MS = 5000;
 
+// P2-2b：首字节延迟目标（只做**告警阈值**，绝不参与任何闸门判定）。
+// 把可观测指标做成闸门会引入新的误杀——推理模型首字节本来就慢（见文件头 2026-10-17 的踩坑记录）。
+// 3s 是交互式 AI 产品的常见 SLO 基线。
+const TTFB_TARGET_MS = 3000;
+
 const ENV_KEYS = {
   firstByteMs: 'MJ_STREAM_FIRST_BYTE_MS',
   idleMs: 'MJ_STREAM_IDLE_MS',
@@ -147,9 +152,29 @@ function createStreamGuard(opts = {}) {
 
     /** 已触发的原因；null 表示未触发。调用方在 catch 里据此产出准确文案 */
     reason: () => state.firedReason,
+    /**
+     * P2-2b：首字节耗时（start → firstByte 的毫秒差）。
+     * 未 start、或首字节尚未达成时返回 null——宿主附加字段缺失必须可容忍。
+     */
+    ttfbMs() {
+      if (!state.started || !state.firstByteAt) return null;
+      return state.firstByteAt - state.startedAt;
+    },
     stats: () => ({ ...state }),
     config: () => ({ firstByteMs: cfg.firstByteMs, idleMs: cfg.idleMs, totalMs: cfg.totalMs, tickMs }),
   };
+}
+
+/**
+ * P2-2b：首字节超目标时告警（只告警、不阻断）。
+ * 与「超时判死」严格分离：这里绝不 abort 连接，否则会把「推理模型想得久」误杀成失败。
+ * @param {number|null} ttfbMs
+ * @param {string} [label] 通道标识（如 'scheduled'），便于日志定位
+ */
+function reportSlowTtfb(ttfbMs, label = '') {
+  if (ttfbMs === null || ttfbMs === undefined) return;
+  if (ttfbMs <= TTFB_TARGET_MS) return;
+  console.warn(`[ttfb] 首字节 ${Math.round(ttfbMs)}ms 超过目标 ${TTFB_TARGET_MS}ms${label ? `（通道：${label}）` : ''}——仅告警，不参与任何闸门判定`);
 }
 
 // 超时错误文案：三种原因各说人话，别把「模型在想」说成「无响应」
@@ -167,4 +192,7 @@ function streamTimeoutMessage(reason, cfg = {}) {
   return '';
 }
 
-module.exports = { createStreamGuard, streamTimeoutMessage, resolveDefaults, DEFAULTS, ENV_KEYS };
+module.exports = {
+  createStreamGuard, streamTimeoutMessage, resolveDefaults, reportSlowTtfb,
+  DEFAULTS, ENV_KEYS, TTFB_TARGET_MS,
+};

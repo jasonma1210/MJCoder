@@ -5,7 +5,29 @@ export const AGENT_CHANNELS: {
   readonly abort: 'agent:abort';
 };
 
-export type AgentEventType = 'message' | 'stream' | 'tool_call' | 'subagent' | 'todos' | 'suspended' | 'done' | 'error';
+export type AgentEventType = 'message' | 'stream' | 'tool_call' | 'subagent' | 'todos' | 'suspended' | 'done' | 'error'
+  | 'verify' | 'verify_ledger';
+
+// P2-8 / V-L1（N7）：V 层判定事件（运行时 schema 见 contract.mjs verifyDataSchema）。
+// 注意语义：verdict 只说明「模型自述与执行记录是否一致」，**不代表改动正确**
+//（L1 只核「有没有发生」，不核「对不对」）——UI 文案不得写成「已验证正确」。
+export interface VerifyEventData {
+  level: 'l1' | 'l3';
+  verdict: 'PASS' | 'BLOCK' | 'SKIP' | 'UNKNOWN';
+  ruleId?: string;
+  reason?: string;
+  annotated: boolean;
+  continued: boolean;
+  ms?: number;
+}
+
+// 引擎侧执行事实快照（正常经 trace 落 JSONL，不经 agent:event；此处登记防降级）
+export interface VerifyLedgerEventData {
+  tools: number;
+  entries: unknown[];
+  truncated?: boolean;
+  ms?: number;
+}
 
 // T1-3：子代理事件载荷（运行时 schema 见 contract.mjs subagentDataSchema）
 export interface SubagentEventData {

@@ -38,6 +38,22 @@ function walk(dir, out = []) {
   return out;
 }
 
+// ── 注释屏蔽（2026-10-18 修假阳性）──
+// 把注释内容替换为空格、**保留换行**（行号不变），再交给规则扫描。
+// 为什么必须做：注释既不可能渲染成 UI，也不可能真的 require('electron')。
+// 实测（本轮）有 3 处命中全部落在注释里，属扫描器假阳性：
+//   · `components/ui/Switch.tsx:9` —— 注释在解释 W3C Switch Pattern，含字面量 `<button>`
+//   · `hooks/useMcpStatus.ts:103` —— 注释在解释「避免每个消费方各挂一个 ipcRenderer 监听」，
+//     而该行代码实际走的是 `window.mjcode` 桥（完全合规）
+//   · `lib/modelWindows.ts:7` —— 注释里用 ⚠️ 标注「两处取值有意偏离施工单」
+// 假阳性的代价是实打实的：它逼迫作者为了过门禁写更差/更含糊的注释，且让真违规淹没在噪声里。
+// 语义不变：只屏蔽「不可能被渲染/执行」的内容，规则强度不降（下方自检专门守这一点）。
+function blankComments(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, p1) => p1);
+}
+
 const files = walk(SRC).filter((f) => !f.includes(`${path.sep}styles${path.sep}`));
 const typedFiles = files.filter((f) => /\.tsx?$/.test(f));
 const counts = { emoji: 0, rawZIndex: 0, paletteColor: 0, hexColor: 0, deadButton: 0, rawIpc: 0 };
@@ -45,8 +61,8 @@ const samples = { emoji: [], rawZIndex: [], paletteColor: [], hexColor: [], dead
 
 for (const file of files) {
   const rel = path.relative(SRC, file);
-  const src = fs.readFileSync(file, 'utf8');
-  const lines = src.split('\n');
+  const code = blankComments(fs.readFileSync(file, 'utf8'));
+  const lines = code.split('\n');
   const mark = (key, lineNo, text) => {
     counts[key] += 1;
     if (samples[key].length < 5) samples[key].push(`${rel}:${lineNo} ${text}`);
@@ -62,16 +78,35 @@ for (const file of files) {
 
   // 死按钮启发式：<button 起至闭合标签前没有 onClick
   const idx = [];
-  let pos = src.indexOf('<button');
-  while (pos !== -1) { idx.push(pos); pos = src.indexOf('<button', pos + 1); }
+  let pos = code.indexOf('<button');
+  while (pos !== -1) { idx.push(pos); pos = code.indexOf('<button', pos + 1); }
   for (const p of idx) {
     // 先屏蔽箭头函数 "=>" 中的 ">" ，避免把 onClick={() => ...} 误判为标签结束
-    const seg = src.slice(p, p + 600).replace(/=>/g, '==');
+    const seg = code.slice(p, p + 600).replace(/=>/g, '==');
     const closeIdx = seg.indexOf('>');
     const head = closeIdx === -1 ? seg : seg.slice(0, closeIdx);
-    const lineNo = src.slice(0, p).split('\n').length;
+    const lineNo = code.slice(0, p).split('\n').length;
     if (!/onClick|onMouseDown|type="submit"/.test(head)) mark('deadButton', lineNo, head.trim().slice(0, 60));
   }
+}
+
+// ── 自检：屏蔽注释**不得**把真违规一起屏蔽掉（防「恒零」假绿）──
+// 若有人把 blankComments 写成 `return ''`，上面 6 条会全绿——这是本门禁唯一的失效模式。
+{
+  const realViolations = "const a = <button>x</button>;\nconst b = require('electron');\nconst c = '⚠';\n";
+  const commentOnly = "// 注释里提到 <button> 与 ipcRenderer 与 ⚠️ 不算违规\n/* 块注释里也提到 <button> ipcRenderer ⚠ */\n";
+  const codeReal = blankComments(realViolations);
+  const codeComment = blankComments(commentOnly);
+  const has = (s, re) => (s.match(re) || []).length;
+  check('自检：代码里的真违规仍被统计（<button> / require(electron) / emoji 各 1）',
+    has(codeReal, /<button/g) === 1 && has(codeReal, RAWIPC) === 1 && has(codeReal, EMOJI) === 1,
+    `<button>=${has(codeReal, /<button/g)} rawIpc=${has(codeReal, RAWIPC)} emoji=${has(codeReal, EMOJI)}`);
+  check('自检：注释里的同形文本被屏蔽（行注释 + 块注释都不计入）',
+    has(codeComment, /<button/g) === 0 && has(codeComment, RAWIPC) === 0 && has(codeComment, EMOJI) === 0,
+    `<button>=${has(codeComment, /<button/g)} rawIpc=${has(codeComment, RAWIPC)} emoji=${has(codeComment, EMOJI)}`);
+  check('自检：屏蔽注释保留行号（替换为空格而非删除）',
+    blankComments('a\n// x\nb').split('\n').length === 3,
+    `行数=${blankComments('a\n// x\nb').split('\n').length}`);
 }
 
 check('零 emoji / 零装饰性字形', counts.emoji === BASELINE.emoji, `${counts.emoji}/${BASELINE.emoji} ${samples.emoji.join(' | ')}`);

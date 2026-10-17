@@ -1,9 +1,175 @@
 // 审批中心：分级判定 + 规则匹配（纯函数部分，可单测）
-// 档位：on-request（默认，写操作询问）/ auto-safe（L2 自动，L1/L3 询问）/ always（全部询问）/ never（全不询问）
+// 档位（**四档**，互斥枚举）：on-request（默认，写操作询问）/ auto-safe（L2 自动，L1/L3 询问）/
+//                              always（全部询问）/ never（全不询问）
+// P2-7「执行后告知」：**正交布尔偏好 `approvalNotice`**，可叠加在上述任意档位上（见下方说明）
 // 规则：{ tool, pattern, scope: 'always' } —— 「始终允许」持久化于 userData/approval-rules.json
 //      { tool, pattern, scope: 'conversation', conversationId } —— 「本对话同类」主进程内存
 
 const LEVELS = { L1: 'danger-command', L2: 'file-write', L3: 'mcp-tool' };
+
+// ── P2-7：「执行后告知」为什么是正交布尔，而不是第五档（team-lead 2026-10-17 裁决，记录偏离）──
+//
+// checklist 的四档是「自动执行 / 执行后告知 / 执行前确认 / 直接阻断」，字面上像是一个五档阶梯。
+// 本项目**刻意**把它实现成「四档枚举 + 正交布尔 `approvalNotice`」，偏离理由（按权重）：
+//   1) 档位枚举是**跨 5 处契约**（shared-ipc/contract.mjs 的 zod enum、main/approvalPolicy.js、
+//      main/approvalSettings.js、main/ecosystem.js、渲染层 UI）。任何一处漏改，表现是
+//      **渲染层一下发就被契约拒绝、整个 run 失败**，且只能在运行时暴露、测试覆盖不到。
+//   2) 正交设计在语义上更正确：用户完全可能想要「always 档 + 每次执行后也告知」
+//      （既逐次确认、又留一条用户可见的记录）。互斥枚举表达不了这个组合。
+//   3) 改一处布尔偏好即可上线，不碰任何契约。
+//
+// ⚠️ 后人对齐 checklist 时别搞混：`approvalNotice` **不是「更严格」**，它不改变任何询问行为。
+//    严格度阶梯始终是 never < auto-safe < on-request < always
+//    （注：若将来真做成第五档，它应排在 never 与 auto-safe **之间**——因为它从不询问，
+//      而 auto-safe 对 L3 仍会询问，所以「执行后告知档」比 auto-safe 更松。别把它误解成更严。）
+//
+// 三条纪律（缺一条就是假治理）：
+//   1) **与 audit 解耦**：审计是无条件留痕的治理底线，不随本偏好开关；通知是「用户可见的补充」，
+//      绝不等于「有 audit 就算告知」。
+//   2) **不替代阻断**：L1 高危/不可逆动作照旧要求执行前确认（或按档位阻断），不发「执行后告知」——
+//      把不可逆高危动作放到事后告知 = 取消治理（用户知道时已经晚了）。
+//   3) **默认关闭**：`approvalNotice` 缺省 false，为 false 时行为与改造前**逐字节一致**。
+const APPROVAL_MODES = Object.freeze({
+  NEVER: 'never',             // 全不询问
+  AUTO_SAFE: 'auto-safe',     // L2 自动，L1/L3 询问
+  ON_REQUEST: 'on-request',   // 默认：写操作询问
+  ALWAYS: 'always',           // 全部询问
+});
+
+// 可补偿性（P2-7 通知内容的核心）：告知的价值就在于「用户知道晚了，但至少知道能不能修」。
+// 判定原则：**外部副作用与本机销毁类动作按不可补偿对待**（保守：说不清就当不可逆）。
+//   · 本机文件写/暂存 → 可补偿（有 git 历史或内容仍在）；
+//   · 外部系统（MCP/浏览器/Chrome/CUA）、对外可见（PR 评论/审查）、持久化注册（插件/定时任务）、
+//     内容销毁（丢弃工作区改动）→ 不可补偿，通知里必须明确标注。
+const REVERSIBILITY = {
+  write_file: { reversible: true, note: '文件内容可再次编辑覆盖' },
+  edit_file: { reversible: true, note: '可用 git 或再次编辑回退' },
+  apply_patch: { reversible: true, note: '可用 git 或反向补丁回退' },
+  git_add: { reversible: true, note: '可 git restore --staged 撤销' },
+  git_restore_staged: { reversible: true, note: '工作区改动仍在，可重新暂存' },
+  git_commit: { reversible: true, note: '未推送时可用 git reset 回退；已推送则需改写远端历史' },
+  // Diff 面板的 hunk 级操作（toolKey 见 ipc/gitHunks.js）：都只动工作区/索引，git 可回退
+  git_apply_hunk: { reversible: true, note: 'hunk 已写入工作区，可用 git checkout/反向补丁回退' },
+  git_apply_hunk_cached: { reversible: true, note: 'hunk 已暂存，可用 git restore --staged 撤销' },
+  git_apply_hunk_unstage: { reversible: true, note: '仅取消暂存，工作区改动仍在' },
+  scheduled_create: { reversible: true, note: '可删除该定时任务停止后续执行' },
+  git_checkout: { reversible: false, note: '未提交改动已被永久丢弃（面板 5 秒快照仅覆盖当次操作）' },
+  unconfined_exec: { reversible: false, note: '以应用完整权限直接执行，副作用不受沙箱约束' },
+  install_plugin: { reversible: false, note: '已下载落盘并注册服务，需手动卸载' },
+  pr_review: { reversible: false, note: '结论已对协作方可见（可再发一次覆盖，但对方已看到原结论）' },
+  pr_comment: { reversible: false, note: '评论已对外发出且通知已推送；删掉本方评论也撤不回对方已收到的通知' },
+  browser_click: { reversible: false, note: '页面上可能已触发提交/支付/发送' },
+  browser_fill: { reversible: false, note: '可能已改变页面表单的真实状态' },
+  browser_select: { reversible: false, note: '可能已触发页面联动副作用' },
+  chrome_click: { reversible: false, note: '在你真实浏览器（含登录态）里可能已触发提交/支付/发送' },
+  chrome_fill: { reversible: false, note: '在你真实浏览器里可能已改变表单真实状态' },
+  cua_action: { reversible: false, note: '界面操作可能已产生真实副作用（支付/删除/发送）' },
+  shell: { reversible: false, note: '命令副作用（文件/进程/网络）无法自动回滚，请核对输出与 git 状态' },
+  code_exec: { reversible: false, note: '代码副作用（文件/进程/网络）无法自动回滚，请核对输出与 git 状态' },
+};
+
+/**
+ * 本次动作的可补偿性。
+ * @returns {{reversible: boolean, note: string}}
+ */
+function reversibilityOf(tool, level) {
+  const t = String(tool || '');
+  const hit = REVERSIBILITY[t];
+  if (hit) return { ...hit };
+  if (t.startsWith('mcp__')) {
+    // MCP 工具名不可枚举，语义未知：写的是**外部系统**，本机无法回滚 → 一律按不可补偿
+    return { reversible: false, note: 'MCP 工具写的是外部系统，本机无法回滚' };
+  }
+  // 未登记的工具：按分级语义给结论，**说法与 reversible 必须一致**
+  //（曾经的错法：note 写「通常可回退」但 reversible=false —— 通知里会变成
+  //  「不可补偿（可回退）」，自相矛盾，等于给用户假信息）。
+  //   · L2 的语义就是 file-write（见 LEVELS）：本机文件写，git 可回退 → 可补偿，但注明未登记具体工具；
+  //   · L1/L3/未知 → 保守按不可补偿（外部副作用或销毁类，说不清就不许诺能修）。
+  if (level === 'L2') {
+    return { reversible: true, note: '本机写入类动作（未登记具体工具），通常可用 git 回退' };
+  }
+  return { reversible: false, note: '未登记的动作类型，按不可补偿对待' };
+}
+
+/**
+ * 构造「执行后告知」的可见通知（纯函数，便于单测；发出去由宿主注入的 sink 负责）。
+ *
+ * 为什么带 textKey/textParams：渲染层文案必须走 i18n（项目纪律），主进程不能硬编码用户可见文案。
+ * text 只作为日志/兜底的可读形态，UI 应以 textKey 为准（key 需 WP-D 侧补齐）。
+ */
+function buildExecutionNotice({ tool, args = {}, level, ok, ms, error } = {}) {
+  const t = String(tool || '(未知动作)');
+  const cost = Number.isFinite(Number(ms)) ? Math.max(0, Math.round(Number(ms))) : null;
+  const rv = reversibilityOf(t, level);
+  return {
+    type: 'approval_notice',
+    tool: t,
+    level: level || null,
+    ok: !!ok,
+    ms: cost,
+    reversible: rv.reversible,
+    reversibleNote: rv.note,
+    textKey: 'approval.notice.executed',
+    textParams: { tool: t, level: level || '', ok: !!ok, ms: cost == null ? 0 : cost, reversible: rv.reversible },
+    // 兜底可读文案（日志/无 i18n 场景）；缺少耗时就不编造数字
+    text: `已执行 ${t}（分级 ${level || '-'}）：${ok ? '成功' : '失败'}${cost == null ? '' : `，耗时 ${cost}ms`}`,
+    ...(error ? { error: String(error).slice(0, 200) } : {}),
+  };
+}
+
+// ── 通知出口（P2-7）：宿主注入 sink，approval.js 不 require 任何事件/electron 依赖 ──
+// 这样本文件仍是纯函数模块（可单测），而「怎么发」由宿主决定（走现有事件通道，不新开 IPC）。
+let noticeSink = null;
+function setNoticeSink(fn) { noticeSink = typeof fn === 'function' ? fn : null; }
+
+/**
+ * 发出「执行后告知」通知。绝不抛（通知失败不能影响已经发生的执行）。
+ * sink 未注入时**不静默**：落一条 warn 说明「偏好已开启但通知通道未接线」。
+ */
+function emitExecutionNotice(payload) {
+  const notice = buildExecutionNotice(payload || {});
+  try {
+    if (typeof noticeSink === 'function') noticeSink(notice);
+    else console.warn(`[approval] 「执行后告知」通知通道未接线，本次通知仅此日志：${notice.text}`);
+  } catch (e) {
+    console.warn('[approval] 执行后告知通知发送失败（不影响主流程）:', e.message);
+  }
+  return notice;
+}
+
+/**
+ * P2-7 的统一入口（**正交布尔**语义，见文件头说明）：动作执行完后按需发一条用户可见通知。
+ *
+ * 四条不发的理由（每条都对应一个必须守住的边界）：
+ *   1) `enabled === false`（默认）→ 什么都不做，行为与改造前一致（零破坏）。
+ *   2) 只读动作（level=null）→ 不发，否则每个 read_file/grep 都刷一条，通知立刻变噪声。
+ *   3) **L1 高危** → 不发，且留日志说明；L1 的正解是执行前确认/阻断，不是事后告知
+ *      （通知绝不能替代阻断——这是本档位的红线）。
+ *   4) 本次**弹过卡**（need=true）→ 不发：用户刚刚亲自点过确认，再发一条是重复打扰。
+ *      因此本函数只覆盖「没弹卡就执行了」的那些动作（规则豁免 / auto-safe 的 L2 / never 档），
+ *      而这恰恰是用户最需要事后知情的一类。
+ *
+ * 为什么这里要重算一次 `needsApproval`：调用点的「最终返回」往往在很深的异步分支里
+ * （见 tools/exec.js 的沙箱三平台 + 兜底），把 verdict 一路透传会污染所有分支且容易漏；
+ * 而入参是同一份（tool/args/mode/rules），纯函数重算结果必然一致。语义单点仍是 needsApproval。
+ *
+ * @returns {object|null} 发出的通知；未发则 null（便于调用点与单测断言）
+ */
+function notifyExecuted({
+  enabled, tool, args = {}, approvalMode = 'on-request', conversationId,
+  alwaysRules = [], conversationRules = [], ok, ms, error,
+}) {
+  if (!enabled) return null;
+  const level = toolLevel(tool, args);
+  if (!level) return null;
+  if (level === 'L1') {
+    console.warn(`[approval] ${tool} 命中 L1 高危/不可逆：不适用「执行后告知」，仍按审批档要求执行前确认（通知不替代阻断）`);
+    return null;
+  }
+  const verdict = needsApproval({ tool, args, approvalMode, conversationId, alwaysRules, conversationRules });
+  if (verdict.need) return null; // 已弹卡确认过
+  return emitExecutionNotice({ tool, args, level, ok, ms, error });
+}
 
 // 不可「记住」的工具：审批 UI 不得给出「本会话允许 / 始终允许」——
 // 这两类决策对它们无效（实现侧不调用 applyApprovalDecision），给了就是产品对用户撒谎。
@@ -333,4 +499,8 @@ function approvalSummary(tool, args = {}) {
   }
 }
 
-module.exports = { LEVELS, toolLevel, needsApproval, approvalTarget, matchPattern, approvalSummary, DANGEROUS_PATTERNS, READONLY_TOOLS, isDangerousCode, NON_REMEMBERABLE, isRememberable };
+module.exports = {
+  LEVELS, toolLevel, needsApproval, approvalTarget, matchPattern, approvalSummary, DANGEROUS_PATTERNS, READONLY_TOOLS, isDangerousCode, NON_REMEMBERABLE, isRememberable,
+  // P2-7：执行后告知（正交布尔偏好；纯函数 + 通知出口）
+  APPROVAL_MODES, reversibilityOf, buildExecutionNotice, notifyExecuted, setNoticeSink, emitExecutionNotice,
+};

@@ -5,6 +5,7 @@
 // 取消 = 仅摘除启用态、保留磁盘 SKILL.md——非破坏可逆，重启用零成本。
 import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
+import Switch from './ui/Switch';
 import { IconChevronDown, IconUpload } from './icons';
 import { BUILTIN_SKILLS } from '../lib/builtinSkills';
 import { skillKeyIn, normSkillKey } from '../lib/skillKey';
@@ -87,10 +88,7 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
                   <div className="text-xs font-medium truncate">{t(s.nameKey)}</div>
                   <div className="text-xs text-text2 truncate">{t(s.descKey)}</div>
                 </div>
-                <button onClick={() => toggle(s.id, !on)} role="switch" aria-checked={on}
-                  className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-                </button>
+                <Switch checked={on} onChange={(next) => toggle(s.id, next)} label={t('settings.enableToggle', { name: t(s.nameKey) })} />
               </div>
             );
           })}
@@ -108,10 +106,7 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
                   <div className="text-xs font-mono truncate">{s.name || s.dir}</div>
                   {s.description && <div className="text-xs text-text2 truncate">{s.description}</div>}
                 </div>
-                <button onClick={() => toggle(s.dir, !on)} role="switch" aria-checked={on}
-                  className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-                </button>
+                <Switch checked={on} onChange={(next) => toggle(s.dir, next)} label={t('settings.enableToggle', { name: s.name || s.dir })} />
               </div>
             );
           })}

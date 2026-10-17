@@ -252,6 +252,8 @@ checkpointStore.initCheckpointStore(app.getPath('userData'));
 // T0-5：本地结构化运行 trace（userData/traces/<runId>.jsonl，不上报；供排障与诊断包）
 const runTrace = require('./runTrace');
 runTrace.initRunTrace(app.getPath('userData'));
+// P2-8 / V-L1：V 层判定落盘目录（userData/eval/verdicts-YYYYMMDD.jsonl，仅元数据，不上报）
+require('./verifyRun').initVerifyRun(app.getPath('userData'));
 
 // T2-5：本地崩溃/异常聚合（结构化 JSONL + trace 尾部 + 渲染层错误转发 + 原生崩溃 dump）。
 // 全部落本机不上传；agentRunner 在本文件后段声明，经 getter 延迟读取（异常发生才调用）。
@@ -848,13 +850,17 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
       error: `用户已停止：编排组 ${plan.groupId} 的在役 Agent 已中止（已完成的部分结果已保留）` };
   }
   if (waited.timedOut || waited.missing) {
-    return { ok: false, groupId: plan.groupId, error: `编排组 ${plan.groupId} 等待超时或状态异常，可稍后在对话中查询进度` };
+    // P0-4：超时/状态异常与用户停止同语义——必须整组强停，否则 pump() 继续派发队列，后台继续烧 token
+    const killed = workerPool.abortGroup(plan.groupId);
+    return { ok: false, groupId: plan.groupId, timedOut: !!waited.timedOut, abortedTasks: killed,
+      error: `编排组 ${plan.groupId} 等待超时/状态异常，已中止在役任务（已完成部分保留），可稍后在对话中查询进度` };
   }
   return { ok: true, groupId: plan.groupId, taskCount: plan.tasks.length, summary: humanizeGroupResult(waited.group) };
 }
 
 // P1-1：把 localStore getter 注入进去（localStore 在 whenReady 后才非 null，故传闭包）
-approvalSettings.initApprovalSettings({ getLocalStore: () => localStore });
+// P2-7：执行后告知的出口必须在此接（emit 是 main.js 作用域函数；挂 ipc/mcp.js 会被本行后续调用清成 null）
+approvalSettings.initApprovalSettings({ getLocalStore: () => localStore, emit: emitTaskEvent });
 
 agentRunner.initAgentRunner({
   loadAgentCore,
@@ -1016,7 +1022,8 @@ function resolveTaskModel() {
   if (!m || !m.model) {
     throw new Error('未配置执行模型：请在任意会话中选择模型（任务编排复用会话模型与凭证）');
   }
-  return { providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model };
+  // P0-3①：思考强度必须随模型下发（定时任务/编排此前恒发默认档）
+  return { providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model, reasoningEffort: m.reasoningEffort || m.reasoning_effort || '' };
 }
 
 function initTaskOrchestration() {

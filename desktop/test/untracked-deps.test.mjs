@@ -73,12 +73,23 @@ function walk(dir, out = [], extSet = CODE_EXT) {
 // 提取静态相对引用：require('x') / from 'x' / import 'x' / import('x')
 const SPEC_RE = /(?:require\(\s*|from\s+|import\s*\(\s*|import\s+)(['"])(\.[^'"]+)\1/g;
 
+// 注释屏蔽（2026-10-18 修假阳性）：注释里写出来的用法示例不是真实依赖。
+// 实测命中：`renderer/src/components/ui/index.ts:1` 的文档注释
+//   「`import { Switch, Modal, Button, Input } from './ui'`」被当成了真引用，
+//   而 `./ui` 并不存在（桶文件自己就是 ui/index.ts）→ 误报断链。
+// 只屏蔽注释（不可能被 require/import 的内容），保留换行以便报错行号不变。
+function blankComments(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:\\])\/\/[^\n]*/g, (_m, p1) => p1);
+}
+
 const missing = [];   // 磁盘上不存在 → 断链
 const untracked = []; // 存在但未入库 → clone 后断链
 let specCount = 0;
 
 for (const file of SCAN_ROOTS.flatMap((r) => walk(r))) {
-  const src = fs.readFileSync(file, 'utf8');
+  const src = blankComments(fs.readFileSync(file, 'utf8'));
   for (const m of src.matchAll(SPEC_RE)) {
     const spec = m[2];
     specCount++;
@@ -102,6 +113,29 @@ const allSources = SCAN_ROOTS.flatMap((r) => walk(r, [], ASSET_EXT));
 const notTracked = tracked ? allSources.filter((f) => !tracked.has(f)) : [];
 
 // ── 4) 断言 ──
+// 注释屏蔽的自检（team-lead 硬要求）：`blankComments` 有一个致命失效模式——
+// 若它写成 `return ''`（把整份文件抹空），所有引用检查都会变成「0 处问题」→ 门禁被关掉却全绿。
+// 这里显式证明两件事：①真引用被保留、注释里的引用被丢弃；②抹空后 specCount 会归零，
+// 因而下方「> 350」这条计数守卫**必然变红**——它就是这类静默失效的兜底。
+check('自检：注释屏蔽保留真引用、丢弃注释里的引用', () => {
+  const fixture = "import a from './real';\n// import b from './commented'\n/* import c from './blocked' */\n";
+  const specs = [...blankComments(fixture).matchAll(SPEC_RE)].map((m) => m[2]);
+  if (!(specs.length === 1 && specs[0] === './real')) {
+    throw new Error(`注释屏蔽结果不符预期：${JSON.stringify(specs)}（应只剩 './real'）`);
+  }
+});
+
+check('自检：blankComments 若退化为抹空整文件，计数守卫必然变红', () => {
+  // 模拟「写错成 return ''」的效果：用空串跑同一正则
+  const vacuous = [...''.matchAll(SPEC_RE)].length;
+  if (vacuous !== 0) throw new Error(`空串不应匹配到引用，实得 ${vacuous}`);
+  // 因此只要 blankComments 抹空，specCount 就会掉到 0，下面的 >350 断言必红。
+  // 反向验证：真实扫描结果必须远超阈值（若这条不成立，说明屏蔽逻辑已经把真引用吃掉了）。
+  if (!(specCount > 350)) {
+    throw new Error(`真实扫描只得到 ${specCount} 条引用——屏蔽逻辑可能吃掉了真引用`);
+  }
+});
+
 check('扫描到的静态相对引用数量 > 350（防止正则失效后静默全绿）', () => {
   if (specCount < 350) throw new Error(`只扫到 ${specCount} 条静态相对引用，疑似解析退化（2026-10-17 实测 429）`);
 });

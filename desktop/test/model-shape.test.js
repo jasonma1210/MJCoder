@@ -23,7 +23,12 @@ check('扁平→嵌套：provider.id 取到', nested.provider.id === 'p-mimo');
 check('扁平→嵌套：provider.base_url 取到', nested.provider.base_url === 'https://api.xiaomimimo.com/v1');
 check('扁平→嵌套：model.model_id 取到', nested.model.model_id === 'mimo-v2.6-flash');
 check('扁平→嵌套：isGlobal 布尔化', nested.provider.isGlobal === false);
-check('扁平→嵌套：补默认上下文窗口', nested.model.context_window === 128000);
+// 2026-10-18（P0-1④）：默认上下文窗口按设计从 128000 **下调**为 32768（常量搬迁至
+// main/modelWindows.js，本文件只引用不再自己写死）。理由：两侧错配代价不对称——
+// 高估 = 压缩阈值永不触发（prompt 超窗直接 400，即"击穿"）；低估 = 早压掉细节（浪费但可恢复）。
+// 这不是回归，是刻意的设计变更；同时禁止再退回 128000（见下方 != 128000 的反向断言）。
+check('扁平→嵌套：补默认上下文窗口（32768，P0-1④ 下调）', nested.model.context_window === 32768);
+check('默认窗口不得退回 128000（高估=击穿）', nested.model.context_window !== 128000);
 // 事故复现点：runAgent 读的就是这三个字段，缺任一即 TypeError
 check('扁平→嵌套：runAgent 读的 model.provider.id 不再是 undefined',
   nested.provider !== undefined && nested.provider.id !== undefined);

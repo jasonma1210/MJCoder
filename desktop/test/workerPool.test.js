@@ -124,9 +124,22 @@ const events = [];
   const g4 = await waitSettled(store, 'w4');
   check('重试后成功（引擎被调 2 次，任务 done）', attempts === 2 && g4.status === 'done' && g4.tasks[0].retryCount === 1);
 
-  // ── 场景 5：真并行（并发上限 2，两个 200ms 任务墙钟 < 350ms）──
+  // ── 场景 5：真并行（并发上限 2，两个 200ms 任务）──
+  // 2026-10-18（team-lead 口径）：判据从「总墙钟 < 350ms」改为「两任务执行区间相交」。
+  // 绝对墙钟**无法区分「没并发」与「机器忙」**——多 agent 同时跑测试时该断言假红（实测批量 20/21、单跑 3/3）。
+  // 区间相交才是「真并行」的充要观测：串行时后者必然在前者结束后才开始，区间不可能相交。
+  const spans = [];
   initWorkerPool({
-    loadAgentCore: async () => makeFakeCore({ '并行甲': { delay: 200, text: '甲完成' }, '并行乙': { delay: 200, text: '乙完成' } }),
+    loadAgentCore: async () => ({
+      runAgent: async (opts) => {
+        const prompt = String(opts.messages[0].content || '');
+        const key = Object.keys({ '并行甲': 1, '并行乙': 1 }).find((k) => prompt.includes(k)) || 'other';
+        const start = Date.now();
+        await sleep(200);
+        spans.push({ key, start, end: Date.now() });
+        return `${key}完成`;
+      },
+    }),
     createToolHandlers: () => ({}),
     store, maxConcurrent: 2, emit: () => {},
     resolveModel: () => ({ providerId: 1, isGlobal: false, baseUrl: '', model: 'test-model' }),
@@ -140,7 +153,13 @@ const events = [];
   await runGroup('w5');
   const g5 = await waitSettled(store, 'w5', 8000);
   const elapsed = Date.now() - t0;
-  check('并发 2 真并行执行（墙钟 < 350ms，串行需 ≥400ms）', g5.status === 'done' && elapsed < 350, `耗时 ${elapsed}ms`);
+  const sa = spans.find((x) => x.key === '并行甲');
+  const sb = spans.find((x) => x.key === '并行乙');
+  const overlapped = !!sa && !!sb && sa.start < sb.end && sb.start < sa.end;
+  check('并发 2 真并行执行（两任务执行区间相交；串行时必然不相交）',
+    g5.status === 'done' && overlapped,
+    `甲=${sa?.start}-${sa?.end} 乙=${sb?.start}-${sb?.end} 总耗时 ${elapsed}ms`);
+  check('并发确实省时（参考值，非判据：总耗时明显小于串行 400ms）', elapsed < 400, `耗时 ${elapsed}ms`);
 
   // ── 场景 6：Worker 可爱命名 + 活动流事件 ──
   events.length = 0;

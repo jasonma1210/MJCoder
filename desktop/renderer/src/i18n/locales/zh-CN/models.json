@@ -20,5 +20,11 @@
   "reasoningLow": "低",
   "reasoningMedium": "中",
   "reasoningHigh": "高",
-  "ctxDefault": "默认"
+  "ctxDefault": "默认",
+  "reasoningUnsupported": "该模型未声明支持思考强度，此档位已不下发",
+  "ctxUnconfirmed": "未确认（按 {k} 估算）",
+  "ctxUnconfirmedHint": "该模型不在窗口映射表中，按 {k} 估算；请手选实际窗口以免提前压缩",
+  "ctxCorrect": "确认为 {k}",
+  "ctxProbed": "已探测：{k}（来源 {source}）",
+  "ctxProbedHint": "Ollama 实际 num_ctx={k}（来源 /api/show），点开可改"
 }

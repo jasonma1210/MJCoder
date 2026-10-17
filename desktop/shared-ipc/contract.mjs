@@ -91,6 +91,29 @@ export const doneDataSchema = z.object({
   persistState: z.enum(['durable', 'pending', 'failed']).optional(),
 });
 
+// P2-8 / V-L1（N7）：V 层（评估接口）判定事件
+// 未在此处登记会被 safeAgentEventEnvelope 降级成一条 error 事件——用户会看到
+// 莫名的「IPC 契约校验失败」（这正是 P0-5④「事件无消费方」的同类教训，故同批注册）。
+// 语义边界：verdict 只表示「自述与执行记录是否一致」，**不表示代码正确**（见 verifier.js 诚实边界）。
+export const verifyDataSchema = z.object({
+  level: z.enum(['l1', 'l3']),
+  verdict: z.enum(['PASS', 'BLOCK', 'SKIP', 'UNKNOWN']),
+  ruleId: z.string().max(64).optional(),
+  reason: z.string().max(600).optional(),
+  annotated: z.boolean(),   // 是否已把对账提示写进 finalText
+  continued: z.boolean(),   // 是否触发了续跑（J2 恒为 false）
+  ms: z.number().optional(),
+});
+
+// 引擎侧执行事实快照（verify_ledger）。正常经 trace 落 JSONL，不经 agent:event；
+// 登记在此是为了「任何宿主把它转推渲染层时也不会被降级成 error」。
+export const verifyLedgerDataSchema = z.object({
+  tools: z.number(),
+  entries: z.array(z.any()).max(200),
+  truncated: z.boolean().optional(),
+  ms: z.number().optional(),
+});
+
 // type → data schema 分发表（新增事件类型必须在此登记，否则校验拒绝——防漂移）
 export const AGENT_EVENT_SCHEMAS = {
   message: messageDataSchema,
@@ -100,6 +123,9 @@ export const AGENT_EVENT_SCHEMAS = {
   todos: todosDataSchema,
   suspended: suspendedDataSchema,
   done: doneDataSchema,
+  // P2-8 / V-L1（N7）：V 层判定 + 执行事实快照
+  verify: verifyDataSchema,
+  verify_ledger: verifyLedgerDataSchema,
   error: z.string(),
 };
 

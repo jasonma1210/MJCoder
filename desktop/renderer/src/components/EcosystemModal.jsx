@@ -10,7 +10,7 @@
 //   （系统提示+工具子集+审批档+沙箱），由 App 开新会话并注入为该会话 agent。
 // 数据经主进程 ecosystem:* IPC 读取本地 ecosystem 资产；TODO(backend)：切换为后端接口。
 import { useState, useEffect, useRef } from 'react';
-import { IconAlert, IconEdit, IconGlobe, IconPuzzle, IconRefresh, IconSearch, IconUser, IconX, IconPlug } from './icons';
+import { IconAlert, IconEdit, IconGlobe, IconPlus, IconPuzzle, IconRefresh, IconSearch, IconUser, IconX, IconPlug } from './icons';
 import {
   loadEnabledFromLocal, setConnectorEnabledLocal,
 } from '../lib/ecosystemEnabled';
@@ -21,6 +21,9 @@ import ConnectorConfigDialog from './ConnectorConfigDialog';
 import LocalMcpSection from './LocalMcpSection';
 import LocalSkillsSection from './LocalSkillsSection';
 import CustomConnectorForm from './CustomConnectorForm';
+import EmployeeFormModal from './EmployeeFormModal';
+import Modal from './ui/Modal';
+import Switch from './ui/Switch';
 import { useI18n } from '../i18n';
 
 // 数字员工默认审批策略（与主进程 approval_policy 对齐）→ i18n key（渲染时经 t() 求值，切语言即时生效）
@@ -69,6 +72,8 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
   const [mcpRefresh, setMcpRefresh] = useState(0); // 弹窗连接成功 → bump 刷新本机服务区
   // 自定义连接器页：null=不显示；对象=打开并携带查重名单与配置文件路径
   const [custom, setCustom] = useState(null);
+  // 数字员工表单：null=关闭；{employee:null}=新建；{employee:e}=编辑（P1-7a）
+  const [empForm, setEmpForm] = useState(null);
   const sentinelRef = useRef(null); // 列表底部哨兵：进入视口即追加下一批
   const scrollRef = useRef(null); // 内容滚动容器（IntersectionObserver root）
   // 云端数据源（用户自有后端）：本地资产先兜底加载，云端命中字段即覆盖
@@ -344,6 +349,13 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
             />
           </div>
           <button onClick={loadAll} className="h-8 w-8 inline-flex items-center justify-center rounded-lg border border-border hover:bg-hover"><IconRefresh size={13} /></button>
+          {/* 数字员工：新建入口（此前只有「招募」，员工是只读生态资产） */}
+          {tab === 'employees' && (
+            <button onClick={() => setEmpForm({ employee: null })}
+              className="h-8 shrink-0 inline-flex items-center gap-1.5 px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 whitespace-nowrap">
+              <IconPlus size={13} /> {t('settings.employeeNew')}
+            </button>
+          )}
           {/* 自定义连接器：目录只保留主流/加得上的服务，其余交给用户自己添加（页面级视图，非弹窗） */}
           {tab === 'connectors' && !custom && (
             <button onClick={openCustom}
@@ -382,7 +394,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
             </div>
           )}
           {notice && (
-            <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-accent-bg border border-accent text-xs text-accent">
+            <div role="status" className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-accent-bg border border-accent text-xs text-accent">
               <IconAlert size={14} className="mt-0.5 shrink-0" />{notice}
             </div>
           )}
@@ -400,6 +412,12 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                     <span className="shrink-0 text-caption px-2 py-1 leading-none rounded bg-accent-bg text-accent whitespace-nowrap">
                       {approvalText(e.approval_policy)}
                     </span>
+                    {/* P1-7a：编辑入口（此前员工只读，无法改角色设定/工具集） */}
+                    <button onClick={() => setEmpForm({ employee: e })}
+                      aria-label={t('settings.employeeEdit')} title={t('settings.employeeEdit')}
+                      className="shrink-0 h-6 w-6 inline-flex items-center justify-center rounded-lg border border-border text-text2 hover:text-text hover:bg-hover">
+                      <IconEdit size={12} />
+                    </button>
                   </div>
                   <div className="flex flex-wrap gap-1.5 mt-3">
                     {(e.industry || []).map((ind) => (
@@ -479,10 +497,8 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                       </div>
                       <div className="flex items-center gap-2.5 mt-auto pt-4">
                         {/* 启用开关：只管「+」菜单可见性（启用≠连接） */}
-                        <button onClick={() => toggleConnector(c, !on)} role="switch" aria-checked={on}
-                          className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                          <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-                        </button>
+                        <Switch checked={on} onChange={(next) => toggleConnector(c, next)}
+                          label={t('settings.enableToggle', { name: String(c.display_name || c.name || '') })} />
                         <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
                           {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}
                         </span>
@@ -526,11 +542,9 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
                       </div>
                       <div className="flex items-center gap-2.5 mt-auto pt-4">
                         {/* 启用开关：开=物化 SKILL.md 并加入启用列表；关=仅摘启用态（D4） */}
-                        <button onClick={() => toggleSkillCatalog(s, !on)} disabled={busyId === String(s.id || s.name)}
-                          role="switch" aria-checked={on}
-                          className={`w-11 h-6 rounded-full transition-colors relative shrink-0 disabled:opacity-50 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                          <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-                        </button>
+                        <Switch checked={on} disabled={busyId === String(s.id || s.name)}
+                          onChange={(next) => toggleSkillCatalog(s, next)}
+                          label={t('settings.enableToggle', { name: String(s.display_name || s.name || s.id || '') })} />
                         <span className={`text-xs shrink-0 ${on ? 'text-accent' : 'text-text2'}`}>
                           {on ? t('ecosystem.enabled') : t('ecosystem.disabled')}
                         </span>
@@ -557,14 +571,34 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
             onConnected={() => setMcpRefresh((v) => v + 1)}
           />
         )}
+
+        {/* 数字员工表单（P1-7a）：新建/编辑/删除，写入后刷新列表 */}
+        {empForm && (
+          <EmployeeFormModal
+            open
+            employee={empForm.employee}
+            onClose={() => setEmpForm(null)}
+            onSaved={({ name }) => {
+              setNotice(t('settings.employeeSaved', { name }));
+              loadAll();
+            }}
+            onDeleted={() => {
+              setNotice(t('settings.employeeDeleted'));
+              loadAll();
+            }}
+          />
+        )}
     </div>
   );
 
   // ST3：内嵌模式只渲染内容区，由宿主（设置页）提供滚动容器
+  // （内嵌态不是对话框：不套 Modal，否则会给内嵌面板套一层焦点陷阱）
   if (embedded) return content;
+  // P1-9⑤：外壳交给 ui/Modal（dialog 语义 + 焦点陷阱 + Esc + 关闭归还焦点）。
+  // frameless = 只换外壳：content 自带 width/max-h/rounded/bg/border，视觉零改动。
   return (
-    <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay">
+    <Modal open onClose={onClose} frameless ariaLabel={t('ecosystem.title')}>
       {content}
-    </div>
+    </Modal>
   );
 }

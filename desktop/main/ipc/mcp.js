@@ -11,13 +11,16 @@ const { app, ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const approval = require('../approval');
+// P2-7：用户偏好「执行后告知」（正交布尔，缺省关闭）
+const approvalSettings = require('../approvalSettings');
 const mcp = require('../mcpClient');
 const guard = require('./payloadGuard');
 const sandbox = require('../sandbox');
 const github = require('../github');
 const voice = require('../voice');
 const { McpAuthManager } = require('../mcpAuth');
-const { writeFileDurable } = require('../data/durableWrite');
+// P0-5①：落盘必须显式设权限（对齐 mcpAuth.js:67 的正例）——配置文件含用户自配凭证
+const { writeFileDurableWithMode } = require('../data/durableWrite');
 const { shellEnv } = require('../tools/exec');
 
 const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpServers() };
@@ -25,6 +28,12 @@ const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpSe
 // MCP 配置持久化（userData/mcp-servers.json）+ 子进程 env 白名单
 const MCP_CONFIG_FILE = () => path.join(app.getPath('userData'), 'mcp-servers.json');
 const ENV_WHITELIST = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SHELL', 'USER', 'TMPDIR', 'NODE_ENV'];
+// P0-5①：仅本人可读写（POSIX）；Windows 上 chmod 语义受限，durableWrite 会如实上报 modeApplied=false
+const MCP_CONFIG_MODE = 0o600;
+// P0-5①：受保护 env 键——用户 env **只能补充**这些之外的键，不能覆盖它们。
+// 为什么要拦：spawn({env}) 会**完全替换**父进程环境，PATH 被覆盖即等价于「子进程可劫持任意可执行文件」；
+// HOME/SHELL/TMPDIR 被覆盖会把服务进程的读写重定向到用户指定位置（沙箱外副作用）。
+const PROTECTED_ENV = new Set([...ENV_WHITELIST, 'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES']);
 
 let deps = null;
 
@@ -60,6 +69,19 @@ function getOauthManager() {
 function loadMcpConfig() {
   const file = MCP_CONFIG_FILE();
   if (!fs.existsSync(file)) return []; // 尚未配置过，正常
+  // P0-5①：历史版本以 0644 落盘（实测 11 个服务的文件就是 0644）——读取时自愈收紧，
+  // 只改权限、不动内容，避免升级后仍长期处于「同机其他用户可读凭证」的状态。
+  try {
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(file).mode & 0o777;
+      if (mode !== MCP_CONFIG_MODE) {
+        fs.chmodSync(file, MCP_CONFIG_MODE);
+        console.warn(`[mcp] 已将 ${file} 权限从 ${mode.toString(8)} 收紧为 ${MCP_CONFIG_MODE.toString(8)}`);
+      }
+    }
+  } catch (e) {
+    console.warn('[mcp] 配置文件权限收紧失败:', e.message);
+  }
   try {
     const list = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!Array.isArray(list)) throw new Error('结构非法：顶层不是数组');
@@ -74,23 +96,46 @@ function loadMcpConfig() {
 
 function saveMcpConfig(list) {
   try {
-    const res = writeFileDurable(MCP_CONFIG_FILE(), JSON.stringify(list, null, 2));
-    if (!res.ok) console.warn('[mcp] 配置持久化失败:', res.error);
+    const res = writeFileDurableWithMode(MCP_CONFIG_FILE(), JSON.stringify(list, null, 2), MCP_CONFIG_MODE);
+    if (!res.ok) {
+      // 落盘失败绝不静默：下次重启会「服务全红且配置消失」，用户无从归因
+      console.warn('[mcp] 配置持久化失败:', res.error);
+    } else if (!res.modeApplied) {
+      console.warn(`[mcp] 权限未收紧（chmod ${MCP_CONFIG_MODE.toString(8)} 失败）：${res.error || '未知原因'}；该文件含凭证，请手动检查权限`);
+    }
   } catch (e) {
     console.warn('[mcp] 配置持久化异常:', e.message);
   }
+}
+
+// P0-5③：用户 env 的「可落盘、可注入」部分——受保护键一律剔除（键名不能由用户决定系统行为）。
+// 同一函数同时服务两个调用点：spawn 前注入（sanitizeEnv）与写入配置（connectMcpServer），
+// 保证「运行时看到的」与「落盘的」是同一视角，不再出现两份漂移的白名单。
+function userEnvOf(env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env && typeof env === 'object' ? env : {})) {
+    if (PROTECTED_ENV.has(k)) continue;
+    if (v === undefined || v === null) continue;
+    out[k] = String(v);
+  }
+  return out;
 }
 
 // env 白名单：仅透传系统基础变量 + 用户显式配置，杜绝 process.env 全量泄漏（P2-10）
 // PATH 特殊处理：打包版 GUI 进程继承的 PATH 极简（/usr/bin:/bin:...），
 // npx/uvx（homebrew）全找不到——真机复盘：MCP 服务全部 spawn ENOENT。
 // 注入与 toolShell 子 shell 一致的完整 PATH（见 SHELL_PATH 定义）。
+//
+// P0-5③：展开顺序修正。旧实现 `{ ...out, PATH: shellEnv().PATH, ...(env || {}) }` 让用户 env **恒胜**，
+// 可覆盖 PATH（子进程劫持任意可执行文件）与 HOME/SHELL/NODE_ENV 等受保护键。
+// 现在：用户 env 先按 userEnvOf 过滤（只做增量），白名单与 PATH **最后**展开 → 受保护键恒为系统真实值。
 function sanitizeEnv(env) {
-  const out = {};
+  const out = userEnvOf(env);
   for (const k of ENV_WHITELIST) {
     if (process.env[k]) out[k] = process.env[k];
   }
-  return { ...out, PATH: shellEnv().PATH, ...(env || {}) };
+  out.PATH = shellEnv().PATH;
+  return out;
 }
 
 // MCP 连接核心逻辑（IPC 处理器与启动重连共用）：委托给 mcpClient（stdio/http 双传输）
@@ -109,9 +154,13 @@ async function connectMcpServer({ name, transport = 'stdio', command, args = [],
   // 连接成功 → 持久化配置（重启后自动重连）。fail-closed：握手失败不写盘。
   if (r.ok && name) {
     const config = loadMcpConfig().filter((s) => s.name !== name);
+    // P0-5②：落盘内容过同一 sanitize 视角——受保护键不写进文件（重启时由 sanitizeEnv 重新注入系统值）。
+    // 用户自配 env（含 API Key 等）**必须原样保留**：脱敏会让需要凭证的服务重启后全部连不上
+    //（P0-5 取舍：本轮只做「明文 + 0600 权限保护」，加密迁移 safeStorage 列入遗留）。
+    const savedEnv = userEnvOf(env);
     config.push(transport === 'http'
-      ? { name, transport, url, headers, env }
-      : { name, transport: 'stdio', command, args, env });
+      ? { name, transport, url, headers, env: savedEnv }
+      : { name, transport: 'stdio', command, args, env: savedEnv });
     saveMcpConfig(config);
   }
   return r;
@@ -133,6 +182,7 @@ function killAllMcpServers() {
 async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-request', conversationId }) {
   const s = mcpServers.get(server);
   if (!s) throw new Error(`MCP 服务 ${server} 未连接`);
+  const startedAt = Date.now(); // P2-7：执行后告知要报耗时
   // L3：MCP 工具调用审批（auto-safe 档仍询问）
   const verdict = approval.needsApproval({ tool: `mcp__${server}__${tool}`, args: args || {}, approvalMode, conversationId, alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules });
   if (verdict.need) {
@@ -143,13 +193,46 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
     }
     deps.applyApprovalDecision(decision, `mcp__${server}__${tool}`, args || {}, conversationId);
   }
+  let noticeOk = false;
+  let noticeError = '';
   try {
-    const result = await mcp.mcpRpc(s, 'tools/call', { name: tool, arguments: args || {} });
-    deps.audit(`mcp:${server}`, tool, `${result?.error ? `error: ${result.error}` : 'ok'} rule=${verdict.matched || 'none'}`, verdict.need ? 'approved' : 'auto');
-    return result;
+    // P1-8：模型侧拿到的是「清洗后的工具名」（H-4：1–128 字符、仅 [A-Za-z0-9_.-]），
+    // 调用前必须还原成服务端真实名字——否则服务端收到的名字已被替换，只会回 unknown tool。
+    const realTool = mcp.resolveToolName(s, tool);
+    // P1-8：走带会话恢复的 RPC（HTTP 会话 404 → 重新 initialize 后重试一次，H-4 要求）
+    const result = await mcp.mcpRpcWithSessionRetry(s, 'tools/call', { name: realTool, arguments: args || {} });
+    // H-4：结果必须二分——JSON-RPC `error`（协议错，走 catch）与 `result.isError:true`（工具**执行**失败）。
+    // 后者是合法工具结果：原样回喂模型自纠（内容不动、不抛错、不改写成 error 字段——
+    // 改写成 error 会被引擎的 isToolFailure 计入「重复失败熔断」，同参重试语义过重）。
+    const toolErr = !!(result && result.isError === true);
+    deps.audit(`mcp:${server}`, tool,
+      `${toolErr ? 'isError: 工具执行失败' : (result?.error ? `error: ${result.error}` : 'ok')} rule=${verdict.matched || 'none'}`,
+      verdict.need ? 'approved' : 'auto');
+    noticeOk = !toolErr;
+    return toolErr ? { ...result, toolError: true } : result;
   } catch (err) {
+    noticeError = err && err.message ? err.message : String(err);
     deps.audit(`mcp:${server}`, tool, `error: ${err.message}`, 'error');
     return { error: err.message };
+  } finally {
+    // P2-7：执行后告知。MCP 写的是**外部系统**（通知里会标注不可补偿），这类最需要事后知情。
+    // 放 finally：成功/失败都要告知；用 try 兜住——通知失败绝不能影响工具结果。
+    try {
+      approval.notifyExecuted({
+        enabled: approvalSettings.getUserApprovalNotice(),
+        tool: `mcp__${server}__${tool}`,
+        args: args || {},
+        approvalMode,
+        conversationId,
+        alwaysRules: deps.getAlwaysRules(),
+        conversationRules: deps.conversationRules,
+        ok: noticeOk,
+        ms: Date.now() - startedAt,
+        error: noticeError,
+      });
+    } catch (e) {
+      console.warn('[approval] MCP 执行后告知发送失败（不影响结果）:', e.message);
+    }
   }
 }
 
@@ -321,7 +404,17 @@ function register() {
   ipcMain.handle('mcp:listServers', async () => {
     return mcp.listMcpServers().map((name) => {
       const s = mcp.getMcpServer(name);
-      return { name, toolCount: s?.tools?.length || 0, kind: s?.kind || 'stdio' };
+      // P1-8：握手协商结果随列表下发（服务端实际版本 / 能力 / 自述），供设置页与诊断查询。
+      // protocolVersion 只放服务端返回值（未声明时为 null）；我们提议的版本单独给，不冒充协商结果。
+      return {
+        name, toolCount: s?.tools?.length || 0, kind: s?.kind || 'stdio',
+        protocolVersion: s?.protocolVersion || null,
+        proposedProtocolVersion: s?.proposedProtocolVersion || null,
+        // P1-8：legacy=true 表示该服务拒绝过 2025-11-25、已降级为 2024-11-05（诊断/UI 可提示）
+        legacy: !!s?.legacy,
+        serverInfo: s?.serverInfo || null,
+        capabilities: s?.capabilities || {},
+      };
     });
   });
 
@@ -372,7 +465,7 @@ function register() {
         command: s.command ? String(s.command) : undefined,
         args: Array.isArray(s.args) ? s.args.map(String) : [],
         url: s.url ? String(s.url) : undefined,
-        env: s.env && typeof s.env === 'object' ? s.env : {},
+        env: userEnvOf(s.env), // P0-5②：手改 JSON 的通道同样只落用户增量 env（受保护键不进文件）
         headers: s.headers && typeof s.headers === 'object' ? s.headers : {},
       });
     }

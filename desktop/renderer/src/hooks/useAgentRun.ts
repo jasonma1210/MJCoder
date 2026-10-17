@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { runAgent, decomposeTask, looksLargeTask } from '../lib/agent';
 import { compactHistory } from '../../../agent-core/index.js';
-import { getModelConfig, modelKeyOf } from '../lib/modelConfig';
+import { getModelConfig, getModelOverrides, modelKeyOf, effectiveContextWindow } from '../lib/modelConfig';
 import { api } from '../lib/api';
 import { toast } from '../components/feedback';
 import { runRegistry, runIndex, makeRunState } from '../lib/runRegistry';
@@ -515,11 +515,22 @@ export default function useAgentRun(d) {
     };
 
     try {
-      // Fix3：按模型 key 读取用户在 popover 里配置的思考强度，注入本轮请求
+      // P0-1①: 打通上下文窗口接线（此前只注入 reasoning_effort，context_window 从未进 payload
+      // → 引擎只能吃 4096 内联兜底，真实 128K 模型被按 4K 频繁压缩）。
+      // 取值走 modelConfig 三级语义：用户手选 > provider×modelId 映射表 > 默认档 32768。
       const mc = getModelConfig(modelKeyOf(selectedModel?.provider, selectedModel?.model));
-      const runModel = mc?.reasoning_effort
-        ? { ...selectedModel, model: { ...selectedModel.model, reasoning_effort: mc.reasoning_effort } }
-        : selectedModel;
+      const ctxWin = effectiveContextWindow(selectedModel?.provider, selectedModel?.model);
+      const runModel = {
+        ...selectedModel,
+        model: {
+          ...(selectedModel?.model || {}),
+          context_window: ctxWin,
+          ...(mc?.reasoning_effort ? { reasoning_effort: mc.reasoning_effort } : {}),
+        },
+      };
+      // P1-11: 任务-模型分档（可选 + 回落主模型）。getModelOverrides() 无配置时返回 null
+      // → 字段整个不出现（零破坏：主进程/引擎按「缺省=跟随主模型」处理）。
+      const modelOverrides = getModelOverrides();
       // P0-B / PM-L1：未选项目（无 cwd）时强制只读——防止工具落主进程目录且无沙箱保护
       const noProject = !executionRoot;
       await runAgent({
@@ -527,6 +538,14 @@ export default function useAgentRun(d) {
         model: runModel,
         mcpTools,
         enabledSkills: runSkills,
+        // P0-1⑥: 技能渐进式披露（agent-core 已实现：索引只注 name+description ≈100 tokens/个，
+        // 正文由 load_skill 按需加载）。显式给 'summary' 而不依赖 'auto'，是因为渲染层宿主
+        // 一定带 skills[].content（正文可取），'auto' 在无 loadSkill 通道时会退回 full（全量注入）。
+        // 回落链（别以为是必须配 handler 才能用）：引擎的 load_skill 在宿主没提供
+        // toolHandlers.loadSkill 时，直接从本次 run 的 skills[].content 取正文
+        // （agent-core/index.js:2503-2508）——所以只传 skills 就能按需加载，两个宿主都已传。
+        skillDisclosure: 'summary',
+        ...(modelOverrides ? { modelOverrides } : {}),
         signal: abortRef.current.signal,
         // V05：使用运行开始时解析的执行根目录（隔离目录/worktree 或项目目录），
         // 全程一致；effectiveProject 变化不得覆盖进行中 run 的工作根

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { confirm, toast } from './feedback';
 import InlineAlert from './InlineAlert';
+import Modal from './ui/Modal';
 import { IconX } from './icons';
 import { useI18n } from '../i18n';
 
@@ -55,11 +56,12 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
     }
   }
 
+  // P1-9⑤：外壳交给 ui/Modal（role=dialog + aria-modal + 焦点陷阱 + Esc + 关闭归还焦点）；
+  // frameless 表示「只换外壳」——面板的宽高/底色/圆角/阴影仍是下面这一层自带，视觉零改动。
   return (
-    <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onMouseDown={onClose}>
+    <Modal open onClose={onClose} frameless ariaLabel={t('archive.title')}>
       <div
         className="w-[560px] max-w-[calc(100vw-2rem)] max-h-[70vh] flex flex-col rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)]"
-        onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
@@ -94,6 +96,6 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -121,6 +121,11 @@ contextBridge.exposeInMainWorld('mjcode', {
   ecosystemSkills: () => ipcRenderer.invoke('ecosystem:skills'),
   // T4-3：数字员工运行时预设（角色模板=系统提示+工具子集+审批档）
   ecosystemEmployeeRuntime: (payload) => ipcRenderer.invoke('ecosystem:employeeRuntime', payload),
+  // P1-7a：自定义数字员工写通道（主进程侧 main/ipc/ecosystem.js:419/439/461，此处补齐 contextBridge）
+  // 缺这三个桥接时，渲染层员工表单点了只会提示「通道缺失」——后端实现了但功能不可用。
+  ecosystemEmployeeCreate: (payload) => ipcRenderer.invoke('ecosystem:employeeCreate', payload),
+  ecosystemEmployeeUpdate: (payload) => ipcRenderer.invoke('ecosystem:employeeUpdate', payload),
+  ecosystemEmployeeDelete: (payload) => ipcRenderer.invoke('ecosystem:employeeDelete', payload),
   // 网络配置（web_search 提供方）：设置 → 网络配置
   webSearchGetConfig: () => ipcRenderer.invoke('websearch:getConfig'),
   webSearchSetConfig: (providers) => ipcRenderer.invoke('websearch:setConfig', { providers }),

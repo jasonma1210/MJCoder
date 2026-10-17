@@ -29,7 +29,20 @@ const valid = (type, data) => ({ runId: R, type, data });
   check('subagent 编排事件合法（groupId/taskId/title）', validateAgentEvent(valid('subagent', { tool: 'orchestrate_task', groupId: 'g1', taskId: 't1', title: '子任务', phase: 'failed', error: '超时' })).ok);
   check('subagent 非法 phase 被拒', !validateAgentEvent(valid('subagent', { tool: 'orchestrate_task', phase: 'running' })).ok);
   check('subagent 非法 tool 被拒', !validateAgentEvent(valid('subagent', { tool: 'unknown_tool', phase: 'spawn' })).ok);
-  check('事件类型登记表完整（8 类）', Object.keys(AGENT_EVENT_SCHEMAS).length === 8);
+  // 登记表完整性：用**名称集合**断言，不用 `.length === N`。
+  // 为什么：数量断言只会告诉你「数字不对」，容易被顺手把 8 改成 9/10 了事；
+  // 名称集合会在新增事件时强制审视「这个新事件是否该被登记、消费方是否已适配」——
+  // 那正是 mcp_status 死信的同型风险（有生产方、没人核对登记完整性）。
+  // 2026-10-18：V 层 N7 注册补入 verify / verify_ledger（未注册会被 safeAgentEventEnvelope
+  // 降级成用户可见的 error 事件），故期望集合由 8 类扩为 10 类。
+  const eventNames = Object.keys(AGENT_EVENT_SCHEMAS).sort();
+  const EXPECTED_EVENT_TYPES = [
+    'done', 'error', 'message', 'stream', 'subagent',
+    'suspended', 'todos', 'tool_call', 'verify', 'verify_ledger',
+  ].sort();
+  check('事件类型登记表完整（名称集合，10 类）',
+    JSON.stringify(eventNames) === JSON.stringify(EXPECTED_EVENT_TYPES),
+    `实际=[${eventNames.join(',')}]`);
 
   // ── 非法形状逐类拒收 + 可读原因 ──
   const bad1 = validateAgentEvent(valid('message', { content: '缺 role' }));

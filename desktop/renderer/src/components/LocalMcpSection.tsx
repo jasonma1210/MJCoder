@@ -4,6 +4,8 @@
 // 持久化配置并重连）。市场预设入口不迁移——生态中心目录本身即市场。
 import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
+import { useMcpStatus, type McpServerState } from '../hooks/useMcpStatus';
+import Switch from './ui/Switch';
 import {
   IconAlert, IconCheck, IconChevronDown, IconEdit, IconPlus,
   IconRefresh, IconX,
@@ -23,14 +25,18 @@ interface Props {
   refreshSignal?: number;
 }
 
-type ConnState = 'ok' | 'fail' | 'connecting' | 'saved';
+// 五态：ok / fail / connecting / saved 由「列表 + 本地操作」派生，
+// crashed 只来自主进程广播的 mcp_status（P0-5④ 新建的消费链路）
+type ConnState = McpServerState;
 
 export default function LocalMcpSection({ refreshSignal }: Props) {
   const { t } = useI18n();
+  const mcpStatus = useMcpStatus();
   const [open, setOpen] = useState(true);
   const [connected, setConnected] = useState<ServerRow[]>([]);
   const [saved, setSaved] = useState<ServerRow[]>([]);
   const [statusMap, setStatusMap] = useState<Record<string, string>>({});
+  const [reconnectMsg, setReconnectMsg] = useState<Record<string, string>>({});
   const [manualOpen, setManualOpen] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState('');
@@ -73,6 +79,35 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
     await load();
   }
 
+  // 崩溃态重连（P0-5④）：调既有 mcp:reconnect（env 由主进程从磁盘读，不经渲染层）。
+  // 成功才撤下崩溃标记——失败时保持红色，否则「点了没反应」比不显示更糟。
+  async function reconnect(name: string) {
+    setReconnectMsg((m) => ({ ...m, [name]: '' }));
+    setStatusMap((m) => ({ ...m, [name]: 'connecting' }));
+    try {
+      const r = (await window.mjcode?.mcpReconnect?.({ name })) as
+        { ok?: boolean; error?: string } | undefined;
+      if (r?.ok) {
+        mcpStatus.clearCrashed(name);
+        setStatusMap((m) => ({ ...m, [name]: 'ok' }));
+        window.dispatchEvent(new CustomEvent('mjcode:mcp-tools-dirty'));
+      } else {
+        setStatusMap((m) => ({ ...m, [name]: 'fail' }));
+        setReconnectMsg((m) => ({
+          ...m,
+          [name]: t('settings.mcpReconnectFailed', { error: r?.error || t('localMcp.connFailed') }),
+        }));
+      }
+    } catch (e) {
+      setStatusMap((m) => ({ ...m, [name]: 'fail' }));
+      setReconnectMsg((m) => ({
+        ...m,
+        [name]: t('settings.mcpReconnectFailed', { error: e instanceof Error ? e.message : String(e) }),
+      }));
+    }
+    await load();
+  }
+
   // 行合并：持久化配置 ∪ 实时连接态
   const rowMap = new Map<string, ServerRow>();
   for (const s of saved) rowMap.set(s.name, { ...s, toolCount: 0 });
@@ -81,9 +116,10 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
   const statusOf = (name: string): ConnState => {
     if (connected.some((c) => c.name === name)) return 'ok';
     const st = statusMap[name] || '';
-    if (st === 'fail') return 'fail';
-    if (st === 'connecting') return 'connecting';
-    return 'saved';
+    const derived: Exclude<ConnState, 'crashed'> =
+      st === 'fail' ? 'fail' : st === 'connecting' ? 'connecting' : 'saved';
+    // 崩溃覆盖：主进程上报过 crashed 且尚未重连成功 → 优先展示崩溃（连接列表可能还没刷新）
+    return mcpStatus.resolve(name, derived);
   };
 
   // JSON 编辑：打开时从持久化配置生成（env 已被主进程剥离，编辑保存会丢 env——
@@ -118,6 +154,7 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
     fail: t('localMcp.connFailed'),
     connecting: t('localMcp.connecting'),
     saved: t('localMcp.savedNotConnected'),
+    crashed: t('settings.mcpCrashed'),
   };
 
   return (
@@ -230,22 +267,41 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                     {st === 'fail' && <span className="text-caption text-danger inline-flex items-center gap-0.5 shrink-0"><IconAlert size={10} /> {statusText.fail}</span>}
                     {st === 'connecting' && <span className="text-caption text-text2 shrink-0">{statusText.connecting}</span>}
                     {st === 'saved' && <span className="text-caption text-text2 shrink-0">{statusText.saved}</span>}
+                    {/* 崩溃态：红点 + 文案，视觉上与「连接失败」区分（失败是握手没成，崩溃是跑着挂掉） */}
+                    {st === 'crashed' && (
+                      <span className="text-caption text-danger inline-flex items-center gap-1 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-danger" aria-hidden="true" />
+                        {statusText.crashed}
+                      </span>
+                    )}
                   </div>
                   {(s.command || s.url) && (
                     <div className="text-caption text-text2 font-mono truncate mt-0.5">
                       {s.transport === 'http' ? s.url : `${s.command || ''} ${(s.args || []).join(' ')}`}
                     </div>
                   )}
+                  {st === 'crashed' && (
+                    <div className="text-caption text-danger mt-0.5 leading-relaxed">{t('settings.mcpCrashHint')}</div>
+                  )}
+                  {reconnectMsg[s.name] && (
+                    <div className="text-caption text-danger mt-0.5 leading-relaxed">{reconnectMsg[s.name]}</div>
+                  )}
                 </div>
+                {st === 'crashed' && (
+                  <button onClick={() => reconnect(s.name)} disabled={statusMap[s.name] === 'connecting'}
+                    className="h-7 inline-flex items-center justify-center whitespace-nowrap text-xs px-2.5 rounded-lg border border-danger text-danger hover:bg-[var(--sem-danger-bg)] disabled:opacity-50 shrink-0">
+                    {statusMap[s.name] === 'connecting' ? t('settings.mcpReconnecting') : t('settings.mcpReconnect')}
+                  </button>
+                )}
                 {st === 'fail' && (
                   <button onClick={() => connect(s)} className="text-xs text-accent hover:underline shrink-0">{t('localMcp.retry')}</button>
                 )}
                 {/* 开关：连接/断开（启用≠连接语义下，这里就是真实连接态） */}
-                <button onClick={() => (isConnected ? disconnect(s.name) : connect(s))}
-                  role="switch" aria-checked={isConnected}
-                  className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${isConnected ? 'bg-accent' : 'bg-hover border border-border'}`}>
-                  <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${isConnected ? 'left-[22px]' : 'left-0.5'}`} />
-                </button>
+                <Switch
+                  checked={isConnected}
+                  onChange={(next) => (next ? connect(s) : disconnect(s.name))}
+                  label={t('settings.mcpServerToggle', { name: s.name })}
+                />
               </div>
             );
           })}

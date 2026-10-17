@@ -371,7 +371,13 @@ class LocalStore {
     if (typeof base_url === 'string' && base_url.trim()) p.base_url = base_url.trim();
     if (typeof keyEncrypted === 'string') p.keyEncrypted = keyEncrypted;
     if (Array.isArray(models)) {
-      p.models = models.map((m) => ({ modelId: String(m.modelId), displayName: String(m.displayName || m.modelId) }));
+      // P0-3③：caps 必须原样落库——此前只留 {modelId, displayName}，能力声明在同步这一层被抹掉，
+      // 渲染层的「思考强度能力门控」就永远拿不到数据（缺就是缺，不补默认值）。
+      p.models = models.map((m) => ({
+        modelId: String(m.modelId),
+        displayName: String(m.displayName || m.modelId),
+        ...(m.caps && typeof m.caps === 'object' ? { caps: m.caps } : {}),
+      }));
       if (!p.models.some((m) => m.modelId === p.modelId)) p.modelId = p.models[0]?.modelId || '';
     }
     this.flush();

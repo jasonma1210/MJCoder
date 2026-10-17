@@ -3,8 +3,12 @@
 // '' / 0 表示跟随服务端默认（不下发参数）
 
 import { tGlobal } from '../i18n';
+import { resolveWindow, DEFAULT_CONTEXT_WINDOW } from './modelWindows';
 
 const STORE_KEY = 'mj_model_configs';
+// P1-11：任务-模型分档（可选 + 回落主模型）。三键固定，勿扩展（与 agent-core 契约同源）
+const OVERRIDES_KEY = 'mj_model_overrides';
+export const OVERRIDE_SLOTS = ['compact', 'decompose', 'worker'];
 
 // i18n：顶层常量会冻结翻译求值（切语言不更新），改为渲染期函数经 tGlobal 解析
 export function getReasoningOptions() {
@@ -58,8 +62,90 @@ export function setModelConfig(key, patch) {
   }
 }
 
-// 上下文窗口取值优先级：用户覆盖 > 模型自带 > 兜底 128K
-export function effectiveContextWindow(provider, model) {
+// P0-1④: 上下文窗口三级取值 —— 用户手选 > 映射表(provider×modelId) > 默认档 32768
+// 返回三态对象 { window, confirmed, source }：source = 'user' | 'table' | 'default' | 'ollama-probe'
+// probedNumCtx：主进程 GET /api/show 探测到的 Ollama num_ctx（本机实际生效值，唯一可信来源）；
+// 传 0/不传时 Ollama 一律按官方最小档 4096 且 confirmed:false（H-1：宁可早压也不击穿）。
+export function resolveContextWindow(provider, model, probedNumCtx = 0) {
   const cfg = getModelConfig(modelKeyOf(provider, model));
-  return cfg?.context_window || model?.context_window || 128000;
+  const picked = Number(cfg?.context_window) > 0 ? Number(cfg.context_window) : 0;
+  if (picked > 0) return { window: picked, confirmed: true, source: 'user' };
+  const resolved = resolveWindow({
+    providerId: provider?.id,
+    baseUrl: provider?.base_url || provider?.baseUrl || '',
+    modelId: model?.model_id || model?.id || model?.modelId || '',
+    probedNumCtx,
+  });
+  return {
+    window: Number(resolved?.window) > 0 ? Number(resolved.window) : DEFAULT_CONTEXT_WINDOW,
+    confirmed: !!resolved?.confirmed,
+    source: resolved?.source || 'default',
+  };
+}
+
+// 兼容旧签名：**必须继续返回 number**（ChatArea.jsx:90 的 `|| 128000` 对对象恒真，
+// 改成对象会静默把用量圆环算错 —— P1-12 风险①）。需要 confirmed 的调用方用 resolveContextWindow()。
+export function effectiveContextWindow(provider, model) {
+  return resolveContextWindow(provider, model).window;
+}
+
+// P1-12: 窗口数值格式化（32K / 200K / 1M），与 getContextOptions() 的 label 风格一致
+export function fmtK(n) {
+  const v = Number(n) || 0;
+  if (v <= 0) return '0';
+  if (v >= 1000000) {
+    const m = v / 1000000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (v % 1000 === 0) return `${v / 1000}K`;
+  if (v % 1024 === 0) return `${v / 1024}K`;
+  return `${Math.round(v / 1000)}K`;
+}
+
+// ── P1-11：任务-模型分档（数据层，无 UI）──
+// 契约（Wave 0 冻结）：{ compact?, decompose?, worker? }，每项 ModelRef =
+// { providerId, isGlobal, baseUrl, model }（扁平形，主进程/引擎统一 toAgentModel 转换）。
+// 纪律：只做「存在则透传、不存在则不传」——任何缺字段/非法项一律静默丢弃并回落主模型，
+// 绝不让分档配置错误拖垮压缩（压缩是恢复路径）。
+function toModelRef(v) {
+  if (!v || typeof v !== 'object') return null;
+  const modelId = String(v.model || v.model_id || v.modelId || '').trim();
+  if (!modelId) return null;
+  return {
+    providerId: v.providerId ?? v.provider_id ?? '',
+    isGlobal: !!v.isGlobal,
+    baseUrl: String(v.baseUrl || v.base_url || ''),
+    model: modelId,
+    ...(v.reasoning_effort || v.reasoningEffort ? { reasoningEffort: v.reasoning_effort || v.reasoningEffort } : {}),
+  };
+}
+
+export function getModelOverrides() {
+  let raw = {};
+  try {
+    raw = JSON.parse(localStorage.getItem(OVERRIDES_KEY)) || {};
+  } catch {
+    console.warn('[modelConfig] modelOverrides parse failed, falling back to main model');
+    return null;
+  }
+  const out = {};
+  for (const slot of OVERRIDE_SLOTS) {
+    const ref = toModelRef(raw?.[slot]);
+    if (ref) out[slot] = ref;
+  }
+  // 全空 = 不配分档：返回 null（调用方据此**不传** modelOverrides 字段，零破坏）
+  return Object.keys(out).length ? out : null;
+}
+
+export function setModelOverrides(next) {
+  try {
+    const clean = {};
+    for (const slot of OVERRIDE_SLOTS) {
+      const ref = toModelRef(next?.[slot]);
+      if (ref) clean[slot] = ref;
+    }
+    localStorage.setItem(OVERRIDES_KEY, JSON.stringify(clean));
+  } catch (e) {
+    console.warn('[modelConfig] modelOverrides persist failed:', e);
+  }
 }

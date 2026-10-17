@@ -321,7 +321,7 @@ const DEPS_HOOKS = new Set(['useEffect', 'useLayoutEffect', 'useMemo', 'useCallb
 function collectTdzViolations(code, label = 't.jsx') {
   const sf = ts.createSourceFile(label, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JSX);
   if (sf.parseDiagnostics && sf.parseDiagnostics.length) return []; // 语法错误由上方既有门禁负责
-  const declPos = new Map(); // name → 首次 const/let 声明绝对位置
+  const declPos = new Map(); // name → 首次「视为已声明」的绝对位置
   const visitDecl = (node) => {
     if (ts.isVariableDeclaration(node)) {
       // 解构声明也要收：const [a, setA] = useState() 是 ArrayBindingPattern，
@@ -338,6 +338,42 @@ function collectTdzViolations(code, label = 't.jsx') {
       };
       addName(node.name);
     }
+    // 2026-10-18（修假阳性）：**形参 / 函数声明 / import 绑定**同样属于「已声明」。
+    // 误报实例（真机代码）：`function useProbedWindows(open)` 的形参 open 在依赖数组里使用，
+    // 扫描器只认 const/let，于是匹配到另一个作用域的 `const [open, setOpen] = useState(false)`
+    // （位置在后）→ 误判成 TDZ。形参/函数声明/import 都在作用域开头即已绑定（函数声明还提升），
+    // 不存在「引用后置声明」的形态，必须纳入声明集。
+    // 注意 declPos 是「首次出现即定」，所以同名的形参与后置 const 并存时取形参位置（更早）→ 不误报。
+    const markName = (id, pos) => {
+      if (id && ts.isIdentifier(id) && !declPos.has(id.text)) declPos.set(id.text, pos);
+    };
+    // HOISTED = -1 哨兵：函数声明与 import 绑定**会被提升**，出现在依赖数组之后也合法。
+    // 参数也一样——形参只能在函数体内被引用，而函数体必然在形参之后，不存在「引用在后」的形态。
+    const HOISTED = -1;
+    if (ts.isParameter(node)) {
+      const pos = HOISTED;
+      const addParam = (n) => {
+        if (!n) return;
+        if (ts.isIdentifier(n)) { markName(n, pos); return; }
+        if (ts.isObjectBindingPattern(n) || ts.isArrayBindingPattern(n)) {
+          for (const el of n.elements) { if (!ts.isOmittedExpression(el)) addParam(el.name); }
+          return;
+        }
+        if (ts.isAssignmentPattern(n)) { addParam(n.left); return; }
+        if (ts.isRestElement(n)) { addParam(n.name); return; }
+      };
+      addParam(node.name);
+    }
+    // 函数声明提升；class 声明**不**提升（`new X()` 在 class 前是真实 TDZ），故 class 仍按位置判
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      markName(node.name, HOISTED);
+    } else if (ts.isClassDeclaration(node) && node.name) {
+      markName(node.name, node.name.getStart(sf));
+    }
+    if (ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)) {
+      const local = node.name || node.propertyName;
+      if (local) markName(local, HOISTED);
+    }
     ts.forEachChild(node, visitDecl);
   };
   visitDecl(sf);
@@ -345,7 +381,7 @@ function collectTdzViolations(code, label = 't.jsx') {
   const violations = [];
   const addIfLate = (id) => {
     const dp = declPos.get(id.text);
-    if (dp !== undefined && dp > id.getStart(sf)) {
+    if (dp !== undefined && dp !== -1 && dp > id.getStart(sf)) {
       const line = sf.getLineAndCharacterOfPosition(id.getStart(sf)).line + 1;
       violations.push(`${id.text}（依赖数组第 ${line} 行，声明在其后）`);
     }
@@ -678,6 +714,53 @@ check('门禁自检：能复现依赖数组 TDZ 事故（activeProject before in
   const v = collectTdzViolations(fake);
   assert.ok(v.some((s) => s.includes('activeProject')), `未能复现 TDZ 事故：${v}`);
   assert.ok(!v.some((s) => s.startsWith('selectedModel')), `误报 selectedModel：${v}`);
+});
+
+// ── 反向用例（team-lead 硬要求）：修完「不再误报」之后，「能抓到真问题」这一性质不得下降 ──
+// 只证明不再误报是不够的——那是「把红灯改成绿灯」的严谨。
+check('门禁自检（反向）：真实 TDZ 仍必须被判红', () => {
+  const fake = `
+    import React, { useEffect } from 'react';
+    export default function C() {
+      useEffect(() => { doThing(); }, [doThing]);
+      const doThing = () => {};
+      return <div />;
+    }
+  `;
+  const v = collectTdzViolations(fake);
+  assert.ok(v.some((s) => s.includes('doThing')), `真实 TDZ 被漏报（把门禁改哑了）：${JSON.stringify(v)}`);
+});
+
+check('门禁自检（反向）：形参 vs 外层同名 const 的跨作用域遮蔽不误报', () => {
+  // 这条正是本轮误报的形态：内层形参 x 先被引用，外层 const x 声明在文件更后面。
+  // 若扫描器不认形参，就会匹配到后置 const 而判红。
+  const fake = `
+    import React, { useEffect } from 'react';
+    function Inner({ x }) {
+      useEffect(() => { console.log(x); }, [x]);
+      return <div>{x}</div>;
+    }
+    export default function Outer() {
+      const x = 1;
+      return <Inner x={x} />;
+    }
+  `;
+  const v = collectTdzViolations(fake);
+  assert.deepEqual(v, [], `跨作用域遮蔽被误报：${JSON.stringify(v)}`);
+});
+
+check('门禁自检（反向）：函数声明提升与 import 绑定不误报', () => {
+  const fake = `
+    import React, { useEffect } from 'react';
+    import { helper } from './helper';
+    export default function D() {
+      useEffect(() => { helper(compute()); }, [helper, compute]);
+      return <div />;
+    }
+    function compute() { return 1; }
+  `;
+  const v = collectTdzViolations(fake);
+  assert.deepEqual(v, [], `函数声明/import 绑定被误报：${JSON.stringify(v)}`);
 });
 
 check('hook 依赖数组无 TDZ 风险（引用后置声明的 const/let）', () => {

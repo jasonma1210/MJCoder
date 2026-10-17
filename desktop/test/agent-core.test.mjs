@@ -564,11 +564,14 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
     );
     // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）
     // 激进档的断言移到 outNormal 计算之后（两者要比较；尾部条数不再固定）
+    // 2026-10-18（P2-4）：激进档门槛 0.85 → 0.80，同一段历史（估算 1067 tokens）在 window=1300 时
+    // 占用 1067/1300 = 0.82 > 0.80 会落进激进档，常规档样本必须后移到 1500（1067/1500 = 0.71，
+    // 仍 > 0.70 触发线，所以照样会压缩）。只改样本窗口，不动断言强度。
     reset();
     chatScript = [{ content: '常规摘要', usage: { prompt_tokens: 10, completion_tokens: 5 } }];
     const outNormal = await compactHistory(
       [{ role: 'system', content: 'sys' }, ...toolHistory],
-      { ...model, model: { ...model.model, context_window: 1300 } },
+      { ...model, model: { ...model.model, context_window: 1500 } },
       async () => chatScript.shift(),
     );
     // 2026-10-17 T2：尾部保留量改由「体积预算」决定（常规保留窗口 25% / 激进 15%），
@@ -637,7 +640,10 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       && String(trParsed.stdout).includes('长输出摘要化')
       && String(trParsed.stdout).includes('mjcode-tool-outputs'));
 
-    // 14.6 续期指令旁路注入：进 system 消息，不进 convo（不污染会话历史）
+    // 14.6 续期指令旁路注入：走**末条 user 消息**，不进 convo（不污染会话历史）
+    // 2026-10-18（P1-4）：注入通道从「拼进首条 system」改为「追加末条 user」——
+    // 拼 system 会当轮把稳定前缀打废（prompt cache 全失效），且中段 system 是 DeepSeek 系的硬坑。
+    // 断言随之改为「末条消息是 user 且含续期文案」+「convo（onMessage 持久化流）内无该文案」。
     reset();
     chatScript = [
       ...Array.from({ length: 4 }, (_, i) => ({
@@ -647,17 +653,24 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       { content: '全部完成', usage: { prompt_tokens: 10, completion_tokens: 5 } },
     ];
     let noticeDone = null;
+    const persistedMsgs = [];
     await runAgent({
       messages: [{ role: 'user', content: '连续干活' }],
       model, cwd: '/tmp/project', maxRounds: 2,
       toolHandlers: makeToolHandlers(),
-      onMessage: () => {},
+      onMessage: (m) => { persistedMsgs.push(m); },
       onDone: (t) => { noticeDone = t; },
     });
-    const anyUserNotice = chatCalls.some((c) => (c.messages || []).some((m) => m.role === 'user' && String(m.content).includes('预算已续期')));
+    const lastMsgIsRenewUser = chatCalls.some((c) => {
+      const msgs = c.messages || [];
+      const last = msgs[msgs.length - 1];
+      return last?.role === 'user' && String(last.content).includes('预算已续期');
+    });
     const systemNotice = chatCalls.some((c) => String(c.messages?.[0]?.content || '').includes('预算已续期'));
-    check('续期指令不再以 user 消息污染 convo', !anyUserNotice);
-    check('续期指令经 system 消息旁路注入', systemNotice);
+    const convoHasNotice = persistedMsgs.some((m) => String(m.content || '').includes('预算已续期'));
+    check('续期指令走末条 user 消息（不动稳定前缀）', lastMsgIsRenewUser);
+    check('续期指令不进 convo（重进线程看不到该旁路文案）', !convoHasNotice);
+    check('续期指令不再拼进首条 system（拼进去当轮前缀全失效）', !systemNotice);
     check('旁路注入后任务正常完成', noticeDone === '全部完成');
 
     // 14.7 token 预算双闸（2026-10-17 语义修正）

@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
 import { IconCheck, IconClock, IconPlus, IconX } from './icons';
+import Switch from './ui/Switch';
 import { useI18n, tGlobal } from '../i18n';
 
 // labelKey 而非 label：顶层常量不持有求值结果，渲染时经 t() 取文案
@@ -96,15 +97,7 @@ const REPEATS = [
   { id: 'custom', labelKey: 'scheduled.repeatCustom', toCron: null },
 ];
 
-// 小开关（TRAE 卡片右侧同款）
-function Switch({ on, onChange }) {
-  return (
-    <button onClick={onChange} role="switch" aria-checked={on}
-      className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-      <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-    </button>
-  );
-}
+// 小开关（TRAE 卡片右侧同款）：视觉与语义统一由 ui/Switch 承载（P1-9）
 
 export default function ScheduledTasks() {
   const { t } = useI18n();
@@ -290,7 +283,7 @@ export default function ScheduledTasks() {
             <div className="text-sm font-medium">{t('scheduled.autoLaunch')}</div>
             <div className="text-xs text-text2 mt-1">{t('scheduled.autoLaunchHint')}</div>
           </div>
-          <Switch on={autoLaunch} onChange={toggleAutoLaunch} />
+          <Switch checked={!!autoLaunch} onChange={() => toggleAutoLaunch()} label={t('scheduled.autoLaunch')} />
         </div>
       )}
 
@@ -397,7 +390,8 @@ export default function ScheduledTasks() {
                 </button>
                 <button onClick={() => showRuns(task.id)}
                   className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border hover:bg-hover text-xs">{t('scheduled.runs')}</button>
-                <Switch on={!!task.enabled} onChange={() => toggle(task.id, task.enabled)} />
+                <Switch checked={!!task.enabled} onChange={() => toggle(task.id, task.enabled)}
+                  label={t('settings.enableToggle', { name: String(task.name || task.id || '') })} />
                 <button onClick={() => remove(task.id, task.name)} className="text-text2 hover:text-danger" title={t('scheduled.delete')}><IconX size={14} /></button>
               </div>
             </div>

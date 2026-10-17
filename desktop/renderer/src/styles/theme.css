@@ -154,6 +154,12 @@
   --sem-success-bg: rgba(74, 222, 128, 0.15);
   --sem-warn-bg: rgba(242, 181, 68, 0.15);
   --sem-info-bg: rgba(138, 180, 248, 0.12);
+  /* 开关圆点（components/ui/Switch.tsx 专用，P1-9 问题 #4）：
+     此前 7 处开关的滑块都写死 `bg-white`，在浅色主题的 `bg-hover` 轨道上几乎同色（看不见）。
+     拆成「填充 + 描边」两份 token：暗色沿用原视觉（白点 + 主题边框色），
+     浅色把描边加深一档保证可辨——不新增十六进制，只新增 token。 */
+  --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
+  --sem-knob-ring: #313131;       --sem-knob-ring-rgb: 49 49 49;
 }
 
 [data-theme="midnight"] {
@@ -170,6 +176,8 @@
   --sem-success-bg: rgba(52, 211, 153, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
   --sem-info-bg: rgba(147, 197, 253, 0.12);
+  --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
+  --sem-knob-ring: #24365a;       --sem-knob-ring-rgb: 36 54 90;
 }
 
 [data-theme="forest"] {
@@ -186,6 +194,8 @@
   --sem-success-bg: rgba(74, 222, 128, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
   --sem-info-bg: rgba(125, 211, 252, 0.12);
+  --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
+  --sem-knob-ring: #27412f;       --sem-knob-ring-rgb: 39 65 47;
 }
 
 [data-theme="sunset"] {
@@ -202,6 +212,8 @@
   --sem-success-bg: rgba(52, 211, 153, 0.14);
   --sem-warn-bg: rgba(251, 191, 36, 0.14);
   --sem-info-bg: rgba(147, 197, 253, 0.12);
+  --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
+  --sem-knob-ring: #4a3026;       --sem-knob-ring-rgb: 74 48 38;
 }
 
 [data-theme="light"] {
@@ -218,6 +230,9 @@
   --sem-success-bg: rgba(22, 163, 74, 0.12);
   --sem-warn-bg: rgba(180, 83, 9, 0.12);
   --sem-info-bg: rgba(29, 78, 216, 0.10);
+  /* 浅色主题：白点在 #e8e8e8 轨道上看不见（问题 #4 的根因）→ 描边单独加深到 --border-strong 档 */
+  --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
+  --sem-knob-ring: #c9c9c9;       --sem-knob-ring-rgb: 201 201 201;
 }
 
 /* ── 圆角四档 + 两档扩展（sm/小控件 · md/按钮输入框 · lg/卡片 · xl/模态）

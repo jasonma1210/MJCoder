@@ -8,6 +8,8 @@ import RecordReplayPanel from './RecordReplayPanel';
 import UpdateSection from './UpdateSection';
 import MemorySection from './MemorySection';
 import { IconAlert, IconCheck, IconCpu, IconGitBranch, IconGlobe, IconPalette, IconSettings, IconUser, IconX } from './icons';
+import Switch from './ui/Switch';
+import Modal from './ui/Modal';
 import THEMES from '../lib/themes.json';
 import ACCENT_CHOICES from '../lib/accentColors.json';
 import { applyAccent } from '../lib/color';
@@ -92,12 +94,9 @@ export default function SettingsModal({
     } catch (e) { console.warn('[settings] failed to apply accent color:', e); }
   }
 
-  // Esc 关闭设置：主窗口无系统标题栏，Esc 是唯一「不用找按钮」的退出路径
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); onClose?.(); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Esc 关闭设置：主窗口无系统标题栏，Esc 是唯一「不用找按钮」的退出路径。
+  // P1-9⑤ 换壳后该职责移交给 ui/Modal（它同时带焦点陷阱与「别的对话框正在接管键盘时让路」
+  // 的判断）——此处不再自挂 window 监听，否则命令式 confirm 弹窗里按 Esc 会把设置页一起关掉。
 
   useEffect(() => {
     window.mjcode?.getFlags?.()
@@ -148,7 +147,12 @@ export default function SettingsModal({
   // 现在两个平台同一处、同一交互（Esc 亦可关闭）。
 
   return (
-    <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay p-6">
+    <Modal open onClose={onClose} frameless
+      ariaLabel={t('settings.navGroupSettings')}
+      // 外壳类名刻意在本文件里写全（不在调用方「调参」）：settings-coverage.test.js
+      // 对本文件有源码字符串断言（浮窗形态 + shadow-modal），且本文件保留自己的表头关闭按钮，
+      // 因此这里是「只换外壳、内容与视觉零改动」——面板块仍是下面这层自带类。
+      overlayClassName="fixed inset-0 z-settings flex items-center justify-center bg-overlay p-6">
       <div className="w-[min(920px,calc(100vw-3rem))] h-[min(680px,calc(100vh-3rem))] bg-bg border border-border rounded-2xl shadow-[var(--shadow-modal)] flex overflow-hidden relative">
         <button onClick={onClose}
           className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
@@ -260,7 +264,8 @@ export default function SettingsModal({
                   <div className="text-sm">{t('settings.autoDecomposeLabel')}</div>
                   <p className="text-xs text-text2 mt-0.5">{t('settings.autoDecomposeDesc')}</p>
                 </div>
-                <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)} />
+                <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)}
+                  label={t('settings.autoDecomposeLabel')} />
               </div>
             </Section>
             <UpdateSection />
@@ -346,7 +351,7 @@ export default function SettingsModal({
         {tab === 'git' && <GitTab projectPath={projectPath} />}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -954,7 +959,8 @@ function NetworkTab() {
                       className="text-xs text-accent hover:underline">{m.docsUrl}</a>
                   )}
                 </div>
-                <Toggle on={p.enabled} onChange={() => update(m.id, { enabled: !p.enabled })} />
+                <Toggle on={p.enabled} onChange={() => update(m.id, { enabled: !p.enabled })}
+                  label={t(`search.${m.id}.label`)} />
               </div>
               {p.enabled && (
                 <div className="mt-2 pl-0">
@@ -1066,13 +1072,10 @@ function OptionRow({ name, desc, selected, warn, onSelect }) {
   );
 }
 
-function Toggle({ on, onChange }) {
-  // ST8：关闭态轨道由 bg-text2（灰字灰底难辨）改为 bg-hover + 边框
-  return (
-    <button onClick={onChange} role="switch" aria-checked={on} className={`w-11 h-6 rounded-full transition-colors relative shrink-0 ${on ? 'bg-accent' : 'bg-hover border border-border'}`}>
-      <div className={`absolute w-5 h-5 rounded-full bg-white border border-border top-0.5 transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-    </button>
-  );
+function Toggle({ on, onChange, label }) {
+  // ST8：关闭态轨道由 bg-text2（灰字灰底难辨）改为 bg-hover + 边框 → 视觉与语义统一由
+  // ui/Switch 承载（P1-9：role="switch" + aria-checked + 可访问名称 + 键盘切换）
+  return <Switch checked={on} onChange={() => onChange()} label={label} />;
 }
 
 function Input({ placeholder, value, onChange, type = 'text' }) {

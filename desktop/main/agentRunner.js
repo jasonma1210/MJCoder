@@ -13,6 +13,8 @@
 const runTrace = require('./runTrace');
 // T3-1：大工具结果卸载——tool_call 事件超限字段落临时文件，IPC 只传句柄
 const bigPayload = require('./bigPayload');
+// P2-8 / V-L1：V 层（评估接口）宿主编排——L1 日志对账 + annotate（不续跑、零额外模型调用）
+const verifyRun = require('./verifyRun');
 
 // T0-2：IPC 边界契约（单一事实来源 shared-ipc/contract.mjs）。
 // Electron 主进程是 CJS 且 Node 20 无法同步 require ESM，沿用 loadAgentCore 的动态 import 模式：
@@ -122,6 +124,23 @@ function startAgentRun(payload, sender) {
     let doneSent = false;
     const startedAt = Date.now();
     console.warn(`[agentRun] 启动 runId=${runId} model=${payload?.model?.model?.model_id || '?'} cwd=${payload?.cwd || '-'} msgs=${payload?.messages?.length || 0} budget=${payload?.tokenBudget || 0}`);
+    // ── P2-8 / V-L1（J2）：主对话通道默认 l1 + annotate（设计 §2.2）──
+    // 默认档在宿主给（'l1'），渲染层可用 payload.verification 覆盖成 'off' 或 'l3'。
+    // 本通道判定所需的两个事实：ledger（引擎 verify_ledger trace，双执行路径都经 onTrace 到达）
+    // 与 diff（主进程 git status，失败即 null → R5 降级 SKIP）。
+    const vrun = verifyRun.createVerificationRun({
+      runId,
+      conversationId: payload.conversationId || '',
+      cwd: payload.cwd || '',
+      // 只取渲染层可配的字段：stopHookActive 是**宿主注入**的防死循环标志（设计 §5.1），
+      // 渲染层不得设置——否则界面可以静默关掉本轮的判定。J2 尚未实现续跑，
+      // 因此此处恒为 false；J3 实现 continue 时由宿主在发起续跑时置真。
+      config: payload.verification
+        ? { ...payload.verification, stopHookActive: false }
+        : null,
+      emit,
+      defaultLevel: 'l1',
+    });
     // 2026-10-15 修复：会话消息持久化收归主进程（此前由渲染层 onMessage/onDone 回调落库）。
     // 事故链：长任务（17min/675k tokens）运行期间渲染层刷新/重载 → 订阅与回调随页面销毁 →
     // 中间消息与**最终总结**全部不落库，任务「偷偷消失」；渲染层 onDone 里 await sendMessage
@@ -168,6 +187,10 @@ function startAgentRun(payload, sender) {
       mcpTools: payload.mcpTools || [],
       enabledSkills: payload.enabledSkills || [],
       skills: payload.skills || [],
+      // P1-6 / P1-11：渲染层已下发，但此前被本白名单整体丢弃 → 主进程真机路径两项都不生效
+      // （单测直接调 runAgent 全绿、真机全废）。缺省一律 undefined，让引擎走自己的默认/回落。
+      skillDisclosure: payload.skillDisclosure || undefined,
+      modelOverrides: payload.modelOverrides || undefined,
       cwd: payload.cwd,
       agentsMd: payload.agentsMd,
       memories: payload.memories || [],
@@ -216,6 +239,35 @@ function startAgentRun(payload, sender) {
           handlers[key] = (...a) => deps.runScope.run({ runId }, () => fn(...a));
         }
       }
+      // P2-8 / V-L1（J2）：收尾的异步部分（L1 对账 → 落库 → emit done）。
+      // 为什么单独抽出来：引擎的 onDone 是**同步回调契约**（不 await、不看返回值），
+      // 把 async 函数直接挂在 onDone 上会让 Promise 逃逸——一旦将来有人在里面抛错，
+      // Node 15+ 会把未捕获 rejection 变成进程终止（主进程崩 = 用户所有会话一起丢）。
+      // 因此回调保持同步、异步体显式 .catch，语义与事件顺序都不变。
+      const finishRun = async (ft, usage, aborted) => {
+        console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
+        let outText = ft;
+        try {
+          const vr = await vrun.finish(ft);
+          if (typeof vr?.finalText === 'string') outText = vr.finalText;
+          if (vr?.verdict === 'BLOCK') {
+            console.warn(`[agentRun] V-L1 自述与执行记录对不上 runId=${runId} rule=${vr.ruleId || '?'} annotated=${!!vr.annotated}（只做标注，不续跑）`);
+          }
+        } catch (e) {
+          console.warn(`[agentRun] V 层判定异常（不影响结果） runId=${runId}:`, e.message);
+        }
+        // 最终 assistant 消息主进程落库（唯一落库点；渲染层凭 mainPersisted 标记去重）
+        const accepted = persistChatMessage({
+          ...toStoreShape({ role: 'assistant', content: outText || '' }),
+          modelName: payload?.model?.model?.model_id || '',
+          tokensInput: usage?.prompt_tokens || 0,
+          tokensOutput: usage?.completion_tokens || 0,
+        });
+        // V08：只有 durable 刷盘成功才宣称 mainPersisted:true；
+        // 失败/未落库时如实上报（渲染层据此本地补显 + 提示保存状态），绝不假成功
+        const dur = confirmDurable(accepted);
+        emit('done', { finalText: outText, usage, aborted, mainPersisted: dur.persisted, persistState: dur.state });
+      };
       const cb = {
         // 中间轮（assistant+tool_calls / tool 结果）主进程直接落库，再照常推事件
         onMessage: (m) => {
@@ -223,7 +275,10 @@ function startAgentRun(payload, sender) {
           emit('message', m);
         },
         onStream: (s) => emit('stream', s),
-        onToolCall: (tc) => emit('tool_call', tc),
+        onToolCall: (tc) => {
+          vrun.onToolCall(tc); // N5：旁路缓存最近一次测试命令输出（不改引擎）
+          emit('tool_call', tc);
+        },
         // T1-3：子代理事件（spawn_subagent 生命周期）→ 渲染层子任务可视化
         onSubagentEvent: (evt) => emit('subagent', evt),
         // P0-B：任务清单 → 渲染层实时展示（让长任务进度对用户可见）
@@ -258,23 +313,24 @@ function startAgentRun(payload, sender) {
         // T0-5：结构化运行 trace 落本机 JSONL（userData/traces/<runId>.jsonl）。
         // 写失败由 runTrace 内部告警兜底，绝不影响运行；run_end 后顺带做文件级 LRU 淘汰。
         onTrace: (evt) => {
+          // P2-8 / V-L1（N1/N2）：收下引擎出的执行事实快照（in-process 直传，子进程宿主
+          // 经 engineProcess/registry.js 的 NOTIFY_CBS（onTrace 已在内）桥接，零额外接线）
+          if (evt?.type === 'verify_ledger') vrun.onLedger(evt);
           runTrace.appendTraceEvent(runId, evt);
           if (evt?.type === 'run_end') runTrace.evictOldTraces();
         },
+        // P2-8 / V-L1（J2）：收尾时先做 L1 对账，再落库/推送。
+        // ⚠️ 契约：回调**本身是同步函数**（引擎 `onDone?.(...)` 既不 await 也不看返回值），
+        // 异步工作交给内部 finishRun 并显式 `.catch`——**绝不让 Promise 逃逸**：
+        // Node 15+ 的未捕获 rejection 会直接终止主进程（整个会话一起丢）。
+        // doneSent 在同步段置真，因此下方「引擎未触发 onDone」的兜底分支不会重复发 done。
+        // 顺序很关键：BLOCK 时 finalText 末尾会多一段对账提示，用户看到的与落库的必须是同一份
+        // 文本——否则重进会话提示就消失了（「只在屏幕上有」的假观测）。
         onDone: (ft, usage, aborted) => {
           doneSent = true;
-          console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
-          // 最终 assistant 消息主进程落库（唯一落库点；渲染层凭 mainPersisted 标记去重）
-          const accepted = persistChatMessage({
-            ...toStoreShape({ role: 'assistant', content: ft || '' }),
-            modelName: payload?.model?.model?.model_id || '',
-            tokensInput: usage?.prompt_tokens || 0,
-            tokensOutput: usage?.completion_tokens || 0,
+          finishRun(ft, usage, aborted).catch((e) => {
+            console.warn(`[agentRun] 收尾流程异常（已产出的结果仍会随下方兜底/前序事件送达） runId=${runId}:`, e?.message || e);
           });
-          // V08：只有 durable 刷盘成功才宣称 mainPersisted:true；
-          // 失败/未落库时如实上报（渲染层据此本地补显 + 提示保存状态），绝不假成功
-          const dur = confirmDurable(accepted);
-          emit('done', { finalText: ft, usage, aborted, mainPersisted: dur.persisted, persistState: dur.state });
         },
       };
       // T3-7：双路径执行——engineHost 可用则引擎跑独立子进程（崩溃半径/内存硬上限隔离），

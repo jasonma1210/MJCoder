@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { market, TYPE_LABELS, PERMISSION_LABELS, signatureLabel } from '../lib/market';
 import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
+import Modal from './ui/Modal';
 import { IconAlert, IconDownload, IconPuzzle, IconRefresh, IconSearch, IconX } from './icons';
 import { useI18n } from '../i18n';
 
@@ -273,11 +274,14 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
   );
 
   // ST3：内嵌模式只渲染内容区，由宿主（设置页）提供滚动容器
+  // （内嵌态不是对话框：不套 Modal，否则会给内嵌面板套一层焦点陷阱）
   if (embedded) return content;
+  // P1-9⑤：外壳交给 ui/Modal（dialog 语义 + 焦点陷阱 + Esc + 关闭归还焦点）。
+  // frameless = 只换外壳：content 自带 width/max-h/rounded/shadow，视觉零改动。
   return (
-    <div className="fixed inset-0 bg-overlay flex items-center justify-center z-settings">
+    <Modal open onClose={onClose} frameless ariaLabel={t('market.title')}>
       {content}
-    </div>
+    </Modal>
   );
 }
 

@@ -10,7 +10,7 @@
 // 所以这里只启用「首字节 + 单轮总时长」两层；拿"空闲"判断会把"正在生成"当成"挂死"。
 // 要享受空闲语义，就得把这两条也改成流式（留作后续）。
 
-const { createStreamGuard, streamTimeoutMessage } = require('./streamGuard');
+const { createStreamGuard, streamTimeoutMessage, reportSlowTtfb } = require('./streamGuard');
 const streamSettings = require('./streamSettings');
 
 function createScheduledChannels({ resolveSecret, quota } = {}) {
@@ -51,6 +51,8 @@ function createScheduledChannels({ resolveSecret, quota } = {}) {
         signal: controller.signal,
       });
       guard.firstByte();
+      // P2-2b：仅测量 + 超目标告警（返回值是纯文本，无处挂字段，故只留日志）
+      reportSlowTtfb(guard.ttfbMs(), 'scheduledChatOnce');
       if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
       const j = await res.json();
       return j.choices?.[0]?.message?.content || '';
@@ -74,22 +76,43 @@ function createScheduledChannels({ resolveSecret, quota } = {}) {
     // P3-2：fg 槽位预占——Worker / 编排 / 记忆后台 compress 均经此通道，统一占用 fg 槽位
     const slot = await quota.acquire('fg', payload.providerId || 'default');
     const body = { model: payload.model, messages: payload.messages, stream: false };
+    // P0-3①：非流式通道（Worker / 定时任务 / 编排组）此前**恒丢思考强度**——三档全会走这条道，
+    // 用户在主会话选的 reasoning_effort 到子任务就静默回默认。由调用方（workerPool / main.js）透传。
+    if (payload.reasoningEffort) body.reasoning_effort = payload.reasoningEffort;
     if (Array.isArray(payload.tools) && payload.tools.length > 0) {
       body.tools = payload.tools;
       body.tool_choice = 'auto';
     }
     const { guard, controller } = guardFor();
+    const post = (b) => fetch(`${root}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.api_key}` },
+      body: JSON.stringify(b),
+      signal: controller.signal,
+    });
     try {
-      const res = await fetch(`${root}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.api_key}` },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let res = await post(body);
+      let firstDetail = '';
+      // H-3：不能假定「网关会忽略未知参数」——LiteLLM 默认对未知参数直接 400
+      //（只有 drop_params:true 才静默丢弃）。命中「不支持该参数」类 400 → 剥离 reasoning_effort 重发一次
+      //（fail-soft：宁可少一个思考档，也不让整组 Worker 因一个参数全失败）。
+      if (res.status === 400 && body.reasoning_effort) {
+        firstDetail = await res.text().catch(() => '');
+        if (/unsupported|unknown|unrecogni[sz]ed|unexpected|invalid|not support/i.test(firstDetail)) {
+          console.warn(`[scheduled] 供应商不接受 reasoning_effort，已剥离该参数重发一次：${firstDetail.slice(0, 160)}`);
+          const retryBody = { ...body };
+          delete retryBody.reasoning_effort;
+          res = await post(retryBody);
+        }
+      }
       guard.firstByte();
+      // P2-2b：首字节延迟只测量、只告警（缺字段时容忍为 null）
+      const ttfbMs = guard.ttfbMs();
+      reportSlowTtfb(ttfbMs, 'scheduledAgentChat');
       if (!res.ok) {
         quota.reportError(payload.providerId || 'default');
-        throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+        const detail = firstDetail || (await res.text().catch(() => ''));
+        throw new Error(`API ${res.status}: ${detail.slice(0, 300)}`);
       }
       const j = await res.json();
       quota.reportSuccess(payload.providerId || 'default');
@@ -103,6 +126,9 @@ function createScheduledChannels({ resolveSecret, quota } = {}) {
         })),
         usage: j.usage ? { prompt_tokens: j.usage.prompt_tokens || 0, completion_tokens: j.usage.completion_tokens || 0 } : null,
         finish_reason: choice.finish_reason || null,
+        // P2-2b：宿主附加字段（引擎侧按缺省消费）。字段名统一为 `ttfbMs`，
+        // 由 agent-core 透传到 onBudget —— 命名与宿主/引擎两侧同一份契约，不再各叫一套。
+        ...(ttfbMs === null ? {} : { ttfbMs }),
       };
     } catch (err) {
       const fired = guard.reason();

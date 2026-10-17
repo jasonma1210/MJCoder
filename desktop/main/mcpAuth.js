@@ -19,6 +19,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { writeFileDurableWithMode } = require('./data/durableWrite');
+// P1-8：协议版本单点化——此处原有一份硬编码的版本字面量副本（本文件 _discover 的 401 探测 initialize）。
+// 现与 mcpClient 共用 mcpProtocol.js（零依赖，避免 mcpAuth ↔ mcpClient 循环 require）。
+const { PROTOCOL_VERSION, CLIENT_CAPABILITIES, CLIENT_INFO } = require('./mcpProtocol');
 
 const CALLBACK_TIMEOUT_MS = 120_000;
 const HTTP_TIMEOUT_MS = 15_000;
@@ -241,7 +244,8 @@ class McpAuthManager {
         headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
         body: JSON.stringify({
           jsonrpc: '2.0', id: 0, method: 'initialize',
-          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'mj-coder', version: '1.0' } },
+          // P1-8：版本/能力/客户端信息全部取自 mcpProtocol.js（不再有第二份字面量副本）
+          params: { protocolVersion: PROTOCOL_VERSION, capabilities: { ...CLIENT_CAPABILITIES }, clientInfo: { ...CLIENT_INFO } },
         }),
       });
       if (probe.status === 401) {
