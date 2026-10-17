@@ -121,11 +121,17 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: ${{ matrix.os }}
+    # 自动发布需要写权限：默认 GITHUB_TOKEN 是只读的，缺这段会在 --publish always 时
+    # 报 "Resource not accessible by integration"（技术设计文档 X3）
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
     env:
+      # electron-builder 走 GitHub Releases 时需要 token；不注入则 --publish always 必失败
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
