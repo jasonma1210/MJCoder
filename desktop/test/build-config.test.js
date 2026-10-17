@@ -108,6 +108,46 @@ const schemaVerdict = (() => {
 })();
 check('build 平台字段均被 electron-builder schema 接受（防 unknown property）',
   schemaVerdict.ok, schemaVerdict.detail);
+
+// X22：更新通道元数据开关必须在 **build 顶级**，不能塞进 build.publish。
+// 事故同型于上面的 verifyUpdateCodeSignature：generateUpdatesFilesForAllChannels 是
+// RootConfiguration/PlatformSpecificBuildOptions 的字段，而 GithubOptions 的
+// additionalProperties = false —— 放进 publish 会被 schema 拒绝，`npm run build` 整个跑不起来，
+// 而「只查 mac/win/linux 三块」的旧断言完全看不见它（测试绿、打包红）。
+const channelVerdict = (() => {
+  const schemePath = path.join(root, 'node_modules', 'app-builder-lib', 'scheme.json');
+  const val = pkg.build?.generateUpdatesFilesForAllChannels;
+  if (val !== true) return { ok: false, detail: `build.generateUpdatesFilesForAllChannels = ${JSON.stringify(val)}（应为 true：beta 通道需要产出通道 yml）` };
+  if ('generateUpdatesFilesForAllChannels' in (pkg.build?.publish || {})) {
+    return { ok: false, detail: '该字段被放进了 build.publish —— GithubOptions.additionalProperties=false，打包会失败' };
+  }
+  if (!fs.existsSync(schemePath)) return { ok: true, detail: 'schema 不可用，跳过（依赖未装）' };
+  try {
+    const scheme = JSON.parse(fs.readFileSync(schemePath, 'utf8'));
+    // ① 顶级 build 的每个字段都必须在 root properties 里
+    const rootAllowed = new Set(Object.keys(scheme.properties || {}));
+    const badTop = Object.keys(pkg.build).filter((k) => !rootAllowed.has(k));
+    // ② publish 块的每个字段都必须在 GithubOptions.properties 里（本仓库 publish.provider=github）
+    const gh = scheme.definitions?.GithubOptions;
+    if (!gh) return { ok: badTop.length === 0, detail: badTop.length ? `顶级非法字段：${badTop.join(', ')}` : 'GithubOptions 未在 schema 中（版本差异，跳过 publish 块）' };
+    const publishAllowed = new Set(Object.keys(gh.properties || {}));
+    const badPublish = Object.keys(pkg.build?.publish || {}).filter((k) => !publishAllowed.has(k));
+    const bad = [...badTop.map((k) => `build.${k}`), ...badPublish.map((k) => `publish.${k}`)];
+    return {
+      ok: bad.length === 0,
+      detail: bad.length ? `非法字段：${bad.join(', ')}` : 'build 顶级与 publish 块字段全部合法',
+    };
+  } catch (e) {
+    return { ok: false, detail: `schema 校验异常：${e.message}` };
+  }
+})();
+check('build 顶级与 publish 字段均被 schema 接受（X22：通道开关必须在顶级，不在 publish 内）',
+  channelVerdict.ok, channelVerdict.detail);
+check('publish.channel / releaseType 类型合法（CI 用 -c.publish.* 覆盖，基线须与 schema 一致）',
+  typeof pkg.build?.publish?.channel === 'string'
+  && ['release', 'prerelease', 'draft'].includes(pkg.build?.publish?.releaseType),
+  `channel=${JSON.stringify(pkg.build?.publish?.channel)} releaseType=${JSON.stringify(pkg.build?.publish?.releaseType)}`);
+
 check('ecosystem 目录随包分发（连接器/数字员工目录依赖）',
   Array.isArray(pkg.build?.extraResources) && pkg.build.extraResources.some((r) => /ecosystem/.test(r.from || '')));
 check('files 白名单含 main/agent-core/renderer.dist（三者缺一即白屏或无引擎）',

@@ -147,10 +147,43 @@ jobs:
         with:
           node-version: 22
 
+      # ── X22：通道解析（beta 通道更新元数据的前提）──
+      # 修复前 CI 只产出 latest.yml，从不产出 beta.yml，于是「发 beta 给部分用户先升」
+      # 在物理上无法执行——包传上去了，客户端拿不到 beta 的更新描述。
+      # 通道由 tag 形态**显式**决定（scripts/resolve-update-channel.mjs，fail-closed）：
+      #   v0.1.0        → channel=latest  releaseType=release
+      #   v0.1.0-rc.1   → channel=beta    releaseType=prerelease
+      # 为什么必须显式传 channel、不能依赖 electron-builder 自动推断：
+      #   detectUpdateChannel 默认 true，`0.1.0-rc.1` 会被推断成通道 `rc` → 产出 rc.yml，
+      #   而客户端 MJ_UPDATE_CHANNEL 只有 latest/beta 两档，rc.yml 永远无人读取。
+      # 非法 tag（空、v、vfoo、latest、1.0 …）脚本直接非零退出中止发布：
+      #   把预发布当稳定版推给所有用户不可逆，宁可不发。
       - name: Sync version from tag
+        id: channel
         working-directory: desktop
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          # 先捕获再 eval：`eval "$(cmd)"` 在 cmd 失败时会 eval 空串并返回 0，
+          # 等于把非法 tag 静默放行——必须显式判退出码才能保持 fail-closed。
+          CHANNEL_INFO="$(node scripts/resolve-update-channel.mjs "$GITHUB_REF_NAME")" || {
+            echo "::error::tag '$GITHUB_REF_NAME' 无法解析为更新通道，已中止发布（fail-closed：绝不把预发布当稳定版推送）"
+            exit 1
+          }
+          eval "$CHANNEL_INFO"
+          # 兜底断言：三个变量任一为空都视为解析异常（防止脚本被改坏后静默发错通道）
+          for v in CHANNEL RELEASE_TYPE VERSION; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v 为空，通道解析异常，已中止发布"
+              exit 1
+            fi
+          done
+          # 本 step 内 $GITHUB_ENV 尚未生效，故用 eval 得到的变量；
+          # 同时写 $GITHUB_OUTPUT 供 upload-artifact 的制品名使用。
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "releaseType=$RELEASE_TYPE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "解析结果：channel=$CHANNEL releaseType=$RELEASE_TYPE version=$VERSION"
+          # VERSION 由脚本给出（已去 v 前缀并通过 semver 校验），不再手写 ${GITHUB_REF_NAME#v}
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Install & build renderer
@@ -159,14 +192,35 @@ jobs:
           npm ci
           cd renderer && npm ci && npm run build
 
+      # 通道相关三个 -c.* 覆盖（X22）：
+      #   -c.publish.channel        → 决定产出 <channel>.yml（beta → beta.yml，latest → latest.yml）
+      #   -c.publish.releaseType    → beta 必须发成 GitHub prerelease，便于 latest 客户端过滤
+      #   -c.generateUpdatesFilesForAllChannels → 顶级 build 字段（**不是** publish 子字段，
+      #      放进 publish 会被 electron-builder 25 的 schema 拒绝：GithubOptions.additionalProperties=false）
+      # 注意：GitHub provider 下 computeChannelNames 会短路成 [currentChannel]，
+      #   即本参数在 GitHub 上不改变产物集合（beta 构建只出 beta.yml，不会顺手覆盖 latest.yml）。
+      #   保留它是为了「若将来换 generic/S3 发布源仍能一次产全通道 yml」，属显式声明意图。
       - name: Package
         working-directory: desktop
-        run: npx electron-builder --publish ${{ vars.PUBLISH_RELEASE == 'true' && 'always' || 'never' }}
+        # 显式从解析 step 的 outputs 取通道变量，不依赖 GITHUB_ENV 的隐式传播
+        # （脚本虽写了 GITHUB_ENV，但显式 env 让本步骤自解释，也避免 step 重排后静默拿空值）。
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          RELEASE_TYPE: ${{ steps.channel.outputs.releaseType }}
+        run: |
+          set -euo pipefail
+          npx electron-builder \
+            -c.publish.channel="$CHANNEL" \
+            -c.publish.releaseType="$RELEASE_TYPE" \
+            -c.generateUpdatesFilesForAllChannels=true \
+            --publish ${{ vars.PUBLISH_RELEASE == 'true' && 'always' || 'never' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MJCode-${{ matrix.os }}-${{ github.sha }}
+          # 制品名带通道（X22）：便于在 Actions 页一眼区分 latest / beta 产物，
+          # 也避免同 sha 同时发过稳定版与预发布时命名冲突。
+          name: MJCode-${{ matrix.os }}-${{ steps.channel.outputs.channel }}-${{ github.sha }}
           if-no-files-found: error
           path: |
             desktop/release/*.dmg

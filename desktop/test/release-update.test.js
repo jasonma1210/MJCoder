@@ -113,7 +113,10 @@ check('CHANGELOG 存在且含当前版本段', () => {
 check('CI 制品纪律（P0-G 回归：tag 触发 + matrix + commit 绑定 + 发布开关）', () => {
   assert.match(ci, /tags: \['v\*'\]/, 'CI 未配置 tag 触发');
   assert.match(ci, /runs-on: \$\{\{ matrix\.os \}\}/, 'release job 未用 matrix 三平台');
-  assert.match(ci, /MJCode-\$\{\{ matrix\.os \}\}-\$\{\{ github\.sha \}\}/, '制品名未绑定 commit sha');
+  // X22：制品名在 sha 前插入了通道（区分 latest / beta 产物），故不再是一个连续字面量。
+  // 断言改为按**意图**校验：制品名必须同时绑定 os、通道、commit sha 三项。
+  assert.match(ci, /MJCode-\$\{\{ matrix\.os \}\}-\$\{\{ steps\.channel\.outputs\.channel \}\}-\$\{\{ github\.sha \}\}/,
+    '制品名未绑定 commit sha 或未带通道（X22：需 os + 通道 + sha）');
   assert.match(ci, /--publish \$\{\{ vars\.PUBLISH_RELEASE/, '缺少受控的发布开关');
   assert.match(ci, /Sync version from tag/, 'release job 未从 tag 同步版本');
 });
