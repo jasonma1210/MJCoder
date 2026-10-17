@@ -227,17 +227,38 @@ async function connectMcpServer({
     onNotify: null,
   };
   transportObj.serverRef = server; // 传输层回环到分发器
+  // 握手阶段进程就没了（命令不存在 / 坏 shebang / 立刻崩）→ 立刻结算挂起的 RPC。
+  // 不这么做的后果（2026-10-17 实测）：spawn ENOENT 明明几百毫秒就发生，但 initialize 要
+  // 干等满 30s 超时，最后返回「MCP initialize 超时（30s）」——错误信息把「进程根本起不来」
+  // 误报成「服务不响应」，用户按超时去排查网络/服务端，方向全错。
+  const failHandshake = (message) => {
+    if (server.handshakeDone) return;
+    for (const [id, cb] of [...server.pending]) {
+      server.pending.delete(id);
+      try { cb({ error: { message } }); } catch (e) { /* 回调所属请求已结束 */ }
+    }
+  };
   if (transportObj.kind === 'stdio') {
     transportObj.child.on('close', (code) => {
       servers.delete(name);
       const wasConnected = server.handshakeDone === true;
       console.log(`[MCP ${name}] 进程退出 code=${code}${wasConnected ? '（运行期崩溃，工具已失效）' : '（握手阶段退出）'}`);
-      if (wasConnected && onStatus) onStatus(name, 'crashed', code);
+      if (wasConnected) {
+        if (onStatus) onStatus(name, 'crashed', code);
+      } else {
+        const tail = String(server.stderrTail || '').trim().slice(0, 300);
+        failHandshake(`MCP 服务进程在握手阶段退出（code=${code}）${tail ? `：${tail}` : ''}`);
+      }
     });
     transportObj.child.on('error', (err) => {
       servers.delete(name);
       console.error(`[MCP ${name}] 启动失败:`, err.message);
-      if (server.handshakeDone === true && onStatus) onStatus(name, 'crashed', null);
+      if (server.handshakeDone === true) {
+        if (onStatus) onStatus(name, 'crashed', null);
+      } else {
+        // spawn ENOENT 就是这条路径：命令/解释器不存在
+        failHandshake(`MCP 服务启动失败：${err.message}`);
+      }
     });
   }
   servers.set(name, server);
