@@ -10,5 +10,7 @@
   "dataPath": "Local data: {path}",
   "dataLocal": "Data stored locally",
   "keyTitle": "Model API keys stay on this machine (encrypted in the system keychain in offline mode) and are never uploaded",
-  "keyBadge": "Keys stay local"
+  "keyBadge": "Keys stay local",
+  "dbUnavailable": "Local DB error",
+  "dbUnavailableTitle": "Task orchestration and memory are unavailable: the local database failed to initialize (see main process log)"
 }

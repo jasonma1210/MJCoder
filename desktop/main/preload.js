@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   // App / Features
   getFlags: () => ipcRenderer.invoke('app:flags'),
   getUserDataPath: () => ipcRenderer.invoke('app:userDataPath'),
+  // X4：本地库状态（失败时状态条显式提示，不静默）
+  dbStatus: () => ipcRenderer.invoke('db:status'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   openInIDE: (payload) => ipcRenderer.invoke('app:openInIDE', payload),
   // Model
@@ -42,11 +44,14 @@ contextBridge.exposeInMainWorld('mjcode', {
   // Git
   gitStatus: (payload) => ipcRenderer.invoke('tool:gitStatus', payload),
   gitDiff: (payload) => ipcRenderer.invoke('tool:gitDiff', payload),
+  gitApplyHunkCached: (payload) => ipcRenderer.invoke('tool:gitApplyHunkCached', payload),
+  gitApplyHunkUnstage: (payload) => ipcRenderer.invoke('tool:gitApplyHunkUnstage', payload),
   gitLog: (payload) => ipcRenderer.invoke('tool:gitLog', payload),
   gitBranch: (payload) => ipcRenderer.invoke('tool:gitBranch', payload),
   gitCommit: (payload) => ipcRenderer.invoke('tool:gitCommit', payload),
   gitAdd: (payload) => ipcRenderer.invoke('tool:gitAdd', payload),
   gitCheckout: (payload) => ipcRenderer.invoke('tool:gitCheckout', payload),
+  gitDiscardFiles: (payload) => ipcRenderer.invoke('tool:gitDiscardFiles', payload),
   gitRestoreStaged: (payload) => ipcRenderer.invoke('tool:gitRestoreStaged', payload),
   gitApplyHunk: (payload) => ipcRenderer.invoke('tool:gitApplyHunk', payload),
   // P0-E：GitHub 最小闭环（gh CLI）
@@ -117,7 +122,12 @@ contextBridge.exposeInMainWorld('mjcode', {
   webSearchSetConfig: (providers) => ipcRenderer.invoke('websearch:setConfig', { providers }),
   // Updater
   checkUpdates: () => ipcRenderer.invoke('updater:check'),
+  // P0-3：应用内下载更新（available 态按钮；autoDownload=false 下唯一下载入口）
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
+  // P0-8c：开机自启（定时任务不错过的根因治理）
+  autoLaunchGet: () => ipcRenderer.invoke('app:autoLaunchGet'),
+  autoLaunchSet: (payload) => ipcRenderer.invoke('app:autoLaunchSet', payload),
   onUpdaterStatus: (cb) => {
     const handler = (_, d) => cb(d);
     ipcRenderer.on('updater:status', handler);
@@ -203,6 +213,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   // P0-2：决策负载携带 approvalId 回传（payload: { approvalId, decision }），
   // 主进程按 id 精确分发，并发审批不再串扰
   resolveApproval: (payload) => ipcRenderer.send('tool:approval-response', payload),
+  // 差集 A：Diff 行内评论 → 主进程按线程存储，返回包装好的回灌 user 消息
+  diffComment: (payload) => ipcRenderer.invoke('diff:comment', payload),
   // 审批结束回执：已决策 / 超时 / 窗口销毁时主进程广播，渲染层据此撤下卡片
   // （否则卡片常驻，用户事后点击 → 主进程已无该 pending → 「无法匹配的审批响应」）
   onApprovalEnd: (cb) => {
@@ -229,6 +241,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   tasksAbortGroup: (groupId) => ipcRenderer.invoke('tasks:abortGroup', { groupId }),
   memoryStats: () => ipcRenderer.invoke('memory:stats'),
   memoryBgTasks: (opts) => ipcRenderer.invoke('memory:bgTasks', opts),
+  // P0-2：记忆管理（列表 / 单条作废 / global_knowledge 转长期留存）——MemorySection 消费
+  memoryList: (opts) => ipcRenderer.invoke('memory:list', opts),
+  memoryInvalidate: (payload) => ipcRenderer.invoke('memory:invalidate', payload),
+  memoryPromote: (payload) => ipcRenderer.invoke('memory:promote', payload),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
   serverBase: (payload) => ipcRenderer.invoke('local:server/base', payload),
   // 网络插件发现（市场弹窗/调试用；对话内安装走 agent 工具通道）

@@ -9,6 +9,30 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { openSqliteJsDb } = require('./sqljsDb');
 
+// ── 幂等加列（X4）──
+// 背景：老库可能「列已存在、user_version 却没推进」（早期无事务包装的版本、手工还原/拷库）。
+// 此时裸 ALTER 会抛 duplicate column，整条迁移链失败 → main.js 把 taskStore 置空 →
+// 任务编排与记忆静默消失（只留一行 console.error）。加列前先探测，天然幂等。
+function hasColumn(db, table, column) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+    return rows.some((c) => c.name === column);
+  } catch (e) {
+    // 探测失败不阻断：按「不存在」尝试，真错了让 ALTER 自己报，错误更具体
+    console.warn(`[db] PRAGMA table_info(${table}) 失败：`, e.message);
+    return false;
+  }
+}
+
+function addColumn(db, table, column, type) {
+  if (hasColumn(db, table, column)) {
+    console.log(`[db] 列已存在，跳过：${table}.${column}`);
+    return false;
+  }
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
+  return true;
+}
+
 const MIGRATIONS = [
   {
     version: 1,
@@ -55,11 +79,9 @@ const MIGRATIONS = [
     version: 2,
     name: 'task-group-auto-replan',
     up: (db) => {
-      db.exec(`
-        ALTER TABLE task_groups ADD COLUMN auto INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE task_groups ADD COLUMN replan_depth INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE task_groups ADD COLUMN replan_of TEXT;
-      `);
+      addColumn(db, 'task_groups', 'auto', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'task_groups', 'replan_depth', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'task_groups', 'replan_of', 'TEXT');
     },
   },
   {
@@ -113,10 +135,8 @@ const MIGRATIONS = [
     version: 4,
     name: 'task-group-policy-snapshot',
     up: (db) => {
-      db.exec(`
-        ALTER TABLE task_groups ADD COLUMN approval_mode TEXT;
-        ALTER TABLE task_groups ADD COLUMN sandbox_policy TEXT;
-      `);
+      addColumn(db, 'task_groups', 'approval_mode', 'TEXT');
+      addColumn(db, 'task_groups', 'sandbox_policy', 'TEXT');
     },
   },
   {
@@ -148,7 +168,7 @@ const MIGRATIONS = [
     version: 6,
     name: 'task-group-thread-binding',
     up: (db) => {
-      db.exec('ALTER TABLE task_groups ADD COLUMN thread_id TEXT;');
+      addColumn(db, 'task_groups', 'thread_id', 'TEXT');
     },
   },
 ];
@@ -162,10 +182,11 @@ function openDb(dataDir) {
     throw new Error(`better-sqlite3 加载失败（${e.message}）。打包版需确认 electron-builder asarUnpack 与 electron-rebuild 配置。`);
   }
   fs.mkdirSync(dataDir, { recursive: true });
-  const db = new Database(path.join(dataDir, 'mjcode-tasks.db'));
+  const file = path.join(dataDir, 'mjcode-tasks.db');
+  const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  migrate(db);
+  migrate(db, file);
   return db;
 }
 
@@ -231,14 +252,14 @@ async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride
 
   if (driver === 'sqljs') {
     const db = await openSqliteJsDb(file);
-    migrate(db);
+    migrate(db, file);
     return db;
   }
 
   // 打包版：auto 直接 sql.js（见上方事故注释——原生模块崩溃无法用子进程探测兜底）
   if (driver === 'auto' && isPackaged) {
     const db = await openSqliteJsDb(file);
-    migrate(db);
+    migrate(db, file);
     console.log('[db] SQLite 驱动：sql.js（WASM，打包版固定）');
     return db;
   }
@@ -258,21 +279,55 @@ async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride
   }
 
   const db = await openSqliteJsDb(file);
-  migrate(db);
+  migrate(db, file);
   console.log('[db] SQLite 驱动：sql.js（WASM 降级）');
   return db;
 }
 
-function migrate(db) {
+// 迁移前快照：库文件是任务编排与记忆的唯一副本（X5 的另一半）。
+// 只在「确实要升级」时做，且按版本号命名（同一版本重试只覆盖同一文件，不会累积）。
+// WAL 模式下必须连带 -wal/-shm 一起拷，否则快照会丢掉最近事务。
+function snapshotBeforeMigrate(filePath, fromVersion) {
+  if (!filePath || fromVersion <= 0) return null; // 新库没有数据可备
+  if (!fs.existsSync(filePath)) return null;
+  const backup = `${filePath}.pre-v${fromVersion}.bak`;
+  try {
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (fs.existsSync(filePath + suffix)) fs.copyFileSync(filePath + suffix, backup + suffix);
+    }
+    console.log(`[db] 迁移前已快照：${backup}`);
+    return backup;
+  } catch (e) {
+    console.warn('[db] 迁移前快照失败（继续迁移，但失去回滚点）：', e.message);
+    return null;
+  }
+}
+
+function migrate(db, filePath) {
   const current = db.pragma('user_version', { simple: true });
+  const target = MIGRATIONS[MIGRATIONS.length - 1].version;
+  // 只在「确实要升级」时快照：每次启动都拷一份 40MB 级库文件是纯浪费
+  if (current < target) snapshotBeforeMigrate(filePath, current);
   for (const m of MIGRATIONS) {
     if (m.version <= current) continue;
     const tx = db.transaction(() => {
       m.up(db);
       db.pragma(`user_version = ${m.version}`);
     });
-    tx();
-    console.log(`[db] 迁移 v${m.version} 完成：${m.name}`);
+    try {
+      tx();
+      console.log(`[db] 迁移 v${m.version} 完成：${m.name}`);
+    } catch (e) {
+      // 兜底：幂等加列之外仍可能撞上「列被别的模块提前加过」。
+      // 这属于「目标效果已达成」，推进版本号继续，而不是让整条链失败。
+      // 只对 duplicate column 精确容错，其余错误照旧抛出（不吞真实故障）。
+      if (/duplicate column name/i.test(String((e && e.message) || ''))) {
+        db.pragma(`user_version = ${m.version}`);
+        console.warn(`[db] 迁移 v${m.version} 目标列已存在，按已应用处理：`, e.message);
+        continue;
+      }
+      throw e;
+    }
   }
 }
 

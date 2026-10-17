@@ -28,7 +28,9 @@ let mainWindow;
 //   requestApproval 据此把挂起审批挂到 runId（运行取消 → cancelApprovalsForRun 统一撤下）；
 //   exec.js 据此把 shell 子进程注册到 runId（运行取消 → killChildrenForRun 终止子进程）。
 const runScope = new AsyncLocalStorage();
-const activeRunChildren = new Map(); // runId -> Set<ChildProcess>
+// P0-1：运行级子进程注册表（单一事实来源，main/childRegistry.js）——
+// initToolExec（工具层）与 initAgentRunner（编排/子代理）共用，取消运行时整组杀灭
+const childRegistry = require('./childRegistry').createChildRegistry();
 
 // ═══════════════════════════════════════════
 //  MODEL SECRETS（仅主进程持有，严禁流向渲染层）
@@ -77,7 +79,9 @@ function saveAlwaysRules() {
 // 向渲染层发起审批，返回 'once' | 'conversation' | 'always' | 'deny'
 // P0-2：审批响应按 approvalId 精确分发。原实现 ipcMain.once 共享一条无 id 通道，
 // 多工具并发审批时第一个响应会被任一等待者消费，决策可能张冠李戴（把「允许」发给更危险的命令）。
-const { ApprovalChannel } = require('./approvalChannel');
+// P1-4：approvalReasonOf/denialText——拒绝理由取回与文案（单一事实来源在 approvalChannel.js）
+// 差集 A：initDiffCommentChannel——diff 行内评论存储（挂 localStore 线程）
+const { ApprovalChannel, approvalReasonOf, denialText, initDiffCommentChannel } = require('./approvalChannel');
 const approvalChannel = new ApprovalChannel({ timeoutMs: 120000 });
 // 模型形状转换（扁平形 ⇄ 嵌套形）：全项目唯一事实来源，见 modelShape.js 顶部事故背景
 const { toAgentModel, toChatRequest } = require('./modelShape');
@@ -99,8 +103,16 @@ function requestApproval(tool, args) {
   // N5：审批挂到发起它的运行（AsyncLocalStorage 上下文由 agentRunner 的 handler 包装注入），
   // 运行取消时 cancelApprovalsForRun 统一撤下（rootExecution 统一取消之「撤审批」）。
   const waitP = approvalChannel.wait(approvalId, broadcastApprovalEnd, runScope.getStore()?.runId || null);
+  // P0-5：无可用窗口（启动早期 / 窗口已销毁）无法征求用户 → fail-closed 按 deny 收尾，
+  // 不再对 mainWindow.webContents 裸解引用（IPC rejection 会把工具循环打进不可诊断态）
+  const win = mainWindow && (typeof mainWindow.isDestroyed !== 'function' || !mainWindow.isDestroyed()) ? mainWindow : null;
+  if (!win) {
+    console.warn(`[approval] 无可用窗口，审批按 deny 收尾（tool=${tool}）`);
+    approvalChannel.dispatch(approvalId, 'deny');
+    return waitP;
+  }
   // V21：审批卡需显示请求来源的工作根——cwd 随摘要下发（无 cwd 时不带该字段）
-  mainWindow.webContents.send('tool:approval-request', { approvalId, tool, ...(args?.cwd ? { cwd: args.cwd } : {}), ...summary });
+  win.webContents.send('tool:approval-request', { approvalId, tool, rememberable: approval.isRememberable(tool), ...(args?.cwd ? { cwd: args.cwd } : {}), ...summary });
   return waitP;
 }
 
@@ -109,9 +121,11 @@ ipcMain.on('tool:approval-response', (_, payload) => {
   const hasId = payload && typeof payload === 'object';
   const approvalId = hasId ? payload.approvalId : null;
   const decision = hasId ? payload.decision : payload;
+  // P1-4：用户可选的决策理由随决议回传（无理由时行为不变）
+  const reason = hasId ? payload.reason : undefined;
   const dispatched = approvalId != null
-    ? approvalChannel.dispatch(approvalId, decision)
-    : approvalChannel.dispatchLegacy(decision); // 旧渲染层兼容：仅唯一挂起时接受
+    ? approvalChannel.dispatch(approvalId, decision, reason)
+    : approvalChannel.dispatchLegacy(approvalId, decision); // P2-3：无 id 响应一律拒绝并告警
   if (!dispatched) console.warn('[approval] 收到无法匹配的审批响应，已忽略（防串扰）');
 });
 
@@ -220,6 +234,12 @@ localDataIpc.initLocalDataIpc({
   getMemoryScheduler: () => memoryScheduler,
 });
 const { syncModelsFile, maybeSyncModelsFile, migrateLocalModelsToFile } = localDataIpc;
+
+// 差集 A：diff 行内评论存储——评论挂到 localStore 的线程对象（t.diffComments）随
+// local-data.json 持久化；localStore 未就绪时 getter 返回 null，内部退化为进程内 Map。
+initDiffCommentChannel({ getLocalStore: () => localStore });
+// P0-8c：开机自启 IPC（实现抽到 main/autoLaunch.js——main.js 逼近 max-lines 门禁）
+require('./autoLaunch').initAutoLaunchIpc({ getStore: () => localStore });
 
 
 // ═══════════════════════════════════════════
@@ -428,6 +448,8 @@ toolExec.initToolExec({
       return recent?.path || app.getPath('home');
     } catch { return app.getPath('home'); }
   },
+  // P0-1：shell/seatbelt/bwrap/git 子进程注册到 runId（缺失即抛错由 exec.js 保证接线存在）
+  registerChild: (child) => childRegistry.register(runScope.getStore()?.runId, child),
 });
 const { toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob, toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd, shellEnv, runGit } = toolExec;
 
@@ -535,7 +557,8 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret.api_key}` },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      // 超时必须「真中断」（上层 withTimeout 只放弃等待，连接挂着则 finally 的 slot.release 不执行 → fg 槽位泄漏）；仅 Agent 路径加兜底——timeout 是总时长语义，直连 chat 套上会硬切长回答
+      signal: externalSignal ? AbortSignal.any([controller.signal, AbortSignal.timeout(125000)]) : controller.signal,
     });
 
     if (!res.ok) {
@@ -589,7 +612,8 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
     quota.reportSuccess(providerId || 'default');
     return { content: fullContent, tool_calls: toolCalls.filter(Boolean), usage, finish_reason: finishReason };
   } catch (err) {
-    if (err.name === 'AbortError') {
+    // 只有「用户主动中止」才算 aborted；本地 125s 超时（TimeoutError/AbortError）必须走错误路径，否则超时被当成用户停止 → 上层永远拿不到失败信号
+    if (err.name === 'AbortError' && externalSignal?.aborted) {
       return { aborted: true, content: fullContent, usage };
     }
     quota.reportError(providerId || 'default');
@@ -603,7 +627,10 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
   }
 }
 
-ipcMain.handle('model:chat', (event, payload) => chatStreamOnce(payload || {}, event.sender));
+// 直连聊天通道：透传 payload.streamTag 作为第 4 个位置参数（chatStreamOnce 的 streamTag），
+// 带标签时 delta/reasoning 事件发 {tag,text}，渲染层据此把流式输出归到正确的会话；
+// 不带标签（主会话/压缩历史等旧调用方）维持原纯文本协议，行为不变。
+ipcMain.handle('model:chat', (event, payload) => chatStreamOnce(payload || {}, event.sender, undefined, payload?.streamTag));
 
 // 中止全部进行中的 chat（停止生成）
 // P0-4：同时中止主进程 Agent 运行器中挂起的交互式运行（run controller 级联中止在途 fetch）
@@ -719,10 +746,13 @@ function prWriteTool(toolKey, run) {
     const { approvalMode = 'on-request', conversationId } = args;
     const verdict = approval.needsApproval({ tool: toolKey, args, approvalMode, conversationId, alwaysRules, conversationRules });
     if (verdict.need) {
-      const decision = await requestApproval(toolKey, args);
+      const approvalWait = requestApproval(toolKey, args);
+      const decision = await approvalWait;
       if (decision === 'deny') {
-        audit(toolKey, `PR #${args.number || '?'}`, '用户拒绝', 'denied');
-        return { ok: false, error: '用户拒绝执行', denied: true };
+        // P1-4：拒绝理由回传——拼进工具结果（模型可见）与审计行（用户可复盘）
+        const reason = approvalReasonOf(approvalWait);
+        audit(toolKey, `PR #${args.number || '?'}`, reason ? `用户拒绝。理由：${reason}` : '用户拒绝', 'denied');
+        return { ok: false, error: denialText(reason), denied: true };
       }
       applyApprovalDecision(decision, toolKey, args, conversationId);
     }
@@ -740,31 +770,14 @@ const prTools = {
 };
 
 // 定时任务专用 toolHandlers：与渲染层会话同源（复用主进程工具实现）
-function scheduledToolHandlers() {
-  return {
-    chat: scheduledAgentChat,
-    shell: toolShell,
-    readFile: toolReadFile,
-    writeFile: (args) => runWriteTool('writeFile', args),
-    editFile: (args) => runWriteTool('editFile', args),
-    applyPatch: (args) => runWriteTool('applyPatch', args),
-    listDir: toolListDir,
-    grep: toolGrep,
-    glob: toolGlob,
-    gitStatus: toolGitStatus,
-    gitDiff: toolGitDiff,
-    gitLog: toolGitLog,
-    gitBranch: toolGitBranch,
-    gitCommit: toolGitCommit,
-    gitAdd: toolGitAdd,
-    mcpCallTool: callMcpTool,
-    prList: prTools.prList,
-    prView: prTools.prView,
-    prDiff: prTools.prDiff,
-    prReview: prTools.prReview,
-    prComment: prTools.prComment,
-  };
-}
+// 定时任务 / Worker 共用的工具集：清单已在 main/scheduledTools.js（main.js 受 1500 行门禁约束）
+const { scheduledToolHandlers: buildScheduledToolHandlers, scheduledCreate: scheduledCreateTool } = require('./scheduledTools');
+const scheduledToolHandlers = () => buildScheduledToolHandlers({
+  scheduledAgentChat, webTools,
+  toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob,
+  toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd,
+  callMcpTool, prTools,
+});
 
 // P0-4：主进程 Agent 运行器——交互式会话工具循环迁移至主进程。
 // 渲染层只负责发起（agent:run）、订阅事件（agent:event）、中止（agent:abort）；
@@ -786,7 +799,7 @@ const { waitGroupSettled, humanizeGroupResult, diffGroupEvents } = require('./or
 async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId } = {}) {
   const goal = String(args?.goal || '').trim();
   if (!goal) return { ok: false, error: 'goal 不能为空' };
-  if (!taskStore) return { ok: false, error: '任务编排子系统不可用（初始化失败）' };
+  if (!taskStore) return { ok: false, error: dbStatus.toolFailure() };
   const cwd = String(args?.cwd || '');
   // P0 治理修复（2026-10-16）：原实现 `workerPool.setMaxConcurrent(args.max_agents)`
   // 存在三个问题：
@@ -822,10 +835,8 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
     },
   });
   if (waited.aborted) {
-    // 用户已停止：强停该组全部在役 Agent（已完成结果保留在组内，胶囊面板可查）
-    for (const a of workerPool.listActive()) {
-      if (a.groupId === plan.groupId) workerPool.abortTask(a.groupId, a.taskId);
-    }
+    // 用户已停止：整组强停（在役中止 + 排队置 skipped + 组 cancelled）。只 abort 在役任务时组仍是 running，pump() 会继续派发队列 → 用户点了停止仍在烧 token
+    workerPool.abortGroup(plan.groupId);
     return { ok: false, aborted: true, groupId: plan.groupId,
       error: `用户已停止：编排组 ${plan.groupId} 的在役 Agent 已中止（已完成的部分结果已保留）` };
   }
@@ -839,27 +850,14 @@ agentRunner.initAgentRunner({
   loadAgentCore,
   // T3-7：引擎子进程宿主（isAvailable 时 runAgent 走独立进程，否则回退 loadAgentCore in-process）
   engineHost,
+  // T4-3 技能接线：数字员工 starter_skills 按名装载本地 SKILL.md 内容（~/.mjcode/skills）
+  loadSkillContents: (names) => require('./skills').loadSkillContents(pluginsIpc.SKILLS_DIR(), names),
   // N5 rootExecution 统一取消：runScope（handler 包装用）/ 撤审批 / 终止子进程 / 子进程注册
   runScope,
   cancelApprovalsForRun: (runId) => approvalChannel.cancelByRun(runId),
-  registerChild: (child) => {
-    const runId = runScope.getStore()?.runId;
-    if (!runId || !child || typeof child.kill !== 'function' || !child.pid) return;
-    let set = activeRunChildren.get(runId);
-    if (!set) { set = new Set(); activeRunChildren.set(runId, set); }
-    set.add(child);
-    child.once('close', () => {
-      set.delete(child);
-      if (set.size === 0) activeRunChildren.delete(runId);
-    });
-  },
-  killChildrenForRun: (runId) => {
-    const set = activeRunChildren.get(runId);
-    if (!set) return 0;
-    let n = 0;
-    for (const c of set) { try { c.kill('SIGTERM'); n += 1; } catch { /* 已退出的忽略 */ } }
-    return n;
-  },
+  // P0-1：registerChild/killChildrenForRun 收敛到 childRegistry（与 initToolExec 同源）
+  registerChild: (child) => childRegistry.register(runScope.getStore()?.runId, child),
+  killChildrenForRun: (runId) => childRegistry.kill(runId),
   // 2026-10-15：会话消息持久化通道（agentRunner 收归主进程落库用）——
   // conversationId 即 threadKey（thread.id），camelCase 形状与 localStore.addMessage 对齐
   persistMessage: ({ conversationId, message }) => {
@@ -891,6 +889,15 @@ agentRunner.initAgentRunner({
     // todoWrite 由 agent-core 内置处理（纯状态，不出网、不触盘），故不在此注册。
     webSearch: (args) => webTools.webSearch(args),
     webFetch: (args) => webTools.webFetch(args),
+    // 2026-10-17：模型侧创建定时任务（此前零入口，用户只能手动去界面建）。恒走 L3 审批，
+    // 且审批只对本次有效（不落规则库）——见 main/scheduledTools.js 的说明。
+    scheduledCreate: (args) => scheduledCreateTool(args, {
+      approvalMode: runApprovalMode || 'on-request',
+      conversationId: conversationId || '',
+      requestApproval,
+      createTask: scheduler.createTask,
+      cronValid: scheduler.cronValid,
+    }),
     // GitHub PR 审查闭环（读直连；review/comment 走 L3 审批）
     prList: prTools.prList,
     prView: prTools.prView,
@@ -940,10 +947,16 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
     model: runModel,
     cwd,
     signal,
-    approvalMode: 'auto-safe',
+    // P0-8c/P1-1：审批档与用户设置对齐——原为硬编码 'auto-safe'，用户选「全部询问」时被静默
+    // 忽略（产品对用户设置撒谎）。与 workerPool.js:206 同源：取「用户当前档（或调用方显式传入）
+    // 与 auto-safe 地板」中更严者；stricterApproval/getCurrentApprovalMode 由 agentRunner 从
+    // approvalPolicy.js 重导出（唯一事实源）。
+    approvalMode: agentRunner.stricterApproval(schedModel.approvalMode || agentRunner.getCurrentApprovalMode(), 'auto-safe'),
     sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
     conversationId: 'scheduled',
     maxRounds: 20,
+    // P0-8c：无人值守成本闸——定时执行强制注入 tokenBudget，与 workerPool.js:211 的 200k 口径对齐
+    tokenBudget: 200000,
     chatRetryBaseMs: 2000, // 无人值守：退避基数放宽，弱网下更耐心
     systemPrompt: '你是定时任务执行器：使用工具完成任务提示词中的要求，产出精炼可读的结果摘要。'
       + '不要反问、不要输出无关寒暄；工具失败时换方式重试或如实说明，不要假装完成。',
@@ -960,6 +973,7 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
 //  与定时任务通道同源：loadAgentCore / scheduledAgentChat / scheduledToolHandlers 复用。
 // ═══════════════════════════════════════════
 const { openDbAsync } = require('./db');
+const dbStatus = require('./dbStatus');
 const { TaskStore } = require('./taskStore');
 const { MemoryManager } = require('./memory');
 const { MemoryBgScheduler } = require('./memory/bgScheduler');
@@ -970,6 +984,8 @@ let taskStore = null;
 let taskDb = null;
 let memoryManager = null;   // P2-1：记忆唯一写入入口（SQLite，五域四层）
 let memoryScheduler = null; // P2-5：记忆后台任务调度器
+// X4：库状态交由 main/dbStatus.js 持有（失败原因 → 状态条 + 工具错误）
+dbStatus.register(ipcMain, () => !!taskStore);
 
 function emitTaskEvent(evt) {
   // 事件桥接：编排器监听组终态/暂停事件，驱动 auto 组自动重规划
@@ -991,11 +1007,12 @@ function resolveTaskModel() {
 function initTaskOrchestration() {
   // 异步初始化：驱动选择可能包含子进程金丝雀探测（最长 ~10s），不阻断启动
   openDbAsync(app.getPath('userData'), { isPackaged: app.isPackaged })
-    .then(setupTaskOrchestration)
+    .then((db) => { if (setupTaskOrchestration(db) === true) dbStatus.markReady(); })
     .catch((err) => {
-      // 编排子系统初始化失败不阻断应用启动（任务功能不可用，其余不受影响）
+      // 初始化失败不阻断启动，但必须让用户看得见（X4）
       console.error('[tasks] 初始化失败（任务编排不可用）:', err.message);
       taskStore = null;
+      dbStatus.markUnavailable(err && err.message);
     });
 }
 
@@ -1020,6 +1037,8 @@ function setupTaskOrchestration(db) {
       chatOnce: scheduledAgentChat,
       resolveModel: resolveTaskModel,
       bgGate: () => quota.bgAllowed(), // P3-3：前台过载/熔断时后台作业全部让路
+      acquireSlot: (kind, providerId) => quota.acquire(kind, providerId), // P3-3：后台压缩走 bg 槽位（不吃前台预留）
+      getDailyQuota: () => Number(localStore?.getPreference('memory.bgDailyQuota')) || null, // P3-3：每日报费上限可配置
       emit: emitTaskEvent,
     });
     memoryScheduler.start({ intervalMs: 60 * 1000 });
@@ -1040,7 +1059,9 @@ function setupTaskOrchestration(db) {
         webSearch: (args) => webTools.webSearch(args),
         webFetch: (args) => webTools.webFetch(args),
       }),
-      buildTaskPrompt: (group, task) => {
+      // P0-2c：转异步——记忆块经 shared/untrustedContent 结构性隔离后再注入
+      // （Worker prompt 是模型上下文的一部分，历史沉淀可能已被污染，与 agent-core 注入口同处置）
+      buildTaskPrompt: async (group, task) => {
         // 注入总体目标 + 已完成前置任务的结论摘要（跨 Worker 数据传递的唯一通道）
         const gNow = taskStore.getGroup(group.group_id);
         const doneSiblings = (gNow?.tasks || [])
@@ -1055,10 +1076,12 @@ function setupTaskOrchestration(db) {
               domains: ['global_knowledge', 'entity', 'reflection'],
             });
             if (hits.length) {
-              memoryBlock = `【相关记忆（历史沉淀，供参考）】\n${hits.map((m) => `- ${m.content.slice(0, 200)}`).join('\n')}`;
+              const { wrapUntrusted } = await import('../shared/untrustedContent.mjs');
+              const raw = hits.map((m) => `- ${m.content.slice(0, 200)}`).join('\n');
+              memoryBlock = wrapUntrusted(raw, { source: 'memory', label: '相关记忆（历史沉淀，供参考）' }).text;
             }
           }
-        } catch { /* 记忆召回失败不阻塞任务 */ }
+        } catch (e) { console.warn('[worker] 记忆召回/隔离失败，本任务不带记忆块:', e.message); }
         return [
           `【总体目标】\n${group.goal}`,
           doneSiblings.length ? `【已完成前置任务的结论摘要】\n${doneSiblings.join('\n')}` : '',
@@ -1093,10 +1116,12 @@ function setupTaskOrchestration(db) {
       }
     }
     console.log('[tasks] 任务编排子系统就绪（SQLite 持久化队列 + Worker 池）');
+    return true;
   } catch (err) {
-    // 编排子系统初始化失败不阻断应用启动（任务功能不可用，其余不受影响）
     console.error('[tasks] 初始化失败（任务编排不可用）:', err.message);
     taskStore = null;
+    dbStatus.markUnavailable(err && err.message);
+    return false;
   }
 }
 
@@ -1250,8 +1275,8 @@ const cuaApprovalChannel = new ApprovalChannel({ timeoutMs: 120000 });
 ipcMain.on('cua:approval-response', (_, payload) => {
   const hasId = payload && typeof payload === 'object' && payload.approvalId;
   const dispatched = hasId
-    ? cuaApprovalChannel.dispatch(payload.approvalId, payload.decision)
-    : cuaApprovalChannel.dispatchLegacy(payload && payload.decision !== undefined ? payload.decision : payload);
+    ? cuaApprovalChannel.dispatch(payload.approvalId, payload.decision, payload.reason)
+    : cuaApprovalChannel.dispatchLegacy(null, payload && payload.decision !== undefined ? payload.decision : payload); // P2-3：无 id 一律拒绝并告警
   if (!dispatched) {
     console.warn('[cua] 收到无法匹配的审批响应，已忽略（fail-closed，按 deny 收尾）');
   }
@@ -1360,7 +1385,9 @@ ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-req
     appName,
     maxSteps,
     model,
-    approvalMode,
+    // P1-2：审批档入参钳制——取「调用方传入 与 用户当前档」中更严者（地板语义），
+    // 渲染层被注入脚本传弱档（never）不再生效；敏感动作逐次确认不受档位影响（设计不变）
+    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', agentRunner.getCurrentApprovalMode()),
     allowedApps: allowedApps || [appName],
     toolHandlers: {
       // chat 留主进程（凭证不出界）；原生执行面全部经子进程会话（T3-6）
@@ -1408,6 +1435,9 @@ ipcMain.handle('cua:stop', async () => {
   if (activeReplayLoop) { activeReplayLoop.stop(); return { ok: true }; }
   if (!activeCuaLoop) return { ok: false, error: '没有进行中的界面自动化任务' };
   activeCuaLoop.stop();
+  // P1-24：停止运行时统一撤下挂起的 CUA 确认卡（按 deny 收尾）——
+  // 此前卡残留：循环已死、卡还在，用户点「允许」打到已无消费者的通道上
+  try { cuaApprovalChannel.disposeAll(); } catch (e) { console.warn('[cua] 撤卡失败:', e.message); }
   return { ok: true };
 });
 
@@ -1430,7 +1460,8 @@ ipcMain.handle('cua:replay', async (_, { recordingId, approvalMode = 'on-request
   };
   const loop = new cuaRecorder.ReplayLoop({
     recording,
-    approvalMode,
+    // P1-2：同 cua:run——审批档入参钳制（更严者生效）
+    approvalMode: agentRunner.stricterApproval(approvalMode || 'on-request', agentRunner.getCurrentApprovalMode()),
     toolHandlers: {
       collectAx: (name) => cuaExec('collectAxTree', name || recording.appName),
       perform: (action, node) => cuaExec('performAction', action, node, { appName: recording.appName || node?.name || '' }),

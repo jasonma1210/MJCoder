@@ -10,5 +10,7 @@
   "dataPath": "本机数据：{path}",
   "dataLocal": "数据保存在本机",
   "keyTitle": "模型 API Key 仅保存在本机（离线模式经系统密钥链加密），不会上传到任何服务器",
-  "keyBadge": "密钥不出本机"
+  "keyBadge": "密钥不出本机",
+  "dbUnavailable": "本地库异常",
+  "dbUnavailableTitle": "任务编排与记忆不可用：本地数据库初始化失败（详情见主进程日志）"
 }
