@@ -1,13 +1,13 @@
 {
   "name": "mj-code-server",
-  "version": "0.1.0",
+  "version": "0.5.0-beta",
   "description": "MJ Code backend - auth, sessions, model config",
   "main": "src/index.js",
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "init-db": "node src/db/init.js",
-    "test": "node test/auth.test.js && node test/mpBind.test.js && node test/collab.test.js",
+    "test": "node test/auth.test.js && node test/mpBind.test.js && node test/collab.test.js && node test/urlGuard.test.js",
     "test:db": "node test/cloud.test.js"
   },
   "dependencies": {

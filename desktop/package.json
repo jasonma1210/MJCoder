@@ -1,6 +1,6 @@
 {
   "name": "mj-code-desktop",
-  "version": "0.1.0",
+  "version": "0.5.0-beta",
   "description": "MJ Code - AI coding assistant",
   "main": "main/main.js",
   "scripts": {
