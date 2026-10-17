@@ -1,11 +1,11 @@
 // @ts-nocheck -- T2-2 存量代码原样搬移（零行为变更）；渐进 TS 路线下补全类型属后续任务（T0-3 门禁只约束新文件扩展名）
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from './feedback';
 import { useI18n } from '../i18n'; // T3-2：i18n
-import { IconCopy, IconCpu, IconSpinner } from './icons';
+import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconPlus, IconSpinner } from './icons';
 import { ToolTraceGroup } from './tools/ToolTrace';
 
 // T2-2：消息流域（自主进程 ChatArea.jsx 原样搬移，行为不变）——
@@ -44,6 +44,7 @@ export default function MessageStream({
   messages, windowStart, onLoadEarlier,
   loading, toolCalls, reasoningText, streamingText,
   runSummary, runUsage, runStartedAt, contextUsage, model,
+  runFiles = [],
   onOpenFile,
 }) {
   const { t } = useI18n();
@@ -55,9 +56,21 @@ export default function MessageStream({
   let effStart = windowStart;
   while (effStart > 0 && effStart < messages.length && messages[effStart].role === 'tool') effStart -= 1;
   const visibleMessages = messages.slice(effStart);
+  // X11：把历史轮次整棵 element 树 memo 住。流式期间 messages/effStart 都不变，
+  // React 复用同一批 element 就会跳过这些子树的 re-render 与 markdown 重新解析——
+  // 每帧只重绘「正在增长的那一段」。
+  const rounds = useMemo(
+    () => renderMessages(visibleMessages, !!runSummary || !!loading, onOpenFile, toolCalls),
+    // visibleMessages 由 messages/effStart 派生，故直接以二者为依赖（避免数组身份每帧变化）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages, effStart, runSummary, loading, onOpenFile, toolCalls],
+  );
   return (
       <div className="relative flex-1 min-h-0 flex flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-4" onScroll={handleScroll}>
+        {/* 正文列与输入框同宽同左缘（Composer 为 max-w-3xl mx-auto）：此前消息贴左、
+            输入框居中，1440 宽下两者错开约 130px，视觉上像是两套栅格 */}
+        <div className="mx-auto w-full max-w-3xl">
         {effStart > 0 && (
           <div className="flex justify-center mb-3">
             <button onClick={() => onLoadEarlier(effStart)}
@@ -68,7 +81,11 @@ export default function MessageStream({
         )}
         {/* 最后一轮的逐条消息 meta 仅在「底部收尾条不会渲染」时展示（有收尾条即由其统一承载，
             避免同一组数字重复出现两次）；历史轮始终保留 meta，避免历史消息丢失模型/耗时信息。 */}
-        {renderMessages(visibleMessages, !!runSummary || !!loading, onOpenFile)}
+        {/* 本轮工具轨迹并入「最后一轮」块内、答复正文之上（见 RoundBlock 的 extraCalls）。
+            此前它单独排在消息流最底部，用户要往下翻才看得到「这一轮做了什么」，与正文割裂。 */}
+        {rounds}
+        {/* 本轮产出文件：运行结束后列出本轮被写入/修改的文件（点击在右侧预览栏打开） */}
+        <RunOutputFiles files={runFiles} onOpenFile={onOpenFile} />
         {/* T1-5：本轮概览卡——运行中实时（耗时/消耗/上下文/模型），结束态转固定收尾条 */}
         <RunFooter
           summary={runSummary}
@@ -80,10 +97,7 @@ export default function MessageStream({
             model,
           } : null}
         />
-        {/* T1-1+T1-2：运行态工具轨迹——语义化卡片 + 折叠分组（进行中的一轮默认展开） */}
-        {toolCalls.length > 0 && (
-          <ToolTraceGroup calls={toolCalls} label={t('message.thisRound')} defaultOpen />
-        )}
+        {/* T1-1+T1-2：运行态工具轨迹已并入最后一轮块（答复正文之上），此处不再重复渲染 */}
         {/* T1-5：推理模型思考流——Markdown 渐进渲染（与正文一致的排版），默认展开可折叠 */}
         {loading && reasoningText && (
           <details className="mb-3 max-w-3xl" open>
@@ -96,7 +110,7 @@ export default function MessageStream({
         {streamingText && (
           <div className="mb-4 max-w-3xl">
             <div className="text-xs text-text2 mb-1">MJ Coder <span className="animate-pulse">▋</span></div>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+            <div className="msg-prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown></div>
           </div>
         )}
         {/* T1-5：统一加载态——spinner + 文案，与工具卡/概览卡的运行中徽标同一视觉语言 */}
@@ -106,6 +120,7 @@ export default function MessageStream({
             {t('message.thinking')}
           </div>
         )}
+        </div>
       </div>
       {/* C3：用户上翻历史时出现，点击回底并恢复跟随 */}
       {showJumpBottom && (
@@ -160,7 +175,7 @@ export function RunFooter({ summary, live }) {
     const sec = Math.max(0, Math.round(ms / 1000));
     return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60}s`;
   };
-  const chip = 'inline-flex items-center gap-1 text-[11px] text-text2 bg-surface border border-border rounded-lg px-3 py-1.5 gap-x-3 gap-y-1 flex-wrap';
+  const chip = 'inline-flex items-center gap-1 text-xs text-text2 bg-surface border border-border rounded-lg px-3 py-1.5 gap-x-3 gap-y-1 flex-wrap';
   // 运行中概览：实时数据流（startedAt/usage/contextUsage 由调用方每轮渲染传入最新值）
   if (live) {
     const total = (live.tokensIn || 0) + (live.tokensOut || 0);
@@ -241,25 +256,125 @@ function isFilePathLike(text: string): boolean {
   return /[\\/]/.test(s);
 }
 
-/** 正文内联代码 / 本地链接 → 可点击的文件 chip（点击在右侧预览栏打开） */
+/** 文件 chip 的「…」菜单（对标 WorkBuddy）：添加到对话框 / 复制路径 / 在默认应用打开。
+ *  「添加到对话框」走 mjcode:add-attachment 事件总线（useAgentRun 监听），与右栏预览同款。 */
+function FileRefMenu({ text, onClose }: { text: string; onClose: () => void }) {
+  const { t } = useI18n();
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  async function copyPath() {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ message: t('message.pathCopied') });
+    } catch (err) {
+      console.warn('[message] copy path failed:', err);
+      toast({ message: t('message.copyFailed') });
+    }
+    onClose();
+  }
+  async function openDefault() {
+    try {
+      const r = await window.mjcode?.openPath?.({ path: text });
+      if (r && r.ok === false) toast({ message: String(r.error || t('filePreview.openFailed')) });
+    } catch (err) {
+      console.warn('[message] open with default app failed:', err);
+    }
+    onClose();
+  }
+  const item = 'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-text hover:bg-hover';
+  return (
+    <div ref={menuRef} role="menu" className="absolute left-0 top-full mt-1 z-menu w-[168px] py-1 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]">
+      <button type="button" role="menuitem" className={item}
+        onClick={() => { window.dispatchEvent(new CustomEvent('mjcode:add-attachment', { detail: { path: text } })); onClose(); }}>
+        <IconPlus size={13} className="text-text2 shrink-0" />
+        <span className="truncate">{t('message.addToChat')}</span>
+      </button>
+      <button type="button" role="menuitem" className={item} onClick={copyPath}>
+        <IconCopy size={13} className="text-text2 shrink-0" />
+        <span className="truncate">{t('message.copyPath')}</span>
+      </button>
+      <button type="button" role="menuitem" className={item} onClick={openDefault}>
+        <IconExternalLink size={13} className="text-text2 shrink-0" />
+        <span className="truncate">{t('filePreview.openWithSystem')}</span>
+      </button>
+    </div>
+  );
+}
+
+/** 本轮产出文件：任务结束后列出本轮被写入/修改的文件（点击在右侧预览栏打开） */
+function RunOutputFiles({ files = [], onOpenFile }: { files?: Array<string | { path: string }>; onOpenFile?: (p: string) => void }) {
+  const { t } = useI18n();
+  const list = (files || []).map((f) => (typeof f === 'string' ? f : f?.path)).filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <div className="mb-4 max-w-3xl">
+      <div className="text-xs text-text2 mb-1.5">{t('message.outputFiles', { n: list.length })}</div>
+      <div className="flex flex-wrap gap-2">
+        {list.map((path) => {
+          const name = path.split('/').pop() || path;
+          const dir = path.length > name.length ? path.slice(0, path.length - name.length - 1) : '';
+          return (
+            <button
+              key={path}
+              type="button"
+              onClick={() => onOpenFile?.(path)}
+              title={path}
+              className="group flex items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2 text-left hover:bg-hover hover:border-accent/40 transition-colors min-w-[190px] max-w-[280px]"
+            >
+              <span className="shrink-0 text-accent"><IconFile size={18} /></span>
+              <span className="min-w-0">
+                <span className="block text-xs text-text truncate">{name}</span>
+                <span className="block text-caption text-text2 truncate" dir="rtl">{dir || name}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** 正文内联代码 / 本地链接 → 可点击的文件 chip：点击在右侧预览栏打开；「…」弹出操作菜单 */
 function FileRefChip({ text, onOpenFile }: { text: string; onOpenFile?: (p: string) => void }) {
   const { t } = useI18n();
+  const [menuOpen, setMenuOpen] = useState(false);
   const clickable = !!onOpenFile && isFilePathLike(text);
-  const base = 'rounded px-1.5 py-0.5 text-[11px] border';
+  const base = 'rounded px-1.5 py-0.5 text-xs border';
   if (!clickable) {
     return (
       <code className={`${base} bg-hover border-border text-text2 font-mono`}>{text}</code>
     );
   }
   return (
-    <button
-      type="button"
-      onClick={() => onOpenFile?.(text)}
-      title={t('message.openFileHint')}
-      className={`${base} bg-accent/10 border-accent/40 text-accent font-mono hover:bg-accent/20 cursor-pointer`}
-    >
-      {text}
-    </button>
+    <span className="relative inline-flex items-center gap-0.5 align-baseline">
+      <button
+        type="button"
+        onClick={() => onOpenFile?.(text)}
+        title={t('message.openFileHint')}
+        className={`${base} bg-accent/10 border-accent/40 text-accent font-mono hover:bg-accent/20 cursor-pointer`}
+      >
+        {text}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+        title={t('message.fileActions')}
+        aria-label={t('message.fileActions')}
+        className="shrink-0 text-text2 hover:text-text rounded p-0.5 align-middle"
+      >
+        <IconChevronDown size={11} />
+      </button>
+      {menuOpen && <FileRefMenu text={text} onClose={() => setMenuOpen(false)} />}
+    </span>
   );
 }
 
@@ -292,13 +407,22 @@ function markdownComponents(onOpenFile?: (p: string) => void) {
 }
 
 // 轮次块：一轮的 user 气泡 + 工具轨迹组 + assistant 回复（含 meta）。折叠状态本组件持有。
-function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta = false, onOpenFile }) {
+function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta = false, extraCalls = [], onOpenFile }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(isLast);
   const calls = [];
   for (const m of assistants) {
     const cs = Array.isArray(m.tool_calls) ? m.tool_calls : Array.isArray(m.toolCalls) ? m.toolCalls : [];
     for (const tc of cs) calls.push(tc);
+  }
+  // 运行中/刚结束的这一轮：中间轮消息尚未回到渲染层（主进程落库、渲染层只拿到最终 assistant），
+  // 所以本轮的工具调用由 MessageStream 以 liveCalls 传入，接到本条消息自带 calls 之后，去重后合并。
+  if (isLast && extraCalls.length) {
+    const seen = new Set(calls.map((c) => c?.id).filter(Boolean));
+    for (const tc of extraCalls) {
+      if (tc?.id && seen.has(tc.id)) continue;
+      calls.push(tc);
+    }
   }
   const firstReply = assistants.find((m) => m.content);
   // 本轮「答复」所在的消息下标：末条有正文的 assistant（工具调用轮里正文只出现在最后一条）。
@@ -314,11 +438,11 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
   return (
     <div className="mb-5">
       <div className="flex items-center gap-2 mb-2 select-none">
-        <span className="text-[11px] text-text2/80 shrink-0">{t('message.round', { n: round })}</span>
+        <span className="text-caption text-text2 shrink-0">{t('message.round', { n: round })}</span>
         {calls.length > 0 && (
-          <span className="text-[10px] text-text2 bg-hover rounded px-1.5 py-0.5 shrink-0">{t('message.callCount', { n: calls.length })}</span>
+          <span className="text-caption text-text2 bg-hover rounded px-1.5 py-0.5 shrink-0">{t('message.callCount', { n: calls.length })}</span>
         )}
-        <button onClick={() => setOpen((v) => !v)} className="text-[11px] text-text2 hover:text-text shrink-0"
+        <button onClick={() => setOpen((v) => !v)} className="text-xs text-text2 hover:text-text shrink-0"
           title={open ? t('message.collapseRound') : t('message.expandRound')}>
           {open ? t('message.collapse') : t('message.expand')}
         </button>
@@ -328,13 +452,13 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
         <button onClick={() => setOpen(true)}
           className="w-full text-left text-xs text-text2 hover:text-text truncate" title={userPreview}>
           {userPreview || replyPreview || t('message.round', { n: round })}
-          {calls.length > 0 && <span className="text-text2/70">{t('message.withToolCalls', { n: calls.length })}</span>}
+          {calls.length > 0 && <span className="text-text2">{t('message.withToolCalls', { n: calls.length })}</span>}
         </button>
       ) : (
         <>
           {user && (
             <div className="mb-4 flex justify-end">
-              <div className="bg-surface rounded-2xl px-4 py-2 max-w-2xl">
+              <div className="msg-prose bg-surface rounded-2xl px-4 py-2 max-w-2xl">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>{user.content}</ReactMarkdown>
               </div>
               <div className="self-center ml-2"><CopyButton text={user.content} /></div>
@@ -359,14 +483,16 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
                 {k === answerIdx && calls.length > 0 && (
                   <ToolTraceGroup calls={calls} toolResults={toolResults} label={t('toolTrace.roundExecTrace')} />
                 )}
-                {m.content && <ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>{m.content}</ReactMarkdown>}
+                {m.content && (
+                  <div className="msg-prose"><ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>{m.content}</ReactMarkdown></div>
+                )}
                 {/* 底部明细：模型 + token 消耗 + 时间。
                     条件放宽：任一信息存在即展示——此前 modelName 为空时整行隐藏，
                     中间消息（有 token 无模型名）与历史消息一律不可见，用户侧「结束信息全缺」。
                     suppressMeta：当轮已有底部 RunFooter（状态/耗时/共消耗/模型/时间）时隐藏本行，
                     避免同一组数字在页面上重复出现两次（用户实测反馈）。 */}
                 {!suppressMeta && (modelName || tokensIn + tokensOut > 0 || m.created_at || m.createdAt) && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-text2" title={t('message.tokensTitle', { in: tokensIn.toLocaleString(), out: tokensOut.toLocaleString() })}>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text2" title={t('message.tokensTitle', { in: tokensIn.toLocaleString(), out: tokensOut.toLocaleString() })}>
                     <IconCpu size={11} className="shrink-0" />
                     <span>{t('message.totalTokens', { n: (tokensIn + tokensOut).toLocaleString() })}</span>
                     {modelName && <span className="truncate">· {modelName}</span>}
@@ -388,7 +514,7 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
   );
 }
 
-export function renderMessages(messages, suppressLastMeta = false, onOpenFile) {
+export function renderMessages(messages, suppressLastMeta = false, onOpenFile, liveCalls = []) {
   // tool_call_id -> tool 消息内容 索引
   const toolResults = new Map();
   for (const m of messages) {
@@ -412,6 +538,7 @@ export function renderMessages(messages, suppressLastMeta = false, onOpenFile) {
       toolResults={toolResults}
       isLast={i === rounds.length - 1}
       suppressMeta={suppressLastMeta && i === rounds.length - 1}
+      extraCalls={i === rounds.length - 1 ? liveCalls : []}
       onOpenFile={onOpenFile}
     />
   ));

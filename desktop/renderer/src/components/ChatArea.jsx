@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { makeCoalescer } from '../lib/streamCoalescer';
 import remarkGfm from 'remark-gfm';
 import { useI18n, tGlobal } from '../i18n'; // T3-2：i18n（渲染文案 useI18n；effect 内命令式生成文案用 tGlobal）
 import { api } from '../lib/api';
@@ -48,6 +49,8 @@ export default function ChatArea({
   const [messages, setMessages] = useState([]);
   const [windowStart, setWindowStart] = useState(0); // C1：窗口起点（顶部隐藏条数），长会话只渲染最近 MSG_WINDOW 条
   const [input, setInput] = useState('');
+  // 附件 chips（拖入/粘贴/「添加到对话框」的图片与文档）：发送时由 useAgentRun.send 统一转为 @路径 上下文
+  const [attachments, setAttachments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [reasoningText, setReasoningText] = useState(''); // 推理模型思考流（不落库）
@@ -61,6 +64,9 @@ export default function ChatArea({
   const [memories, setMemories] = useState([]);
   const [ambient, setAmbient] = useState([]);
   const [queued, setQueued] = useState([]); // 运行中排队的指令（下一轮自动执行）
+  // 排队卡片的「立即执行」：点击后先停当前轮，等 loading 归零再发——避免与中止收尾抢状态。
+  // 用「挂起 + effect 触发」而不是 setTimeout：中止收尾是异步的，定时器时长只能靠猜。
+  const [pendingRun, setPendingRun] = useState(null);
   // P0-A：上一轮失败输入，供「重试本轮」一键重放（瞬时错误重试耗尽后，失败可挽回）
   const [lastFailed, setLastFailed] = useState(null); // { text }
   // 大任务拆分（token 效率）：plan=待用户确认的拆分卡片；planReport=分步完成报告
@@ -73,6 +79,8 @@ export default function ChatArea({
   // 此前结束信息只藏在最终消息的 meta 小字里（且中间消息/异常路径都没有），
   // 用户侧表现就是「结果出来了，但没有任何结束的信息」。
   const [runSummary, setRunSummary] = useState(null); // { status, durationMs, tokensIn, tokensOut, model, endedAt }
+  // 本轮产出文件（write_file/edit_file/apply_patch 的目标路径）：运行结束渲染成卡片，点击开预览
+  const [runFiles, setRunFiles] = useState([]);
   const runStartRef = useRef(0);
   // T1-5：运行中实时消耗（onMessage 每条中间消息累计；结束态以 runSummary 为准）
   const [runUsage, setRunUsage] = useState({ tokensIn: 0, tokensOut: 0 });
@@ -103,6 +111,20 @@ export default function ChatArea({
   const voice = useVoice({ onText: (text) => setInput((prev) => (prev ? `${prev} ${text}` : text)) });
   // 实际执行目录：隔离工作区就绪时用 worktree 路径，否则用项目目录
   const cwd = (runMode === 'worktree' && worktree?.path) ? worktree.path : (project?.path || '');
+
+  // X11：流式提交器（每帧最多一次）。loadingRef 用于提交时的「还在跑吗」判定
+  const loadingRef = useRef(false);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+  const legacyDeltaRef = useRef('');  // 无标签旧协议：delta / reasoning 各自累加，不能共用
+  const legacyReasonRef = useRef('');
+  const commitStream = useMemo(
+    () => makeCoalescer(setStreamingText, () => loadingRef.current),
+    [],
+  );
+  const commitReason = useMemo(
+    () => makeCoalescer(setReasoningText, () => loadingRef.current),
+    [],
+  );
 
   // 首启向导带入的首任务提示词
   // P1-6：onPromptConsumed 走 latest-ref 模式，不列入依赖数组。
@@ -192,6 +214,7 @@ export default function ChatArea({
       const reqId = ++msgReqRef.current;
       const fetchStartedAt = Date.now();
       setLastFailed(null); // 切换会话：失败重试上下文不跨会话
+      setAttachments([]);  // 附件 chips 同为会话级上下文：不跨会话残留（与 openedFiles 同口径）
       setMessages([]);     // 先清空：异步拉取期间禁止显示旧会话消息（串显根因）
       setWindowStart(0);
       api.messages(thread.id).then((list) => {
@@ -236,6 +259,7 @@ export default function ChatArea({
     setReasoningText(rs?.inFlight ? (rs.reasoning || '') : '');
     setToolCalls(rs?.inFlight ? [...rs.toolCalls] : []);
     setRunSummary(rs?.done ? rs.runSummary : null);
+    setRunFiles(rs?.done ? (rs.files || []) : []);
     if (!isCreatingThread) {
       setPlan(null);
       setPlanReport(null);
@@ -317,9 +341,10 @@ export default function ChatArea({
         const rs = runIndex.get(tag);
         if (!rs) return;
         rs.streaming += text;
-        if (rs.threadId === activeThreadIdRef.current) setStreamingText(rs.streaming);
+        if (rs.threadId === activeThreadIdRef.current) commitStream(rs.streaming);
       } else {
-        setStreamingText((prev) => prev + text);
+        legacyDeltaRef.current += text;
+        commitStream(legacyDeltaRef.current);
       }
     });
     return () => { if (typeof off === 'function') off(); };
@@ -337,9 +362,10 @@ export default function ChatArea({
         const rs = runIndex.get(tag);
         if (!rs) return;
         rs.reasoning += text;
-        if (rs.threadId === activeThreadIdRef.current) setReasoningText(rs.reasoning);
+        if (rs.threadId === activeThreadIdRef.current) commitReason(rs.reasoning);
       } else {
-        setReasoningText((prev) => (prev || '') + text);
+        legacyReasonRef.current += text;
+        commitReason(legacyReasonRef.current);
       }
     });
     return () => { if (typeof off === 'function') off(); };
@@ -350,12 +376,42 @@ export default function ChatArea({
     input, loading, selectedModel, project, projectPicked, thread, cwd, mcpTools, enabledSkills,
     fileSkills, memories, agentsMd, approvalSettings, planMode, runMode, worktree, sessionExtras,
     messages, compacting, plan, voice,
+    attachments, setAttachments,
     setInput, setModelWarning, setPlan, setPlanReport, setDecomposing, setMessages, setLastFailed, setLoading,
-    setToolCalls, setRunSummary, setRunUsage, setQueued, setStreamingText, setReasoningText,
+    setToolCalls, setRunSummary, setRunUsage, setQueued, setStreamingText, setReasoningText, setRunFiles,
     setWindowStart, setCompacting, setPlanMode, setRunMode, setModeMsg, setWorktree,
     abortRef, activeThreadIdRef, activeRunIdRef, runStartRef, agentFilesRef, messagesRef, steerPendingRef,
     onNewMessage, onThreadStatus, onAgentFilesChange, onThreadCreated, onAutoProject, onSubagentEvent,
   });
+
+  // 排队卡片「立即执行」：stop() 之后等 loading 归零（中止收尾完成）再发这条。
+  // 直接在 stop() 后面调 send() 会与收尾抢状态：收尾分支会把 loading 置 false、把线程置 idle，
+  // 结果新任务刚起就被写成「空闲」。
+  useEffect(() => {
+    if (!pendingRun || loading) return;
+    const text = pendingRun;
+    setPendingRun(null);
+    send(text);
+    // send 每次渲染重建；此处只在「挂起项就绪且已空闲」时触发一次，故意不列依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRun, loading]);
+
+  // 立即执行第 i 条：从队列摘除 → 停当前轮 → 挂起待发
+  function runQueuedNow(i) {
+    const text = queued[i];
+    if (!text) return;
+    setQueued((q) => q.filter((_, j) => j !== i));
+    stop();
+    setPendingRun(text);
+  }
+
+  // 编辑第 i 条：摘除并回填输入框（不覆盖已输入内容时追加，避免吞掉用户正在写的）
+  function editQueued(i) {
+    const text = queued[i];
+    if (!text) return;
+    setQueued((q) => q.filter((_, j) => j !== i));
+    setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text));
+  }
   // T2-2：Composer 接线在欢迎页与对话页间共享（仅 workspaceBound 语义随场景不同）
   const composerProps = {
     input, setInput, onSend: send, onStop: stop, onPickFiles: pickFiles,
@@ -364,7 +420,8 @@ export default function ChatArea({
     providers, onSelectModel,
     approval: approvalSettings, onApprovalChange,
     onSteer: steer, onQueue: queueNext, onClear: clearContext,
-    queuedCount: queued.length, queued, onQueueRemove: (i) => setQueued((q) => q.filter((_, j) => j !== i)),
+    queued, onQueueRemove: (i) => setQueued((q) => q.filter((_, j) => j !== i)),
+    onQueueRunNow: runQueuedNow, onQueueEdit: editQueued,
     onCompact: compactContext, compacting,
     contextUsage, onPlanMode: enablePlanMode, planMode,
     runMode, onModeChange: switchMode, worktreeInfo: worktree, modeMsg,
@@ -374,6 +431,9 @@ export default function ChatArea({
     extras: sessionExtras, onExtrasChange: setSessionExtras, enabledSkills,
     plusOpen, onPlusOpenChange: setPlusOpen,
     voice, onDropFiles: ingestFiles, messages,
+    // 附件 chips：图片 hover 预览 / 文档点击 → onOpenFile（右栏预览，App.openFileInPane）
+    attachments, onRemoveAttachment: (path) => setAttachments((a) => a.filter((x) => x.path !== path)),
+    onOpenAttachment: onOpenFile,
     connectedServers: [...new Set((mcpTools || []).map((t) => String(t.function?.name || '').split('__')[1]).filter(Boolean))],
   };
 
@@ -418,6 +478,7 @@ export default function ChatArea({
         runStartedAt={runStartRef.current}
         contextUsage={contextUsage}
         model={selectedModel?.model?.model_id}
+        runFiles={runFiles}
         onOpenFile={onOpenFile}
       />
       {/* Composer 容器必须 shrink-0：否则会被上方消息区挤压，输入框被推出可视区*/}
