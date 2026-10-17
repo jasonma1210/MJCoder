@@ -29,7 +29,9 @@ function check(name, fn) {
 // 取舍规则见报告：纯读通道、无入参通道、已有 zod 契约（agent:run / tasks 的 cancel·abortTask·
 // abortGroup·retryTask·deleteGroup·config·execute）不在此列。
 const GUARDED_CHANNELS = [
-  // main/main.js —— 顶到 1500 行硬门禁，只加必要的几个
+  // main/main.js —— 这几条是「main.js 里仅剩的直连写通道」（其余由 zod 契约或纯读排除，见下方剔除名单）。
+  // 行数不是纳入范围的判据：按 eslint 的 code 口径（skipBlankLines+skipComments）main.js 余量充足，
+  // 别把这段读成「main.js 快撞 1500 行」——那是历史上被传错的错误前提（60d989e 已清 7 处）。
   'checkpoint:clear',
   'cua:run',
   'cua:replay',
