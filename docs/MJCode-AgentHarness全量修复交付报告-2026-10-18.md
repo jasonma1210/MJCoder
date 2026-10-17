@@ -157,7 +157,7 @@
 | `npm run lint` | **0 error** / 155 warning（基线 146，+9 来自新增代码） |
 | `node scripts/i18n-scan.mjs renderer/src` | 裸中文残留 **0** |
 
-**新增测试**：16 个套件、**约 181 条行为断言**（`window-inference`/`wallclock-budget`/`rewrite-ledger`/`trim-trigger`/`skill-disclosure`/`role-tool-cut`/`parallel-readonly-tools`/`summary-clamp`/`summary-notice`/`ttfb-report`/`prefix-stability`/`model-override`/`role-injection-guard`/`independent-verification`/`model-windows-parity`/`probe-window-wiring`）。
+**新增测试**：16 个套件、**198 条行为断言**（`window-inference` 15 · `wallclock-budget` 9 · `rewrite-ledger` 8 · `trim-trigger` 6 · `skill-disclosure` 11 · `role-tool-cut` 6 · `parallel-readonly-tools` 10 · `summary-clamp` 12 · `summary-notice` 10 · `ttfb-report` 18 · `prefix-stability` 11 · `model-override` 14 · `role-injection-guard` 9 · `independent-verification` 22 · `probe-window-wiring` 21 · `model-windows-parity` 9）。
 
 ### 门禁自身的修复（5 处，独立于业务代码）
 
