@@ -114,14 +114,17 @@ check('斜杠命令菜单存在且含 Codex 同款命令', () => {
   assert.match(composer, /ArrowDown/, '需支持方向键选择');
 });
 
-check('steer（Enter 当轮引导）已实现', () => {
+check('steer 仍存在（显式打断当前轮），但 Enter 已改为排队', () => {
   // T2-2：steer/queueNext/send 流程已拆出 hooks/useAgentRun.ts
+  // 2026-10-17（用户实测）：Enter 曾走 steer，而 steer() 第一行是 stop() ——
+  // 于是"运行中再发一条"会掐断当前任务。现改为 Enter 入队（onQueue 优先），
+  // steer 保留给需要显式打断的调用方。
   const composer = read('components/Composer.tsx');
   const runHook = read('hooks/useAgentRun.ts');
   assert.match(runHook, /function steer\(/);
-  assert.match(composer, /if \(loading && onSteer\) \{ onSteer\(input\)/);
+  assert.match(composer, /const put = onQueue \|\| onSteer/);
   // T3-2 i18n：运行中占位文案已抽取到 zh-CN/composer.json（placeholderRunning），改为两段式验证
-  assertI18nCopy(composer, 'composer', '运行中：Enter 当轮引导', '运行中占位未提示 Enter 当轮引导');
+  assertI18nCopy(composer, 'composer', '运行中：Enter 排队到下一轮', '运行中占位未提示 Enter 排队');
 });
 
 check('queue（Tab 排队下一轮）已实现', () => {

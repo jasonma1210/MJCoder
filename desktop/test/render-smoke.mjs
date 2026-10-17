@@ -275,4 +275,56 @@ check('门禁自检：能复现跨作用域白屏（子组件引用父组件局�
   } finally { fs.unlinkSync(tmp); loaded.delete('__scope_probe.jsx'); }
 });
 
+// C1（2026-10-17）：MessageStream 的「输出文件卡片」必须能渲染。
+// 事故形态：组件里用了 <IconFile>，但文件顶部 import 列表漏了它，
+//   而该文件带 @ts-nocheck → tsc 不报「未定义标识符」→ 门禁全绿放行。
+//   只有消息里出现产出文件时才走到那段 JSX，长任务收尾整页被 ErrorBoundary 接走 =
+//   用户看到「app 崩了」。真实证据：diagnostics/crash-2026-10-17.jsonl 两条 rendererError。
+// 这条用例是**唯一**能在 CI 期拦住同类漏 import 的防线：渲染期会真正执行组件函数体。
+check('渲染冒烟：消息里的「输出文件卡片」可渲染（漏 import 会在此炸出）', () => {
+  const props = {
+    messages: [{ id: 'm1', role: 'assistant', content: '已完成修复，产出以下文件。' }],
+    windowStart: 0,
+    onLoadEarlier: noop,
+    loading: false,
+    toolCalls: [],
+    reasoningText: '',
+    streamingText: '',
+    runSummary: '',
+    runUsage: { tokensIn: 100, tokensOut: 50 },
+    runStartedAt: Date.now() - 5000,
+    contextUsage: null,
+    model: 'probe-model',
+    runFiles: ['/tmp/probe-output/report-fix.md'],
+    onOpenFile: noop,
+  };
+  let html = '';
+  assert.doesNotThrow(() => { html = renderWithI18n('components/MessageStream.tsx', props); },
+    'MessageStream 渲染输出文件卡片抛错（真机表现：整页被 ErrorBoundary 换成崩溃页）');
+  assert.ok(html.includes('report-fix.md'), '未渲染出产出文件名，说明 RunOutputFiles 分支没走到');
+});
+
+// T1（2026-10-17）：运行中必须能看到「已思考 Ns」，否则用户以为卡死会按 Esc 杀任务
+check('渲染冒烟：运行中的思考态带计时（减少误以为卡死）', () => {
+  const props = {
+    messages: [],
+    windowStart: 0,
+    onLoadEarlier: noop,
+    loading: true,
+    toolCalls: [],
+    reasoningText: '正在分析代码结构…',
+    streamingText: '',
+    runSummary: '',
+    runUsage: null,
+    runStartedAt: Date.now() - 12000,
+    contextUsage: null,
+    model: 'probe-model',
+    runFiles: [],
+    onOpenFile: noop,
+  };
+  const html = renderWithI18n('components/MessageStream.tsx', props);
+  assert.ok(/已思考\s*1[0-9]s/.test(html), `未渲染出「已思考 Ns」计时：${html.slice(0, 200)}`);
+  assert.ok(/已收\s*\d+\s*字/.test(html), '未渲染出「已收 N 字」');
+});
+
 console.log(`\nPASS：${pass}/${total} 项通过`);

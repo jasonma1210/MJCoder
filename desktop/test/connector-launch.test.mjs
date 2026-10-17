@@ -87,15 +87,84 @@ const byId = (id) => catalog.find((c) => c.id === id);
 const larkReal = byId('mcp-lark-feishu');
 check('目录含飞书连接器且为 npm 占位符形态', !!larkReal && larkReal.install.type === 'npm'
   && larkReal.install.args.some((a) => a.includes('${LARK_APP_ID}')));
-const ardotRemote = byId('mcp-ardot-remote');
-check('目录含 Ardot 远程条目且 oauth 引导授权', !!ardotRemote && buildLaunchPlan(ardotRemote, {}).kind === 'needs-auth');
-const ardotLocal = byId('mcp-ardot-local');
-check('目录含 Ardot 本条目且匿名直连', !!ardotLocal && buildLaunchPlan(ardotLocal, {}).kind === 'ready');
-const imaReal = byId('mcp-ima');
-// 2026-10-16（用户实测 ima 反馈）：manual 条目恒 manual——原实现「required env 缺值时
-// 误判 needs-config，填齐后又落回 manual」造成表单震荡（保存无响应/要求重输）。
-check('目录含 ima 条目且为 manual（不因 required env 误判 needs-config）', !!imaReal && buildLaunchPlan(imaReal, {}).kind === 'manual');
-check('ima 填齐 env 后仍 manual（无启动信息，不产生可连接假象）', !!imaReal && buildLaunchPlan(imaReal, { IMA_CLIENT_ID: 'x', IMA_API_KEY: 'y' }).kind === 'manual');
+
+// 2026-10-17（用户要求）：ima 与 Ardot 从内置目录移除。
+// 原来这里有两条「目录含 ima 且为 needs-auth」的断言（2026-10-16 修 manual 表单震荡时加的），
+// 现在改为**反向**断言——条目不该再回来；buildLaunchPlan 的 manual / needs-auth 语义
+// 已由上面 p8 / tmplOne 等内联样例覆盖，不依赖具体目录条目。
+check('ima / Ardot 已从目录移除（用户 2026-10-17 要求）',
+  !byId('mcp-ima') && !byId('mcp-ardot-remote') && !byId('mcp-ardot-local'));
+
+// ── header 模板注入（2026-10-17：远程连接器「填了 key 仍 401」的根因）──
+// 旧实现只认 values.Authorization；而真实连接器用 X-Api-Key / Bearer ${API_KEY} 等模板，
+// 用户填的 key 注入不到对应 header → 服务端看到空 header → 恒 401，且界面显示"已配置"。
+const tmplOne = {
+  install: { type: 'remote', url: 'https://api.example.com/mcp', headers: { 'X-Api-Key': '${API_KEY}' } },
+  env_vars: [{ name: 'API_KEY', label: 'API Key', required: true }],
+  auth_type: 'api_key',
+};
+check('模板变量缺失 → needs-auth，且收集的是模板里的变量名（不是硬编码 Authorization）',
+  (() => { const p = buildLaunchPlan(tmplOne, {}); return p.kind === 'needs-auth' && p.missing.length === 1 && p.missing[0].name === 'API_KEY'; })());
+check('模板变量填齐 → ready，且注入到模板指定的 header 名',
+  (() => {
+    const p = buildLaunchPlan(tmplOne, { API_KEY: 'k-123' });
+    return p.kind === 'ready' && p.payload.headers['X-Api-Key'] === 'k-123' && !('Authorization' in p.payload.headers);
+  })());
+check('Bearer 前缀模板按原样拼接（Authorization: Bearer ${API_KEY}）',
+  (() => {
+    const c = { install: { type: 'remote', url: 'https://a/mcp', headers: { Authorization: 'Bearer ${API_KEY}' } } };
+    const p = buildLaunchPlan(c, { API_KEY: 'sk-1' });
+    return p.kind === 'ready' && p.payload.headers.Authorization === 'Bearer sk-1';
+  })());
+check('多变量模板：缺一即 needs-auth，且只报缺的那个',
+  (() => {
+    const c = { install: { type: 'remote', url: 'https://a/mcp', headers: { 'X-Id': '${CLIENT_ID}', 'X-Key': '${API_KEY}' } } };
+    const p = buildLaunchPlan(c, { CLIENT_ID: 'id-1' });
+    return p.kind === 'needs-auth' && p.missing.length === 1 && p.missing[0].name === 'API_KEY';
+  })());
+check('缺变量时**不发**半截模板（发 "Bearer " 比不发更难排查）',
+  (() => {
+    const c = { install: { type: 'remote', url: 'https://a/mcp', headers: { Authorization: 'Bearer ${API_KEY}' } } };
+    const payload = remotePayload(c, {});
+    return payload && !('Authorization' in payload.headers);
+  })());
+check('兼容：模板未声明 Authorization 时，直接粘贴整条令牌仍可用',
+  (() => {
+    const c = { install: { type: 'remote', url: 'https://a/mcp' }, auth_type: 'api_key' };
+    const p = buildLaunchPlan(c, { Authorization: 'Bearer pasted' });
+    return p.kind === 'ready' && p.payload.headers.Authorization === 'Bearer pasted';
+  })());
+
+// ── URL 占位符（2026-10-17：把 key 放 query 的服务，如 ?token=${TUSHARE_TOKEN}）──
+const urlTmpl = { install: { type: 'remote', url: 'https://api.example.com/mcp/?token=${TUSHARE_TOKEN}' }, env_vars: [{ name: 'TUSHARE_TOKEN', required: true }] };
+check('URL 里的 ${VAR} 会被替换（否则发出去的是字面量，服务端只会报 401）',
+  (() => {
+    const p = buildLaunchPlan(urlTmpl, { TUSHARE_TOKEN: 'tk-1' });
+    return p.kind === 'ready' && p.payload.url === 'https://api.example.com/mcp/?token=tk-1';
+  })());
+check('URL 变量缺失 → needs-auth，且收集 url 里的变量（此前只扫 headers，漏掉这类服务）',
+  (() => { const p = buildLaunchPlan(urlTmpl, {}); return p.kind === 'needs-auth' && p.missing.length === 1 && p.missing[0].name === 'TUSHARE_TOKEN'; })());
+check('URL 变量缺失 → remotePayload 返回 null（宁可提示缺项，也不发空 token 去请求）',
+  remotePayload(urlTmpl, {}) === null);
+check('headers 与 url 同时缺变量时只报缺的那个', 
+  (() => {
+    const c = { install: { type: 'remote', url: 'https://a/mcp?k=${K1}', headers: { 'X-K': '${K2}' } } };
+    const p = buildLaunchPlan(c, { K1: 'v1' });
+    return p.kind === 'needs-auth' && p.missing.length === 1 && p.missing[0].name === 'K2';
+  })());
+
+check('sse 连接器 → payload.transport=sse（否则主进程会按 streamableHttp 整错）',
+  (() => {
+    const c = { transport: 'sse', install: { type: 'remote', url: 'https://a/sse' } };
+    const p = buildLaunchPlan(c, {});
+    return p.kind === 'ready' && p.payload.transport === 'sse';
+  })());
+check('streamableHttp 连接器 → payload.transport=http（不回归）',
+  (() => {
+    const c = { transport: 'http', install: { type: 'remote', url: 'https://a/mcp' } };
+    const p = buildLaunchPlan(c, {});
+    return p.kind === 'ready' && p.payload.transport === 'http';
+  })());
 
 const failed = results.filter((x) => !x.ok);
 console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);

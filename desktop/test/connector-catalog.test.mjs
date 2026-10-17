@@ -127,10 +127,17 @@ check('manual 条目必须声明 env_vars（否则点开无处可填，不应收
   assert.deepEqual(bad, [], `以下 manual 条目无任何可填字段，应移除或补齐官方凭证声明：\n  ${bad.join('\n  ')}`);
 });
 
-check('用户点名的主流服务均在目录中（ima / 飞书 / 钉钉 / Notion / Ardot）', () => {
-  for (const id of ['mcp-ima', 'mcp-lark-feishu', 'mcp-dingtalk', 'mcp-notion', 'mcp-ardot-remote', 'mcp-ardot-local']) {
+check('主流服务仍在目录中（飞书 / 钉钉 / Notion）', () => {
+  for (const id of ['mcp-lark-feishu', 'mcp-dingtalk', 'mcp-notion']) {
     assert.ok(list.some((c) => c.id === id), `缺少 ${id}`);
   }
+});
+
+// 2026-10-17：用户明确要求移除 ima 与 Ardot（不再作为内置连接器出现）。
+// 反向断言：将来若有人"顺手加回来"，这里先红。
+check('ima / Ardot 已按用户要求移除，不得回流', () => {
+  const bad = ['mcp-ima', 'mcp-ardot-remote', 'mcp-ardot-local'].filter((id) => list.some((c) => c.id === id));
+  assert.deepEqual(bad, [], `这些条目已要求移除，却又出现了：${bad.join(', ')}`);
 });
 
 check('钉钉按官方规范声明凭证（Client ID / Client Secret）', () => {
@@ -139,12 +146,6 @@ check('钉钉按官方规范声明凭证（Client ID / Client Secret）', () => 
   const names = (dt.env_vars || []).map((v) => v.name);
   assert.ok(names.includes('DINGTALK_Client_ID'), '缺 DINGTALK_Client_ID');
   assert.ok(names.includes('DINGTALK_Client_Secret'), '缺 DINGTALK_Client_Secret');
-});
-
-check('Ardot 本地端点使用完整路径 /api/v1/mcp（基址无法直接连）', () => {
-  const a = list.find((c) => c.id === 'mcp-ardot-local');
-  assert.ok(a, '缺少 mcp-ardot-local');
-  assert.ok(String(a.install?.url || '').endsWith('/api/v1/mcp'), `实际=${a.install?.url}`);
 });
 
 check('目录规模已收敛（防止再次膨胀成大量不可用条目）', () => {

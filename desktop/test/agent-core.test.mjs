@@ -563,10 +563,7 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       async () => chatScript.shift(),
     );
     // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）
-    check('激进档尾部更短且注入压力告警',
-      // 固定头（system + 首条 user）+ 摘要 + 3 条尾部
-      outAggressive.length <= 2 + 1 + 3 && String(outAggressive[1].content).includes('上下文压力告警'),
-      `len=${outAggressive.length}`);
+    // 激进档的断言移到 outNormal 计算之后（两者要比较；尾部条数不再固定）
     reset();
     chatScript = [{ content: '常规摘要', usage: { prompt_tokens: 10, completion_tokens: 5 } }];
     const outNormal = await compactHistory(
@@ -574,11 +571,16 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       { ...model, model: { ...model.model, context_window: 1300 } },
       async () => chatScript.shift(),
     );
-    // 2026-10-17：压缩保留前导 system + 首条 user（原始需求/专家角色不可被摘要掉）
-    // 固定头 = 前导 system(1) + 首条 user(1) + 摘要(1)；尾部 6 条（user 原始需求不再被裁掉）
-    check('常规档保留 6 条尾部且无压力告警',
-      outNormal.length === 2 + 1 + 6 && !String(outNormal[1].content).includes('上下文压力告警'),
+    // 2026-10-17 T2：尾部保留量改由「体积预算」决定（常规保留窗口 25% / 激进 15%），
+    // 不再是固定条数（keepTail=6/3）。守护目标不变：激进档必须裁得更狠且带压力告警，
+    // 常规档必须保留更多尾部；固定头（system 块 + 首条 user）两档都要保住。
+    // 条数断言退化为「体积断言」的原因：一轮并发 8 个工具时，条数制会把整段都算成尾部。
+    check('常规档保留尾部且无压力告警',
+      outNormal.length > 3 && !String(outNormal[1].content).includes('上下文压力告警'),
       `len=${outNormal.length}`);
+    check('激进档尾部更短且注入压力告警',
+      outAggressive.length < outNormal.length && String(outAggressive[1].content).includes('上下文压力告警'),
+      `agg=${outAggressive.length} normal=${outNormal.length}`);
     check('激进档比常规档裁得更多', outAggressive.length < outNormal.length);
 
     // 14.4 真实 usage 驱动压缩：启发式估算低于阈值，但上一轮真实 prompt_tokens 超过 70% → 仍触发

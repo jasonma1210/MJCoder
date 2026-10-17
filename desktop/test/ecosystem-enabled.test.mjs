@@ -108,7 +108,10 @@ const recs = cons.filter((c) => c.recommended === true);
 check('recommended 精选 10~15 条', recs.length >= 10 && recs.length <= 15, `实际 ${recs.length} 条`);
 // 用户指定四产品必须在精选默认启用集内（Notion/飞书/ima/Ardot 本地）
 const recIds = new Set(recs.map((c) => c.id));
-check('精选覆盖用户指定四产品', ['mcp-notion', 'mcp-lark-feishu', 'mcp-ima', 'mcp-ardot-local'].every((id) => recIds.has(id)));
+// 2026-10-17：ima 与 Ardot 已按用户要求从内置目录移除，这条随之收缩为「仍在目录里的两个」，
+// 并补一条反向断言，防止它们被顺手加回来。
+check('精选覆盖仍在目录中的指定产品（Notion / 飞书）', ['mcp-notion', 'mcp-lark-feishu'].every((id) => recIds.has(id)));
+check('已移除的 ima / Ardot 不再出现在精选清单里', !recIds.has('mcp-ima') && !recIds.has('mcp-ardot-local') && !recIds.has('mcp-ardot-remote'));
 // 默认启用集直接喂真实目录：结果应与 recommended 集一致
 const realDefault = M.defaultEnabled(cons);
 check('真实目录默认启用=recommended 集', realDefault.connectors.length === recs.length);
