@@ -230,7 +230,8 @@ const { syncModelsFile, maybeSyncModelsFile, migrateLocalModelsToFile } = localD
 // 差集 A：diff 行内评论存储——评论挂到 localStore 的线程对象（t.diffComments）随
 // local-data.json 持久化；localStore 未就绪时 getter 返回 null，内部退化为进程内 Map。
 initDiffCommentChannel({ getLocalStore: () => localStore });
-// P0-8c：开机自启 IPC（实现抽到 main/autoLaunch.js——main.js 逼近 max-lines 门禁）
+// P0-8c：开机自启 IPC（实现抽到 main/autoLaunch.js——系统能力与调度器解耦，与行数无关；
+// 理由与 autoLaunch.js 文件头保持一致，别再写成「逼近 max-lines 门禁」）
 require('./autoLaunch').initAutoLaunchIpc({ getStore: () => localStore });
 
 
