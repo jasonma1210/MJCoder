@@ -343,7 +343,7 @@ export default function ChatArea({
         rs.streaming += text;
         if (rs.threadId === activeThreadIdRef.current) commitStream(rs.streaming);
       } else {
-        legacyDeltaRef.current += text;
+        legacyDeltaRef.current = (loadingRef.current ? legacyDeltaRef.current : '') + text;
         commitStream(legacyDeltaRef.current);
       }
     });
@@ -364,7 +364,7 @@ export default function ChatArea({
         rs.reasoning += text;
         if (rs.threadId === activeThreadIdRef.current) commitReason(rs.reasoning);
       } else {
-        legacyReasonRef.current += text;
+        legacyReasonRef.current = (loadingRef.current ? legacyReasonRef.current : '') + text;
         commitReason(legacyReasonRef.current);
       }
     });
