@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { openSqliteJsDb } = require('./sqljsDb');
+const dbStatus = require('../dbStatus');
 
 // ── 幂等加列（X4）──
 // 背景：老库可能「列已存在、user_version 却没推进」（早期无事务包装的版本、手工还原/拷库）。
@@ -243,6 +244,13 @@ function probeBetterSqlite3(timeoutMs = 10000) {
   });
 }
 
+// 包一层：把「库打开时发生过降级」的事实转交 dbStatus（X5），避免调用方各自处理
+async function openSqliteJsDbTracked(file) {
+  const db = await openSqliteJsDb(file);
+  if (db && db.__openWarning) dbStatus.markWarning(db.__openWarning);
+  return db;
+}
+
 async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride } = {}) {
   const file = path.join(dataDir, 'mjcode-tasks.db');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -251,14 +259,14 @@ async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride
   const driver = String(driverOverride || process.env.MJ_DB_DRIVER || 'auto').toLowerCase();
 
   if (driver === 'sqljs') {
-    const db = await openSqliteJsDb(file);
+    const db = await openSqliteJsDbTracked(file);
     migrate(db, file);
     return db;
   }
 
   // 打包版：auto 直接 sql.js（见上方事故注释——原生模块崩溃无法用子进程探测兜底）
   if (driver === 'auto' && isPackaged) {
-    const db = await openSqliteJsDb(file);
+    const db = await openSqliteJsDbTracked(file);
     migrate(db, file);
     console.log('[db] SQLite 驱动：sql.js（WASM，打包版固定）');
     return db;
@@ -278,7 +286,7 @@ async function openDbAsync(dataDir, { isPackaged = false, driver: driverOverride
     console.log('[db] 金丝雀探测失败：better-sqlite3 在当前 Electron 环境不安全，降级 sql.js（WASM）');
   }
 
-  const db = await openSqliteJsDb(file);
+  const db = await openSqliteJsDbTracked(file);
   migrate(db, file);
   console.log('[db] SQLite 驱动：sql.js（WASM 降级）');
   return db;

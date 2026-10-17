@@ -42,13 +42,15 @@ export default function StatusBar({ localMode, threadCount, projectPath, modelNa
 
       {modelName && <span className="truncate max-w-[160px]">{t('statusBar.model', { name: modelName })}</span>}
 
-      {dbStatus && dbStatus.ok === false && (
+      {dbStatus && (dbStatus.ok === false || dbStatus.warning) && (
         <span
-          className="flex items-center gap-1 text-warn truncate max-w-[200px]"
-          title={dbStatus.reason || t('statusBar.dbUnavailableTitle')}
+          className="flex items-center gap-1 text-warn truncate max-w-[220px]"
+          title={dbStatus.ok === false
+            ? (dbStatus.reason || t('statusBar.dbUnavailableTitle'))
+            : dbStatus.warning}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-warn shrink-0" />
-          {t('statusBar.dbUnavailable')}
+          {dbStatus.ok === false ? t('statusBar.dbUnavailable') : t('statusBar.dbRecovered')}
         </span>
       )}
 

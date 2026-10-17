@@ -5,11 +5,18 @@
 //（主进程 catch 写入、IPC 读出、编排工具拼进错误），故独立成模块，避免 main.js 继续膨胀
 //（main.js 已顶到 1500 行 max-lines 门禁）。
 let unavailable = null;
+// 降级但可用（库损坏后已重建/已从快照恢复）：任务编排能跑，但用户必须知道数据被动过
+let warning = '';
 
 function markUnavailable(reason) {
   unavailable = { reason: String(reason || 'unknown'), at: Date.now() };
 }
 
+function markWarning(message) {
+  warning = String(message || '');
+}
+
+// 注意：markReady 只清「不可用」，不清 warning——warning 描述的是本次打开时的既成事实
 function markReady() {
   unavailable = null;
 }
@@ -18,6 +25,7 @@ function snapshot(tasksReady) {
   return {
     ok: !unavailable,
     reason: unavailable ? unavailable.reason : '',
+    warning,
     tasksReady: !!tasksReady,
   };
 }
@@ -33,4 +41,4 @@ function register(ipcMain, isTasksReady) {
   ipcMain.handle('db:status', () => snapshot(isTasksReady()));
 }
 
-module.exports = { markUnavailable, markReady, snapshot, toolFailure, register };
+module.exports = { markUnavailable, markWarning, markReady, snapshot, toolFailure, register };

@@ -13,19 +13,70 @@ const { writeFileDurable } = require('../data/durableWrite');
 
 const PERSIST_DEBOUNCE_MS = 150;
 
+// X5：库文件损坏时的处置顺序 —— ①隔离坏文件（改名保留，绝不删）②用迁移前快照恢复
+// ③都失败才建空库。任何一步的结果都通过 warning 上交，由状态条显式提示，
+// 而不是像原来那样「静默重建一个空库，用户以为数据自己没了」。
+function recoverCorruptDb(SQL, filePath) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const corrupt = `${filePath}.corrupt-${stamp}`;
+  try {
+    fs.renameSync(filePath, corrupt);
+    console.warn(`[db] 库文件损坏，已隔离保留：${path.basename(corrupt)}`);
+  } catch (e) {
+    console.warn('[db] 坏文件隔离失败（继续尝试从快照恢复）：', e.message);
+  }
+
+  // 迁移前快照：<file>.pre-v{N}.bak（db/index.js 在升级前生成），按时间从新到旧尝试
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  let candidates = [];
+  try {
+    candidates = fs.readdirSync(dir)
+      .filter((f) => f.startsWith(`${base}.pre-v`) && f.endsWith('.bak'))
+      .map((f) => path.join(dir, f))
+      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  } catch (e) {
+    console.warn('[db] 快照目录读取失败，跳过恢复：', e.message);
+  }
+
+  for (const bak of candidates) {
+    try {
+      fs.copyFileSync(bak, filePath);
+      const db = new SQL.Database(fs.readFileSync(filePath));
+      console.log(`[db] 已从迁移前快照恢复：${path.basename(bak)}`);
+      return { db, warning: `本地库损坏，已从快照恢复（${path.basename(bak)}；坏文件保留为 ${path.basename(corrupt)}）` };
+    } catch (e) {
+      console.warn(`[db] 快照恢复失败（${path.basename(bak)}）：`, e.message);
+    }
+  }
+
+  return {
+    db: new SQL.Database(),
+    warning: `本地库损坏且无可用快照，已重建空库（坏文件保留为 ${path.basename(corrupt)}）`,
+  };
+}
+
 async function openSqliteJsDb(filePath) {
   const initSqlJs = require('sql.js');
   const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
   const SQL = await initSqlJs({ wasmBinary: fs.readFileSync(wasmPath) });
 
-  // 载入既有库文件（断点续跑：重启后恢复全部状态）
+  // 载入既有库文件（断点续跑：重启后恢复全部状态）。
+  // 损坏时走「隔离 → 快照恢复 → 建空库」三级处置，并留下 openWarning 供状态条提示（X5）。
   let sqldb;
+  let openWarning = '';
   if (fs.existsSync(filePath)) {
     try {
       sqldb = new SQL.Database(fs.readFileSync(filePath));
+      // 关键：sql.js 构造时**不解析**内容，坏文件要到第一次查询才抛「file is not a database」。
+      // 这里立刻做一次极轻的 PRAGMA 探测，把损坏暴露在这个 try 里，才能进入恢复流程。
+      sqldb.exec('PRAGMA schema_version;');
     } catch (e) {
-      console.error(`[db] 既有库文件损坏，重建：${e.message}`);
-      sqldb = new SQL.Database();
+      console.error(`[db] 既有库文件损坏：${e.message}`);
+      const recovered = recoverCorruptDb(SQL, filePath);
+      sqldb = recovered.db;
+      openWarning = recovered.warning;
+      console.error(`[db] ${openWarning}`);
     }
   } else {
     sqldb = new SQL.Database();
@@ -68,6 +119,8 @@ async function openSqliteJsDb(filePath) {
   const db = {
     // 标识符：main.js will-quit 判断是否需要 flush
     __driver: 'sqljs',
+    // 打开期的降级说明（库损坏/已重建/已从快照恢复）——由 db/index.js 转交 dbStatus
+    __openWarning: openWarning,
 
     exec(sql) {
       sqldb.exec(sql);
