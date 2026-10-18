@@ -8,6 +8,7 @@ import { confirm } from '../feedback';
 import { IconX } from '../icons';
 import { useI18n } from '../../i18n';
 import { Section, Input } from './shared';
+import Dot from '../ui/Dot';
 
 interface ProviderModel {
   id?: string;
@@ -158,7 +159,7 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
           {mf && !mf.exists && t('settings.modelsFileNotCreated')}
         </p>
         {(mf?.errors?.length ?? 0) > 0 && (
-          <div className="mt-1 space-y-0.5">
+          <div className="mt-1 space-y-1">
             {mf?.errors?.slice(0, 5).map((e, i) => (
               <p key={i} className="text-xs text-danger">{t('settings.parseWarn', { error: e.error })}</p>
             ))}
@@ -195,7 +196,7 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
                 ) : (
                   <>
                     <span className="text-sm font-medium">{p.name}</span>
-                    <span className="text-caption px-1.5 py-0.5 rounded bg-hover text-text2">{isFile ? t('settings.sourceFile') : (isServer ? t('settings.sourceShared') : t('settings.sourceLocal'))}</span>
+                    <span className="text-caption px-2 py-1 rounded bg-hover text-text2">{isFile ? t('settings.sourceFile') : (isServer ? t('settings.sourceShared') : t('settings.sourceLocal'))}</span>
                     <span className="ml-auto flex items-center gap-2 shrink-0">
                       {!isServer && !isFile && (
                         <>
@@ -239,7 +240,7 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
               </div>
               {!editing && <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>}
               {isFile && (
-                <div className="text-caption text-text2 mt-0.5">{t('settings.fileManagedNote', { path: mf?.path || '~/.mjcode/models.json' })}</div>
+                <div className="text-caption text-text2 mt-1">{t('settings.fileManagedNote', { path: mf?.path || '~/.mjcode/models.json' })}</div>
               )}
               {st?.testing && <div className="text-xs text-text2 mt-1">{t('settings.testing')}</div>}
               {st && !st.testing && (st.ok
@@ -260,8 +261,8 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
                   {p.models?.map((m) => {
                     const mid = m.model_id || m.modelId;
                     return (
-                      <div key={m.id ?? mid} className="flex items-center gap-1.5 pl-4 text-xs text-text2 group">
-                        <span className="w-1 h-1 rounded-full bg-text2 shrink-0" />
+                      <div key={m.id ?? mid} className="flex items-center gap-2 pl-4 text-xs text-text2 group">
+                        <Dot size="xs" className="bg-text2" />
                         <span className="truncate">{m.display_name || mid}</span>
                         {!isServer && (
                           <button
@@ -338,7 +339,7 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
           <div key={p.id} className="py-3 border-b border-border last:border-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">{p.name}</span>
-              <span className="text-caption px-1.5 py-0.5 rounded bg-hover text-text2">{t('settings.sourceShared')}</span>
+              <span className="text-caption px-2 py-1 rounded bg-hover text-text2">{t('settings.sourceShared')}</span>
               <span className="text-caption text-text2 ml-auto">{t('settings.serverManagedNote')}</span>
             </div>
             <div className="text-xs text-text2 mt-1 font-mono">{p.base_url}</div>
@@ -347,7 +348,7 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
                 {p.models?.map((m) => {
                   const mid = m.model_id || m.modelId;
                   return (
-                    <div key={m.id ?? mid} className="flex items-center gap-1.5 pl-4 text-xs text-text2">
+                    <div key={m.id ?? mid} className="flex items-center gap-2 pl-4 text-xs text-text2">
                       <span className="w-1 h-1 rounded-full bg-text2 shrink-0" />
                       <span className="truncate">{m.display_name || mid}</span>
                     </div>

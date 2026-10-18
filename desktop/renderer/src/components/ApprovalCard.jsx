@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { useI18n } from '../i18n'; // T3-2：i18n
 import { IconAlert, IconFile, IconPlug, IconTerminal } from './icons';
+import Button from './ui/Button';
 
 // 顶层常量只存标题 key（求值推迟到渲染时经 t()，切换语言即时更新）
 const LEVEL_META = {
@@ -141,7 +142,7 @@ export default function ApprovalCard({ onPendingChange }) {
   return (
     <div className={`fixed bottom-14 right-4 w-[460px] max-w-[calc(100vw-2rem)] z-approval transition-shadow${flash ? ' ring-2 ring-accent rounded-2xl' : ''}`}>
       <div className="bg-surface border border-warn rounded-2xl shadow-[var(--shadow-pop)] overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
           <span className={meta.color}><meta.Icon size={15} /></span>
           <span className="text-sm font-medium">{t(meta.titleKey)}</span>
           <span className="text-text2 text-xs font-mono truncate">{pending.tool}</span>
@@ -168,7 +169,7 @@ export default function ApprovalCard({ onPendingChange }) {
                 </span>
               </div>
             )}
-            <pre className="mx-4 my-3 rounded-md border border-border bg-bg px-3 py-2.5 text-code font-mono overflow-x-auto max-h-40 whitespace-pre-wrap text-text2">
+            <pre className="mx-4 my-3 rounded-lg border border-border bg-bg px-3 py-3 text-code font-mono overflow-x-auto max-h-40 whitespace-pre-wrap text-text2">
               {pending.detail || t('approval.noDetail')}
             </pre>
             {/* P1-4：可选理由输入——默认收起，点「附加理由」展开。
@@ -180,26 +181,25 @@ export default function ApprovalCard({ onPendingChange }) {
                   onChange={(e) => setReasonText(e.target.value)}
                   placeholder={t('approval.reasonPlaceholder')}
                   rows={2}
-                  className="w-full px-2 py-1.5 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
+                  className="w-full px-2 py-2 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
                 />
               </div>
             )}
-            <div className="flex flex-wrap gap-2 px-4 pb-3.5">
+            <div className="flex flex-wrap gap-2 px-4 pb-4">
               <button onClick={() => setReasonOpen((v) => !v)}
-                className="px-2 py-1.5 rounded-lg text-xs text-text2 hover:text-text border border-transparent hover:border-border">
+                className="px-2 py-2 rounded-lg text-xs text-text2 hover:text-text border border-transparent hover:border-border">
                 {reasonOpen ? t('approval.collapse') : t('approval.attachReason')}
               </button>
-              <button onClick={() => resolve('once')}
-                className="px-3 py-1.5 rounded-lg text-xs bg-accent-solid text-on-accent hover:brightness-110">{t('approval.allowOnce')}</button>
+              <Button variant="primary" size="sm" onClick={() => resolve('once')}>{t('approval.allowOnce')}</Button>
               {rememberable && (
                 <button onClick={() => resolve('conversation')}
-                  className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
+                  className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
               )}
               <button onClick={() => resolve('deny')}
-                className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.deny')}</button>
+                className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.deny')}</button>
               {rememberable && (
                 <button onClick={() => resolve('always')}
-                  className="px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
+                  className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
               )}
               <span className="text-caption text-text2 self-center ml-auto" title={t('approval.hotkeyTitle')}>{t('approval.hotkeyHint')}</span>
             </div>

@@ -7,6 +7,7 @@ import PlusMenu from './PlusMenu';
 import ComposerControls from './ComposerControls';
 import { projectDisplayName } from '../lib/projectName';
 import { useI18n, tGlobal } from '../i18n';
+import Button from './ui/Button';
 
 // T2-2：输入区组件（自主进程 ChatArea.jsx 原样搬移，props 接口不变）。
 // 历史事故纪律（保留原文注释）：Composer 是独立 function 组件，拿不到父组件词法作用域，
@@ -189,12 +190,12 @@ export default function Composer({
       {hasTaskBadges && (
       <div className="flex items-center gap-3 px-4 pb-2 text-xs text-text2">
         {planMode && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-info-bg text-info shrink-0" title={t('composer.planModeTip')}>
+          <span className="text-xs px-2 py-1 rounded bg-info-bg text-info shrink-0" title={t('composer.planModeTip')}>
             {t('composer.planMode')}
           </span>
         )}
         {expert && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.expertTip', { mission: expert.mission || '' })}>
             <IconBot size={11} />
             {expert.title_cn || expert.name}
@@ -204,7 +205,7 @@ export default function Composer({
           </span>
         )}
         {(extras?.skillIds || []).length > 0 && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.skillsTip', {
               skills: extras.skillIds.join('、'), // i18n-literal
             })}>
@@ -216,7 +217,7 @@ export default function Composer({
           </span>
         )}
         {(extras?.mcpServers || []).length > 0 && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+          <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.connectorsTip', {
               names: extras.mcpServers.join('、'), // i18n-literal
             })}>
@@ -237,17 +238,17 @@ export default function Composer({
       )}
 
       {modeMsg && (
-        <div className="mb-1.5 text-xs text-text2 px-4 truncate" title={modeMsg}>{modeMsg}</div>
+        <div className="mb-2 text-xs text-text2 px-4 truncate" title={modeMsg}>{modeMsg}</div>
       )}
 
       {/* A5：录音条（波形 + 计时 + 停止） */}
       {voiceActive && (
-        <div className="mb-1.5 mx-1 rounded-xl border border-danger bg-danger-bg px-3 py-2 flex items-center gap-3">
+        <div className="mb-2 mx-1 rounded-xl border border-danger bg-danger-bg px-3 py-2 flex items-center gap-3">
           <span className="text-xs text-danger font-medium shrink-0">
             {voice.state === 'recording' ? t('composer.recording') : t('composer.transcribing')}
           </span>
           {voice.state === 'recording' && (
-            <span className="flex items-end gap-0.5 h-4 flex-1" aria-hidden="true">
+            <span className="flex items-end gap-1 h-4 flex-1" aria-hidden="true">
               {[0, 1, 2, 3, 4].map((i) => (
                 <span key={i} className="w-1 rounded-sm bg-danger transition-all duration-150"
                   style={{ height: `${6 + Math.round((voice.level || 0) * 10 * ((i % 2) + 1))}px` }} />
@@ -264,7 +265,7 @@ export default function Composer({
         </div>
       )}
       {voice?.error && (
-        <div className="mb-1.5 mx-1">
+        <div className="mb-2 mx-1">
           <InlineAlert type="error" onDismiss={voice.clearError}>
             {voice.error.message}{voice.error.hint ? `：${voice.error.hint}` : ''} {/* i18n-literal */}
           </InlineAlert>
@@ -281,12 +282,12 @@ export default function Composer({
       {/* 拆分卡片：待用户确认，确认前不执行 */}
       {plan && (
         <div className="mb-2 mx-1 rounded-2xl border border-accent bg-accent-bg p-3">
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-accent">{t('composer.splitTitle', { n: plan.tasks.length })}</span>
             <button onClick={() => onPlanChange?.(null)} className="text-text2 hover:text-text" aria-label={t('composer.closePlan')}><IconX size={14} /></button>
           </div>
           {plan.reason && <p className="text-xs text-text2 mb-2">{plan.reason}</p>}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {plan.tasks.map((task, i) => (
               <div key={i} className="flex items-center gap-2 bg-surface border border-border rounded-xl px-3 py-2">
                 <span className="text-xs text-text2 shrink-0 tabular-nums">{i + 1}/{plan.tasks.length}</span>
@@ -294,7 +295,10 @@ export default function Composer({
                   <div className="text-sm truncate">{task.title}</div>
                   <div className="text-xs text-text2 truncate" title={task.prompt}>{task.prompt}</div>
                 </div>
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="shrink-0"
                   onClick={() => {
                     const ps = { title: task.title, index: i, total: plan.tasks.length, tasks: plan.tasks };
                     onPlanChange?.(null);
@@ -303,7 +307,7 @@ export default function Composer({
                     //   不传 forcedThread 即回落到当前 thread（send 内部 forcedThread || thread）
                     onSend?.(task.prompt, undefined, { skipDecompose: true, planStep: ps });
                   }}
-                  className="h-7 shrink-0 inline-flex items-center justify-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">{t('composer.runStep')}</button>
+                >{t('composer.runStep')}</Button>
               </div>
             ))}
           </div>
@@ -333,13 +337,15 @@ export default function Composer({
             <>
               <p className="text-xs text-text2 mt-1">{t('composer.nextStep', { n: planReport.index + 2, total: planReport.total, title: planReport.next.title })}</p>
               <div className="flex items-center gap-2 mt-2">
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={() => {
                     setInput(planReport.next.prompt);
                     onPlanReportChange?.(null);
                     requestAnimationFrame(() => taRef.current?.focus());
                   }}
-                  className="h-7 inline-flex items-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">{t('composer.fillAndSend')}</button>
+                >{t('composer.fillAndSend')}</Button>
                 <button onClick={() => onPlanReportChange?.(null)} className="text-xs text-text2 hover:text-text underline">{t('composer.notNow')}</button>
               </div>
             </>
@@ -351,11 +357,11 @@ export default function Composer({
 
       {/* P0-B：未选项目时明示只读边界（沙箱已强制 read-only，此处告知用户） */}
       {!loading && !cwd && (
-        <p className="mb-1.5 mx-1 text-xs text-warn">{t('composer.noProjectReadonly')}</p>
+        <p className="mb-2 mx-1 text-xs text-warn">{t('composer.noProjectReadonly')}</p>
       )}
       {/* P0-A：失败可重试（瞬时错误重试耗尽后，一键重放上一轮输入） */}
       {lastFailed && !loading && (
-        <div className="mb-1.5 mx-1 flex items-center justify-between gap-2">
+        <div className="mb-2 mx-1 flex items-center justify-between gap-2">
           <span className="text-xs text-text2 truncate">{t('composer.lastFailedNote')}</span>
           <button
             onClick={() => { const failedText = lastFailed.text; onLastFailedChange?.(null); onSend?.(failedText); }}
@@ -476,7 +482,7 @@ export default function Composer({
 
         {/* 底部工具行三段式：输入辅助（+/麦克风）│ 执行配置（模式/审批/沙箱/模型 chip）… 发送。
             图标按钮与 chip 同高（h-7）同圆角，垂直居中对齐；分隔线区分「加内容」与「定规矩」两组语义 */}
-        <div className="flex items-center justify-between mt-2.5 gap-2">
+        <div className="flex items-center justify-between mt-3 gap-2">
           <div className="flex items-center gap-1 min-w-0 flex-wrap">
             <button
               onClick={() => onPlusOpenChange?.(!plusOpen)}
@@ -540,7 +546,7 @@ function AttachmentChips({ items = [], projectPath, onRemove, onOpen }) {
   const { t } = useI18n();
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-1.5 mb-2">
+    <div className="flex flex-wrap gap-2 mb-2">
       {items.map((a) => (
         <AttachmentChip
           key={a.path}
@@ -586,7 +592,7 @@ function AttachmentChip({ item, projectPath, onRemove, onOpen, removeTitle, prev
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <div className="flex items-center gap-1.5 pl-2 pr-1 h-7 rounded-lg bg-raise border border-border max-w-[220px]">
+      <div className="flex items-center gap-2 pl-2 pr-1 h-7 rounded-lg bg-raise border border-border max-w-[220px]">
         {item.isImage
           ? <IconEye size={12} className="text-text2 shrink-0" />
           : <IconFile size={12} className="text-text2 shrink-0" />}
@@ -601,14 +607,14 @@ function AttachmentChip({ item, projectPath, onRemove, onOpen, removeTitle, prev
           onClick={() => onRemove?.(item.path)}
           title={removeTitle}
           aria-label={removeTitle}
-          className="shrink-0 text-text2 hover:text-text rounded p-0.5"
+          className="shrink-0 text-text2 hover:text-text rounded p-1"
         >
           <IconX size={10} />
         </button>
       </div>
       {hover && item.isImage && (
-        <div className="absolute left-0 bottom-full mb-1.5 z-menu">
-          <div className="p-1.5 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]">
+        <div className="absolute left-0 bottom-full mb-2 z-menu">
+          <div className="p-2 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]">
             {failed ? (
               <div className="text-caption text-text2 px-1 py-2 w-40">{previewFailed}</div>
             ) : dataUrl ? (
@@ -633,11 +639,11 @@ function QueuedTasks({ queued = [], onRunNow, onEdit, onRemove }) {
   const { t } = useI18n();
   if (!queued.length) return null;
   return (
-    <div className="mb-1.5 space-y-1">
+    <div className="mb-2 space-y-1">
       {queued.map((q, i) => (
         <div
           key={`${i}-${String(q).slice(0, 12)}`}
-          className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-1.5"
+          className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2"
         >
           <span className="text-caption text-text2 shrink-0 tabular-nums">{i + 1}</span>
           <span className="flex-1 min-w-0 text-xs text-text truncate" title={q}>{q}</span>

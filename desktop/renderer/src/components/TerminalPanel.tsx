@@ -119,7 +119,7 @@ export default function TerminalPanel({ cwd }: TerminalPanelProps) {
         {entries.length > 0 && (
           <button
             onClick={() => setEntries([])}
-            className="shrink-0 text-text2 hover:text-text p-0.5"
+            className="shrink-0 text-text2 hover:text-text p-1"
             title={t('rightPane.terminalClear')}
             aria-label={t('rightPane.terminalClear')}
           >
@@ -128,7 +128,7 @@ export default function TerminalPanel({ cwd }: TerminalPanelProps) {
         )}
       </div>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-2 py-1.5 font-mono text-code leading-relaxed">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-2 py-2 font-mono text-code leading-relaxed">
         {entries.length === 0 && (
           <div className="text-text2 py-3 text-center">{t('rightPane.terminalEmpty')}</div>
         )}
@@ -160,7 +160,7 @@ export default function TerminalPanel({ cwd }: TerminalPanelProps) {
         ))}
       </div>
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 border-t border-border">
+      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-t border-border">
         <span className="shrink-0 text-accent font-mono text-code select-none">$</span>
         <input
           value={input}

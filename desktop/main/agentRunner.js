@@ -15,6 +15,8 @@ const runTrace = require('./runTrace');
 const bigPayload = require('./bigPayload');
 // P2-8 / V-L1：V 层（评估接口）宿主编排——L1 日志对账 + annotate（不续跑、零额外模型调用）
 const verifyRun = require('./verifyRun');
+// P1-1：V 层触发策略（纯函数）——决定「这一轮值不值得多花一次 L3 模型调用」
+const verifyPolicy = require('./verifyPolicy');
 
 // T0-2：IPC 边界契约（单一事实来源 shared-ipc/contract.mjs）。
 // Electron 主进程是 CJS 且 Node 20 无法同步 require ESM，沿用 loadAgentCore 的动态 import 模式：
@@ -53,6 +55,20 @@ const runApprovalModes = new Map();
 
 function initAgentRunner(d) {
   deps = d;
+}
+
+// P0-1：取本轮最后一条用户消息作为「任务」描述（渲染层 messages 末条 user = 本轮诉求）。
+// 只用于记忆条目的任务摘要，截断 300 字符——记忆是召回用的，不需要完整原文。
+function lastUserText(messages) {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m && m.role === 'user') {
+      const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+      return c.replace(/\s+/g, ' ').trim().slice(0, 300);
+    }
+  }
+  return '';
 }
 
 // runId -> { controller, sender }
@@ -124,10 +140,14 @@ function startAgentRun(payload, sender) {
     let doneSent = false;
     const startedAt = Date.now();
     console.warn(`[agentRun] 启动 runId=${runId} model=${payload?.model?.model?.model_id || '?'} cwd=${payload?.cwd || '-'} msgs=${payload?.messages?.length || 0} budget=${payload?.tokenBudget || 0}`);
-    // ── P2-8 / V-L1（J2）：主对话通道默认 l1 + annotate（设计 §2.2）──
-    // 默认档在宿主给（'l1'），渲染层可用 payload.verification 覆盖成 'off' 或 'l3'。
-    // 本通道判定所需的两个事实：ledger（引擎 verify_ledger trace，双执行路径都经 onTrace 到达）
-    // 与 diff（主进程 git status，失败即 null → R5 降级 SKIP）。
+    // ── P2-8 / V-L1（J2）+ P1-1：主对话通道 V 层装配 ──
+    // P1-1 后宿主默认档为 'l3'（L1 全量 + 风险门触发时才跑 L3），渲染层仍可用
+    // payload.verification 覆盖成 'off' / 'l1' / 'l3'。本通道判定所需的两个事实：ledger
+    //（引擎 verify_ledger trace，双执行路径都经 onTrace 到达）与 diff（主进程 git status，
+    //  失败即 null → R5 降级 SKIP）。
+    // P1-1：L3 独立评审目标（紧凑档优先、回落主模型）——延迟到调用时解析（配置可变）。
+    // 与定时通道共用同一目标工厂：guardrail 本质是分类任务，不需要前沿模型，故优先便宜档。
+    const l3 = typeof deps.l3Target === 'function' ? (deps.l3Target() || {}) : {};
     const vrun = verifyRun.createVerificationRun({
       runId,
       conversationId: payload.conversationId || '',
@@ -139,7 +159,15 @@ function startAgentRun(payload, sender) {
         ? { ...payload.verification, stopHookActive: false }
         : null,
       emit,
-      defaultLevel: 'l1',
+      // P1-1：宿主默认档由 'l1' 升为 'l3' —— L1 确定性对账照旧**全量跑**（零网络、零边际成本）；
+      // L3 只在**风险门**（本轮产生对外/不可逆动作）放行时才多花一次模型调用。
+      // 渲染层若显式下发 verification.level，仍以渲染层为准（config 覆盖 defaultLevel）。
+      defaultLevel: 'l3',
+      l3Chat: l3.l3Chat || null,
+      l3Model: l3.l3Model || null,
+      // 风险门：仅命中 external/不可逆动作才跑 L3；**不抽样**——抽样是度量手段，
+      // 交互通道人就在屏幕前，不该为度量引入每次运行都可能发生的额外模型成本。
+      l3Gate: (ctx) => verifyPolicy.shouldRunL3({ ...ctx, trigger: { risk: true, sampleRate: 0 } }),
     });
     // 2026-10-15 修复：会话消息持久化收归主进程（此前由渲染层 onMessage/onDone 回调落库）。
     // 事故链：长任务（17min/675k tokens）运行期间渲染层刷新/重载 → 订阅与回调随页面销毁 →
@@ -179,6 +207,21 @@ function startAgentRun(payload, sender) {
       tokensInput: m.tokens_input || 0,
       tokensOutput: m.tokens_output || 0,
     });
+    // ── P0-1 / P0-2（记忆写入闭环）：宿主侧记忆归档 ──
+    // 空间键取**项目路径**而非 cwd：cwd 在 worktree 模式下是临时隔离目录（每次运行一个），
+    // 按它归档会把记忆散进一次性空间、永不被召回；召回侧（ChatArea / Worker）一律用项目路径作 spaceId。
+    // 落库统一经 MemoryManager 唯一入口（deps.rememberMemory），失败只告警、绝不影响运行结果。
+    const memorySpaceId = payload.projectPath || payload.cwd || 'default';
+    const archiveMemory = (args) => {
+      try {
+        return (deps.rememberMemory && deps.rememberMemory({ spaceId: memorySpaceId, ...args })) || null;
+      } catch (e) {
+        console.warn(`[agentRun] 记忆归档失败（不影响运行） runId=${runId}:`, e.message);
+        return null;
+      }
+    };
+    // P0-1 收纳判据：本轮是否真有工具执行（纯闲聊不写记忆）。onToolCall 逐条累加。
+    let toolCallCount = 0;
     // T3-7：引擎可序列化参数与回调群抽为共享对象——in-process 与子进程两条路径同源，
     // 杜绝「改一处漏一处」的路径漂移（子进程路径经 RPC 传 params，回调在主进程侧执行）。
     const engineParams = {
@@ -217,7 +260,7 @@ function startAgentRun(payload, sender) {
       }
     }
     try {
-      const handlers = deps.createToolHandlers({
+      const rawHandlers = deps.createToolHandlers({
         sender, signal: controller.signal, runId,
         // T1-3：orchestrate_task 的子任务事件上报通道（主进程 taskStore 状态 diff → 渲染层）
         emitSubagent: (evt) => emit('subagent', evt),
@@ -229,6 +272,12 @@ function startAgentRun(payload, sender) {
         // R6：发起会话 id——对话内 orchestrate_task 建组时绑定会话（组按会话归属显示）
         conversationId: payload.conversationId || '',
       });
+      // P1-5：用户自定义生命周期 hooks 包在**真实 handler 之外、ALS 之内**——
+      // 顺序有意如此：hook 里的 spawn/审批仍落在 runId 的取消域（abort 时一并收敛），
+      // 而 pre 钩子拦截发生在真实工具执行之前（拦截时 handler 根本不会被调用）。
+      const handlers = deps.toolHooks
+        ? deps.toolHooks.wrap(rawHandlers, { cwd: payload.cwd, conversationId: payload.conversationId || '' })
+        : rawHandlers;
       // N5 rootExecution 统一取消：全部 handler 在 { runId } 的 AsyncLocalStorage 上下文内执行——
       // 主进程 requestApproval 据此把挂起审批挂到 runId（abortRun → cancelApprovalsForRun 撤下）；
       // exec 子进程据此注册到 runId（abortRun → killChildrenForRun 终止）。
@@ -252,14 +301,28 @@ function startAgentRun(payload, sender) {
       const finishRun = async (ft, usage, aborted) => {
         console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
         let outText = ft;
+        let vVerdict = null; // P0-1：L1 判定结果（BLOCK = 自述与执行记录对不上，结论不可信，不沉淀）
         try {
           const vr = await vrun.finish(ft);
           if (typeof vr?.finalText === 'string') outText = vr.finalText;
+          vVerdict = vr?.verdict || null;
           if (vr?.verdict === 'BLOCK') {
             console.warn(`[agentRun] V-L1 自述与执行记录对不上 runId=${runId} rule=${vr.ruleId || '?'} annotated=${!!vr.annotated}（只做标注，不续跑）`);
           }
         } catch (e) {
           console.warn(`[agentRun] V 层判定异常（不影响结果） runId=${runId}:`, e.message);
+        }
+        // ── P0-1（记忆写入闭环）：运行收尾归档 ──
+        // 把「任务 + 结论」沉淀为该项目的 session 域记忆，供后续会话召回（跨会话学习闭环的入口）。
+        // 收纳判据（宁缺毋滥，避免把闲聊/失败产物塞进记忆）：未中止 + 本轮确有工具执行 + 结论非空
+        // + L1 未判 BLOCK。会话域是瞬时域：受半衰期衰减与容量总闸管理，不会无限膨胀。
+        const conclusion = String(outText || '').trim();
+        if (!aborted && toolCallCount > 0 && conclusion && vVerdict !== 'BLOCK') {
+          archiveMemory({
+            domain: 'session', importance: 0.6, entityTags: ['run_conclusion'], source: 'model_conclusion',
+            content: `【任务】${lastUserText(payload.messages) || '(未记录)'}\n【结论】${conclusion.slice(0, 1200)}`,
+            summary: conclusion.slice(0, 300),
+          });
         }
         // 最终 assistant 消息主进程落库（唯一落库点；渲染层凭 mainPersisted 标记去重）
         const accepted = persistChatMessage({
@@ -283,6 +346,7 @@ function startAgentRun(payload, sender) {
         onStream: (s) => emit('stream', s),
         onToolCall: (tc) => {
           vrun.onToolCall(tc); // N5：旁路缓存最近一次测试命令输出（不改引擎）
+          toolCallCount += 1;  // P0-1：本轮确有工具执行 → 允许收尾归档结论
           emit('tool_call', tc);
         },
         // T1-3：子代理事件（spawn_subagent 生命周期）→ 渲染层子任务可视化
@@ -326,6 +390,15 @@ function startAgentRun(payload, sender) {
           // 否则子代理的 verify_ledger 会让台账多一条、run_end 会让「最后一条即终态」
           // 的判据被子代理收尾覆盖。
           if (evt.type === 'verify_ledger' && !evt.sub) vrun.onLedger(evt);
+          // P0-2：压缩摘要归档——引擎只发事件（trace 通道），落记忆库是宿主副作用。
+          // 只归档主 run（!sub）：子代理压缩与 verify_ledger 同口径，不参与本 run 的沉淀。
+          if (evt.type === 'memory_saved' && !evt.sub && String(evt.summary || '').trim()) {
+            archiveMemory({
+              domain: 'session', importance: 0.7, entityTags: ['compression_summary'], source: 'compressor',
+              content: String(evt.summary),
+              summary: String(evt.summary).slice(0, 300),
+            });
+          }
           runTrace.appendTraceEvent(runId, evt);
           if (evt.type === 'run_end' && !evt.sub) runTrace.evictOldTraces();
         },

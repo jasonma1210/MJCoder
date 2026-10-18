@@ -33,7 +33,7 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
             <div className="space-y-1">
               {projects.slice(0, 5).map((p) => (
                 <button key={p.path} onClick={() => onSelectProject?.(p)}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-border hover:bg-hover text-left">
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl border border-border hover:bg-hover text-left">
                   <IconFolder size={16} className="text-text2 shrink-0" />
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm truncate">{p.name || p.path}</span>

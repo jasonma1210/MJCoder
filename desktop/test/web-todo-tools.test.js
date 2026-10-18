@@ -40,14 +40,15 @@ import('../agent-core/index.js').then((m) => {
     assert.deepStrictEqual(item.properties.status.enum, ['pending', 'in_progress', 'completed']);
   });
 
-  check('工具总数随能力演进：16 → 21 → 26 → 32 → 39 → 40 → 41（新增定时任务创建）', () => {
+  check('工具总数随能力演进：16 → 21 → 26 → 32 → 39 → 40 → 41 → 46（期 3 原生工具）', () => {
     // 16 原有 + web_search/web_fetch/todo_write + git_add/git_branch = 21
     // + pr_list/pr_view/pr_diff/pr_review/pr_comment = 26（PR 审查闭环）
     // + browser_navigate/click/fill/select/screenshot/extract = 32（T4-1 Browser Use）
     // + chrome_status/tabs/navigate/click/fill/screenshot/extract = 39（T4-2 Chrome 接管）
     // + code_exec = 40（T4-7 Code Mode）
     // + scheduled_create = 41（2026-10-17：模型此前零定时任务入口，只能让用户手动建）
-    assert.strictEqual(BASE_TOOLS.length, 41, `实际 ${BASE_TOOLS.length} 个工具`);
+    // + clipboard/notify/http_request/sqlite/sandbox_code_run = 46（期 3：原生内置工具）
+    assert.strictEqual(BASE_TOOLS.length, 46, `实际 ${BASE_TOOLS.length} 个工具`);
   });
 
   // ── P1-5：BASE_TOOLS 与 handler 映射 / 审批分级不得断链 ──

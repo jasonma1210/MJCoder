@@ -254,11 +254,11 @@ export default function PlusMenu({
       role="menu"
     >
       {!panel && (
-        <div className="py-1.5">
+        <div className="py-2">
           <MenuRow Icon={IconFilePlus} label={tr('plusMenu.addFiles')} onClick={() => { onPickFiles?.(); onClose?.(); }} />
           <MenuRow Icon={IconMessage} label={tr('plusMenu.refsFromChat')} hasSub disabled={!hasProject}
             disabledReason={tr('plusMenu.refsDisabled')} onClick={() => setPanel('refs')} />
-          <div className="my-1.5 border-t border-border" />
+          <div className="my-2 border-t border-border" />
           <MenuRow Icon={IconBranch} label={tr('plusMenu.mode')} hasSub disabled={!hasProject}
             disabledReason={tr('plusMenu.modeDisabled')} onClick={() => setPanel('mode')} />
           <MenuRow Icon={IconBot} label={tr('plusMenu.experts')} hasSub badge={expert ? expert.title_cn || expert.name : null}
@@ -269,7 +269,7 @@ export default function PlusMenu({
           <MenuRow Icon={IconPlug} label={tr('plusMenu.connectors')} hasSub
             badge={extras?.mcpServers?.length ? tr('plusMenu.connectorCount', { n: extras.mcpServers.length }) : null}
             onClick={() => setPanel('connectors')} />
-          <div className="my-1.5 border-t border-border" />
+          <div className="my-2 border-t border-border" />
           <MenuRow Icon={IconMic} label={tr('plusMenu.voiceInput')} hint="Ctrl+M" onClick={() => { onVoiceStart?.(); onClose?.(); }} />
         </div>
       )}
@@ -292,14 +292,14 @@ export default function PlusMenu({
           {[{ value: 'local', labelKey: 'plusMenu.localMode', hintKey: 'plusMenu.localModeHint' },
             { value: 'worktree', labelKey: 'plusMenu.worktreeMode', hintKey: 'plusMenu.worktreeModeHint' }].map((o) => (
             <button key={o.value} onClick={() => { onModeChange?.(o.value); onClose?.(); }}
-              className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-hover">
+              className="w-full flex items-center gap-2 px-3 py-3 text-left hover:bg-hover">
               <span className="w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center"
                 style={{ borderColor: runMode === o.value ? 'var(--theme-accent)' : 'var(--theme-border)' }}>
                 {runMode === o.value && <span className="w-2 h-2 rounded-full bg-accent" />}
               </span>
               <span className="flex-1 min-w-0">
                 <span className="block text-xs">{tr(o.labelKey)}</span>
-                <span className="block text-caption text-text2 mt-0.5">{tr(o.hintKey)}</span>
+                <span className="block text-caption text-text2 mt-1">{tr(o.hintKey)}</span>
               </span>
             </button>
           ))}
@@ -310,7 +310,7 @@ export default function PlusMenu({
       {panel === 'experts' && (
         <SubPanel title={tr('plusMenu.experts')} onBack={() => setPanel(null)} keyword={keyword} setKeyword={setKeyword} searchPlaceholder={tr('plusMenu.searchExperts')}>
           {expert && (
-            <div className="mx-2 my-1.5 rounded-lg bg-accent-bg border border-accent/40 px-3 py-2 flex items-center gap-2">
+            <div className="mx-2 my-2 rounded-lg bg-accent-bg border border-accent/40 px-3 py-2 flex items-center gap-2">
               <IconBot size={14} className="text-accent shrink-0" />
               <span className="text-xs flex-1 truncate">{tr('plusMenu.currentExpert', { name: expert.title_cn || expert.name })}</span>
               <button onClick={() => onExtrasChange?.({ ...extras, expert: null })} className="text-text2 hover:text-text shrink-0" aria-label={tr('plusMenu.deactivateExpert')}>
@@ -323,13 +323,13 @@ export default function PlusMenu({
               const RoleIcon = roleIcon(e.category);
               return (
                 <button key={e.id} onClick={() => { onExtrasChange?.({ ...extras, expert: e }); onClose?.(); }}
-                  className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left hover:bg-hover border-b border-border last:border-0">
+                  className="w-full flex items-start gap-3 px-3 py-3 text-left hover:bg-hover border-b border-border last:border-0">
                   <span className="w-8 h-8 rounded-lg bg-accent-bg text-accent flex items-center justify-center shrink-0">
                     <RoleIcon size={15} />
                   </span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-xs font-medium truncate">{e.title_cn || e.name}</span>
-                    <span className="block text-caption text-text2 truncate mt-0.5">{e.mission || e.category}</span>
+                    <span className="block text-caption text-text2 truncate mt-1">{e.mission || e.category}</span>
                     <span className="block text-caption text-text2 mt-1">
                       {e.approval_policy === 'trusted' || e.approval_policy === 'always' ? tr('plusMenu.trustFull') : e.approval_policy === 'safe-auto' || e.approval_policy === 'auto-safe' ? tr('plusMenu.trustSafe') : tr('plusMenu.trustOnRequest')}
                     </span>
@@ -440,20 +440,20 @@ export default function PlusMenu({
                       : <span className="text-caption shrink-0 text-text2 whitespace-nowrap">{status}</span>}
                   </button>
                   {cfgOpen && (
-                    <div className="px-3 pb-2.5 space-y-1.5">
+                    <div className="px-3 pb-3 space-y-2">
                       {plan.kind === 'needs-config' && plan.missing.map((m) => (
                         <div key={m.name}>
-                          <label className="block text-caption text-text2 mb-0.5">
+                          <label className="block text-caption text-text2 mb-1">
                             {m.label}
                             {m.docs_url && (
-                              <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-1.5" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
+                              <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-2" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
                             )}
                           </label>
                           <input
                             value={vals[m.name] || ''}
                             onChange={(ev) => setVal(m.name, ev.target.value)}
                             placeholder={m.name}
-                            className="w-full h-7 px-2 rounded-md border border-border bg-bg text-xs outline-none focus:border-accent"
+                            className="w-full h-7 px-2 rounded-lg border border-border bg-bg text-xs outline-none focus:border-accent"
                           />
                         </div>
                       ))}
@@ -466,24 +466,24 @@ export default function PlusMenu({
                           <p className="text-caption text-text2 leading-relaxed">{tr('plusMenu.authHint')}</p>
                           {plan.missing.map((m) => (
                             <div key={m.name}>
-                              <label className="block text-caption text-text2 mb-0.5">
+                              <label className="block text-caption text-text2 mb-1">
                                 {m.label || m.name}
                                 {m.docs_url && (
-                                  <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-1.5" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
+                                  <a href={m.docs_url} target="_blank" rel="noreferrer" className="text-accent ml-2" onClick={(e) => e.stopPropagation()}>{tr('plusMenu.docsLink')}</a>
                                 )}
                               </label>
                               <input
                                 value={vals[m.name] || ''}
                                 onChange={(ev) => setVal(m.name, ev.target.value)}
                                 placeholder={m.name}
-                                className="w-full h-7 px-2 rounded-md border border-border bg-bg text-xs outline-none focus:border-accent"
+                                className="w-full h-7 px-2 rounded-lg border border-border bg-bg text-xs outline-none focus:border-accent"
                               />
                             </div>
                           ))}
                         </>
                       )}
                       {c.install?.auth_command && (
-                        <div className="rounded-md border border-border bg-surface2 px-2 py-1.5">
+                        <div className="rounded-lg border border-border bg-surface2 px-2 py-2">
                           <div className="text-caption text-text2 leading-relaxed">{tr('plusMenu.cliAuthRequired')}</div>
                           <code className="block mt-1 text-caption text-text1 break-all select-all">{c.install.auth_command}</code>
                         </div>
@@ -493,13 +493,13 @@ export default function PlusMenu({
                       )}
                       {plan.kind !== 'manual' && (
                         <button onClick={submit}
-                          className="h-7 px-2.5 rounded-md bg-accent-solid text-on-accent text-xs whitespace-nowrap hover:brightness-110">
+                          className="h-7 px-3 rounded-lg bg-accent-solid text-on-accent text-xs whitespace-nowrap hover:brightness-110">
                           {plan.kind === 'needs-auth' ? tr('plusMenu.connect') : tr('plusMenu.saveConnect')}
                         </button>
                       )}
                       {plan.kind === 'manual' && (
                         <button onClick={() => { window.dispatchEvent(new CustomEvent('mjcode:open-ecosystem')); onClose?.(); }}
-                          className="h-7 px-2.5 rounded-md border border-border text-xs text-text2 whitespace-nowrap hover:text-text">
+                          className="h-7 px-3 rounded-lg border border-border text-xs text-text2 whitespace-nowrap hover:text-text">
                           {tr('plusMenu.openEcosystem')}
                         </button>
                       )}
@@ -528,12 +528,12 @@ function MenuRow({ Icon, label, hasSub, badge, hint, disabled, disabledReason, o
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       title={disabled ? disabledReason : undefined}
-      className="w-full flex items-center gap-2.5 px-3 h-9 text-left hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+      className="w-full flex items-center gap-3 px-3 h-9 text-left hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
       role="menuitem"
     >
       <Icon size={15} className="text-text2 shrink-0" />
       <span className="text-xs flex-1 truncate">{label}</span>
-      {badge && <span className="text-caption px-1.5 py-0.5 rounded bg-accent-bg text-accent shrink-0">{badge}</span>}
+      {badge && <span className="text-caption px-2 py-1 rounded bg-accent-bg text-accent shrink-0">{badge}</span>}
       {hint && <span className="text-caption text-text2 shrink-0">{hint}</span>}
       {hasSub && !disabled && <IconChevronRight size={12} className="text-text2 shrink-0" />}
     </button>

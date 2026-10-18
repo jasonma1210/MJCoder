@@ -74,6 +74,11 @@
   "chromeConnected": "Connected to user's Chrome",
   "chromeDisconnected": "Not connected: load the takeover extension and approve the connection card",
   "codeExec": "Code execution (Code Mode)",
+  "clipboard": "Clipboard",
+  "notify": "System notification",
+  "httpRequest": "HTTP request",
+  "sqlite": "SQLite database",
+  "sandboxCodeRun": "Sandbox execution",
   "codeEmpty": "(empty code)",
   "codeImage": "Generated image"
 }

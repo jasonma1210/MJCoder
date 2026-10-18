@@ -258,7 +258,8 @@ await check('agent-core：BASE_TOOLS schema + 映射表 + 审批透传', () => {
   const src = fs.readFileSync(path.join(DESKTOP, 'agent-core', 'index.js'), 'utf8');
   assert.match(src, /name: 'code_exec'/);
   assert.match(src, /code_exec: 'codeExec'/);
-  assert.match(src, /'code_exec'\]/);
+  // 期 3：APPROVAL_TOOLS 末尾追加了 5 个原生工具，'code_exec' 后不再是数组收尾
+  assert.match(src, /'code_exec',/);
 });
 
 await check('main.js：initCodeTools 接线 + createToolHandlers 注入', () => {

@@ -66,6 +66,16 @@ const REVERSIBILITY = {
   cua_action: { reversible: false, note: '界面操作可能已产生真实副作用（支付/删除/发送）' },
   shell: { reversible: false, note: '命令副作用（文件/进程/网络）无法自动回滚，请核对输出与 git 状态' },
   code_exec: { reversible: false, note: '代码副作用（文件/进程/网络）无法自动回滚，请核对输出与 git 状态' },
+  // 期 3：原生工具的可补偿性
+  //   · clipboard 写：覆盖用户原剪贴板内容，被覆盖的内容无从取回 → 不可补偿；
+  //   · http_request：请求已发往外部系统，其副作用（写入/删除/发送）本机无法回滚 → 不可补偿；
+  //   · sqlite 写：改动已落盘，且可能是 DROP/DELETE 这类**内容销毁**，本机无 git 历史可退 → 不可补偿；
+  //   · notify / sandbox_code_run：纯本地提示与沙盒内纯计算（无文件/网络副作用）→ 可补偿。
+  clipboard: { reversible: false, note: '用户原剪贴板内容已被覆盖，无从取回' },
+  http_request: { reversible: false, note: '请求已发往外部系统，其副作用本机无法回滚' },
+  sqlite: { reversible: false, note: '数据库改动已落盘；DROP/DELETE 类语句直接销毁内容，本机无历史可回退' },
+  notify: { reversible: true, note: '仅弹出本地系统通知，无持久副作用' },
+  sandbox_code_run: { reversible: true, note: '沙盒内纯计算（默认无文件/无网络），无外部副作用' },
 };
 
 /**
@@ -223,6 +233,11 @@ const TOOL_LEVEL = {
   // 等价于「给 AI 一个以后自己动手的长期授权」，判 L3：任何审批档位都弹卡。
   // 实现侧（main/scheduledTools.js）刻意不落规则库，所以 L3 的「可豁免」对本工具实际不生效。
   scheduled_create: 'L3',
+  // 期 3：sandbox_code_run 判 L2（唯一登记的档，读写同工具不同档的在 toolLevel 特判）。
+  // 为什么是 L2 而不是 L3：它是**强沙盒**变体（一次性子进程、默认无文件/无网络），
+  // 整个设计目的就是把「安全地跑一段代码」与 code_exec（全能力、L3）区分开。
+  // 若与 code_exec 同为 L3，这层区分在审批语义上会被抹平（auto-safe/无人值守下两者都会弹卡）。
+  sandbox_code_run: 'L2',
 };
 
 // 只读工具：任何档位都不询问
@@ -243,8 +258,47 @@ const {
   DANGEROUS_PATTERNS, isDangerousCommand, matchDangerousPattern, isDangerousCode, cuaStrongConfirm,
 } = require('./dangerousPatterns');
 
+// 期 3：SQL 只读判定（**单一事实来源**）。
+// 两个消费方必须用同一份判定，否则就是「审批层以为只读、执行层却照跑」的错位：
+//   · toolLevel('sqlite', …)：只读语句不弹卡，写语句按 L3；
+//   · nativeTools.toolSqlite：action=query 只接受只读语句（sql.js 的 all()/step() 对
+//     DELETE/UPDATE 同样会真实执行，只按 action 分流等于给模型留了绕过审批的口子）。
+// 语义：剥掉前导空白与注释后，首关键字落在只读白名单内才算只读。
+const READONLY_SQL_RE = /^(select|pragma|explain|with|values)\b/i;
+function stripLeadingSqlNoise(sql) {
+  let s = String(sql || '');
+  for (;;) {
+    const next = s.replace(/^\s+/, '').replace(/^--[^\n]*\n?/, '').replace(/^\/\*[\s\S]*?\*\//, '');
+    if (next === s) return s;
+    s = next;
+  }
+}
+function isReadonlySql(sql) {
+  const s = stripLeadingSqlNoise(sql);
+  if (!s) return false; // 空语句一律按「非只读」保守处理（fail-closed）
+  return READONLY_SQL_RE.test(s);
+}
+
 function toolLevel(tool, args = {}) {
   if (READONLY_TOOLS.has(tool)) return null;
+  // 期 3：notify 不进审批面——它是「告知用户」的原语（长任务完成时提醒用户回来看），
+  // 对它逐次弹卡等于废掉这个工具；且无持久副作用（与 todo_write 同纪律）。
+  if (tool === 'notify') return null;
+  // 期 3：clipboard 读只读（不询问）；写覆盖用户剪贴板原内容 → L2。
+  if (tool === 'clipboard') return String(args.action || 'read') === 'write' ? 'L2' : null;
+  // 期 3：http_request——GET/HEAD 只读；其余方法改动外部系统状态，判 L3（可经规则豁免，
+  // 规则粒度=URL 前缀，与 browser_navigate 同纪律）。
+  if (tool === 'http_request') {
+    const m = String(args.method || 'GET').toUpperCase();
+    return (m === 'GET' || m === 'HEAD') ? null : 'L3';
+  }
+  // 期 3：sqlite——只读语句（SELECT/PRAGMA/EXPLAIN/WITH）不询问；写语句判 L3。
+  // 为什么写库是 L3 而不是 L2：DROP/TRUNCATE/DELETE 会**静默销毁内容**且本机没有 git 可回退，
+  // 与 git_checkout（丢工作区改动）同一分级纪律——按「是否会静默销毁内容」而非「是否写磁盘」。
+  if (tool === 'sqlite') {
+    if (String(args.action || 'query').toLowerCase() === 'tables') return null;
+    return isReadonlySql(args.sql) ? null : 'L3';
+  }
   if (tool === 'shell') {
     return DANGEROUS_PATTERNS.some((p) => p.test(String(args.command || ''))) ? 'L1' : null;
   }
@@ -307,6 +361,13 @@ function approvalTarget(tool, args = {}) {
   // T4-7 Code Mode：规则粒度=代码前缀（matchPattern 前缀语义——批准过 200 字符前缀，
   // 后续代码只有以该前缀开头且边界为空白才豁免，防止「批准短代码后长代码静默放行」）
   if (tool === 'code_exec') return String(args.code || '').slice(0, 200);
+  // 期 3：原生工具的规则粒度（与 code_exec 同一纪律——批准短操作不得让长操作静默放行）：
+  //   clipboard 按动作（读不在审批面，只有写需要粒度）、http_request 按 URL 前缀、
+  //   sqlite 按「库路径 + SQL 前缀」、sandbox_code_run 按代码前缀。
+  if (tool === 'clipboard') return String(args.action || 'read');
+  if (tool === 'http_request') return String(args.url || '');
+  if (tool === 'sqlite') return `${String(args.path || '')} ${String(args.sql || '').slice(0, 120)}`;
+  if (tool === 'sandbox_code_run') return String(args.code || '').slice(0, 200);
   // P1-2：CUA 界面动作——规则粒度为动作上下文（CUA 决策本就不落规则库，此处仅为
   // needsApproval 的豁免检查提供一致的目标形态）
   if (tool === 'cua_action') return [args.text, args.key, args.label, args.target].filter(Boolean).join(' ').slice(0, 200);
@@ -466,6 +527,51 @@ function approvalSummary(tool, args = {}) {
           + (danger ? '\n注意：代码包含 child_process/危险命令等模式，恒逐次确认，不可被「始终允许」规则豁免。' : ''),
       };
     }
+    // ── 期 3：原生内置工具审批卡文案 ──
+    case 'clipboard':
+      return {
+        level: 'L2', title: '写入系统剪贴板',
+        detail: `将把以下内容写入剪贴板（${String(args.text || '').length} 字符）：\n${String(args.text || '').slice(0, 500)}\n\n`
+          + '⚠ 你当前的剪贴板内容会被**覆盖且无法恢复**，请确认没有还没粘贴的东西。',
+      };
+    case 'http_request': {
+      const method = String(args.method || 'GET').toUpperCase();
+      const headers = args.headers && typeof args.headers === 'object' ? Object.keys(args.headers) : [];
+      return {
+        level: (method === 'GET' || method === 'HEAD') ? 'L2' : 'L3',
+        title: `HTTP 请求（${method}）`,
+        detail: `${method} ${String(args.url || '').slice(0, 300)}\n`
+          + (headers.length ? `请求头：${headers.slice(0, 12).join(', ')}\n` : '')
+          + (args.body ? `请求体：${String(args.body).slice(0, 300)}\n` : '')
+          + (method === 'GET' || method === 'HEAD'
+            ? '（只读请求，不改动外部系统状态）'
+            : '⚠ 该请求会改变外部系统的状态（创建/修改/删除），其副作用本机无法回滚。'),
+      };
+    }
+    case 'sqlite': {
+      const action = String(args.action || 'query').toLowerCase();
+      if (action === 'tables') {
+        return { level: null, title: '读取 SQLite 表清单', detail: `数据库：${String(args.path || '')}` };
+      }
+      const readonly = isReadonlySql(args.sql);
+      return {
+        level: readonly ? null : 'L3',
+        title: readonly ? 'SQLite 只读查询' : 'SQLite 写入',
+        detail: `数据库：${String(args.path || '')}\nSQL：${String(args.sql || '').slice(0, 500)}`
+          + (readonly ? '' : '\n\n⚠ 这是写语句，可能包含 DROP/DELETE 这类**直接销毁内容**的操作，'
+            + '且本机没有可回退的历史版本。请确认语句与目标库无误。'),
+      };
+    }
+    case 'sandbox_code_run': {
+      const code = String(args.code || '');
+      const shown = code.slice(0, 600) + (code.length > 600 ? '\n…（完整代码见工具参数）' : '');
+      return {
+        level: 'L2',
+        title: '执行代码（强沙盒）',
+        detail: `在一次性隔离子进程中执行以下代码（默认无文件访问、默认无网络）：\n${shown}\n`
+          + '需要文件/网络/持久状态时请改用 code_exec（会另行走逐次确认）。',
+      };
+    }
     // ── V03：受限沙箱不可用时的单次非沙箱执行审批卡 ──
     case 'unconfined_exec':
       return {
@@ -501,6 +607,8 @@ function approvalSummary(tool, args = {}) {
 
 module.exports = {
   LEVELS, toolLevel, needsApproval, approvalTarget, matchPattern, approvalSummary, DANGEROUS_PATTERNS, READONLY_TOOLS, isDangerousCode, NON_REMEMBERABLE, isRememberable,
+  // 期 3：SQL 只读判定（approval.toolLevel 与 nativeTools.toolSqlite 共用同一份实现）
+  isReadonlySql,
   // P2-7：执行后告知（正交布尔偏好；纯函数 + 通知出口）
   APPROVAL_MODES, reversibilityOf, buildExecutionNotice, notifyExecuted, setNoticeSink, emitExecutionNotice,
 };

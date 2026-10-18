@@ -105,12 +105,12 @@ function NodeCard({ node }: { node: TaskNode }) {
   return (
     <button
       onClick={() => expandable && setOpen(!open)}
-      className={`text-left w-full rounded-lg border border-border bg-surface px-2.5 py-2 space-y-1 ${
+      className={`text-left w-full rounded-lg border border-border bg-surface px-3 py-2 space-y-1 ${
         expandable ? 'hover:border-strong cursor-pointer' : 'cursor-default'
       }`}
       title={expandable ? t('subtaskTree.clickToView') : t(PHASE_LABEL[node.phase])}
     >
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex items-center gap-2 min-w-0">
         <PhaseIcon phase={node.phase} />
         <span className="truncate flex-1 text-text">{node.title || node.taskId}</span>
         {node.tokens > 0 && (

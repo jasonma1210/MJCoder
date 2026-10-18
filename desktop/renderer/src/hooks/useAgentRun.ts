@@ -579,6 +579,9 @@ export default function useAgentRun(d) {
         // V05：使用运行开始时解析的执行根目录（隔离目录/worktree 或项目目录），
         // 全程一致；effectiveProject 变化不得覆盖进行中 run 的工作根
         cwd: executionRoot,
+        // P0-1：记忆归档的空间分区键（= 项目路径，与召回侧 ChatArea/Worker 同一键）。
+        // 与 cwd 分开：cwd 在 worktree 模式下是临时隔离目录，按它归档的记忆不会被召回。
+        projectPath: effectiveProject?.path || '',
         agentsMd,
         skills: fileSkills,
         memories,

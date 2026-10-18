@@ -129,13 +129,13 @@ export default function RightPane({
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center gap-1 px-2 h-11 border-b border-border shrink-0">
           {/* 面板切换 tab（原挂在应用顶栏右侧，现收敛到所控制的区域上方） */}
-          <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto">
+          <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
             {PANEL_TABS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => onTab(t.id)}
                 title={tr(t.labelKey)}
-                className={`shrink-0 px-2 h-7 rounded-lg text-xs flex items-center gap-1.5 ${
+                className={`shrink-0 px-2 h-7 rounded-lg text-xs flex items-center gap-2 ${
                   active.id === t.id ? 'bg-hover text-text' : 'text-text2 hover:text-text'
                 }`}
               >
@@ -170,7 +170,7 @@ export default function RightPane({
                       disabled={!supported}
                       onClick={() => { if (!supported) return; onTab(p.id); setAddOpen(false); }}
                       title={supported ? tr(p.labelKey) : tr(p.reasonKey || 'rightPane.unsupportedGeneric')}
-                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-left text-text hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      className="w-full flex items-center gap-3 px-3 py-2 text-xs text-left text-text hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
                       <p.Icon size={14} />
                       <span className="truncate flex-1">{tr(p.labelKey)}</span>
@@ -183,7 +183,7 @@ export default function RightPane({
           </div>
 
           {/* 右上角工具组：最大化 / 关闭（与 Codex 右栏右上角一致） */}
-          <div className="ml-auto shrink-0 flex items-center gap-0.5">
+          <div className="ml-auto shrink-0 flex items-center gap-1">
             <button
               onClick={() => setMaximized((v) => !v)}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-text2 hover:text-text"

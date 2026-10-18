@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconAlert, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
+import Modal from './ui/Modal';
 
 // ── 命令式确认框 + Toast（A2 统一规格）──
 // 用法（无需在各组件挂 state/JSX）：
@@ -28,7 +29,9 @@ export function countConfirm(opts = {}) {
   return confirm({ ...opts, count: opts.count ?? 0 });
 }
 
-export function toast({ message, actionLabel, onAction, duration = 5000 }) {
+// actionLabel/onAction 给默认值 = undefined 语义：二者本就可选（消费端 `t.actionLabel &&` 判空），
+// 显式默认值同时让 TS 推导出的参数类型把这两项标为可选，供新 .ts 调用方直接 toast({ message })。
+export function toast({ message, actionLabel = null, onAction = null, duration = 5000 }) {
   if (!toastListener) {
     console.warn('[feedback] FeedbackHost not mounted; toast dropped:', message);
     return;
@@ -116,30 +119,11 @@ export default function FeedbackHost() {
     setDialog(null);
   }
 
-  // 开箱接管焦点（P3-F3）：ui/Modal 的「别人的对话框在接管键盘」判据要求
-  // `document.activeElement` 落在对方弹层内（closest('[aria-modal],[role=dialog]')）。
-  // 此前 confirm 打开时不 focus 任何元素 → 判据不成立 → 底层 Modal 会先吃掉 Esc
-  // （第一下关掉底层浮层、第二下才取消确认框），Tab 也会跑到底层去。
-  const dialogPanelRef = useRef(null);
-  useEffect(() => {
-    if (!dialog) return;
-    // countConfirm 自带 autoFocus 的输入框（它本身就在弹层内），不要去抢
-    if (dialog.count != null) return;
-    dialogPanelRef.current?.focus();
-  }, [dialog]);
-
-  // Esc 关闭 = 取消（危险操作默认安全侧）
-  // P1-6：finish 走 latest-ref 模式。finish 是组件内普通函数（每次渲染新建），
-  // 直接列入依赖会让 keydown 监听每轮渲染卸载重挂；但遗漏又会用到过期闭包。
-  // ref 方案两者兼顾：监听只在 dialog 开关时重挂，调用时永远是最新 finish。
-  const finishRef = useRef(finish);
-  finishRef.current = finish;
-  useEffect(() => {
-    if (!dialog) return;
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); finishRef.current(false); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [dialog]);
+  // 焦点接管 / Esc / 焦点归还 全部交给 ui/Modal（见下方 JSX）：
+  //   · 打开时 Modal 把焦点移进面板——countConfirm 自带 autoFocus 的输入框会被尊重，不被抢走；
+  //   · Esc 由 Modal 的键盘处理器经 onClose 触发 finish(false)，即「取消」（危险操作默认安全侧）；
+  //   · 关闭时 Modal 把焦点归还给打开它的元素。
+  // 这里因此不再自持 dialogPanelRef / window keydown 监听（原 P3-F3 的重复实现已移除，行为不回退）。
 
   function dismissToast(id) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -148,23 +132,25 @@ export default function FeedbackHost() {
   return (
     <>
       {dialog && (
-        <div className="fixed inset-0 z-palette flex items-center justify-center bg-overlay" onMouseDown={() => finish(false)}>
-          <div
-            ref={dialogPanelRef}
-            tabIndex={-1}
-            className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)] p-5 focus:outline-none"
-            onMouseDown={(e) => e.stopPropagation()}
-            role="alertdialog"
-            aria-modal="true"
-            aria-label={dialog.title || tr('feedback.confirmFallback')}
-          >
+        /* 外壳交给 ui/Modal（role=alertdialog + aria-modal + 焦点陷阱 + Esc + 关闭归还焦点）；
+           frameless 表示「只换外壳」——面板的宽高/底色/圆角/阴影仍是下面这层自带，视觉零改动。
+           遮罩类名沿用原字符串（z-palette），保持与审批层/toast 的层叠关系不变。 */
+        <Modal
+          open
+          onClose={() => finish(false)}
+          frameless
+          role="alertdialog"
+          ariaLabel={dialog.title || tr('feedback.confirmFallback')}
+          overlayClassName="fixed inset-0 z-palette flex items-center justify-center bg-overlay"
+        >
+          <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)] p-5 focus:outline-none">
             <div className="flex items-start gap-3">
               {dialog.danger && (
-                <span className="text-danger shrink-0 mt-0.5"><IconAlert size={18} /></span>
+                <span className="text-danger shrink-0 mt-1"><IconAlert size={18} /></span>
               )}
               <div className="flex-1">
                 <div className="text-sm font-semibold">{dialog.title || tr('feedback.confirmFallback')}</div>
-                <div className="text-xs text-text2 mt-1.5 leading-relaxed whitespace-pre-line">{dialog.message}</div>
+                <div className="text-xs text-text2 mt-2 leading-relaxed whitespace-pre-line">{dialog.message}</div>
                 {dialog.count != null && (
                   <div className="mt-3">
                     <input
@@ -172,7 +158,7 @@ export default function FeedbackHost() {
                       value={countInput}
                       onChange={(e) => setCountInput(e.target.value.replace(/\D/g, ''))}
                       placeholder={tr('feedback.countConfirmPlaceholder', { count: dialog.count })}
-                      className="w-40 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm outline-none focus:border-accent"
+                      className="w-40 bg-bg border border-border rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
                       onKeyDown={(e) => { if (e.key === 'Enter' && Number(countInput) === dialog.count) finish(true); }}
                     />
                   </div>
@@ -181,11 +167,11 @@ export default function FeedbackHost() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => finish(false)}
-                className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">{tr('feedback.cancel')}</button>
+                className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">{tr('feedback.cancel')}</button>
               <button
                 onClick={() => finish(true)}
                 disabled={dialog.count != null && Number(countInput) !== dialog.count}
-                className={`text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger-solid text-on-accent hover:brightness-110' : 'bg-accent-solid text-on-accent hover:brightness-110'}`}
+                className={`text-xs px-3 py-2 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger-solid text-on-accent hover:brightness-110' : 'bg-accent-solid text-on-accent hover:brightness-110'}`}
               >
                 {/* danger 只表达**视觉强度**（红色 + 警告图标），不表达「删除」语义。
                     此前默认文案是「确认删除」，于是「允许对外动作」这类确认框也写着"确认删除"
@@ -194,7 +180,7 @@ export default function FeedbackHost() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
       {/* Toast 右下角（审批卡左上方错开，z-toast 位于 approval 之下） */}
       <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-toast flex flex-col gap-2 items-center pointer-events-none">

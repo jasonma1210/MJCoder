@@ -143,6 +143,17 @@ function firstProtectedTarget(targets, protectedPaths, base) {
   return null;
 }
 
+/**
+ * 期 3：文件能力降级——治理偏好 fsMode === 'read-only' 时拒绝一切写操作。
+ * **单一事实来源**：exec.js 的写工具闸口（write_file/edit_file/apply_patch）与
+ * nativeTools.toolSqlite 的写路径共用本判定，避免「一处以为只读、另一处照写」的错位。
+ * @param {{fsMode?: string}} governance 治理配置（readGovernance 的正常化输出）
+ * @returns {boolean}
+ */
+function isReadonlyFs(governance) {
+  return !!governance && governance.fsMode === 'read-only';
+}
+
 module.exports = {
   isWithinRoot,
   allowedWriteRoots,
@@ -151,4 +162,5 @@ module.exports = {
   PROTECTED_SUBPATH_NAMES,
   protectedPathsFor,
   firstProtectedTarget,
+  isReadonlyFs,
 };

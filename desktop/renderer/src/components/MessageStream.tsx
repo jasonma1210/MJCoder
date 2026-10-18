@@ -5,8 +5,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from './feedback';
 import { useI18n } from '../i18n'; // T3-2：i18n
-import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconFile, IconPlus, IconSpinner } from './icons';
+import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconFile, IconGitBranch, IconPlus, IconSpinner } from './icons';
 import { ToolTraceGroup } from './tools/ToolTrace';
+import Button from './ui/Button';
+import Dot from './ui/Dot';
 
 // T2-2：消息流域（自主进程 ChatArea.jsx 原样搬移，行为不变）——
 // 窗口切片（C1）/ 智能滚底（C3）/ 轮次重放（T1-2）/ 本轮概览（T1-5）/ 运行态轨迹与思考流。
@@ -90,10 +92,9 @@ export default function MessageStream({
         <div className="mx-auto w-full max-w-3xl">
         {effStart > 0 && (
           <div className="flex justify-center mb-3">
-            <button onClick={() => onLoadEarlier(effStart)}
-              className="text-xs text-text2 hover:text-text px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
+            <Button variant="secondary" size="sm" onClick={() => onLoadEarlier(effStart)}>
               {t('message.loadEarlier', { n: effStart })}
-            </button>
+            </Button>
           </div>
         )}
         {/* 最后一轮的逐条消息 meta 仅在「底部收尾条不会渲染」时展示（有收尾条即由其统一承载，
@@ -136,7 +137,7 @@ export default function MessageStream({
         )}
         {/* T1-5：统一加载态——spinner + 文案，与工具卡/概览卡的运行中徽标同一视觉语言 */}
         {loading && !streamingText && !reasoningText && toolCalls.length === 0 && (
-          <div className="flex items-center gap-1.5 text-text2 text-sm">
+          <div className="flex items-center gap-2 text-text2 text-sm">
             <IconSpinner size={14} className="animate-spin" />
             {t('message.thinking')}
             {elapsedSec > 0 && <span className="text-text2/70">{t('message.thinkingElapsed', { s: elapsedSec })}</span>}
@@ -148,7 +149,7 @@ export default function MessageStream({
       {showJumpBottom && (
         <button
           onClick={jumpToBottom}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 text-xs px-3 py-1.5 rounded-full bg-raise border border-border shadow-[var(--shadow-pop)] text-text2 hover:text-text"
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 text-xs px-3 py-2 rounded-full bg-raise border border-border shadow-[var(--shadow-pop)] text-text2 hover:text-text"
         >
           {t('message.jumpBottom')}
         </button>
@@ -179,6 +180,22 @@ function CopyButton({ text }) {
   );
 }
 
+// P1-6：会话分支——从该条消息处 fork 出一支新会话（复制截至该消息的历史）。
+// 无状态组件：经 CustomEvent 交给 App 处理（同 mjcode:open-settings 模式，避免层层传 prop）。
+function ForkButton({ messageId }) {
+  const { t } = useI18n();
+  if (messageId == null) return null;
+  return (
+    <button
+      onClick={() => window.dispatchEvent(new CustomEvent('mjcode:fork-thread', { detail: { messageId } }))}
+      className="opacity-0 group-hover:opacity-100 text-text2 hover:text-text shrink-0 p-1"
+      title={t('message.forkTitle')} aria-label={t('message.forkAria')}
+    >
+      <IconGitBranch size={13} />
+    </button>
+  );
+}
+
 // 本轮概览卡（T1-5：RunFooter 与 Token 仪表盘整合，WorkBuddy 式固定收尾）：
 // · live 模式（运行中）：运行中徽标 + 实时耗时 + 本轮已消耗 + 上下文用量 + 模型，每秒刷新；
 // · 结束态：状态（正常结束/任务暂停/已停止/失败）+ 耗时 + 共消耗 + 模型 + 结束时间。
@@ -197,7 +214,7 @@ export function RunFooter({ summary, live }) {
     const sec = Math.max(0, Math.round(ms / 1000));
     return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${sec % 60}s`;
   };
-  const chip = 'inline-flex items-center gap-1 text-xs text-text2 bg-surface border border-border rounded-lg px-3 py-1.5 gap-x-3 gap-y-1 flex-wrap';
+  const chip = 'inline-flex items-center gap-1 text-xs text-text2 bg-surface border border-border rounded-lg px-3 py-2 gap-x-3 gap-y-1 flex-wrap';
   // 运行中概览：实时数据流（startedAt/usage/contextUsage 由调用方每轮渲染传入最新值）
   if (live) {
     const total = (live.tokensIn || 0) + (live.tokensOut || 0);
@@ -232,7 +249,7 @@ export function RunFooter({ summary, live }) {
     <div className="mb-4 max-w-3xl">
       <div className={chip}>
         <span className={`inline-flex items-center gap-1 ${st.cls}`}>
-          <span className={`w-1.5 h-1.5 rounded-full inline-block ${st.dot}`} />
+          <Dot size="sm" className={`inline-block ${st.dot}`} />
           {st.label}
         </span>
         {summary.durationMs > 0 && <span>{tr('message.duration', { dur: fmtDur(summary.durationMs) })}</span>}
@@ -312,7 +329,7 @@ function FileRefMenu({ text, onClose }: { text: string; onClose: () => void }) {
     }
     onClose();
   }
-  const item = 'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-text hover:bg-hover';
+  const item = 'w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-text hover:bg-hover';
   return (
     <div ref={menuRef} role="menu" className="absolute left-0 top-full mt-1 z-menu w-[168px] py-1 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]">
       <button type="button" role="menuitem" className={item}
@@ -339,7 +356,7 @@ function RunOutputFiles({ files = [], onOpenFile }: { files?: Array<string | { p
   if (!list.length) return null;
   return (
     <div className="mb-4 max-w-3xl">
-      <div className="text-xs text-text2 mb-1.5">{t('message.outputFiles', { n: list.length })}</div>
+      <div className="text-xs text-text2 mb-2">{t('message.outputFiles', { n: list.length })}</div>
       <div className="flex flex-wrap gap-2">
         {list.map((path) => {
           const name = path.split('/').pop() || path;
@@ -350,7 +367,7 @@ function RunOutputFiles({ files = [], onOpenFile }: { files?: Array<string | { p
               type="button"
               onClick={() => onOpenFile?.(path)}
               title={path}
-              className="group flex items-center gap-2.5 rounded-xl border border-border bg-surface px-3 py-2 text-left hover:bg-hover hover:border-accent/40 transition-colors min-w-[190px] max-w-[280px]"
+              className="group flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-left hover:bg-hover hover:border-accent/40 transition-colors min-w-[190px] max-w-[280px]"
             >
               <span className="shrink-0 text-accent"><IconFile size={18} /></span>
               <span className="min-w-0">
@@ -370,14 +387,14 @@ function FileRefChip({ text, onOpenFile }: { text: string; onOpenFile?: (p: stri
   const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
   const clickable = !!onOpenFile && isFilePathLike(text);
-  const base = 'rounded px-1.5 py-0.5 text-xs border';
+  const base = 'rounded px-2 py-1 text-xs border';
   if (!clickable) {
     return (
       <code className={`${base} bg-hover border-border text-text2 font-mono`}>{text}</code>
     );
   }
   return (
-    <span className="relative inline-flex items-center gap-0.5 align-baseline">
+    <span className="relative inline-flex items-center gap-1 align-baseline">
       <button
         type="button"
         onClick={() => onOpenFile?.(text)}
@@ -391,7 +408,7 @@ function FileRefChip({ text, onOpenFile }: { text: string; onOpenFile?: (p: stri
         onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
         title={t('message.fileActions')}
         aria-label={t('message.fileActions')}
-        className="shrink-0 text-text2 hover:text-text rounded p-0.5 align-middle"
+        className="shrink-0 text-text2 hover:text-text rounded p-1 align-middle"
       >
         <IconChevronDown size={11} />
       </button>
@@ -484,7 +501,7 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
       <div className="flex items-center gap-2 mb-2 select-none">
         <span className="text-caption text-text2 shrink-0">{t('message.round', { n: round })}</span>
         {calls.length > 0 && (
-          <span className="text-caption text-text2 bg-hover rounded px-1.5 py-0.5 shrink-0">{t('message.callCount', { n: calls.length })}</span>
+          <span className="text-caption text-text2 bg-hover rounded px-2 py-1 shrink-0">{t('message.callCount', { n: calls.length })}</span>
         )}
         <button onClick={() => setOpen((v) => !v)} className="text-xs text-text2 hover:text-text shrink-0"
           title={open ? t('message.collapseRound') : t('message.expandRound')}>
@@ -505,7 +522,7 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
               <div className="msg-prose bg-surface rounded-2xl px-4 py-2 max-w-2xl">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>{user.content}</ReactMarkdown>
               </div>
-              <div className="self-center ml-2"><CopyButton text={user.content} /></div>
+              <div className="self-center ml-2 flex"><CopyButton text={user.content} /><ForkButton messageId={user.id} /></div>
             </div>
           )}
           {/* 本轮的执行体流程（工具轨迹组）改为渲染在「MJ Coder」标签下方、正文之前
@@ -521,6 +538,7 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
                 <div className="text-xs text-text2 mb-1 flex items-center gap-2">
                   MJ Coder
                   <CopyButton text={m.content} />
+                  <ForkButton messageId={m.id} />
                 </div>
                 {/* 本轮执行体流程：紧贴「答复」上方（模型标签之下、正文之上），
                     先看「这一轮做了什么」再看结论。用 label 明示归属，避免用户找不到它在哪。 */}
@@ -536,7 +554,7 @@ function RoundBlock({ round, user, assistants, toolResults, isLast, suppressMeta
                     suppressMeta：当轮已有底部 RunFooter（状态/耗时/共消耗/模型/时间）时隐藏本行，
                     避免同一组数字在页面上重复出现两次（用户实测反馈）。 */}
                 {!suppressMeta && (modelName || tokensIn + tokensOut > 0 || m.created_at || m.createdAt) && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text2" title={t('message.tokensTitle', { in: tokensIn.toLocaleString(), out: tokensOut.toLocaleString() })}>
+                  <div className="mt-2 flex items-center gap-2 text-xs text-text2" title={t('message.tokensTitle', { in: tokensIn.toLocaleString(), out: tokensOut.toLocaleString() })}>
                     <IconCpu size={11} className="shrink-0" />
                     <span>{t('message.totalTokens', { n: (tokensIn + tokensOut).toLocaleString() })}</span>
                     {modelName && <span className="truncate">· {modelName}</span>}

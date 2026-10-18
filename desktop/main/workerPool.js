@@ -13,9 +13,11 @@ const workerIsolation = require('./workerIsolation');
 const { toAgentModel } = require('./modelShape');
 const { stricterApproval } = require('./approvalPolicy');
 const path = require('path');
-// P2-8 / V-L1：V 层（评估接口）宿主侧编排。本通道**默认 off**（无人值守不打断，
-// 设计 §2.2）；opt-in 由 deps.getVerifyConfig() 显式下发 level='l1' 才生效。
+// P2-8 / V-L1：V 层（评估接口）宿主侧编排。P1-2 后本通道**默认 l1**（此前默认 off）：
+// L1 是零网络、零边际成本的确定性对账，子任务没有理由不对账；
+// L3 由 deps.getVerifyConfig() 显式下发 level='l3' 才可能触发（风险门放行时）。
 const verifyRun = require('./verifyRun');
+const verifyPolicy = require('./verifyPolicy');
 
 let deps = null;
 let maxConcurrent = 4; // 默认并发 4：主流大模型服务普遍支持 4 路并发请求
@@ -173,17 +175,29 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
     let abortReason = null;
     try {
       const core = await deps.loadAgentCore();
-      const handlers = deps.createToolHandlers({ signal: controller.signal, cwd: runCwd });
-      // ── P2-8 / V-L1：Worker 通道 V 层（默认 off；opt-in 经 deps.getVerifyConfig()）──
+      const rawHandlers = deps.createToolHandlers({ signal: controller.signal, cwd: runCwd });
+      // P1-5：Worker 工具调用同样过用户自定义 hooks（preToolUse/postToolUse）——
+      // 无人值守不等于可以绕过用户设的校验规则（用户写一次规则，三条通道一致生效）。
+      const handlers = deps.toolHooks
+        ? deps.toolHooks.wrap(rawHandlers, { cwd: runCwd || '', conversationId: `task:${group.group_id}:${task.taskId}` })
+        : rawHandlers;
+      // ── P2-8 / V-L1 + P1-2：Worker 通道 V 层（默认 l1；opt-in 经 deps.getVerifyConfig() 升到 l3）──
       // 判定事实来源：ledger（引擎 verify_ledger，经下方 onTrace 收）+ diff（runCwd 的
       // git status，非 git 工作区返回 null → R5 降级 SKIP，不阻断任务）。
+      // P1-2：默认档由 off 升为 l1——子任务（编排产出）此前无任何对账，只靠主任务兜底。
+      const l3 = typeof deps.l3Target === 'function' ? (deps.l3Target() || {}) : {};
       const vrun = verifyRun.createVerificationRun({
         runId: `worker:${runKey}`,
         conversationId: `task:${group.group_id}:${task.taskId}`,
         cwd: runCwd || '',
         config: (typeof deps.getVerifyConfig === 'function' ? deps.getVerifyConfig() : null),
         emit: null, // Worker 无 agent:event 通道；结果只进 trace + verdicts.jsonl
-        defaultLevel: 'off',
+        defaultLevel: 'l1',
+        // P1-2：L3 能力一并接线（风险门触发时才跑）。Worker 是无人值守通道，
+        // 需要 l3 的组由 getVerifyConfig() 显式下发 level='l3'（与定时通道同策略）。
+        l3Chat: l3.l3Chat || null,
+        l3Model: l3.l3Model || null,
+        l3Gate: (ctx) => verifyPolicy.shouldRunL3({ ...ctx, trigger: { risk: true, sampleRate: 0 } }),
       });
       controller.signal.addEventListener('abort', () => { abortReason = controller.signal.reason?.message || String(controller.signal.reason || '运行已中止'); }, { once: true });
       // 墙钟超时：到点中止本轮 Agent（工具调用在下一轮 chat 才感知，符合设计取舍）

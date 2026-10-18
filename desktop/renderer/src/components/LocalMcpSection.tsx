@@ -6,6 +6,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useMcpStatus, type McpServerState } from '../hooks/useMcpStatus';
 import Switch from './ui/Switch';
+import Button from './ui/Button';
+import Dot from './ui/Dot';
 import {
   IconAlert, IconCheck, IconChevronDown, IconEdit, IconPlus,
   IconRefresh, IconX,
@@ -18,6 +20,15 @@ interface ServerRow {
   args?: string[];
   url?: string;
   toolCount?: number;
+  // 期 2：三层治理档位（auto-start / whitelist / manual），由主进程落盘时打入
+  tier?: string;
+}
+
+// 期 2：治理配置（档位 profile / 文件能力 fsMode / 沙盒网络开关）
+interface Governance {
+  profile: 'normal' | 'developer';
+  fsMode: 'read-only' | 'read-write';
+  sandboxNetwork: boolean;
 }
 
 interface Props {
@@ -28,6 +39,21 @@ interface Props {
 // 五态：ok / fail / connecting / saved 由「列表 + 本地操作」派生，
 // crashed 只来自主进程广播的 mcp_status（P0-5④ 新建的消费链路）
 type ConnState = McpServerState;
+
+// 期 2：档位徽章样式（性冷淡风——auto-start/whitelist 中性色，manual 用 danger 提示高危）
+const TIER_CLASS: Record<string, string> = {
+  'auto-start': 'border-border text-text2',
+  whitelist: 'border-border text-text2',
+  manual: 'border-danger text-danger',
+};
+// 期 2：档位 → i18n key 后缀
+const TIER_KEY: Record<string, string> = {
+  'auto-start': 'tierAutoStart',
+  whitelist: 'tierWhitelist',
+  manual: 'tierManual',
+};
+// 期 2：开发者档额外自动启动的 git 服务名（与主进程 DEVELOPER_AUTO_START_NAMES 对齐）
+const GIT_NAMES = new Set(['git', 'git-mcp']);
 
 export default function LocalMcpSection({ refreshSignal }: Props) {
   const { t } = useI18n();
@@ -42,6 +68,12 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
   const [jsonText, setJsonText] = useState('');
   const [jsonMsg, setJsonMsg] = useState('');
   const [form, setForm] = useState({ name: '', transport: 'stdio', command: '', args: '', url: '' });
+  // 期 2：治理配置（默认最保守档：normal / 读写 / 沙盒禁网）
+  const [profile, setProfile] = useState<'normal' | 'developer'>('normal');
+  // 期 3：能力降级开关（文件能力 fsMode / 沙盒网络开关）
+  const [fsMode, setFsMode] = useState<'read-only' | 'read-write'>('read-write');
+  const [sandboxNetwork, setSandboxNetwork] = useState(false);
+  const [govMsg, setGovMsg] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -49,12 +81,70 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
       setConnected(Array.isArray(list) ? list : []);
     } catch (e) { console.warn('[local-mcp] listServers failed:', e); }
     try {
-      const cfg = (await window.mjcode?.mcpGetConfig?.()) as { ok?: boolean; servers?: ServerRow[] } | undefined;
-      if (cfg?.ok) setSaved(cfg.servers || []);
+      const cfg = (await window.mjcode?.mcpGetConfig?.()) as { ok?: boolean; servers?: ServerRow[]; governance?: Governance } | undefined;
+      if (cfg?.ok) {
+        setSaved(cfg.servers || []);
+        if (cfg.governance?.profile) setProfile(cfg.governance.profile);
+        // 期 3：同步读取能力降级开关（缺省回最保守档，与 readGovernance 归一化一致）
+        if (cfg.governance?.fsMode) setFsMode(cfg.governance.fsMode);
+        setSandboxNetwork(cfg.governance?.sandboxNetwork === true);
+      }
     } catch (e) { console.warn('[local-mcp] getConfig failed:', e); }
   }, []);
 
   useEffect(() => { load(); }, [load, refreshSignal]);
+
+  // 期 2：切换治理档位并持久化。developer 档额外把 git 类纳入自动启动——
+  // 切换后立即对「已保存但未连接」的 git 服务发起重连（复用 mcp:reconnect 的幂等语义），
+  // 使档位变更即时生效，而非仅等下次启动。
+  async function applyProfile(next: 'normal' | 'developer') {
+    setProfile(next);
+    setGovMsg('');
+    try {
+      const r = (await window.mjcode?.mcpGovernanceSet?.({ profile: next })) as
+        { ok?: boolean; governance?: Governance; error?: string } | undefined;
+      if (!r?.ok) { setGovMsg(r?.error || t('localMcp.govFailed')); return; }
+      if (r.governance?.profile) setProfile(r.governance.profile);
+      if (next === 'developer') {
+        const connectedNames = new Set(connected.map((c) => c.name));
+        for (const s of saved) {
+          if (GIT_NAMES.has(s.name) && !connectedNames.has(s.name)) {
+            setStatusMap((m) => ({ ...m, [s.name]: 'connecting' }));
+            const rc = (await window.mjcode?.mcpReconnect?.({ name: s.name })) as { ok?: boolean } | undefined;
+            setStatusMap((m) => ({ ...m, [s.name]: rc?.ok ? 'ok' : 'fail' }));
+          }
+        }
+        window.dispatchEvent(new CustomEvent('mjcode:mcp-tools-dirty'));
+      }
+      await load();
+    } catch (e) {
+      setGovMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // 期 3：能力降级开关切换（文件能力 fsMode / 沙盒网络 sandboxNetwork）。
+  // 与档位 profile 共用 mcp:governance/set（部分更新语义，未提供字段保持原值）。
+  // 二者只改变既有工具的运行期行为，不改变工具集，故无需 mjcode:mcp-tools-dirty。
+  async function applyGovernance(partial: Partial<Pick<Governance, 'fsMode' | 'sandboxNetwork'>>) {
+    setGovMsg('');
+    // 乐观更新：先落 UI，失败则由回包/load 纠正
+    if (partial.fsMode !== undefined) setFsMode(partial.fsMode);
+    if (partial.sandboxNetwork !== undefined) setSandboxNetwork(partial.sandboxNetwork);
+    try {
+      const r = (await window.mjcode?.mcpGovernanceSet?.(partial)) as
+        { ok?: boolean; governance?: Governance; error?: string } | undefined;
+      if (!r?.ok) {
+        setGovMsg(r?.error || t('localMcp.govFailed'));
+        await load();
+        return;
+      }
+      if (r.governance?.fsMode) setFsMode(r.governance.fsMode);
+      setSandboxNetwork(r.governance?.sandboxNetwork === true);
+    } catch (e) {
+      setGovMsg(e instanceof Error ? e.message : String(e));
+      await load();
+    }
+  }
 
   async function connect(s: ServerRow) {
     setStatusMap((m) => ({ ...m, [s.name]: 'connecting' }));
@@ -168,36 +258,74 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
         <span className="text-sm font-medium">{t('localMcp.title')}</span>
         <span className="text-xs text-text2">{t('localMcp.count', { n: rows.length })}</span>
         <span className="flex-1" />
+        {/* 期 2：治理档位选择器（普通用户 / 开发者）。developer 档额外自启 git 类服务。 */}
+        <span className="h-7 inline-flex items-center gap-1 px-2 rounded-lg border border-border shrink-0">
+          <span className="text-caption text-text2">{t('localMcp.profileLabel')}</span>
+          {(['normal', 'developer'] as const).map((p) => (
+            <span key={p} onClick={(e) => { e.stopPropagation(); if (p !== profile) applyProfile(p); }}
+              className={`px-2 py-1 rounded-lg text-caption cursor-pointer ${profile === p ? 'bg-hover text-text' : 'text-text2 hover:text-text'}`}>
+              {t(p === 'developer' ? 'localMcp.profileDeveloper' : 'localMcp.profileNormal')}
+            </span>
+          ))}
+        </span>
         <span onClick={(e) => { e.stopPropagation(); load(); }}
           className="h-7 w-7 inline-flex items-center justify-center rounded-lg border border-border hover:bg-hover text-text2 cursor-pointer">
           <IconRefresh size={12} />
         </span>
         <span onClick={(e) => { e.stopPropagation(); setManualOpen((v) => !v); }}
-          className={`h-7 inline-flex items-center gap-1 px-2.5 rounded-lg border text-xs cursor-pointer ${manualOpen ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}>
+          className={`h-7 inline-flex items-center gap-1 px-3 rounded-lg border text-xs cursor-pointer ${manualOpen ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}>
           <IconPlus size={12} /> {t('localMcp.addManually')}
         </span>
         <span onClick={(e) => { e.stopPropagation(); if (jsonOpen) { setJsonOpen(false); } else { openJson(); } }}
-          className={`h-7 inline-flex items-center gap-1 px-2.5 rounded-lg border text-xs cursor-pointer ${jsonOpen ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}>
+          className={`h-7 inline-flex items-center gap-1 px-3 rounded-lg border text-xs cursor-pointer ${jsonOpen ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}>
           <IconEdit size={12} /> {t('localMcp.editJson')}
         </span>
       </button>
 
       {open && (
         <div className="px-4 pb-3">
+          {govMsg && <div className="mb-3 text-caption text-danger leading-relaxed">{govMsg}</div>}
+          {/* 期 3：能力降级开关（文件能力只读/读写、沙盒网络开/关）。
+              统一用「标签 + 双段」形态，与折叠头的档位选择器保持同一视觉规则。
+              只影响原生工具的运行期行为（sqlite 写 / sandbox_code_run 联网），不改变已连接服务。 */}
+          <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="inline-flex items-center gap-1">
+              <span className="text-caption text-text2">{t('localMcp.fsModeLabel')}</span>
+              <span className="h-7 inline-flex items-center gap-1 px-2 rounded-lg border border-border">
+                {(['read-only', 'read-write'] as const).map((m) => (
+                  <span key={m} onClick={() => { if (m !== fsMode) applyGovernance({ fsMode: m }); }}
+                    className={`px-2 py-1 rounded-lg text-caption cursor-pointer ${fsMode === m ? 'bg-hover text-text' : 'text-text2 hover:text-text'}`}>
+                    {t(m === 'read-only' ? 'localMcp.fsReadOnly' : 'localMcp.fsReadWrite')}
+                  </span>
+                ))}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="text-caption text-text2">{t('localMcp.sandboxNetLabel')}</span>
+              <span className="h-7 inline-flex items-center gap-1 px-2 rounded-lg border border-border">
+                {([false, true] as const).map((on) => (
+                  <span key={String(on)} onClick={() => { if (on !== sandboxNetwork) applyGovernance({ sandboxNetwork: on }); }}
+                    className={`px-2 py-1 rounded-lg text-caption cursor-pointer ${sandboxNetwork === on ? 'bg-hover text-text' : 'text-text2 hover:text-text'}`}>
+                    {t(on ? 'localMcp.sandboxNetOn' : 'localMcp.sandboxNetOff')}
+                  </span>
+                ))}
+              </span>
+            </span>
+          </div>
           {/* 手动添加表单 */}
           {manualOpen && (
-            <div className="mb-3 p-3 rounded-lg border border-border bg-bg space-y-1.5">
+            <div className="mb-3 p-3 rounded-lg border border-border bg-bg space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-text2">{t('localMcp.manualTitle')}</span>
                 <button onClick={() => setManualOpen(false)} className="text-text2 hover:text-text"><IconX size={13} /></button>
               </div>
               <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder={t('localMcp.namePh')}
-                className="w-full h-8 px-2.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent" />
+                className="w-full h-8 px-3 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent" />
               <div className="flex items-center gap-2">
                 {(['stdio', 'http'] as const).map((v) => (
                   <button key={v} onClick={() => setForm({ ...form, transport: v })}
-                    className={`px-2.5 py-1 rounded-lg text-xs border ${form.transport === v ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'}`}>
+                    className={`px-3 py-1 rounded-lg text-xs border ${form.transport === v ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'}`}>
                     {v === 'stdio' ? t('localMcp.transportStdio') : t('localMcp.transportHttp')}
                   </button>
                 ))}
@@ -206,17 +334,19 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                 <>
                   <input value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })}
                     placeholder={t('localMcp.commandPh')}
-                    className="w-full h-8 px-2.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
+                    className="w-full h-8 px-3 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
                   <input value={form.args} onChange={(e) => setForm({ ...form, args: e.target.value })}
                     placeholder={t('localMcp.argsPh')}
-                    className="w-full h-8 px-2.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
+                    className="w-full h-8 px-3 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
                 </>
               ) : (
                 <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })}
                   placeholder={t('localMcp.urlPh')}
-                  className="w-full h-8 px-2.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
+                  className="w-full h-8 px-3 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent font-mono" />
               )}
-              <button
+              <Button
+                variant="primary"
+                size="md"
                 disabled={!form.name || (form.transport === 'http' ? !form.url : !form.command)}
                 onClick={async () => {
                   await connect({
@@ -229,27 +359,26 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                   setManualOpen(false);
                   setForm({ name: '', transport: 'stdio', command: '', args: '', url: '' });
                 }}
-                className="h-8 inline-flex items-center justify-center px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40">
+              >
                 {t('localMcp.connectAndSave')}
-              </button>
+              </Button>
             </div>
           )}
 
           {/* JSON 编辑抽屉 */}
           {jsonOpen && (
             <div className="mb-3 p-3 rounded-lg border border-border bg-bg">
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-text2">{t('localMcp.jsonHint')}</span>
                 <button onClick={() => setJsonOpen(false)} className="text-text2 hover:text-text"><IconX size={13} /></button>
               </div>
               <textarea value={jsonText} onChange={(e) => setJsonText(e.target.value)} rows={10}
-                className="w-full rounded-lg border border-border bg-surface p-2.5 text-xs font-mono outline-none focus:border-accent resize-y" />
-              <div className="flex items-center justify-between mt-1.5">
+                className="w-full rounded-lg border border-border bg-surface p-3 text-xs font-mono outline-none focus:border-accent resize-y" />
+              <div className="flex items-center justify-between mt-2">
                 <span className="text-xs text-text2">{jsonMsg}</span>
-                <button onClick={saveJson}
-                  className="h-7 inline-flex items-center justify-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110">
+                <Button variant="primary" size="sm" onClick={saveJson}>
                   {t('localMcp.jsonSave')}
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -265,33 +394,39 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs flex items-center gap-2">
                     <span className="truncate font-medium">{s.name}</span>
-                    {st === 'ok' && <span className="text-caption text-success inline-flex items-center gap-0.5 shrink-0"><IconCheck size={10} /> {statusText.ok}{s.toolCount ? ` · ${s.toolCount}` : ''}</span>}
-                    {st === 'fail' && <span className="text-caption text-danger inline-flex items-center gap-0.5 shrink-0"><IconAlert size={10} /> {statusText.fail}</span>}
+                    {/* 期 2：三层治理档位徽章（auto-start / whitelist / manual） */}
+                    {s.tier && TIER_KEY[s.tier] && (
+                      <span className={`text-caption px-2 py-1 rounded-lg border shrink-0 ${TIER_CLASS[s.tier] || 'border-border text-text2'}`}>
+                        {t(`localMcp.${TIER_KEY[s.tier]}`)}
+                      </span>
+                    )}
+                    {st === 'ok' && <span className="text-caption text-success inline-flex items-center gap-1 shrink-0"><IconCheck size={10} /> {statusText.ok}{s.toolCount ? ` · ${s.toolCount}` : ''}</span>}
+                    {st === 'fail' && <span className="text-caption text-danger inline-flex items-center gap-1 shrink-0"><IconAlert size={10} /> {statusText.fail}</span>}
                     {st === 'connecting' && <span className="text-caption text-text2 shrink-0">{statusText.connecting}</span>}
                     {st === 'saved' && <span className="text-caption text-text2 shrink-0">{statusText.saved}</span>}
                     {/* 崩溃态：红点 + 文案，视觉上与「连接失败」区分（失败是握手没成，崩溃是跑着挂掉） */}
                     {st === 'crashed' && (
                       <span className="text-caption text-danger inline-flex items-center gap-1 shrink-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-danger" aria-hidden="true" />
+                        <Dot size="sm" className="bg-danger" />
                         {statusText.crashed}
                       </span>
                     )}
                   </div>
                   {(s.command || s.url) && (
-                    <div className="text-caption text-text2 font-mono truncate mt-0.5">
+                    <div className="text-caption text-text2 font-mono truncate mt-1">
                       {s.transport === 'http' ? s.url : `${s.command || ''} ${(s.args || []).join(' ')}`}
                     </div>
                   )}
                   {st === 'crashed' && (
-                    <div className="text-caption text-danger mt-0.5 leading-relaxed">{t('settings.mcpCrashHint')}</div>
+                    <div className="text-caption text-danger mt-1 leading-relaxed">{t('settings.mcpCrashHint')}</div>
                   )}
                   {reconnectMsg[s.name] && (
-                    <div className="text-caption text-danger mt-0.5 leading-relaxed">{reconnectMsg[s.name]}</div>
+                    <div className="text-caption text-danger mt-1 leading-relaxed">{reconnectMsg[s.name]}</div>
                   )}
                 </div>
                 {st === 'crashed' && (
                   <button onClick={() => reconnect(s.name)} disabled={statusMap[s.name] === 'connecting'}
-                    className="h-7 inline-flex items-center justify-center whitespace-nowrap text-xs px-2.5 rounded-lg border border-danger text-danger hover:bg-[var(--sem-danger-bg)] disabled:opacity-50 shrink-0">
+                    className="h-7 inline-flex items-center justify-center whitespace-nowrap text-xs px-3 rounded-lg border border-danger text-danger hover:bg-[var(--sem-danger-bg)] disabled:opacity-50 shrink-0">
                     {statusMap[s.name] === 'connecting' ? t('settings.mcpReconnecting') : t('settings.mcpReconnect')}
                   </button>
                 )}

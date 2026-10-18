@@ -12,6 +12,7 @@ import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
 import { IconCheck, IconClock, IconPlus, IconRefresh, IconUser, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
+import Button from './ui/Button';
 
 const POLL_MS = 5000; // 在线成员与远端变更轮询间隔
 
@@ -167,18 +168,19 @@ export default function TeamSpace({ spaceId = 'default' }) {
           <p className="text-xs text-text2">{t('teamSpace.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-text2">
+          <div className="flex items-center gap-2 text-xs text-text2">
             <IconUser size={14} />
             {members.length > 0 ? members.map(m => m.display_name).join(t('teamSpace.listSep')) : t('teamSpace.noMembers')}
           </div>
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={doSync}
             disabled={syncing}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-text2 hover:bg-hover disabled:opacity-50"
           >
             <IconRefresh size={14} />
             {syncing ? t('teamSpace.syncing') : t('teamSpace.sync')}
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -204,10 +206,10 @@ export default function TeamSpace({ spaceId = 'default' }) {
               value={cardTitle}
               onChange={e => setCardTitle(e.target.value)}
               placeholder={t('teamSpace.cardTitlePlaceholder')}
-              className="flex-1 rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text outline-none focus:border-accent"
+              className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text outline-none focus:border-accent"
             />
-            <button onClick={addCard} className="rounded-lg bg-accent-solid px-3 py-1.5 text-sm text-on-accent">{t('teamSpace.add')}</button>
-            <button onClick={() => setShowAdd(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm text-text2">{t('teamSpace.cancel')}</button>
+            <button onClick={addCard} className="rounded-lg bg-accent-solid px-3 py-2 text-sm text-on-accent">{t('teamSpace.add')}</button>
+            <button onClick={() => setShowAdd(false)} className="rounded-lg border border-border px-3 py-2 text-sm text-text2">{t('teamSpace.cancel')}</button>
           </div>
         ) : null}
 
@@ -247,7 +249,7 @@ export default function TeamSpace({ spaceId = 'default' }) {
                       <select
                         value={card.column}
                         onChange={e => drag(card.id, e.target.value)}
-                        className="w-full rounded border border-border bg-surface px-1.5 py-1 text-xs text-text2 outline-none focus:border-accent"
+                        className="w-full rounded border border-border bg-surface px-2 py-1 text-xs text-text2 outline-none focus:border-accent"
                       >
                         {BOARD_COLUMNS.map(c => (
                           <option key={c.key} value={c.key}>{colLabel(c.key)}</option>

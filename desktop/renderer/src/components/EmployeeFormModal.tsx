@@ -253,7 +253,7 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
         />
         <div>
           <div className="text-xs text-text2 mb-1">{t('settings.employeeTools')}</div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-2">
             {TOOL_ALIASES.map((alias) => {
               const on = tools.includes(alias);
               return (

@@ -220,31 +220,36 @@ async function runShellTool(args) {
   if (process.platform === 'win32' && policy !== 'full-access') {
     return new Promise((resolve) => {
       sandbox.windowsBackend.windowsSandboxReady().then(async (st) => {
+        // P1-4：按策略分档——workspace-write 执行前先做工作区 ACL（含 .git/.mjcode carve-out），
+        // read-only 不授予工作区写权限；ACL 失败视为未就绪 → 命令守卫兜底（fail-closed）。
         if (st.ready) {
-          const r = await sandbox.windowsBackend.execAsSandboxUser(command, cwd);
-          if (r.ok) {
-            audit('shell', command, `sandbox=windows-restricted-user/${policy} resultUnknown=true`, neededApproval ? 'approved' : 'auto');
-            // P0 修复（2026-10-16）：原实现硬编码 exitCode:0 且 stdout 取 schtasks 自己的输出，
-            // 两者叠加 ⇒ Agent 以为所有命令都成功、却看不到任何输出。这是系统性欺骗，
-            // 且比"功能缺失"更危险——Agent 会基于假的成功继续下一步。
-            // 现如实上报「结果不可知」+ 可行动提示，绝不伪造成功。
-            resolve({
-              stdout: '',
-              stderr: '',
-              exitCode: null,
-              errorCode: 'result-unknown',
-              resultUnknown: true,
-              sandboxed: true,
-              sandboxBackend: 'windows-restricted-user',
-              sandbox: { policy, sandboxed: true, backend: 'windows-restricted-user' },
-              error: r.reason || '',
-              ...cwdMeta,
-              hint: 'Windows 沙箱执行：命令的真实退出码与输出暂不可见（schtasks 无法回传）。'
-                  + '请勿据此判断命令成功——若必须看到真实结果，可临时改用非沙箱模式（full-access）或在终端执行。',
-            });
-            return;
-          }
-          console.warn(`[sandbox] Windows 受限用户执行失败（${r.error}），落到命令守卫`);
+          const acl = policy === 'workspace-write' ? await sandbox.windowsBackend.applyWorkspaceAcl(cwd, undefined, writeGuard.protectedPathsFor(cwd)) : { ok: true };
+          if (acl.ok) {
+            const r = await sandbox.windowsBackend.execAsSandboxUser(command, cwd, undefined, policy);
+            if (r.ok) {
+              audit('shell', command, `sandbox=windows-restricted-user/${policy} resultUnknown=true`, neededApproval ? 'approved' : 'auto');
+              // P0 修复（2026-10-16）：原实现硬编码 exitCode:0 且 stdout 取 schtasks 自己的输出，
+              // 两者叠加 ⇒ Agent 以为所有命令都成功、却看不到任何输出。这是系统性欺骗，
+              // 且比"功能缺失"更危险——Agent 会基于假的成功继续下一步。
+              // 现如实上报「结果不可知」+ 可行动提示，绝不伪造成功。
+              resolve({
+                stdout: '',
+                stderr: '',
+                exitCode: null,
+                errorCode: 'result-unknown',
+                resultUnknown: true,
+                sandboxed: true,
+                sandboxBackend: 'windows-restricted-user',
+                sandbox: { policy, tier: policy, sandboxed: true, backend: 'windows-restricted-user' },
+                error: r.reason || '',
+                ...cwdMeta,
+                hint: 'Windows 沙箱执行：命令的真实退出码与输出暂不可见（schtasks 无法回传）。'
+                    + '请勿据此判断命令成功——若必须看到真实结果，可临时改用非沙箱模式（full-access）或在终端执行。',
+              });
+              return;
+            }
+            console.warn(`[sandbox] Windows 受限用户执行失败（${r.error}），落到命令守卫`);
+          } else console.warn(`[sandbox] Windows 工作区 ACL 设置失败（${acl.error}），落到命令守卫`);
         } else {
           console.warn(`[sandbox] Windows 沙箱未就绪（${st.reason}），落到命令守卫`);
         }
@@ -326,6 +331,13 @@ async function runWriteTool(toolName, args) {
   const { approvalMode = 'on-request', conversationId, requireApproval = true, sandboxPolicy, ...rest } = args;
   const toolKey = { writeFile: 'write_file', editFile: 'edit_file', applyPatch: 'apply_patch' }[toolName];
   let ruleMatched = 'none'; // P1-C：审批规则命中情况随审计留痕
+
+  // 期 3：只读文件能力档拒绝一切写工具（fsMode 判定单一事实来源在 writeGuard.isReadonlyFs；
+  // fail-closed：不受审批档/「始终允许」规则影响，不提供单次放行口）。
+  if (writeGuard.isReadonlyFs(deps.getGovernance && deps.getGovernance())) {
+    audit(toolKey, rest.path || '(patch)', '只读文件能力档拒绝写入', 'blocked');
+    return { ok: false, blocked: true, readOnly: true, error: '当前为「只读文件能力」档，已拒绝文件写入（可在「本机服务 → 能力降级」切换为读写）。' };
+  }
 
   // ── 可写区内的只读 carve-out（对齐 Codex 当前沙箱架构）──
   // `.git`（含 worktree/submodule 的 gitdir）与应用自身配置目录：即使在项目目录内也**禁止写入**。

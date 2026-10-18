@@ -74,6 +74,11 @@
   "chromeConnected": "已连接用户 Chrome",
   "chromeDisconnected": "未连接：请加载接管扩展并在审批卡批准",
   "codeExec": "代码执行（Code Mode）",
+  "clipboard": "剪贴板",
+  "notify": "系统通知",
+  "httpRequest": "HTTP 请求",
+  "sqlite": "SQLite 数据库",
+  "sandboxCodeRun": "沙盒代码执行",
   "codeEmpty": "（空代码）",
   "codeImage": "生成图片"
 }

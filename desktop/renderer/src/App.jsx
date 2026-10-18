@@ -29,6 +29,7 @@ import { projectDisplayName } from './lib/projectName';
 import { getDefaultProject, loadJSON, applyThemeToDocument, rememberModel, pickInitialModel } from './lib/appState';
 import usePendingExpert from './hooks/usePendingExpert';
 import { useThreadModel } from './hooks/useThreadModel';
+import { useForkThread } from './hooks/useForkThread';
 import THEMES from './lib/themes.json';
 import { useI18n } from './i18n';
 
@@ -260,6 +261,8 @@ export default function App() {
   // 快捷键 effect 闭包是空的，用 ref 读取最新的任务态（⌘⌥B 需按作用域判断）
   const activeThreadRef = useRef(null);
   useEffect(() => { activeThreadRef.current = activeThread; }, [activeThread]);
+  // P1-6：会话分支注册——「从此处分叉」按钮派发 mjcode:fork-thread，逻辑见 hooks/useForkThread
+  useForkThread({ activeThreadRef, onForked: (th) => { selectThread(th); loadData(); } });
   // 同上：⌘P 需按「右栏是否停在文件面板」分流，闭包读 ref 防陈旧
   const paneStateRef = useRef({ open: false, tab: 'diff' });
   useEffect(() => { paneStateRef.current = { open: paneOpen, tab: paneTab }; }, [paneOpen, paneTab]);
@@ -315,9 +318,6 @@ export default function App() {
   // 布局状态持久化
   useEffect(() => { localStorage.setItem('mj_sidebar_open', JSON.stringify(sidebarOpen)); }, [sidebarOpen]);
   useEffect(() => { localStorage.setItem('mj_pane_open', JSON.stringify(paneOpen)); }, [paneOpen]);
-
-  // 登录系统已移除：不再有 serverHealth 探测与登录页跳转。
-  // 本地模式在模块级置位（setLocalMode(true)），数据由挂载时 loadData() 加载。
 
   // 项目状态持久化
   useEffect(() => { localStorage.setItem('mj_active_project', JSON.stringify(activeProject)); }, [activeProject]);
@@ -547,7 +547,7 @@ export default function App() {
                   key={opt.id}
                   role="menuitem"
                   onClick={() => { setThreadFilter(opt.id); setFilterOpen(false); }}
-                  className={`w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-hover ${threadFilter === opt.id ? 'text-text' : 'text-text2'}`}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-hover ${threadFilter === opt.id ? 'text-text' : 'text-text2'}`}
                 >
                   <span>{tr(opt.labelKey)}</span>
                   {threadFilter === opt.id && <IconCheck size={13} className="text-accent" />}
@@ -571,11 +571,11 @@ export default function App() {
             <IconPanelRight size={16} />
           </button>
           <button onClick={cycleTheme}
-            className="text-text2 hover:text-text px-1.5 py-1 rounded-lg" title={tr('app.themeTitle', { name: themeLabel() })} aria-label={tr('app.switchTheme')}>
+            className="text-text2 hover:text-text px-2 py-1 rounded-lg" title={tr('app.themeTitle', { name: themeLabel() })} aria-label={tr('app.switchTheme')}>
             <IconPalette size={15} />
           </button>
           {localMode && (
-            <span className="text-caption px-1.5 py-0.5 rounded-md bg-warn-bg text-warn" title={tr('app.offlineTitle')}>
+            <span className="text-caption px-2 py-1 rounded-lg bg-warn-bg text-warn" title={tr('app.offlineTitle')}>
               {tr('app.offlineMode')}
             </span>
           )}

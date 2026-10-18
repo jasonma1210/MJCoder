@@ -12,7 +12,7 @@ export default function InlineAlert({ type = 'info', children, onDismiss }) {
   const Icon = type === 'error' ? IconAlert : type === 'warn' ? IconAlert : IconCheck;
   return (
     <div className={`flex items-start gap-2 border rounded-lg px-3 py-2 text-xs ${styles[type] || styles.info}`} role="alert">
-      <span className="mt-0.5 shrink-0"><Icon size={14} /></span>
+      <span className="mt-1 shrink-0"><Icon size={14} /></span>
       <div className="flex-1 leading-relaxed">{children}</div>
       {onDismiss && (
         <button onClick={onDismiss} className="shrink-0 hover:opacity-70" title={t('inlineAlert.close')}>

@@ -11,6 +11,7 @@
 //      2026-10-17 统一为 `ttfbMs`（无下划线）的契约，实现**刻意不保留**旧下划线别名——
 //      双名会让口径重新漂移（一半宿主写 A、一半读 B，症状是「ttfb 永远是 null」且无声无息）。
 //      因此这里既断言新名生效，也断言旧名**不被消费**、且源码里 0 命中。
+//   ⑥ P2-2 SLO 回归门禁：边界「当且仅当 > 目标值」、端到端口径（e2eTtfbMs）在册、主聊天通道接线在册。
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -47,7 +48,7 @@ check('TTFB_TARGET_MS === 3000', TTFB_TARGET_MS === 3000, `got=${TTFB_TARGET_MS}
     `engine=${TTFB_TARGET_MS} host=${sg.TTFB_TARGET_MS}`);
 }
 
-async function runOnce({ ttfbField, maxRounds = 4, maxTotalRounds }) {
+async function runOnce({ ttfbField, ttfbValue = 3500, maxRounds = 4, maxTotalRounds }) {
   const traces = [];
   const budgets = [];
   let rounds = 0;
@@ -62,8 +63,8 @@ async function runOnce({ ttfbField, maxRounds = 4, maxTotalRounds }) {
           tool_calls: [{ id: 'f1', type: 'function', function: { name: 'shell', arguments: '{"command":"echo 1"}' } }],
           usage: { prompt_tokens: 50, completion_tokens: 10 },
         };
-        if (ttfbField === 'underscore') res._ttfbMs = 3500;   // 规格 §10 的构造
-        else if (ttfbField === 'plain') res.ttfbMs = 3500;     // 实现实际读取的字段
+        if (ttfbField === 'underscore') res._ttfbMs = ttfbValue;   // 规格 §10 的构造
+        else if (ttfbField === 'plain') res.ttfbMs = ttfbValue;     // 实现实际读取的字段
         return res;
       }
       return { content: '任务完成', usage: { prompt_tokens: 50, completion_tokens: 10 } };
@@ -166,6 +167,42 @@ async function runOnce({ ttfbField, maxRounds = 4, maxTotalRounds }) {
   }
   check('源码门禁：agent-core/ 与 main/ 代码内 `_ttfbMs` 0 命中（旧名永不复活）',
     hits.length === 0, hits.length ? hits.join(', ') : `扫描 ${files.length} 个文件`);
+}
+
+// ── ⑥ P2-2 SLO 回归门禁：边界「当且仅当 > 目标值」──
+{
+  const ok = await runOnce({ ttfbField: 'plain', ttfbValue: TTFB_TARGET_MS });
+  check(`边界：ttfbMs === ${TTFB_TARGET_MS}（恰好达标）不产生 slow_ttfb`,
+    ok.traces.filter((e) => e.type === 'slow_ttfb').length === 0,
+    `slow_ttfb=${ok.traces.filter((e) => e.type === 'slow_ttfb').length} 条`);
+  const breach = await runOnce({ ttfbField: 'plain', ttfbValue: TTFB_TARGET_MS + 1 });
+  check(`边界：ttfbMs === ${TTFB_TARGET_MS + 1}（超标 1ms）即产生 slow_ttfb`,
+    breach.traces.filter((e) => e.type === 'slow_ttfb').length === 1,
+    `slow_ttfb=${breach.traces.filter((e) => e.type === 'slow_ttfb').length} 条`);
+}
+
+// ── ⑦ P2-2 端到端口径（e2eTtfbMs）：首个模型轮携带、≥ 模型段、后续轮不带 ──
+{
+  const r = await runOnce({ ttfbField: 'plain' });
+  const modelEvts = r.traces.filter((e) => e.type === 'model');
+  check('首个 model 事件带 e2eTtfbMs（端到端口径在册）',
+    typeof modelEvts[0]?.e2eTtfbMs === 'number', `实测=${JSON.stringify(modelEvts[0]?.e2eTtfbMs)}`);
+  check('e2eTtfbMs ≥ 模型段 ttfbMs（装配段耗时非负）',
+    modelEvts[0]?.e2eTtfbMs >= modelEvts[0]?.ttfbMs,
+    `e2e=${modelEvts[0]?.e2eTtfbMs} model=${modelEvts[0]?.ttfbMs}`);
+  check('后续轮 model 事件不带 e2eTtfbMs（口径仅首轮）',
+    modelEvts.length > 1 && !('e2eTtfbMs' in modelEvts[1]),
+    `model 事件 ${modelEvts.length} 条`);
+}
+
+// ── ⑧ P2-2 主对话通道接线（源码门禁）：main.js 必须消费 reportSlowTtfb ──
+// 此前只有 scheduled 通道接了 TTFB 告警，主聊天（最高频路径）测到 ttfb 却不告警——
+// 静态断言防接线再次脱落（与 bridge-parity 同款源码门禁风格）。
+{
+  const src = fs.readFileSync(path.join(import.meta.dirname, '../main/main.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/[^\n]*/g, '$1');
+  check('主对话通道接线：main.js 消费 reportSlowTtfb（chat 通道 TTFB 告警在册）',
+    src.includes('reportSlowTtfb('));
 }
 
 console.log(`\nttfb-report: ${pass}/${pass + fail} 通过`);

@@ -21,5 +21,18 @@
   "connFailed": "Connection failed",
   "connecting": "Connecting…",
   "savedNotConnected": "Not connected",
-  "retry": "Retry"
+  "retry": "Retry",
+  "profileLabel": "Profile",
+  "profileNormal": "Standard",
+  "profileDeveloper": "Developer",
+  "tierAutoStart": "Auto-start",
+  "tierWhitelist": "Whitelist",
+  "tierManual": "Manual",
+  "govFailed": "Failed to switch profile",
+  "fsModeLabel": "File access",
+  "fsReadOnly": "Read-only",
+  "fsReadWrite": "Read-write",
+  "sandboxNetLabel": "Sandbox network",
+  "sandboxNetOn": "On",
+  "sandboxNetOff": "Off"
 }

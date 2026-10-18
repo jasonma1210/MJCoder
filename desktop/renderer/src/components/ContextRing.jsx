@@ -23,7 +23,7 @@ export default function ContextRing({ usage, onClick, compacting }) {
       onClick={onClick}
       title={t('contextRing.title', { pct, used: usage.used, total: usage.total })}
       aria-label={t('contextRing.ariaLabel', { pct })}
-      className="flex items-center gap-1.5 text-text2 hover:text-text shrink-0"
+      className="flex items-center gap-2 text-text2 hover:text-text shrink-0"
     >
       <svg width="20" height="20" viewBox="0 0 20 20" className="shrink-0">
         <circle cx="10" cy="10" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2.5" />

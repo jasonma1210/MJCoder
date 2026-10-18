@@ -5,6 +5,7 @@ import { confirm } from './feedback';
 import { IconCheck, IconClock, IconPlus, IconX } from './icons';
 import Switch from './ui/Switch';
 import Modal from './ui/Modal';
+import Button from './ui/Button';
 import { useI18n, tGlobal } from '../i18n';
 // 窗口解析与主进程同一张表（lib/modelWindows.ts ↔ main/modelWindows.js 有 parity 测试）
 import { resolveWindow } from '../lib/modelWindows';
@@ -424,13 +425,13 @@ export default function ScheduledTasks() {
           <p className="text-text2 text-xs mt-1">{t('scheduled.subtitle')}</p>
         </div>
         <button onClick={() => { setShowForm(true); setError(''); }}
-          className="h-8 inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg bg-accent-solid text-on-accent text-sm hover:brightness-110">
+          className="h-8 inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-accent-solid text-on-accent text-sm hover:brightness-110">
           <IconPlus size={14} /> {t('scheduled.newTask')}
         </button>
       </div>
 
       {/* 状态筛选（TRAE 同款：全部/已启用/已停用） */}
-      <div className="flex items-center gap-1.5 mb-4">
+      <div className="flex items-center gap-2 mb-4">
         {[['all', t('scheduled.filterAll', { n: tasks.length })], ['enabled', t('scheduled.filterEnabled', { n: enabledCount })], ['disabled', t('scheduled.filterDisabled', { n: tasks.length - enabledCount })]].map(([id, label]) => (
           <button key={id} onClick={() => setFilter(id)}
             className={`h-7 inline-flex items-center px-3 rounded-full text-xs border ${filter === id ? 'border-accent text-accent' : 'border-border text-text2 hover:text-text'}`}>
@@ -480,15 +481,15 @@ export default function ScheduledTasks() {
 
             <input placeholder={t('scheduled.namePlaceholder')} value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
+              className="w-full h-10 bg-input border border-border rounded-xl px-4 text-sm mb-3 outline-none focus:border-accent" />
             <textarea placeholder={t('scheduled.promptPlaceholder')} value={form.prompt}
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-              className="w-full bg-input border border-border rounded-xl px-3.5 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
+              className="w-full bg-input border border-border rounded-xl px-4 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
 
             {/* 任务级模型：不选就跟随会话当前模型（旧行为），选了就固定用这个跑 */}
             <select value={form.modelRef} onChange={(e) => setForm({ ...form, modelRef: e.target.value })}
               aria-label={t('scheduled.modelLabel')}
-              className="w-full h-10 bg-input border border-border rounded-xl px-2.5 text-sm mb-1 outline-none focus:border-accent">
+              className="w-full h-10 bg-input border border-border rounded-xl px-3 text-sm mb-1 outline-none focus:border-accent">
               <option value="">{t('scheduled.modelFollowSession')}</option>
               {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -535,25 +536,25 @@ export default function ScheduledTasks() {
             {/* 重复 / 时间 / 有效期（TRAE 三联行） */}
             <div className="grid grid-cols-3 gap-2 mb-3">
               <select value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })}
-                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
+                className="h-10 bg-input border border-border rounded-xl px-3 text-sm outline-none focus:border-accent">
                 {REPEATS.map((r) => <option key={r.id} value={r.id}>{t('scheduled.repeatLabel', { label: t(r.labelKey) })}</option>)}
               </select>
               <select value={form.validType} onChange={(e) => setForm({ ...form, validType: e.target.value })}
-                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent">
+                className="h-10 bg-input border border-border rounded-xl px-3 text-sm outline-none focus:border-accent">
                 <option value="forever">{t('scheduled.validForever')}</option>
                 <option value="until">{t('scheduled.validUntilType')}</option>
               </select>
               <input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })}
-                className="h-10 bg-input border border-border rounded-xl px-2.5 text-sm outline-none focus:border-accent" />
+                className="h-10 bg-input border border-border rounded-xl px-3 text-sm outline-none focus:border-accent" />
             </div>
             {form.validType === 'until' && (
               <input type="date" value={form.validUntil} onChange={(e) => setForm({ ...form, validUntil: e.target.value })}
-                className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm mb-3 outline-none focus:border-accent" />
+                className="w-full h-10 bg-input border border-border rounded-xl px-4 text-sm mb-3 outline-none focus:border-accent" />
             )}
             {form.repeat === 'custom' && (
               <input placeholder={t('scheduled.cronPlaceholder')} value={form.schedule}
                 onChange={(e) => setForm({ ...form, schedule: e.target.value })}
-                className="w-full h-10 bg-input border border-border rounded-xl px-3.5 text-sm font-mono mb-2 outline-none focus:border-accent" />
+                className="w-full h-10 bg-input border border-border rounded-xl px-4 text-sm font-mono mb-2 outline-none focus:border-accent" />
             )}
 
             {formCronErr ? (
@@ -614,7 +615,7 @@ export default function ScheduledTasks() {
                   {meta && <span className={`text-xs shrink-0 ${meta.cls}`}>{t('scheduled.lastStatus', { label: t(meta.labelKey) })}</span>}
                   {/* 待确认动作：定时任务默认不执行对外动作，被拦下的会攒成清单（归档 md 里有明细） */}
                   {Number(task.pending_count) > 0 && (
-                    <span className="text-xs shrink-0 px-1.5 rounded bg-input text-text2">
+                    <span className="text-xs shrink-0 px-2 rounded bg-input text-text2">
                       {t('scheduled.pendingCount', { n: task.pending_count })}
                     </span>
                   )}
@@ -639,14 +640,14 @@ export default function ScheduledTasks() {
                 </div>
                 {/* 任务级模型：已建任务也能改（此前只有新建表单能选，改一次得删了重建）
                     选中即保存，下一轮执行按新模型跑 */}
-                <div className="text-xs text-text2 mt-1.5 flex items-center gap-1.5">
+                <div className="text-xs text-text2 mt-2 flex items-center gap-2">
                   <span className="shrink-0">{t('scheduled.modelLabel')}</span>
                   <select
                     aria-label={t('scheduled.modelLabel')}
                     title={t('scheduled.modelHint')}
                     value={task?.model?.providerId && task?.model?.model ? `${task.model.providerId}::${task.model.model}` : ''}
                     onChange={(e) => changeTaskModel(task, e.target.value)}
-                    className="min-w-0 max-w-[260px] h-6 bg-input border border-border rounded-md px-1 text-xs outline-none focus:border-accent">
+                    className="min-w-0 max-w-[260px] h-6 bg-input border border-border rounded-lg px-1 text-xs outline-none focus:border-accent">
                     <option value="">{t('scheduled.modelFollowShort')}</option>
                     {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.short}</option>)}
                     {/* provider 已被删/改名时，任务里的快照不在选项里：补一条占位，否则 select 会显示成第一项（撒谎） */}
@@ -669,21 +670,20 @@ export default function ScheduledTasks() {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button onClick={() => runNow(task.id)} disabled={busyId === task.id}
-                  className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border hover:bg-hover text-xs disabled:opacity-50">
+                  className="h-7 inline-flex items-center justify-center px-3 rounded-lg border border-border hover:bg-hover text-xs disabled:opacity-50">
                   {busyId === task.id ? t('scheduled.runningNow') : t('scheduled.runNow')}
                 </button>
                 <button onClick={() => showRuns(task.id)}
-                  className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border hover:bg-hover text-xs">{t('scheduled.runs')}</button>
+                  className="h-7 inline-flex items-center justify-center px-3 rounded-lg border border-border hover:bg-hover text-xs">{t('scheduled.runs')}</button>
                 {/* 对外动作放行状态 + 一键切换（开的时候要二次确认，见 toggleExternal） */}
                 <button onClick={() => toggleExternal(task)} title={t('scheduled.allowExternalLabel')}
-                  className={`h-7 inline-flex items-center justify-center px-2.5 rounded-lg border text-xs ${task.external_policy === 'allow' ? 'border-danger text-danger' : 'border-border text-text2 hover:bg-hover'}`}>
+                  className={`h-7 inline-flex items-center justify-center px-3 rounded-lg border text-xs ${task.external_policy === 'allow' ? 'border-danger text-danger' : 'border-border text-text2 hover:bg-hover'}`}>
                   {task.external_policy === 'allow' ? t('scheduled.externalAllowed') : t('scheduled.externalBlocked')}
                 </button>
                 {/* 产出校验状态 + 一键切换（关掉后零产出不判失败；只做提交/汇报的任务用） */}
-                <button onClick={() => toggleExpectsFile(task)} title={t('scheduled.expectsFileLabel')}
-                  className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border text-text2 hover:bg-hover text-xs">
+                <Button variant="secondary" size="sm" onClick={() => toggleExpectsFile(task)} title={t('scheduled.expectsFileLabel')}>
                   {task.expects_file === false ? t('scheduled.expectsFileOffShort') : t('scheduled.expectsFileOn')}
-                </button>
+                </Button>
                 <Switch checked={!!task.enabled} onChange={() => toggle(task.id, task.enabled)}
                   label={t('settings.enableToggle', { name: String(task.name || task.id || '') })} />
                 <button onClick={() => remove(task.id, task.name)} className="text-text2 hover:text-danger" title={t('scheduled.delete')}><IconX size={14} /></button>
@@ -730,7 +730,7 @@ export default function ScheduledTasks() {
                               </span>
                               {a.status === 'pending' && a.replayable && (
                                 <button onClick={() => replayAction(r.id, a.id)} disabled={busyAction === a.id}
-                                  className="h-6 shrink-0 px-2 rounded-md border border-border hover:bg-hover disabled:opacity-50">
+                                  className="h-6 shrink-0 px-2 rounded-lg border border-border hover:bg-hover disabled:opacity-50">
                                   {busyAction === a.id ? t('scheduled.replayBusy') : t('scheduled.replay')}
                                 </button>
                               )}

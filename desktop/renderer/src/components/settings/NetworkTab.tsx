@@ -95,7 +95,7 @@ function StreamTimeoutSection() {
         );
       })}
       <div className="flex items-center gap-3 pt-3">
-        <button onClick={save} className="bg-accent-solid text-on-accent rounded-lg px-3 py-1.5 text-sm">
+        <button onClick={save} className="bg-accent-solid text-on-accent rounded-lg px-3 py-2 text-sm">
           {t('settings.streamSave')}
         </button>
         {flash && <span className="text-xs text-text2">{flash}</span>}

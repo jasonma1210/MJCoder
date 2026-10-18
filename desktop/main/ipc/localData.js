@@ -228,6 +228,12 @@ function register() {
     const { threadId, projectPath } = payload;
     return deps.getLocalStore() ? deps.getLocalStore().setThreadProject(threadId, projectPath) : { ok: false };
   });
+  // P1-6：会话分支——以 fromMessageId 为分支点，复制出独立新会话（含该消息及之前全部历史）
+  ipcMain.handle('local:threads/fork', async (_, payload) => {
+    guard.assertIds(payload || {}, ['threadId', 'fromMessageId']);
+    if (!deps.getLocalStore()) return { ok: false, error: '本地数据层未初始化' };
+    return deps.getLocalStore().forkThread(payload.threadId, { fromMessageId: payload.fromMessageId });
+  });
 
   ipcMain.handle('local:providers/list', async () => {
     if (!deps.getLocalStore()) return [];

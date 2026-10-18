@@ -164,7 +164,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
       {/* 录制表单 */}
       <div className="space-y-2">
         <textarea
-          className="w-full bg-input border border-border rounded px-2 py-1.5 text-sm"
+          className="w-full bg-input border border-border rounded px-2 py-2 text-sm"
           rows={2}
           placeholder={t('settings.cuaObjectivePlaceholder')}
           value={form.objective}
@@ -173,21 +173,21 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
         />
         <div className="flex gap-2">
           <input
-            className="flex-1 bg-input border border-border rounded px-2 py-1.5 text-sm"
+            className="flex-1 bg-input border border-border rounded px-2 py-2 text-sm"
             placeholder={t('settings.cuaAppNamePlaceholder')}
             value={form.appName}
             onChange={(e) => setForm({ ...form, appName: e.target.value })}
             disabled={!!running}
           />
           <input
-            className="w-32 bg-input border border-border rounded px-2 py-1.5 text-sm"
+            className="w-32 bg-input border border-border rounded px-2 py-2 text-sm"
             placeholder={t('settings.cuaNamePlaceholder')}
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             disabled={!!running}
           />
           <input
-            className="w-16 bg-input border border-border rounded px-2 py-1.5 text-sm"
+            className="w-16 bg-input border border-border rounded px-2 py-2 text-sm"
             type="number" min={1} max={50}
             title={t('settings.cuaMaxStepsLabel')}
             value={form.maxSteps}
@@ -197,7 +197,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
         </div>
         <div className="flex gap-2 items-center">
           <select
-            className="flex-1 bg-input border border-border rounded px-2 py-1.5 text-sm"
+            className="flex-1 bg-input border border-border rounded px-2 py-2 text-sm"
             value={form.modelKey}
             onChange={(e) => setForm({ ...form, modelKey: e.target.value })}
             disabled={!!running}
@@ -206,11 +206,11 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
             {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
           </select>
           {!running ? (
-            <button className="px-3 py-1.5 text-sm bg-accent-solid text-on-accent rounded hover:opacity-90" onClick={startRecord}>
+            <button className="px-3 py-2 text-sm bg-accent-solid text-on-accent rounded hover:opacity-90" onClick={startRecord}>
               {t('settings.cuaStartRecord')}
             </button>
           ) : (
-            <button className="px-3 py-1.5 text-sm border border-border rounded hover:bg-hover" onClick={stop}>
+            <button className="px-3 py-2 text-sm border border-border rounded hover:bg-hover" onClick={stop}>
               {t('settings.cuaStop')}
             </button>
           )}
@@ -237,7 +237,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
 
       {/* 事件时间线 */}
       {events.length > 0 && (
-        <div className="max-h-40 overflow-y-auto border border-border rounded p-2 space-y-0.5">
+        <div className="max-h-40 overflow-y-auto border border-border rounded p-2 space-y-1">
           {events.map((e, i) => (
             <p key={i} className={`text-xs ${e.type === 'error' ? 'text-danger' : 'text-text2'}`}>{eventLine(e)}</p>
           ))}
@@ -249,7 +249,7 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
         <p className="text-xs text-text2">{t('settings.cuaRecordingsTitle')}</p>
         {!recordings.length && <p className="text-xs text-text2">{t('settings.cuaNoRecordings')}</p>}
         {recordings.map((rec) => (
-          <div key={rec.id} className="flex items-center gap-2 border border-border rounded px-2 py-1.5">
+          <div key={rec.id} className="flex items-center gap-2 border border-border rounded px-2 py-2">
             <div className="flex-1 min-w-0">
               <p className="text-sm truncate">{rec.name}</p>
               <p className="text-xs text-text2 truncate">

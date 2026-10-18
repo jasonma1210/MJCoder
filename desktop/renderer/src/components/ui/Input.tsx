@@ -1,7 +1,7 @@
 // UI 原语：文本输入 / 多行文本（P1-9）
 //
 // 与 Button 同理，只收敛仓库里实际存在的两种输入形态：
-//   ① 单行：`h-8/h-9 px-2.5 rounded-lg border border-border bg-input focus:border-accent`
+//   ① 单行：`h-8/h-9 px-3 rounded-lg border border-border bg-input focus:border-accent`
 //   ② 多行：同上 + resize-y，并可选「字符计数」（数字员工 system_prompt 有 12000 上限）
 //
 // 特性：
@@ -41,7 +41,7 @@ export function Input({
       {label && (
         <label htmlFor={inputId} className="block text-xs text-text2 mb-1">{label}</label>
       )}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2">
         <input
           id={inputId}
           disabled={disabled}
@@ -49,7 +49,7 @@ export function Input({
           aria-describedby={error ? errId : undefined}
           className={[
             FIELD_BASE,
-            'h-8 px-2.5 text-xs',
+            'h-8 px-3 text-xs',
             error ? 'border-danger' : 'border-border',
             disabled ? 'opacity-50' : '',
             className,
@@ -114,7 +114,7 @@ export function TextArea({
         aria-describedby={error ? errId : undefined}
         className={[
           FIELD_BASE,
-          'px-2.5 py-2 text-xs leading-relaxed resize-y font-mono',
+          'px-3 py-2 text-xs leading-relaxed resize-y font-mono',
           error ? 'border-danger' : 'border-border',
           disabled ? 'opacity-50' : '',
           className,

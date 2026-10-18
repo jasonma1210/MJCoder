@@ -21,5 +21,18 @@
   "connFailed": "连接失败",
   "connecting": "连接中…",
   "savedNotConnected": "未连接",
-  "retry": "重试"
+  "retry": "重试",
+  "profileLabel": "档位",
+  "profileNormal": "普通",
+  "profileDeveloper": "开发者",
+  "tierAutoStart": "自启动",
+  "tierWhitelist": "白名单",
+  "tierManual": "手动授权",
+  "govFailed": "档位切换失败",
+  "fsModeLabel": "文件能力",
+  "fsReadOnly": "只读",
+  "fsReadWrite": "读写",
+  "sandboxNetLabel": "沙盒网络",
+  "sandboxNetOn": "开",
+  "sandboxNetOff": "关"
 }

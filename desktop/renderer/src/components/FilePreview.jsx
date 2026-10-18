@@ -6,6 +6,7 @@ import { openLinkByMode, isHttpUrl } from '../lib/linkOpen';
 import { toast } from './feedback';
 import { IconAlert, IconCopy, IconFolderOpen, IconHammer, IconFile, IconSpinner } from './icons';
 import { useI18n } from '../i18n';
+import Button from './ui/Button';
 
 // 应用内文件预览（对标 WorkBuddy 右侧预览栏）：代码 / Markdown / 图片 / PDF / 音视频
 //
@@ -159,7 +160,7 @@ export default function FilePreview({ filePath, projectPath }) {
       </div>
 
       {/* 操作栏 */}
-      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-border shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
         <button onClick={openInEditor} title={t('filePreview.openInEditorTitle')}
           className="text-xs px-2 py-1 rounded-lg border border-border hover:bg-hover flex items-center gap-1">
           <IconHammer size={12} /> {t('filePreview.openInEditor')}
@@ -193,8 +194,8 @@ export default function FilePreview({ filePath, projectPath }) {
             </p>
             <p className="text-xs text-text2 max-w-md break-all">{filePath}</p>
             <div className="flex gap-2">
-              <button onClick={openInSystem} className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent hover:brightness-110">{t('filePreview.openWithSystem')}</button>
-              <button onClick={revealInFinder} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">{t('filePreview.showInFinder')}</button>
+              <Button variant="primary" size="sm" onClick={openInSystem}>{t('filePreview.openWithSystem')}</Button>
+              <button onClick={revealInFinder} className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">{t('filePreview.showInFinder')}</button>
             </div>
           </div>
         )}
@@ -229,7 +230,7 @@ export default function FilePreview({ filePath, projectPath }) {
 
         {/* T4-3：HTML 视图切换条（渲染=沙箱 iframe / 源码=高亮文本） */}
         {!meta.loading && meta.kind === 'text' && isHtml && (
-          <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface">
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface">
             <IconAlert size={12} className="text-warn shrink-0" />
             <span className="text-xs text-text2 flex-1">
               {htmlMode === 'render' ? t('filePreview.htmlSandboxHint') : t('filePreview.htmlSourceHint')}
@@ -237,11 +238,11 @@ export default function FilePreview({ filePath, projectPath }) {
             <div className="flex gap-1 shrink-0">
               <button onClick={() => setHtmlMode('render')} disabled={text.totalLines > TEXT_MAX_LINES}
                 title={text.totalLines > TEXT_MAX_LINES ? t('filePreview.htmlTruncatedNoRender') : undefined}
-                className={`text-xs px-2 py-0.5 rounded-lg border ${htmlMode === 'render' ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'} disabled:opacity-40`}>
+                className={`text-xs px-2 py-1 rounded-lg border ${htmlMode === 'render' ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'} disabled:opacity-40`}>
                 {t('filePreview.htmlViewRender')}
               </button>
               <button onClick={() => setHtmlMode('source')}
-                className={`text-xs px-2 py-0.5 rounded-lg border ${htmlMode === 'source' ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'}`}>
+                className={`text-xs px-2 py-1 rounded-lg border ${htmlMode === 'source' ? 'border-accent text-accent' : 'border-border text-text2 hover:bg-hover'}`}>
                 {t('filePreview.htmlViewSource')}
               </button>
             </div>

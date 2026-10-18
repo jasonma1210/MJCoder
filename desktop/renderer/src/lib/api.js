@@ -58,6 +58,11 @@ async function localMessages(id) {
   return window.mjcode.localMessages({ threadId: id });
 }
 
+// P1-6：会话分支——以 fromMessageId 为分支点复制出一支新会话（仅本地模式）
+async function localForkThread(id, fromMessageId) {
+  return window.mjcode.localForkThread({ threadId: id, fromMessageId });
+}
+
 async function localSendMessage(id, data) {
   return window.mjcode.localAddMessage({
     threadId: id,
@@ -122,6 +127,11 @@ export const api = {
     ? window.mjcode.localSetThreadStatus({ id, status })
     : request(`/threads/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) })),
   messages: (id) => (localMode ? localMessages(id) : request(`/threads/${id}/messages`)),
+  // P1-6：会话分支（仅本地模式；服务端无对应路由）——从某条历史消息处开一支新会话
+  forkThread: (id, fromMessageId) => {
+    if (!localMode) return Promise.reject(new Error(t('runtime.forkOnlineUnsupported')));
+    return localForkThread(id, fromMessageId);
+  },
   sendMessage: (id, data) => (localMode ? localSendMessage(id, data) : request(`/threads/${id}/messages`, { method: 'POST', body: JSON.stringify(data) })),
   // /compact 落库：压缩摘要整体替换消息历史（仅本地模式；服务端无替换路由）
   replaceMessages: (id, messages) => {
@@ -248,4 +258,16 @@ export const api = {
       weekly_threads: [],
     };
   },
+
+  // P1-4：Windows OS 级沙箱接线（命令清单审计 / 一次性管理员设置 / 卸载）。
+  // 非 Windows 平台由主进程返回 not-supported；此处只在桥面缺失（旧构建/浏览器调试）时诚实降级。
+  sandboxWindowsPlan: () => (window.mjcode?.sandboxWindowsPlan
+    ? window.mjcode.sandboxWindowsPlan()
+    : Promise.resolve({ ok: false, supported: false, error: 'no-bridge' })),
+  sandboxWindowsSetup: () => (window.mjcode?.sandboxWindowsSetup
+    ? window.mjcode.sandboxWindowsSetup({})
+    : Promise.resolve({ ok: false, error: 'no-bridge' })),
+  sandboxWindowsTeardown: () => (window.mjcode?.sandboxWindowsTeardown
+    ? window.mjcode.sandboxWindowsTeardown({})
+    : Promise.resolve({ ok: false, error: 'no-bridge' })),
 };

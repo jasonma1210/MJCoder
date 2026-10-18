@@ -62,6 +62,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   githubStatus: () => ipcRenderer.invoke('github:status'),
   githubCreatePr: (payload) => ipcRenderer.invoke('github:createPr', payload),
   sandboxStatus: () => ipcRenderer.invoke('sandbox:status'),
+  // P1-4：Windows OS 级沙箱接线（命令清单审计 / 一次性管理员设置 / 卸载隔离）
+  sandboxWindowsPlan: () => ipcRenderer.invoke('sandbox:windows/plan'),
+  sandboxWindowsSetup: (payload) => ipcRenderer.invoke('sandbox:windows/setup', payload || {}),
+  sandboxWindowsTeardown: (payload) => ipcRenderer.invoke('sandbox:windows/teardown', payload || {}),
   // Git Worktree 隔离工作区
   createWorktree: (payload) => ipcRenderer.invoke('worktree:create', payload),
   listWorktrees: (payload) => ipcRenderer.invoke('worktree:list', payload),
@@ -154,6 +158,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   localRestoreThread: (payload) => ipcRenderer.invoke('local:threads/restore', payload),
   localPurgeThread: (payload) => ipcRenderer.invoke('local:threads/purge', payload),
   localSetThreadProject: (payload) => ipcRenderer.invoke('local:threads/set-project', payload),
+  // P1-6：会话分支（从某条历史消息点 fork 出新会话）
+  localForkThread: (payload) => ipcRenderer.invoke('local:threads/fork', payload),
   localMessages: (payload) => ipcRenderer.invoke('local:messages/list', payload),
   localAddMessage: (payload) => ipcRenderer.invoke('local:messages/add', payload),
   // /compact 落库：压缩摘要历史整体替换（P2-6 收口）
@@ -203,6 +209,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   // T7：OAuth 浏览器授权（令牌主进程闭环，此桥只回状态）
   mcpAuthorize: (payload) => ipcRenderer.invoke('mcp:authorize', payload),
   mcpAuthStatus: (payload) => ipcRenderer.invoke('mcp:authStatus', payload),
+  // 期 2：MCP 三层治理（档位 profile / 文件能力 fsMode / 沙盒网络开关）读写
+  mcpGovernanceGet: () => ipcRenderer.invoke('mcp:governance/get'),
+  mcpGovernanceSet: (payload) => ipcRenderer.invoke('mcp:governance/set', payload),
   // 定时任务（桌面端本地调度器）
   scheduledList: () => ipcRenderer.invoke('scheduled:list'),
   scheduledSave: (payload) => ipcRenderer.invoke('scheduled:save', payload),
@@ -261,6 +270,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   memoryInvalidate: (payload) => ipcRenderer.invoke('memory:invalidate', payload),
   memoryPromote: (payload) => ipcRenderer.invoke('memory:promote', payload),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
+  // P1-5：用户自定义生命周期 hooks（preToolUse / postToolUse）——HooksSection 消费
+  hooksGetConfig: () => ipcRenderer.invoke('hooks:getConfig'),
+  hooksSetConfig: (payload) => ipcRenderer.invoke('hooks:setConfig', payload),
   serverBase: (payload) => ipcRenderer.invoke('local:server/base', payload),
   // 网络插件发现（市场弹窗/调试用；对话内安装走 agent 工具通道）
   marketSearchNetwork: (payload) => ipcRenderer.invoke('market:searchNetwork', payload),

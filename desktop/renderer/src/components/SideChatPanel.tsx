@@ -123,7 +123,7 @@ export default function SideChatPanel({ model }: SideChatPanelProps) {
         {messages.length > 0 && (
           <button
             onClick={() => setMessages([])}
-            className="shrink-0 text-text2 hover:text-text p-0.5"
+            className="shrink-0 text-text2 hover:text-text p-1"
             title={t('rightPane.sideChatClear')} aria-label={t('rightPane.sideChatClear')}
           >
             <IconX size={11} />
@@ -140,7 +140,7 @@ export default function SideChatPanel({ model }: SideChatPanelProps) {
         )}
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[88%] rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words ${
+            <div className={`max-w-[88%] rounded-2xl px-3 py-2 text-xs whitespace-pre-wrap break-words ${
               m.role === 'user' ? 'bg-accent-solid text-on-accent' : m.error ? 'bg-danger-bg text-danger' : 'bg-surface text-text'
             }`}>
               {m.content || (m.streaming ? '…' : '')}
@@ -149,7 +149,7 @@ export default function SideChatPanel({ model }: SideChatPanelProps) {
         ))}
       </div>
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 border-t border-border">
+      <div className="shrink-0 flex items-center gap-2 px-2 py-2 border-t border-border">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}

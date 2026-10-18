@@ -32,20 +32,20 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-0 border-b border-border shrink-0 overflow-x-auto">
+      <div className="flex items-stretch gap-1 px-2 pt-2 pb-0 border-b border-border shrink-0 overflow-x-auto">
         {shown.map((f) => {
           const isActive = f === active;
           return (
             <div
               key={f}
-              className={`group flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-t-lg text-xs max-w-[180px] shrink-0 ${
+              className={`group flex items-center gap-1 pl-3 pr-1 py-1 rounded-t-lg text-xs max-w-[180px] shrink-0 ${
                 isActive ? 'bg-bg text-text border border-border border-b-transparent -mb-px' : 'text-text2 hover:bg-hover'
               }`}
             >
               <button
                 onClick={() => onSelect?.(f)}
                 title={f}
-                className="truncate flex items-center gap-1.5 min-w-0"
+                className="truncate flex items-center gap-2 min-w-0"
               >
                 <IconFile size={11} className="shrink-0" />
                 <span className="truncate font-mono">{baseName(f)}</span>
@@ -54,7 +54,7 @@ export default function FileViewerPane({ files = [], active, projectPath, onSele
                 onClick={(e) => { e.stopPropagation(); onClose?.(f); }}
                 title={t('filePreview.closeTabTitle')}
                 aria-label={t('filePreview.closeTab', { name: baseName(f) })}
-                className="shrink-0 text-text2 hover:text-text rounded p-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                className="shrink-0 text-text2 hover:text-text rounded p-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               >
                 <IconX size={10} />
               </button>

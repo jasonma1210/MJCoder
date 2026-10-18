@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { IconLaptop, IconMessage } from './icons';
 import { useI18n } from '../i18n';
+import Dot from './ui/Dot';
 
 // 底部状态条（P0-信任闭环）：把「离线 / 本机数据 / 密钥不出本机」从抽象定位变成常驻可见事实
 export default function StatusBar({ localMode, threadCount, projectPath, modelName }) {
@@ -29,7 +30,7 @@ export default function StatusBar({ localMode, threadCount, projectPath, modelNa
   return (
     <footer className="h-7 shrink-0 px-4 flex items-center gap-3 text-xs text-text2 border-t border-border bg-sidebar">
       <span className="flex items-center gap-1" title={localMode ? t('statusBar.offlineTitle') : t('statusBar.connectedTitle')}>
-        <span className={`w-1.5 h-1.5 rounded-full ${localMode ? 'bg-[var(--sem-warn)]' : 'bg-[var(--sem-success)]'}`} />
+        <Dot size="sm" className={localMode ? 'bg-[var(--sem-warn)]' : 'bg-[var(--sem-success)]'} />
         {localMode ? t('statusBar.offlineMode') : t('statusBar.connected')}
       </span>
 
@@ -49,7 +50,7 @@ export default function StatusBar({ localMode, threadCount, projectPath, modelNa
             ? (dbStatus.reason || t('statusBar.dbUnavailableTitle'))
             : dbStatus.warning}
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-warn shrink-0" />
+          <Dot size="sm" className="bg-warn" />
           {dbStatus.ok === false ? t('statusBar.dbUnavailable') : t('statusBar.dbRecovered')}
         </span>
       )}

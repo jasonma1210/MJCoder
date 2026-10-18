@@ -221,6 +221,44 @@ class LocalStore {
     return t;
   }
 
+  // P1-6：会话分支（fork）——从某条历史消息点复制出一支新会话，用于「从历史点开分支重跑」。
+  // 语义：新会话包含源会话中 id ≤ fromMessageId 的全部消息（含该条，按插入序重编 id）；
+  // 会话元数据（cwd/项目/模型）原样继承，parentThreadId/forkFromMessageId 记录来源以便追溯。
+  // 为什么复制而非共享消息：会话是可独立编辑/续跑的历史，共享一份消息会让两支互相污染。
+  forkThread(threadId, { fromMessageId } = {}) {
+    this.requireWritable(); // V08：corrupt-blocked 态拒绝写入（fail-closed）
+    const src = this.data.threads.find((x) => x.id === Number(threadId));
+    if (!src) return { ok: false, error: '源会话不存在' };
+    const pivot = Number(fromMessageId);
+    if (fromMessageId === undefined || fromMessageId === null || !Number.isFinite(pivot)) {
+      return { ok: false, error: '分支点消息 id 非法' };
+    }
+    const copied = this.data.messages
+      .filter((m) => m.threadId === Number(threadId) && m.id <= pivot)
+      .sort((a, b) => a.id - b.id);
+    if (copied.length === 0) return { ok: false, error: '分支点之前没有可复制的内容' };
+    const now = Date.now();
+    const t = {
+      id: this.nextId(), title: `${src.title || '会话'} · 分支`,
+      cwd: src.cwd || '', projectPath: src.projectPath || '',
+      providerId: src.providerId ?? null, providerName: src.providerName || '', modelName: src.modelName || '',
+      status: 'idle', parentThreadId: src.id, forkFromMessageId: pivot,
+      createdAt: now, updatedAt: now,
+    };
+    this.data.threads.push(t);
+    for (const m of copied) {
+      this.data.messages.push({
+        id: this.nextId(), threadId: t.id, role: m.role, content: m.content || '',
+        toolCalls: m.toolCalls || null, toolCallId: m.toolCallId || null,
+        tokensInput: m.tokensInput || 0, tokensOutput: m.tokensOutput || 0,
+        modelName: m.modelName || '', createdAt: m.createdAt || now,
+      });
+    }
+    t.updatedAt = Date.now();
+    this.flush();
+    return { ok: true, thread: t, copied: copied.length };
+  }
+
   // 线程状态：运行中 / 待审批 / 已完成（侧栏三色指示的数据来源）
   // P0-1：状态切换与消息同属高频路径，走合并刷盘
   setThreadStatus(threadId, status) {

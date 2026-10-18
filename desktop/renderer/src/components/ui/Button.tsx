@@ -20,7 +20,7 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
 
 // sm = 列表行内小按钮（h-7），md = 表单主操作（h-8）——与仓库既有取值对齐
 const SIZE_CLASS: Record<ButtonSize, string> = {
-  sm: 'h-7 px-2.5 text-xs',
+  sm: 'h-7 px-3 text-xs',
   md: 'h-8 px-4 text-xs',
 };
 
@@ -51,7 +51,7 @@ export default function Button({
       disabled={blocked}
       aria-busy={loading || undefined}
       className={[
-        'inline-flex items-center justify-center gap-1.5 rounded-lg whitespace-nowrap',
+        'inline-flex items-center justify-center gap-2 rounded-lg whitespace-nowrap',
         'transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
         SIZE_CLASS[size],
         VARIANT_CLASS[variant],

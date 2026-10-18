@@ -269,6 +269,11 @@ const scheduledL3Target = createScheduledL3Target({
   chatOnce: (p, m) => scheduledChatOnce(p, m),
 });
 
+// P1-5：用户自定义生命周期 hooks（preToolUse / postToolUse）——配置落 userData/hooks.json。
+// 三条运行通道（交互会话 / Worker / 定时任务）共用同一个 runner：用户写一次规则，全域一致生效。
+const { createToolHookRunner } = require('./toolHooks');
+const toolHooks = createToolHookRunner({ filePath: path.join(app.getPath('userData'), 'hooks.json') });
+
 // T2-5：本地崩溃/异常聚合（结构化 JSONL + trace 尾部 + 渲染层错误转发 + 原生崩溃 dump）。
 // 全部落本机不上传；agentRunner 在本文件后段声明，经 getter 延迟读取（异常发生才调用）。
 const { initDiagnostics, reportError, startCrashReporter } = require('./diagnostics');
@@ -283,7 +288,7 @@ const bigPayload = require('./bigPayload');
 // T1（2026-10-17）：流式三层守卫（首字节 / 空闲 / 单轮总时长）。
 // 替代原来的 AbortSignal.timeout(125000)——那是「总时长」语义，会把推理模型
 // （mimo 等思考阶段长时间无正文）误判成「无响应」并整轮杀掉。
-const { createStreamGuard, streamTimeoutMessage } = require('./streamGuard');
+const { createStreamGuard, streamTimeoutMessage, reportSlowTtfb } = require('./streamGuard');
 // T6：三层超时可在设置页调整（用户设置 > 环境变量 > 默认），每次请求现读，改完立即生效
 const streamSettings = require('./streamSettings');
 const resolveStreamTimeouts = () => streamSettings.getStreamTimeouts();
@@ -408,6 +413,11 @@ if (!hasMainLock) {
   });
   app.whenReady().then(() => {
     setupFileLogging();
+    // 2026-10-18 ⑦：启动横幅——给启动日志一个**时间戳 + 版本锚点**。
+    // 此前整段启动日志无时间戳、无版本行，用户上报日志时无法对齐到具体构建与时刻。
+    // app.getVersion 在部分测试宿主的 mock app 上不存在 → 防御式取值，缺失降级为 unknown。
+    const appVer = typeof app.getVersion === 'function' ? app.getVersion() : 'unknown';
+    console.log(`[startup] ${new Date().toISOString()} MJCode v${appVer} · electron ${process.versions.electron} · node ${process.versions.node} · ${process.platform}-${process.arch}`);
     createWindow();
     crashGuard.attachWindow(mainWindow); // C2：unresponsive / responsive 只存在于 BrowserWindow
     previewScheme.initPreviewScheme(); // T3-1：流式预览协议处理器（必须 ready 后注册）
@@ -482,6 +492,8 @@ app.on('will-quit', () => {
   try { require('./browserTools').disposeAll(); } catch (e) { console.warn('[browser] 退出清理异常:', e.message); }
   // T4-2：关闭 Chrome 接管中继（断开扩展连接，端口不残留）
   try { require('./chromeRelay/server').close(); } catch (e) { console.warn('[chromeRelay] 退出清理异常:', e.message); }
+  // 期 3：关闭原生工具持有的 SQLite 连接（flush 落盘）
+  try { nativeTools.disposeNativeTools(); } catch (e) { console.warn('[nativeTools] 退出清理异常:', e.message); }
 });
 // SIGTERM/SIGINT/SIGHUP 优雅退出：pkill/终端关闭/Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
 for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
@@ -514,6 +526,10 @@ toolExec.initToolExec({
   },
   // P0-1：shell/seatbelt/bwrap/git 子进程注册到 runId（缺失即抛错由 exec.js 保证接线存在）
   registerChild: (child) => childRegistry.register(runScope.getStore()?.runId, child),
+  // 期 3：能力降级开关——写工具（write_file/edit_file/apply_patch）受治理「文件能力」档约束
+  // （read-only 档下 fail-closed 拒绝一切写入，与 nativeTools.sqlite 写路径同一开关口径）。
+  // 懒取（仅运行时调用，故可引用下方才 require 的 mcpIpc）。
+  getGovernance: () => mcpIpc.getGovernance(),
 });
 const { toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob, toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd, shellEnv, runGit } = toolExec;
 
@@ -554,6 +570,17 @@ codeTools.initCodeTools({
   userDataDir: app.getPath('userData'),
 });
 
+// 期 3：原生内置工具层（clipboard / notify / http_request / sqlite / sandbox_code_run）——
+// 本地系统能力一律原生实现，不经 MCP 连接器；代码执行走独立子进程沙盒，禁止复用宿主进程。
+// 能力降级开关（文件只读/读写、沙盒网络开闭）经 getGovernance 注入（与期 2 治理偏好同源）。
+const nativeTools = require('./nativeTools');
+nativeTools.initNativeTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  getGovernance: () => mcpIpc.getGovernance(),
+  userDataDir: app.getPath('userData'),
+});
+
 
 // T2-1：技能与插件市场域已拆出 main/ipc/plugins.js（只搬移不改行为）——
 // SKILL.md 技能体系 / 插件市场（git 安装+权限双闸+签名 fail-closed）/ 网络插件发现与对话内安装。
@@ -572,10 +599,17 @@ initProjectIpc({ getMainWindow: () => mainWindow, runGit });
 // MCP 配置持久化/连接/状态 + 沙箱状态查询 + GitHub 闭环 IPC + 语音转写。
 // emitTaskEvent 归属任务编排域（本文件，函数声明提升可用），经注入转发 MCP 状态事件。
 const mcpIpc = require('./ipc/mcp');
-mcpIpc.initMcpIpc({ requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules, audit, emitTaskEvent, getCredentialCrypto: () => credentialCrypto });
+// 期 2：注入 getLocalStore——治理偏好（档位/文件能力/沙盒网络）存在 localStore 偏好中，
+// localStore 在 whenReady 后才非 null，故传闭包 getter（与其它偏好注入同源）。
+mcpIpc.initMcpIpc({ requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules, audit, emitTaskEvent, getCredentialCrypto: () => credentialCrypto, toolHooks, getLocalStore: () => localStore });
 const { connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, mcpServers } = mcpIpc;
 // GitHub PR 审查闭环工具仍在本文件组装（gh CLI 封装见 main/github.js）
 const github = require('./github');
+
+// P1-4：Windows OS 级沙箱的接线入口（命令清单 / 一次性管理员设置 / 卸载）。
+// 非 Windows 平台返回 not-supported，绝不伪造可用性（详见 main/ipc/sandbox.js 头注释）。
+const { initSandboxIpc } = require('./ipc/sandbox');
+initSandboxIpc();
 
 
 // ═══════════════════════════════════════════
@@ -708,6 +742,10 @@ async function chatStreamOnce({ providerId, isGlobal = false, baseUrl, messages,
     quota.reportError(providerId || 'default');
     throw err;
   } finally {
+    // P2-2：主对话通道的 TTFB 告警接线——此前只有 scheduled 通道接了 reportSlowTtfb，
+    // 用户手动对话（最高频路径）测到了首字节却不告警，SLO 只覆盖了次要通道。
+    // 放 finally：成功/失败路径都报（未达成首字节时 ttfbMs() 为 null，reportSlowTtfb 自然跳过）。
+    reportSlowTtfb(streamGuard.ttfbMs(), 'chat');
     streamGuard.stop();
     if (onExternalAbort && externalSignal?.removeEventListener) {
       externalSignal.removeEventListener('abort', onExternalAbort);
@@ -916,6 +954,22 @@ agentRunner.initAgentRunner({
     if (!localStore) return { ok: false, error: '本地数据层未初始化' };
     return localStore.flushSync();
   },
+  // P0-1/P0-2（记忆写入闭环）：Agent 运行收尾 / 压缩摘要的自动归档通道。
+  // 引擎本身不碰存储，归档统一经 MemoryManager 唯一写入入口（去重/容量闸/可信度分级都在那里）。
+  // 读取时取模块级 memoryManager（initDb 内赋值）——闭包在调用时求值，装配顺序无关。
+  rememberMemory: (args) => {
+    try {
+      return memoryManager ? memoryManager.remember(args) : null;
+    } catch (e) {
+      console.warn('[memory] 自动归档失败（丢弃该条）:', e.message);
+      return null;
+    }
+  },
+  // P1-1：主对话通道的 L3 独立评审目标工厂（与定时通道同源：紧凑档优先、回落主模型）。
+  // 工厂在 run 启动时才解析——配置随时可变，且启动早期模型尚未就绪。
+  l3Target: scheduledL3Target,
+  // P1-5：用户自定义生命周期 hooks——交互会话的工具调用同样过 preToolUse/postToolUse
+  toolHooks,
   // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
   // V01：createToolHandlers 接收本 run 的宿主治理值（agentRunner 已按角色钳制），
@@ -971,6 +1025,13 @@ agentRunner.initAgentRunner({
     // T4-7：Code Mode（子进程持久会话 + L3/L1 审批；仅主会话注入——
     // Worker/定时任务无审批通道语义，不允许执行任意代码）
     codeExec: codeTools.toolCodeExec,
+    // 期 3：原生内置工具（clipboard/notify/http_request/sqlite/sandbox_code_run）。
+    // 同样仅主会话注入——Worker/定时任务没有审批通道语义，不允许触碰剪贴板/发请求/写库/跑代码。
+    clipboard: nativeTools.toolClipboard,
+    notify: nativeTools.toolNotify,
+    httpRequest: nativeTools.toolHttpRequest,
+    sqlite: nativeTools.toolSqlite,
+    sandboxCodeRun: nativeTools.toolSandboxCodeRun,
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRunWhenReady(payload || {}, event.sender));
@@ -1015,7 +1076,7 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     // 追加在 BASE_PROMPT 之后（不替换）：BASE_PROMPT 承载「可用工具/默认目录/路径怎么给」，替换掉它模型就不知道自己能写文件、该写哪
     appendSystemPrompt: rc.appendPrompt,
     // 编排工具补齐：定时通道原先没有 orchestrate_task（对话有），这就是"同一句话对话能 4 Agent 并行、定时只能串行"的差别；cwd 强制产出目录，子 Agent 写入才落在用户找得到的地方。
-    toolHandlers: sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}` }) }),
+    toolHandlers: toolHooks.wrap(sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}` }) }), { cwd: rc.dir, conversationId: `scheduled:${taskId}` }),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
     // trace 落盘用 runId（不是 taskId）：否则同一任务的多次运行互相覆盖，事后无法还原这一次发生了什么
     onTrace: (evt) => { sv.onTrace(evt); require('./runTrace').appendTraceEvent(runId, evt); },
@@ -1124,6 +1185,10 @@ function setupTaskOrchestration(db) {
       getModelOverrides: () => localStore?.getPreference('model_overrides') || null,
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
+      // P1-2：Worker 通道的 L3 独立评审目标工厂（与定时/主对话同源）。
+      l3Target: scheduledL3Target,
+      // P1-5：Worker 的工具调用同样过用户 hooks（无人值守不代表可以绕过用户设的校验规则）
+      toolHooks,
       createToolHandlers: ({ signal, cwd }) => ({
         ...scheduledToolHandlers({ unattended: true, contextCwd: cwd }), // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
         // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联

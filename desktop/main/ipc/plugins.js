@@ -13,6 +13,7 @@ const skillsLib = require('../skills');
 const pluginMarket = require('../pluginMarket');
 const registryLib = require('../registry');
 const pluginDiscovery = require('../pluginDiscovery');
+const ecosystemLib = require('../ecosystem');
 const guard = require('./payloadGuard');
 
 let deps = null;
@@ -56,6 +57,27 @@ async function searchPluginsTool(args = {}) {
   };
 }
 
+// 2026-10-18：对话内安装（install_plugin kind=mcp）只按包名 `npx -y <pkg>` 启动，
+// **不带连接器声明的启动参数**。对「必须传目录/密钥」的连接器（如 filesystem 的 ${ALLOWED_DIR}），
+// 这会以零配置启动——服务端回报连接成功、把 14 个工具全列出来，实际每个调用都失败（静默假健康）。
+// 故：若该包在连接器目录里声明了未填参数，拒绝此处的裸安装，引导用户去生态中心填参数后连接。
+function connectorRequiresConfig(pkg) {
+  const dirs = [path.join(app.getPath('userData'), 'ecosystem'), path.join(app.getAppPath(), '..', 'ecosystem')];
+  for (const d of dirs) {
+    let list = [];
+    try { list = ecosystemLib.loadMcpConnectors(d); } catch { continue; }
+    if (!list.length) continue;
+    const hit = list.find((c) => String(c?.install?.pkg || '') === pkg);
+    if (!hit) return null;
+    const args = Array.isArray(hit.install?.args) ? hit.install.args : [];
+    const envs = Array.isArray(hit.env_vars) ? hit.env_vars : [];
+    const needs = args.some((a) => /\$\{\w+\}/.test(String(a)))
+      || envs.some((v) => /\$\{\w+\}/.test(String(v?.default || '')) || v?.required === true);
+    return needs ? (hit.name || pkg) : null;
+  }
+  return null;
+}
+
 // 对话内安装（工具 install_plugin 的实现）。恒走 L3 审批卡（approval.js TOOL_LEVEL），
 // 卡片展示安装对象与风险说明，用户允许才执行；npm 源包名白名单校验防注入。
 async function installNetworkPlugin(args, { approvalMode = 'on-request', conversationId = '' } = {}) {
@@ -77,6 +99,14 @@ async function installNetworkPlugin(args, { approvalMode = 'on-request', convers
       return { ok: false, error: `npm 包名非法：${pkg}` };
     }
     const name = pluginDiscovery.repoToSkillName(args.name || pkg) || `mcp-${Date.now().toString(36)}`;
+    // 2026-10-18：连接器声明了必填参数（如 filesystem 的 ${ALLOWED_DIR}）→ 此处裸安装会静默假健康，
+    // 拒绝并引导去生态中心（那里会收集参数后带入启动参数，连接前由 mcpSpawnGuard 兜底校验）。
+    const needCfg = connectorRequiresConfig(pkg);
+    if (needCfg) {
+      const msg = `连接器「${needCfg}」需要先填写必填参数（如允许目录 / 密钥）才能连接——请在「生态中心」配置后安装，避免零配置启动导致的工具全部不可用`;
+      deps.audit('install_plugin', `mcp ${pkg}`, '需先配置参数', 'denied');
+      return { ok: false, error: msg, needsConfig: true, connector: needCfg };
+    }
     // connectMcpServer：连接成功才持久化 mcp-servers.json（fail-closed），失败即回报
     const r = await deps.getConnectMcpServer()({ name, command: 'npx', args: ['-y', pkg] });
     deps.audit('install_plugin', `mcp ${pkg}`, r.ok ? `连接成功 tools=${r.toolCount}` : `失败 ${r.error}`, r.ok ? 'ok' : 'error');

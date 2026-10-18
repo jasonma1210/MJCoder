@@ -18,6 +18,7 @@ import {
 import { connectorValuesForLocal, saveConnectorValueLocal } from '../lib/ecosystemEnabled';
 import { IconAlert, IconCheck, IconEdit, IconGlobe, IconPlug, IconX } from './icons';
 import Modal from './ui/Modal';
+import Button from './ui/Button';
 
 // 目录条目在 ConnectorLike 之外的展示/授权字段
 interface ConnectorEntry extends ConnectorLike {
@@ -222,7 +223,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-sm font-semibold truncate">{connector.display_name || connector.name}</h3>
-            <p className="text-xs text-text2 mt-0.5">{connector.vendor} · {t('ecosystem.dialog.subtitle')}</p>
+            <p className="text-xs text-text2 mt-1">{connector.vendor} · {t('ecosystem.dialog.subtitle')}</p>
           </div>
           <button onClick={onClose} className="text-text2 hover:text-text shrink-0"><IconX size={16} /></button>
         </div>
@@ -243,30 +244,33 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
             {oauthState === 'authorized' ? (
               <div className="flex items-center justify-between gap-3">
                 {statusBadge || <span className="text-xs text-text2">{t('ecosystem.dialog.enableNote')}</span>}
-                <button
+                <Button
+                  variant="primary"
+                  size="md"
+                  className="shrink-0"
                   onClick={submitConnect}
                   disabled={status === 'connecting'}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconPlug size={13} />
                   {status === 'connecting' ? t('ecosystem.dialog.connecting') : t('ecosystem.dialog.testConnect')}
-                </button>
+                </Button>
               </div>
             ) : (
-              <button
+              <Button
+                variant="primary"
+                size="md"
+                className="w-full"
                 onClick={startOAuth}
                 disabled={oauthState === 'authorizing' || oauthState === 'checking'}
-                className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
               >
                 <IconGlobe size={13} />
                 {oauthState === 'authorizing' ? t('ecosystem.dialog.authorizing') : t('ecosystem.dialog.oauthAuthorize')}
-              </button>
+              </Button>
             )}
             {docsUrl && (
-              <button onClick={openDocs}
-                className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border hover:bg-hover text-xs text-text2">
+              <Button variant="secondary" size="md" className="w-full" onClick={openDocs}>
                 <IconGlobe size={13} /> {t('ecosystem.dialog.openDocs')}
-              </button>
+              </Button>
             )}
           </div>
         ) : (
@@ -288,7 +292,7 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
 
             {/* 变量/令牌表单：按连接器声明的规范逐项收集（manual 档同样渲染 —— 见 fields 注释） */}
             {fields.length > 0 && (
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 {fields.map((f) => (
                   <div key={f.name}>
                     <div className="flex items-center justify-between mb-1">
@@ -336,36 +340,39 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
                         : t('ecosystem.dialog.enableNote')}
                     </span>
                   )}
-                <button
+                <Button
+                  variant="primary"
+                  size="md"
+                  className="shrink-0"
                   onClick={saveConfig}
                   disabled={emptyRequired.length > 0}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconCheck size={13} /> {t('ecosystem.dialog.saveConfig')}
-                </button>
+                </Button>
               </div>
             )}
 
             {/* 无 docs_url 的条目兜底给官方链接按钮 */}
             {docsUrl && authMode !== 'paste_key' && (
-              <button onClick={openDocs}
-                className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border hover:bg-hover text-xs text-text2">
+              <Button variant="secondary" size="md" className="w-full" onClick={openDocs}>
                 <IconGlobe size={13} /> {t('ecosystem.dialog.openDocs')}
-              </button>
+              </Button>
             )}
 
             {/* 连接动作区 */}
             {plan.kind !== 'manual' && (
               <div className="flex items-center justify-between gap-3 pt-1">
                 {statusBadge || <span className="text-xs text-text2">{t('ecosystem.dialog.enableNote')}</span>}
-                <button
+                <Button
+                  variant="primary"
+                  size="md"
+                  className="shrink-0"
                   onClick={submitConnect}
                   disabled={!canConnect || status === 'connecting'}
-                  className="h-8 shrink-0 inline-flex items-center justify-center gap-1.5 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40"
                 >
                   <IconPlug size={13} />
                   {status === 'connecting' ? t('ecosystem.dialog.connecting') : t('ecosystem.dialog.testConnect')}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -374,11 +381,10 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
         {/* 配置文件入口：直接打开 userData/mcp-servers.json 供手工编辑（高级通道）。
             放在最外层（两种授权形态都能用），避免只有某一条分支才看得到。 */}
         <div className="mt-4 pt-3 border-t border-border">
-          <button onClick={openConfigFile}
-            className="h-8 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border hover:bg-hover text-xs text-text2">
+          <Button variant="secondary" size="md" className="w-full" onClick={openConfigFile}>
             <IconEdit size={13} /> {t('ecosystem.dialog.openMcpJson')}
-          </button>
-          {cfgErr && <p className="text-xs text-danger mt-1.5 break-all">{cfgErr}</p>}
+          </Button>
+          {cfgErr && <p className="text-xs text-danger mt-2 break-all">{cfgErr}</p>}
         </div>
       </div>
     </Modal>

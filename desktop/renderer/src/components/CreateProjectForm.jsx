@@ -94,10 +94,10 @@ export default function CreateProjectForm({ onCreated, onCancel, busy = false, h
       <div className="flex justify-end gap-3 mt-6">
         {onCancel && (
           <button onClick={onCancel} disabled={creating}
-            className="px-5 py-2.5 rounded-xl text-sm border border-border hover:bg-hover disabled:opacity-50">{t('project.cancel')}</button>
+            className="px-5 py-3 rounded-xl text-sm border border-border hover:bg-hover disabled:opacity-50">{t('project.cancel')}</button>
         )}
         <button onClick={create} disabled={disabled}
-          className="bg-accent-solid text-on-accent px-5 py-2.5 rounded-xl text-sm disabled:opacity-50">
+          className="bg-accent-solid text-on-accent px-5 py-3 rounded-xl text-sm disabled:opacity-50">
           {creating ? t('project.creating') : t('project.createBtn')}
         </button>
       </div>

@@ -159,6 +159,9 @@ export const agentRunPayloadSchema = z
       model: z.object({ model_id: z.string().min(1) }).passthrough(),
     }),
     cwd: z.string().optional(),
+    // P0-1（记忆写入闭环）：项目路径 = 记忆空间分区键（召回侧用同一键）。
+    // 与 cwd 分开登记的原因：cwd 在 worktree 模式下是临时隔离目录，不是稳定的项目分区键。
+    projectPath: z.string().max(1024).optional(),
     conversationId: z.string().optional(),
     approvalMode: z.enum(['on-request', 'auto-safe', 'always', 'never']).optional(),
     sandboxPolicy: z.enum(['read-only', 'workspace-write', 'full-access']).optional(),

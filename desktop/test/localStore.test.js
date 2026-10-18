@@ -119,6 +119,44 @@ check('线程不存在时报错', store.replaceMessages(999999, [{ role: 'user',
 // 其余会话消息不受影响（t.id 有 2 条早期消息）
 check('replaceMessages 不误伤其它会话', store.listMessages(t.id).length === 2);
 
+// ── P1-6：会话分支（fork）——从某条历史消息点复制出独立新会话 ──
+const dirFork = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-local-fork-'));
+const sF = new LocalStore(dirFork);
+const src = sF.createThread({ title: '源会话', cwd: '/tmp/f', projectPath: '/tmp/f', providerName: 'DS', modelName: 'deepseek-chat' });
+const f1 = sF.addMessage({ threadId: src.id, role: 'user', content: '一' });
+const f2 = sF.addMessage({ threadId: src.id, role: 'assistant', content: '二' });
+sF.addMessage({ threadId: src.id, role: 'user', content: '三' });
+sF.addMessage({ threadId: src.id, role: 'assistant', content: '四' });
+sF.flushSync();
+const rf = sF.forkThread(src.id, { fromMessageId: f2.id });
+check('fork 成功', rf.ok === true && rf.copied === 2);
+const forked = rf.thread;
+check('fork 继承元数据（cwd/项目/模型）',
+  forked.cwd === '/tmp/f' && forked.projectPath === '/tmp/f'
+  && forked.providerName === 'DS' && forked.modelName === 'deepseek-chat' && forked.status === 'idle');
+check('fork 记录来源（parentThreadId / forkFromMessageId）',
+  forked.parentThreadId === src.id && forked.forkFromMessageId === f2.id);
+const fm = sF.listMessages(forked.id);
+check('fork 复制截至分支点的历史（含该条）',
+  fm.length === 2 && fm[0].content === '一' && fm[1].content === '二' && fm[0].threadId === forked.id);
+check('fork 消息 id 独立（不与源会话共享）', fm.every((m) => m.id !== f1.id && m.id !== f2.id));
+// 独立性：往分支里追加不影响源会话
+sF.addMessage({ threadId: forked.id, role: 'user', content: '分支新增' });
+check('分支与源会话互不污染',
+  sF.listMessages(src.id).length === 4 && sF.listMessages(forked.id).length === 3);
+// 落在首条消息上也能分支
+const rf1 = sF.forkThread(src.id, { fromMessageId: f1.id });
+check('分支点为首条消息时复制 1 条', rf1.ok === true && rf1.copied === 1 && sF.listMessages(rf1.thread.id)[0].content === '一');
+// 持久化：重开实例可见分支会话与历史
+sF.flushSync();
+const sF2 = new LocalStore(dirFork);
+check('分支会话落盘可恢复',
+  sF2.listThreads().some((x) => x.id === forked.id) && sF2.listMessages(forked.id).length === 3);
+// 边界：非法/缺失分支点一律拒绝
+check('源会话不存在时拒绝', sF.forkThread(999999, { fromMessageId: f1.id }).ok === false);
+check('分支点缺失时拒绝', sF.forkThread(src.id, {}).ok === false);
+check('分支点为非数字时拒绝', sF.forkThread(src.id, { fromMessageId: 'abc' }).ok === false);
+
 // ── P0-1：消息热路径合并刷盘（主进程不再被每条消息一次的整库同步写阻塞）──
 const dirHot = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-local-hot-'));
 const sHot = new LocalStore(dirHot);
@@ -154,6 +192,7 @@ check('flushSync 幂等（无脏数据不再写盘）', (() => { const r = sHot.
   fs.rmSync(dirBak, { recursive: true, force: true });
   fs.rmSync(dirMig, { recursive: true, force: true });
   fs.rmSync(dirHot, { recursive: true, force: true });
+  fs.rmSync(dirFork, { recursive: true, force: true });
   fs.rmSync(dirTimer, { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}：${pass}/${pass + fail} 项通过`);

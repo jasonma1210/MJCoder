@@ -14,6 +14,10 @@ const approval = require('../approval');
 // P2-7：用户偏好「执行后告知」（正交布尔，缺省关闭）
 const approvalSettings = require('../approvalSettings');
 const mcp = require('../mcpClient');
+// P1-3：MCP 崩溃后的自动重连调度（指数退避 + 上限 + 幂等）
+const { createMcpAutoReconnect } = require('../mcpAutoReconnect');
+// 2026-10-18：stdio 启动参数守卫（占位符未替换 / 空参数 → spawn 前 fail-closed）
+const { checkStdioSpawn } = require('../mcpSpawnGuard');
 const guard = require('./payloadGuard');
 const sandbox = require('../sandbox');
 const github = require('../github');
@@ -22,8 +26,30 @@ const { McpAuthManager } = require('../mcpAuth');
 // P0-5①：落盘必须显式设权限（对齐 mcpAuth.js:67 的正例）——配置文件含用户自配凭证
 const { writeFileDurableWithMode } = require('../data/durableWrite');
 const { shellEnv } = require('../tools/exec');
+// 期 1（2026-10-18）：懒启动地基——预热白名单/灰度开关（mcpPrewarm）+ 工具清单缓存（mcpToolCache）
+// 期 2（2026-10-18）：三层分级（auto-start/whitelist/manual）+ profile 分流 + 治理偏好读写
+const { isLazyMode, autoStartConfigs, normalizeProfile, readGovernance, classifyTier, TIER, PROFILES } = require('../mcpPrewarm');
+const { createMcpToolCache } = require('../mcpToolCache');
+
+// 期 2：治理偏好存储在 localStore 的偏好键中（与其它用户偏好同源），默认值由 readGovernance 兜底。
+const GOVERNANCE_PREF_KEY = 'mcp_governance';
 
 const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpServers() };
+
+// 期 1：工具清单缓存（落 userData/mcp-tool-manifests.json，0600）。懒建——app 就绪后才可 getPath。
+let toolCache = null;
+function getToolCache() {
+  if (toolCache) return toolCache;
+  toolCache = createMcpToolCache({ filePath: path.join(app.getPath('userData'), 'mcp-tool-manifests.json') });
+  return toolCache;
+}
+
+// 期 2：读当前治理配置（档位 profile / 文件能力 fsMode / 沙盒网络沙盒开关）。
+// 存储在 localStore 偏好（whenReady 后就绪，故经 deps.getLocalStore getter 读取，缺省回最保守档）。
+function getGovernance() {
+  const store = deps && deps.getLocalStore ? deps.getLocalStore() : null;
+  return readGovernance(store ? store.getPreference(GOVERNANCE_PREF_KEY) : null);
+}
 
 // MCP 配置持久化（userData/mcp-servers.json）+ 子进程 env 白名单
 const MCP_CONFIG_FILE = () => path.join(app.getPath('userData'), 'mcp-servers.json');
@@ -36,6 +62,8 @@ const MCP_CONFIG_MODE = 0o600;
 const PROTECTED_ENV = new Set([...ENV_WHITELIST, 'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES']);
 
 let deps = null;
+// P1-3：自动重连调度器（initMcpIpc 内建；connectMcpServer 的 onStatus 会驱动它）
+let autoReconnect = null;
 
 // T7：OAuth 令牌管理器（懒建：凭证加密就绪才可用；令牌加密落 userData/mcp-oauth.json）。
 // 授权窗口用独立 BrowserWindow（无 preload、沙箱化），loopback 收到回调即由引擎关窗。
@@ -138,8 +166,31 @@ function sanitizeEnv(env) {
   return out;
 }
 
+// 2026-10-18 并发安全：连接成功后的落盘是「读-改-写」，而启动重连已改为有界并发——
+// 多个服务同时成功会出现后写覆盖先写，把先落盘的服务配置整个丢掉（配置数据丢失）。
+// 用一条 promise 链把**写盘**串行化（连接仍并发，只有写盘排队）。
+let configWriteChain = Promise.resolve();
+function persistMcpServer(entry) {
+  configWriteChain = configWriteChain.then(() => {
+    const next = loadMcpConfig().filter((s) => s.name !== entry.name);
+    next.push(entry);
+    saveMcpConfig(next);
+  }).catch((e) => { console.warn('[mcp] 配置落盘失败:', e.message); });
+  return configWriteChain;
+}
+
 // MCP 连接核心逻辑（IPC 处理器与启动重连共用）：委托给 mcpClient（stdio/http 双传输）
 async function connectMcpServer({ name, transport = 'stdio', command, args = [], env = {}, url, headers = {} } = {}) {
+  // 2026-10-18：stdio 参数守卫。这里是**所有连接路径的唯一入口**（IPC 手动连接 / 启动重连 /
+  // 崩溃自动重连 / 生态安装通道都经 main.js 注入的 connectMcpServer），故一处拦截即全覆盖：
+  // 带未替换占位符或空参数的配置在 spawn 前就被拒，避免服务端「零配置启动但回报连接成功」的静默失败。
+  if (transport !== 'http') {
+    const v = checkStdioSpawn({ name, command, args, env });
+    if (!v.ok) {
+      console.warn(`[mcp] ${name || command}: ${v.error}`);
+      return { ok: false, error: v.error };
+    }
+  }
   // T7：http 连接挂 OAuth 钩子——令牌全程主进程闭环，渲染层不经手
   const am = transport === 'http' && name ? getOauthManager() : null;
   const auth = am ? {
@@ -148,20 +199,32 @@ async function connectMcpServer({ name, transport = 'stdio', command, args = [],
   } : undefined;
   const r = await mcp.connectMcpServer({
     name, transport, command, args, env: sanitizeEnv(env), url, headers, auth,
-    onStatus: (n, st, code) => emitMcpStatus(n, st, code),
+    // P1-3：崩溃上报同时驱动「渲染层状态」与「自动重连排程」。
+    // 二者是并列的两条出口，互不回喂——emitMcpStatus 只发渲染层事件（不触发重连），
+    // autoReconnect.onStatus 只排程重连（其自身回执走 emitStatus，见 initMcpIpc）。
+    onStatus: (n, st, code) => {
+      emitMcpStatus(n, st, code);
+      if (autoReconnect) autoReconnect.onStatus(n, st, code);
+    },
     onLog: (line) => console.log(`[MCP ${name}]`, line),
   });
   // 连接成功 → 持久化配置（重启后自动重连）。fail-closed：握手失败不写盘。
   if (r.ok && name) {
-    const config = loadMcpConfig().filter((s) => s.name !== name);
     // P0-5②：落盘内容过同一 sanitize 视角——受保护键不写进文件（重启时由 sanitizeEnv 重新注入系统值）。
     // 用户自配 env（含 API Key 等）**必须原样保留**：脱敏会让需要凭证的服务重启后全部连不上
     //（P0-5 取舍：本轮只做「明文 + 0600 权限保护」，加密迁移 safeStorage 列入遗留）。
     const savedEnv = userEnvOf(env);
-    config.push(transport === 'http'
-      ? { name, transport, url, headers, env: savedEnv }
-      : { name, transport: 'stdio', command, args, env: savedEnv });
-    saveMcpConfig(config);
+    // 期 2：落盘时打上内在档位 tier（auto-start/whitelist/manual）——服务自身的风险属性，
+    // 与登录/平台无关。重启分流（reconnectMcpServers）与 UI 徽章都据此判定，缺失时回落到 classifyTier。
+    const tier = classifyTier({ name, command, args, url });
+    await persistMcpServer(transport === 'http'
+      ? { name, transport, url, headers, env: savedEnv, tier }
+      : { name, transport: 'stdio', command, args, env: savedEnv, tier });
+    // 期 1：落工具清单缓存——懒启动下未连接服务的工具由渲染层从缓存重建，
+    // 保证「服务没起来」不等于「模型看不见它的能力」。所有连接路径（手动/启动/自动重连/
+    // 生态安装）都经本函数，故此处一处即全覆盖。
+    const tools = Array.isArray(r.tools) ? r.tools : (mcp.getMcpServer(name)?.tools || []);
+    if (tools.length) getToolCache().saveManifest(name, tools);
   }
   return r;
 }
@@ -174,13 +237,22 @@ function emitMcpStatus(name, status, code) {
 }
 
 // P1-1：统一清理全部 MCP 子进程（应用退出时调用）→ 委托 mcpClient（stdio SIGTERM→SIGKILL）
+// P1-3：同时取消全部在途自动重连链——退出/批量重配时不该再有定时器尝试拉起旧连接
 function killAllMcpServers() {
+  if (autoReconnect) autoReconnect.cancelAll();
   return mcp.killAllMcpServers();
 }
 
 // P0-D：提取为命名函数（IPC 与定时任务 Agent 通道共用）
 async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-request', conversationId }) {
-  const s = mcpServers.get(server);
+  let s = mcpServers.get(server);
+  if (!s) {
+    // 期 1：按需连接兜底（connect-on-demand）——懒启动下未连接的服务在**首次调用**时补连，
+    // 而不是直接抛「未连接」。这正是「工具对模型可见（缓存清单）→ 调用时自动拉起」闭环的后半段。
+    // 仅当存在已保存配置时才尝试；补连失败仍如实回「未连接」，不掩盖故障。
+    const rc = await reconnectSaved(server, { reason: 'connect-on-demand' });
+    if (rc && rc.ok) s = mcpServers.get(server);
+  }
   if (!s) throw new Error(`MCP 服务 ${server} 未连接`);
   const startedAt = Date.now(); // P2-7：执行后告知要报耗时
   // L3：MCP 工具调用审批（auto-safe 档仍询问）
@@ -236,19 +308,74 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
   }
 }
 
+// P1-3：按名重连「已保存但当前未连接」的服务——**IPC 手动重连与崩溃自动重连共用同一实现**，
+// 保证两条路径的幂等/审计/落盘行为完全一致（否则自动重连可能悄悄绕过手动路径已有的纪律）。
+// 为什么必须由主进程按名取配置、而不是渲染层把 payload 传进来：
+// mcp-servers.json 里的 env 含 API Key，跨 IPC 出口一律剥离（见 mcp:getConfig），
+// 渲染层拿不到 env 就拼不出完整 payload。此处从磁盘读整条（含 env），
+// env 全程留在主进程内，符合既有「凭证不出主进程」纪律。
+async function reconnectSaved(name, { reason = 'manual' } = {}) {
+  // 幂等：已连接就直接回当前状态，避免重复 spawn 出第二个子进程
+  const existing = mcp.getMcpServer(name);
+  if (existing) return { ok: true, toolCount: (existing.tools || []).length, already: true };
+  const saved = loadMcpConfig().find((s) => s && s.name === name);
+  if (!saved) {
+    // fail-closed：没有保存过的配置就如实报错，不要拿空 command 去 spawn
+    return { ok: false, error: `未找到已保存的 MCP 配置：${name}（请先在生态中心保存该服务）` };
+  }
+  const r = await connectMcpServer(saved);
+  try {
+    deps.audit(`mcp:reconnect:${name}`, '',
+      r && r.ok ? `tools=${r.toolCount || 0} reason=${reason}` : `error: ${(r && r.error) || 'unknown'}`,
+      r && r.ok ? 'connected' : 'error');
+  } catch { /* 审计失败不影响重连结果 */ }
+  return r;
+}
+
 // 启动时自动重连已持久化的 MCP 服务
+//
+// 2026-10-18：由串行 await 改为**有界并发**。原因：11 个 npx 冷启动逐个 await，
+// 总耗时 = 各服务冷启动耗时之和（用户实测启动后工具长时间不齐）；并发下按批推进。
+// 并发上限保守取 4：MCP 服务冷启动要拉包/起进程，全并发会瞬时抢 CPU 与 npm 缓存锁。
+// 落盘已由 persistMcpServer 串行化，故并发不会丢配置（见该函数注释）。
+const RECONNECT_CONCURRENCY = 4;
+
 async function reconnectMcpServers() {
-  const config = loadMcpConfig();
-  if (config.length === 0) return;
-  console.log(`[mcp] 自动重连 ${config.length} 个已保存服务...`);
-  for (const s of config) {
-    try {
-      const res = await connectMcpServer(s);
-      console.log(`[mcp] 重连 ${s.name}: ${res.ok ? `${res.toolCount} 个工具` : res.error}`);
-    } catch (err) {
-      console.warn(`[mcp] 重连 ${s.name} 失败:`, err.message);
+  const all = loadMcpConfig();
+  if (all.length === 0) return;
+  // 期 1：懒启动灰度。MJCODE_MCP_LAZY 未置位 → 行为完全不变（全量重连）。
+  // 置位后仅拉起「启动时应自动连接」的子集（auto-start 档 + developer 档的 git 类），
+  // 其余（whitelist 白名单 / manual 高危）不再随启动 spawn，改由 callMcpTool 按需拉起。
+  const lazy = isLazyMode();
+  const profile = getGovernance().profile;
+  const config = lazy ? autoStartConfigs(all, { profile }) : all;
+  if (lazy) {
+    console.log(`[mcp] 懒启动（MJCODE_MCP_LAZY=1，profile=${profile}）：自动拉起 ${config.length}/${all.length} 个服务（auto-start 档${profile === PROFILES.DEVELOPER ? ' + git 类' : ''}），其余按需拉起`);
+  } else {
+    console.log(`[mcp] 自动重连 ${config.length} 个已保存服务（并发 ${RECONNECT_CONCURRENCY}）...`);
+  }
+  let okCount = 0;
+  let failCount = 0;
+  let toolTotal = 0;
+  for (let i = 0; i < config.length; i += RECONNECT_CONCURRENCY) {
+    const batch = config.slice(i, i + RECONNECT_CONCURRENCY);
+    const results = await Promise.all(batch.map(async (s) => {
+      try {
+        const res = await connectMcpServer(s);
+        console.log(`[mcp] 重连 ${s.name}: ${res.ok ? `${res.toolCount} 个工具` : res.error}`);
+        return res;
+      } catch (err) {
+        console.warn(`[mcp] 重连 ${s.name} 失败:`, err.message);
+        return { ok: false };
+      }
+    }));
+    for (const res of results) {
+      if (res && res.ok) { okCount += 1; toolTotal += res.toolCount || 0; } else { failCount += 1; }
     }
   }
+  // 汇总一行：此前 11 条逐服务日志后没有任何收尾信息，读者无法判断是否全部完成、总共多少工具
+  const lazyTail = lazy ? `；其余 ${all.length - config.length} 个服务按需拉起（调用时自动连接）` : '';
+  console.log(`[mcp] 重连完成：${okCount} 成功 / ${failCount} 失败，共 ${toolTotal} 个工具${lazyTail}`);
 }
 
 function register() {
@@ -260,16 +387,14 @@ function register() {
     } catch (e) {
       return { ok: false, error: e.message };
     }
-    return connectMcpServer(payload);
+    const r = await connectMcpServer(payload);
+    // P1-3：用户手动连上了，撤掉该服务可能存在的自动重连在途链（人工优先，不再自动覆盖）
+    if (r && r.ok && payload && payload.name && autoReconnect) autoReconnect.cancel(payload.name);
+    return r;
   });
 
   // 2026-10-17（用户实测反馈「ima 配置完成后 + 菜单里仍然显示需手动配置」）：
-  // 按名重连「已保存但当前未连接」的服务。
-  //
-  // 为什么必须由主进程按名取配置、而不是渲染层把 payload 传进来：
-  // mcp-servers.json 里的 env 含 API Key，跨 IPC 出口一律剥离（见 mcp:getConfig），
-  // 渲染层拿不到 env 就拼不出完整 payload。此处从磁盘读整条（含 env），
-  // env 全程留在主进程内，符合既有「凭证不出主进程」纪律。
+  // 按名重连「已保存但当前未连接」的服务（实现见 reconnectSaved）。
   ipcMain.handle('mcp:reconnect', async (_, payload) => {
     try {
       // X14：name 是用户数据（来自目录/配置），先过边界校验
@@ -277,18 +402,7 @@ function register() {
     } catch (e) {
       return { ok: false, error: e.message };
     }
-    const name = String(payload.name);
-    // 幂等：已连接就直接回当前状态，避免重复 spawn 出第二个子进程
-    const existing = mcp.getMcpServer(name);
-    if (existing) return { ok: true, toolCount: (existing.tools || []).length, already: true };
-    const saved = loadMcpConfig().find((s) => s && s.name === name);
-    if (!saved) {
-      // fail-closed：没有保存过的配置就如实报错，不要拿空 command 去 spawn
-      return { ok: false, error: `未找到已保存的 MCP 配置：${name}（请先在生态中心保存该服务）` };
-    }
-    const r = await connectMcpServer(saved);
-    deps.audit(`mcp:reconnect:${name}`, '', r && r.ok ? `tools=${r.toolCount || 0}` : `error: ${(r && r.error) || 'unknown'}`, r && r.ok ? 'connected' : 'error');
-    return r;
+    return reconnectSaved(String(payload.name), { reason: 'manual' });
   });
 
   // T7：浏览器授权（三级回落在引擎内完成；只回状态与级别，绝不回传令牌）
@@ -330,7 +444,11 @@ function register() {
     }
     // 断开 + 同步移除持久化配置（http 传输无子进程，close 为空操作）
     mcp.disconnectMcpServer(name);
+    // P1-3：用户主动断开即「人工否决」——撤掉在途自动重连链，否则断开后它会把服务再次拉起
+    if (autoReconnect) autoReconnect.cancel(name);
     saveMcpConfig(loadMcpConfig().filter((s) => s.name !== name));
+    // 期 1：同步清掉该服务的工具清单缓存，避免删除服务后其工具仍残留在缓存里
+    getToolCache().removeManifest(name);
     return { ok: true };
   });
 
@@ -422,21 +540,36 @@ function register() {
   // 应用重启后主进程自动重连，但渲染层 mcpTools 状态为空，
   // 渲染层启动时调此通道重建 agent 工具集，MCP 工具即全程可用
   ipcMain.handle('mcp:listTools', async () => {
-    return mcp.listMcpServers().map((name) => {
+    const connected = new Set(mcp.listMcpServers());
+    const out = [...connected].map((name) => {
       const s = mcp.getMcpServer(name);
-      return { server: name, tools: s?.tools || [] };
+      return { server: name, tools: s?.tools || [], connected: true };
     });
+    // 期 1：补上「已保存但当前未连接」服务的**缓存清单**——懒启动下这些服务不再随启动 spawn，
+    // 若只回已连接服务的工具，模型会看不见已装能力。此处用最近一次成功握手的清单兜底，
+    // 真正调用时由 callMcpTool 按需拉起并把真实结果取回。无缓存（从未连过）的服务不出现。
+    const saved = loadMcpConfig();
+    for (const s of saved) {
+      const name = String((s && s.name) || '');
+      if (!name || connected.has(name)) continue;
+      const mf = getToolCache().getManifest(name);
+      if (mf && mf.tools.length) out.push({ server: name, tools: mf.tools, connected: false });
+    }
+    return out;
   });
 
   // B3：已保存（持久化）的 MCP 配置列表 —— 前端据此渲染「已保存但未连接」状态
   // P1-M：env 可能含用户配置的 API Key 等敏感变量——跨 IPC 出口一律剥离，
   //  spawn 路径直接读磁盘配置（不经此通道），渲染层永远拿不到 env
+  // 期 2：servers 的 tier 由 {env,...rest} 自然透出（落盘时已打），缺失时回落 classifyTier 补齐；
+  //      同时下发 governance（profile / fsMode / sandboxNetwork）供设置页渲染档位选择器。
   ipcMain.handle('mcp:getConfig', async () => ({
     ok: true,
     // 2026-10-16：同时回传配置文件路径 —— 生态中心连接器弹窗据此提供「打开 JSON 直接改」入口。
     // 只回路径、不读内容：文件里的 env 含 API Key，跨 IPC 出口仍一律剥离（见上一条注释）。
     path: MCP_CONFIG_FILE(),
-    servers: loadMcpConfig().map(({ env, ...rest }) => rest),
+    servers: loadMcpConfig().map(({ env, ...rest }) => ({ ...rest, tier: rest.tier || classifyTier(rest) })),
+    governance: getGovernance(),
   }));
 
   // T2：生态中心「本机服务」区 JSON 编辑入口（开发者通道）——
@@ -467,6 +600,8 @@ function register() {
         url: s.url ? String(s.url) : undefined,
         env: userEnvOf(s.env), // P0-5②：手改 JSON 的通道同样只落用户增量 env（受保护键不进文件）
         headers: s.headers && typeof s.headers === 'object' ? s.headers : {},
+        // 期 2：手改 JSON 时同样重算 tier（用户可能改了 command/name 改变了服务风险属性）
+        tier: classifyTier({ name: String(s.name), command: s.command, args: s.args, url: s.url }),
       });
     }
     saveMcpConfig(valid);
@@ -476,13 +611,68 @@ function register() {
     return { ok: true, saved: valid.length, dropped };
   });
 
+  // 期 2：治理偏好读取（档位 profile / 文件能力 fsMode / 沙盒网络开关）。
+  // 与 mcp:getConfig 内联下发的 governance 同源——单独通道供设置页进入时直达读取。
+  ipcMain.handle('mcp:governance/get', async () => ({ ok: true, governance: getGovernance() }));
+
+  // 期 2：治理偏好写入。只接受已知字段，未提供字段保持原值（部分更新语义），
+  // 归一化由 readGovernance 兜底（非法值回落最保守档），写后回传最新治理配置。
+  ipcMain.handle('mcp:governance/set', async (_, payload = {}) => {
+    const store = deps && deps.getLocalStore ? deps.getLocalStore() : null;
+    if (!store) return { ok: false, error: '本地数据层未初始化' };
+    try {
+      const prev = store.getPreference(GOVERNANCE_PREF_KEY);
+      const merged = readGovernance({
+        ...(prev && typeof prev === 'object' ? prev : {}),
+        ...(payload && typeof payload === 'object' ? {
+          ...(payload.profile !== undefined ? { profile: payload.profile } : {}),
+          ...(payload.fsMode !== undefined ? { fsMode: payload.fsMode } : {}),
+          ...(payload.sandboxNetwork !== undefined ? { sandboxNetwork: payload.sandboxNetwork === true } : {}),
+        } : {}),
+      });
+      store.setPreference(GOVERNANCE_PREF_KEY, merged);
+      try { deps.audit('mcp:governance', '', `profile=${merged.profile} fsMode=${merged.fsMode} sandboxNetwork=${merged.sandboxNetwork}`, 'recorded'); } catch { /* 审计失败不影响写入 */ }
+      return { ok: true, governance: merged };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   // A5：语音本地转写（whisper.cpp；音频不出本机）
   ipcMain.handle('voice:transcribe', async (_, { wavBase64, language }) => voice.transcribeWav({ wavBase64, language }));
+
+  // ═══ P1-5：用户自定义生命周期 hooks（preToolUse / postToolUse）═══
+  // 设置页据此列出/编辑 hooks.json。命令文本与其它 MCP 配置同属「用户本机配置」，
+  // 不含凭证，因此可以跨 IPC 回传（与 mcp:getConfig 剥离 env 的取舍不同，此处无敏感字段）。
+  ipcMain.handle('hooks:getConfig', async () => ({
+    ok: true,
+    path: deps.toolHooks ? deps.toolHooks.filePath : '',
+    hooks: deps.toolHooks ? deps.toolHooks.list() : [],
+  }));
+
+  ipcMain.handle('hooks:setConfig', async (_, payload) => {
+    if (!deps.toolHooks) return { ok: false, error: 'hooks 能力未接线' };
+    // X14：非数组会让归一化把整份配置判为无效（用户以为存了、实际清空）
+    try {
+      guard.assertArray(payload || {}, 'hooks', { max: 200 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    const r = deps.toolHooks.save(Array.isArray(payload?.hooks) ? payload.hooks : []);
+    if (r.ok) deps.audit('hooks:setConfig', deps.toolHooks.filePath, `count=${r.hooks.length}`, 'recorded');
+    return r;
+  });
 }
 
 function initMcpIpc(d) {
   deps = d;
+  // P1-3：自动重连器在此建——reconnect 复用 reconnectSaved（与手动重连同源），
+  // emitStatus 直连 emitMcpStatus（**不经 onStatus**，否则「失败→crashed→再排程」成死循环）。
+  autoReconnect = createMcpAutoReconnect({
+    reconnect: (name) => reconnectSaved(name, { reason: 'auto' }),
+    emitStatus: (name, status, code) => emitMcpStatus(name, status, code),
+  });
   register();
 }
 
-module.exports = { initMcpIpc, connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, mcpServers };
+module.exports = { initMcpIpc, connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, getGovernance, mcpServers };

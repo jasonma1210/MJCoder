@@ -111,7 +111,7 @@ export default function FilesPanel({
     <div className="flex-1 min-h-0 flex">
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="shrink-0 flex items-center gap-2 px-2 h-9 border-b border-border">
-          <div className="flex-1 min-w-0 flex items-center gap-1.5 px-2 h-7 rounded-lg bg-input border border-border focus-within:border-accent">
+          <div className="flex-1 min-w-0 flex items-center gap-2 px-2 h-7 rounded-lg bg-input border border-border focus-within:border-accent">
             <IconSearch size={13} className="text-text2 shrink-0" />
             <input
               ref={inputRef}
@@ -167,7 +167,7 @@ export default function FilesPanel({
                   key={f}
                   onClick={() => onOpenFile?.(f)}
                   title={f}
-                  className="w-full text-left px-2 py-1 text-xs truncate hover:bg-hover rounded flex items-center gap-1.5"
+                  className="w-full text-left px-2 py-1 text-xs truncate hover:bg-hover rounded flex items-center gap-2"
                 >
                   <IconFile size={11} className="shrink-0 text-text2" />
                   <span className="truncate">{relPath(f)}</span>

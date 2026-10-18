@@ -24,7 +24,7 @@ export function OptionRow({ name, desc, selected, warn, onSelect }: {
   return (
     <button onClick={onSelect}
       className="w-full text-left py-4 border-b border-border last:border-0 flex items-start gap-3 hover:bg-hover -mx-5 px-5">
-      <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${selected ? 'border-accent' : 'border-border'}`}>
+      <span className={`mt-1 w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${selected ? 'border-accent' : 'border-border'}`}>
         {selected && <span className="w-2 h-2 rounded-full bg-accent" />}
       </span>
       <span className="flex-1">

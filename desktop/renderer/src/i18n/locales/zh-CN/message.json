@@ -9,6 +9,8 @@
   "copyFailed": "复制失败",
   "copyTitle": "复制内容",
   "copyAria": "复制消息内容",
+  "forkTitle": "从此处分叉",
+  "forkAria": "从此消息处开一支新会话",
   "running": "运行中",
   "elapsed": "已耗时 {dur}",
   "duration": "耗时 {dur}",

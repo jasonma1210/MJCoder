@@ -3,6 +3,7 @@ import { IconAlert, IconBot, IconCheck, IconSpinner, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
 // A5：重试前置「副作用核对」的二次确认对话框
 import { confirm } from './feedback';
+import Bar from './ui/Bar';
 
 // Agent 运行胶囊（WorkBuddy 式）：输入框上方左侧显示每个在役数字员工；
 // 点胶囊展开面板——查看每个 Agent 的实时执行流程（工具调用流），可强制关闭。
@@ -255,7 +256,7 @@ function TokenDashboard({ state }) {
   const warn = pct >= 80;
   const fmt = (n) => Number(n || 0).toLocaleString();
   return (
-    <div className="px-4 py-2 border-t border-border shrink-0 text-xs space-y-1.5">
+    <div className="px-4 py-2 border-t border-border shrink-0 text-xs space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-text2">
           {t('agentDock.tokenUsage')}{state.model ? ` · ${state.model}` : ''}
@@ -265,12 +266,7 @@ function TokenDashboard({ state }) {
           {t('agentDock.usageOf', { used: fmt(state.windowSpent), total: fmt(state.budget), pct })}
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-border overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${warn ? 'bg-danger' : 'bg-accent'}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <Bar value={pct} className="h-1.5" fillClassName={`rounded-full transition-all ${warn ? 'bg-danger' : 'bg-accent'}`} />
       <div className="flex items-center gap-x-3 flex-wrap text-text2">
         <span>{t('agentDock.cumulative', { in: fmt(state.promptTokens), out: fmt(state.completionTokens) })}</span>
         {state.rescues > 0 && <span className="text-warn">{t('agentDock.autoCompact', { n: state.rescues })}</span>}
@@ -310,12 +306,12 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
   const providerEntries = Object.entries(quota?.providers || {});
   return (
     <div className="absolute bottom-full left-0 mb-2 w-[26rem] max-h-[24rem] flex flex-col bg-surface border border-border rounded-2xl shadow-[var(--shadow-pop)] z-30 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-        <div className="text-sm font-medium flex items-center gap-1.5"><IconBot size={15} /> {t('agentDock.runningAgents', { n: agents.length })}</div>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="text-sm font-medium flex items-center gap-2"><IconBot size={15} /> {t('agentDock.runningAgents', { n: agents.length })}</div>
         <div className="flex items-center gap-2">
           {agents.length > 0 && (
             <button onClick={() => onAbortAll(groupIds)}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
               title={t('agentDock.stopAllTitle')}
             >
               <IconAlert size={11} /> {t('agentDock.stopAll')}
@@ -324,7 +320,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
           <button onClick={onClose} className="text-text2 hover:text-text p-1"><IconX size={13} /></button>
         </div>
       </div>
-      {allMsg && <div className="px-4 py-1.5 text-xs text-warn bg-warn-bg">{allMsg}</div>}
+      {allMsg && <div className="px-4 py-2 text-xs text-warn bg-warn-bg">{allMsg}</div>}
       <div className="overflow-y-auto p-2 space-y-2">
         {agents.length === 0 && groups.length === 0 && historyGroups.length === 0 && (
           <div className="text-text2 text-xs text-center py-6">{t('agentDock.emptyHint')}</div>
@@ -341,7 +337,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               {g.status === 'paused' && (
                 <button
                   onClick={() => onExecute(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-0.5 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
+                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
                   title={t('agentDock.continueGroupTitle')}
                 >
                   {t('agentDock.continueGroup')}
@@ -350,7 +346,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               {g.status === 'ready' && (
                 <button
                   onClick={() => onExecute(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-0.5 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
+                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
                   title={t('agentDock.runGroupTitle')}
                 >
                   {t('agentDock.runGroup')}
@@ -359,7 +355,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               {g.status === 'running' && (
                 <button
                   onClick={() => onCancelGroup(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-0.5 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
+                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
                   title={t('agentDock.cancelGroupTitle')}
                 >
                   {t('agentDock.cancelGroup')}
@@ -368,7 +364,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               {g.status !== 'running' && (
                 <button
                   onClick={() => onDeleteGroup(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-0.5 rounded border border-border text-text2 text-xs hover:bg-hover hover:text-danger"
+                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-border text-text2 text-xs hover:bg-hover hover:text-danger"
                   title={t('agentDock.deleteGroupTitle')}
                 >
                   {deletingId === g.groupId ? <IconSpinner size={11} className="animate-spin" /> : t('agentDock.deleteGroup')}
@@ -384,7 +380,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                     <span className="text-danger truncate flex-1" title={ft.title}>{ft.title || ft.taskId}</span>
                     <button
                       onClick={() => onRetryTask(g.groupId, ft.taskId, ft.title)}
-                      className="shrink-0 inline-flex items-center px-2 py-0.5 rounded border border-border text-text2 text-xs hover:bg-hover"
+                      className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-border text-text2 text-xs hover:bg-hover"
                       title={t('agentDock.retryTaskTitle')}
                     >
                       {t('agentDock.retryTask')}
@@ -406,7 +402,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                 <span className="text-xs text-text2 truncate flex-1" title={g.goal}>{g.goal || g.groupId}</span>
                 <button
                   onClick={() => onDeleteGroup(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded border border-border text-text2 text-caption hover:bg-hover hover:text-danger"
+                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-border text-text2 text-caption hover:bg-hover hover:text-danger"
                   title={t('agentDock.deleteGroupTitle')}
                 >
                   {deletingId === g.groupId ? <IconSpinner size={10} className="animate-spin" /> : t('agentDock.deleteGroup')}
@@ -429,14 +425,14 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                   {/* R6：待人工审查的失败任务可直接重试（成果是否保留由主进程裁决） */}
                   <button
                     onClick={() => onRetryTask(a.groupId, a.taskId, a.title)}
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-warn text-warn text-xs hover:bg-warn-bg"
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-warn text-warn text-xs hover:bg-warn-bg"
                     title={t('agentDock.retryTaskTitle')}
                   >
                     {t('agentDock.retryTask')}
                   </button>
                   <button
                     onClick={() => onDismiss(a.key)}
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border text-text2 text-xs hover:bg-hover"
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-text2 text-xs hover:bg-hover"
                     title={t('agentDock.dismiss')}
                   >
                     <IconX size={11} /> {t('agentDock.dismiss')}
@@ -445,7 +441,7 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               ) : (
                 <button
                   onClick={() => onAbort(a)}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
+                  className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
                   title={t('agentDock.abortTitle')}
                 >
                   <IconX size={11} /> {t('agentDock.forceClose')}
@@ -661,7 +657,7 @@ export default function AgentDock({ threadId = null, cwd = '' }) {
           <button
             key={a.key}
             onClick={() => setOpen(true)}
-            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-surface border border-border text-xs hover:border-accent"
+            className="inline-flex items-center gap-2 h-7 px-3 rounded-full bg-surface border border-border text-xs hover:border-accent"
             title={t('agentDock.agentRunning', { name: a.name, title: a.title })}
           >
             {/* 待人工审查的终态 Agent 胶囊同样用警示图标（不转圈，避免误导「仍在运行」） */}
@@ -677,7 +673,7 @@ export default function AgentDock({ threadId = null, cwd = '' }) {
         {agents.length === 0 && (activeGroups.length > 0 || historyGroups.length > 0) && (
           <button
             onClick={openPanel}
-            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-surface border border-border text-xs hover:border-accent"
+            className="inline-flex items-center gap-2 h-7 px-3 rounded-full bg-surface border border-border text-xs hover:border-accent"
             title={t('agentDock.taskGroups')}
           >
             <IconBot size={12} className="text-accent" />

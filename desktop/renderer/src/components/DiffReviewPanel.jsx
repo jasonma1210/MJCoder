@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { IconCheck, IconChevronRight, IconFileDiff, IconGitBranch, IconRefresh } from './icons';
 import { confirm, countConfirm, toast } from './feedback';
 import { useI18n } from '../i18n';
+import Button from './ui/Button';
 
 // 按文件分组的 diff 审查面板：逐文件接受（git add）/ 放弃修改（checkout 还原）
 // 嵌入右侧常驻面板渲染，不再使用全屏模态（对标 Codex 的 Review Pane）
@@ -363,7 +364,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
             <button
               key={key}
               onClick={() => setScope(key)}
-              className={`text-xs px-2 py-1 rounded-md ${scope === key ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'}`}
+              className={`text-xs px-2 py-1 rounded-lg ${scope === key ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'}`}
             >
               {label}
             </button>
@@ -376,7 +377,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
           onClick={() => setLastTurnOnly((v) => !v)}
           disabled={agentSet.size === 0}
           title={agentSet.size === 0 ? t('diff.noAgentChanges') : t('diff.lastTurnTitle')}
-          className={`text-xs px-2 py-1 rounded-md ${lastTurnOnly ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'} disabled:opacity-40`}
+          className={`text-xs px-2 py-1 rounded-lg ${lastTurnOnly ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:text-text'} disabled:opacity-40`}
         >
           {t('diff.lastTurn')}
         </button>
@@ -404,7 +405,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                     className="flex items-center justify-between px-3 py-2 bg-bg cursor-pointer select-none hover:bg-hover"
                     title={isOpen ? t('diff.collapse') : t('diff.expand')}
                   >
-                    <span className="text-xs font-mono truncate flex items-center gap-1.5" title={f.path}>
+                    <span className="text-xs font-mono truncate flex items-center gap-2" title={f.path}>
                       <IconChevronRight size={12} className={`shrink-0 text-text2 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
                       {f.path}
                     </span>
@@ -442,7 +443,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                           onClick={() => unstageHunk(f, h)}
                           disabled={busy || !h.header}
                           title={h.header ? t('diff.unstageHunkTitle') : t('diff.noHunkUnstage')}
-                          className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                          className="text-caption px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-40"
                         >
                           {t('diff.unstageHunk')}
                         </button>
@@ -453,7 +454,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                             onClick={() => toggleComment(f.path, hi)}
                             disabled={!threadId}
                             title={threadId ? t('diff.commentHunkTitle') : t('diff.noThread')}
-                            className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                            className="text-caption px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-40"
                           >
                             {t('diff.comment')}
                           </button>
@@ -461,7 +462,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                             onClick={() => acceptHunk(f, h)}
                             disabled={busy || !h.header}
                             title={h.header ? t('diff.acceptHunkTitle') : t('diff.noHunkAccept')}
-                            className="text-caption px-1.5 py-0.5 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-40"
+                            className="text-caption px-2 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-40"
                           >
                             {t('diff.acceptHunk')}
                           </button>
@@ -469,7 +470,7 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                             onClick={() => rejectHunk(f, h)}
                             disabled={busy || !h.header}
                             title={h.header ? t('diff.revertHunkTitle') : t('diff.noHunkRevert')}
-                            className="text-caption px-1.5 py-0.5 rounded border border-border hover:bg-hover disabled:opacity-40"
+                            className="text-caption px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-40"
                           >
                             {t('diff.revertHunk')}
                           </button>
@@ -484,16 +485,16 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                           onChange={(e) => setCommentText(e.target.value)}
                           placeholder={t('diff.commentPlaceholder')}
                           rows={2}
-                          className="w-full px-2 py-1.5 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
+                          className="w-full px-2 py-2 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent resize-none"
                         />
                         <div className="flex items-center gap-2">
                           <button onClick={() => submitComment(f, h, hi)}
                             disabled={commentBusy || !commentText.trim()}
-                            className="text-xs px-2.5 py-1 rounded bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">
+                            className="text-xs px-3 py-1 rounded bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">
                             {commentBusy ? t('diff.submitting') : t('diff.submitComment')}
                           </button>
                           <button onClick={() => { setCommentDraft(null); setCommentText(''); }}
-                            className="text-xs px-2.5 py-1 rounded border border-border hover:bg-hover">{t('diff.cancel')}</button>
+                            className="text-xs px-3 py-1 rounded border border-border hover:bg-hover">{t('diff.cancel')}</button>
                           <span className="text-caption text-text2 ml-auto">{t('diff.commentHint')}</span>
                         </div>
                       </div>
@@ -509,12 +510,12 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                     </pre>
                     {/* 差集 A：评论列表（展示在对应 hunk 下） */}
                     {hunkComments(f.path, hi).map((c) => (
-                      <div key={c.id} className="px-3 py-1.5 text-xs border-t border-border">
-                        <span className="text-text2 mr-1.5">
+                      <div key={c.id} className="px-3 py-2 text-xs border-t border-border">
+                        <span className="text-text2 mr-2">
                           {c.lineRange ? t('diff.lineRange', { start: c.lineRange.start, end: c.lineRange.end }) : t('diff.wholeChange')}
                         </span>
                         <span className="whitespace-pre-wrap">{c.comment}</span>
-                        <span className="text-success ml-1.5">{t('diff.commentDone')}</span>
+                        <span className="text-success ml-2">{t('diff.commentDone')}</span>
                       </div>
                     ))}
                   </div>
@@ -548,15 +549,14 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                 <input value={prForm.base} onChange={(e) => setPrForm({ ...prForm, base: e.target.value })}
                   placeholder={t('diff.prBasePlaceholder')}
                   className="flex-1 h-8 px-3 rounded-lg bg-bg border border-border text-xs outline-none focus:border-accent" />
-                <label className="flex items-center gap-1.5 text-xs text-text2 shrink-0">
+                <label className="flex items-center gap-2 text-xs text-text2 shrink-0">
                   <input type="checkbox" checked={prForm.draft} onChange={(e) => setPrForm({ ...prForm, draft: e.target.checked })} />
                   {t('diff.draft')}
                 </label>
               </div>
               {prError && <p className="text-danger text-xs">{prError}</p>}
               <div className="flex items-center gap-2">
-                <button onClick={submitPr} disabled={prBusy}
-                  className="h-8 inline-flex items-center px-3 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-50">{prBusy ? t('diff.creating') : t('diff.createPr')}</button>
+                <Button variant="primary" size="md" onClick={submitPr} disabled={prBusy}>{prBusy ? t('diff.creating') : t('diff.createPr')}</Button>
                 <button onClick={() => setPrOpen(false)}
                   className="h-8 inline-flex items-center px-3 rounded-lg border border-border text-xs hover:bg-hover">{t('diff.cancel')}</button>
               </div>
@@ -572,13 +572,12 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
             {/* P0-E：diff 的「交付」出口——经本机 gh CLI 创建 PR */}
             <button onClick={openPr} disabled={busy || !projectPath}
               title={projectPath ? t('diff.createPrTitle') : t('diff.needProject')}
-              className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1">
+              className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover disabled:opacity-50 flex items-center gap-1">
               <IconGitBranch size={12} /> {t('diff.createPr')}
             </button>
             <button onClick={rejectAll} disabled={busy}
-              className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover disabled:opacity-50">{t('diff.discardAll')}</button>
-            <button onClick={acceptAll} disabled={busy}
-              className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50">{t('diff.acceptAll')}</button>
+              className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover disabled:opacity-50">{t('diff.discardAll')}</button>
+            <Button variant="primary" size="sm" onClick={acceptAll} disabled={busy}>{t('diff.acceptAll')}</Button>
           </div>
         </div>
       )}

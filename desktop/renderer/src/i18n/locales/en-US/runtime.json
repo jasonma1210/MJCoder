@@ -11,6 +11,7 @@
   "localServiceDown": "Cannot connect to the local service (localhost:3001); switched to the local database",
   "authFailed": "Server authentication failed (account login has been removed from the desktop app; data is managed locally)",
   "compactOnlineUnsupported": "Compaction results are not persisted in online mode (local mode only)",
+  "forkOnlineUnsupported": "Thread branching is only available in local mode",
   "archiveNeedsLocal": "Archive management requires offline mode or pending server support",
   "serverModelDeleteUnsupported": "Server-shared models cannot be deleted on this machine",
   "serverModelEditUnsupported": "Server-shared models cannot be edited on this machine",

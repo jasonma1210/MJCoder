@@ -71,7 +71,7 @@ export default function LocalSkillsSection({ enabledSkills, onSkillsChange }: Pr
         })}</span>
         <span className="flex-1" />
         <span onClick={(e) => { e.stopPropagation(); importFromFolder(); }}
-          className="h-7 inline-flex items-center gap-1 px-2.5 rounded-lg border border-border text-xs text-text2 hover:text-text cursor-pointer shrink-0">
+          className="h-7 inline-flex items-center gap-1 px-3 rounded-lg border border-border text-xs text-text2 hover:text-text cursor-pointer shrink-0">
           <IconUpload size={12} /> {t('localSkills.importFromFolder')}
         </span>
       </button>

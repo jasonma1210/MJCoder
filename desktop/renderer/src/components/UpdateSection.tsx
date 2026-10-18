@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useI18n } from '../i18n';
+import Button from './ui/Button';
 
 interface UpdaterEvent {
   status: string;
@@ -93,14 +94,13 @@ export default function UpdateSection() {
           <div className="text-xs text-text2 mt-1">{t('settings.updateNote')}</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={check} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">{t('settings.checkUpdate')}</button>
+          <button onClick={check} className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">{t('settings.checkUpdate')}</button>
           {/* P0-3：available 态「下载更新」——downloading 中禁用防重复触发（进度经状态文案展示） */}
           {(updaterState === 'available' || updaterState === 'downloading') && (
-            <button onClick={download} disabled={updaterState === 'downloading'}
-              className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent disabled:opacity-50">{t('settings.updaterDownloadBtn')}</button>
+            <Button variant="primary" size="sm" onClick={download} disabled={updaterState === 'downloading'}>{t('settings.updaterDownloadBtn')}</Button>
           )}
           {updaterState === 'downloaded' && (
-            <button onClick={install} className="text-xs px-3 py-1.5 rounded-lg bg-accent-solid text-on-accent">{t('settings.restartInstall')}</button>
+            <Button variant="primary" size="sm" onClick={install}>{t('settings.restartInstall')}</Button>
           )}
         </div>
       </div>

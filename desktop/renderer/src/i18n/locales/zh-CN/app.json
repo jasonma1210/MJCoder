@@ -15,6 +15,8 @@
   "deleteThreadOnlineMsg": "确定删除「{name}」吗？此操作不可恢复。",
   "delete": "删除",
   "threadDeleted": "已删除会话",
+  "forked": "已从此处分叉出新会话",
+  "forkFailed": "分叉失败",
   "undo": "撤销",
   "toggleSidebarTitle": "显示/隐藏左侧栏（⌘B）",
   "noProject": "未选择项目",

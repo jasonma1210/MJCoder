@@ -5,6 +5,7 @@ import InlineAlert from './InlineAlert';
 import { IconCheck, IconCpu, IconGlobe, IconShield, IconZap } from './icons';
 import { useI18n } from '../i18n';
 import { loadEnabledFromLocal, setConnectorEnabledLocal, saveEnabledToLocal } from '../lib/ecosystemEnabled';
+import Bar from './ui/Bar';
 
 // 顶层常量只存 i18n key，渲染时经 t() 求值（避免模块加载冻结译文）
 // B5（2026-10-16）：新增「安全默认档」步骤——新用户面对「审批档 × 沙箱档」组合
@@ -231,10 +232,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
         <span className="text-sm text-text truncate">{t(STEPS[step])}</span>
         <div className="ml-auto flex items-center gap-3 shrink-0">
           <span className="text-caption text-text2 tabular-nums">{t('onboarding.stepOf', { current: step + 1, total: STEPS.length })}</span>
-          <div className="w-24 h-1 rounded-full bg-border overflow-hidden" aria-hidden="true">
-            <div className="h-full bg-accent transition-[width] duration-300"
-              style={{ width: `${Math.round(((step + 1) / STEPS.length) * 100)}%` }} />
-          </div>
+          <Bar value={Math.round(((step + 1) / STEPS.length) * 100)} className="w-24 h-1" fillClassName="bg-accent transition-[width] duration-300" aria-hidden="true" />
         </div>
       </div>
 
@@ -247,7 +245,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
             <div className="text-center">
               <h1 className="text-3xl font-semibold mb-3">{t('onboarding.welcomeHeading')}</h1>
               <p className="text-text2 text-sm mb-8">{t('onboarding.welcomeSub')}</p>
-              <button onClick={next} className="bg-accent-solid text-on-accent px-6 py-2.5 rounded-xl text-sm">{t('onboarding.startSetup')}</button>
+              <button onClick={next} className="bg-accent-solid text-on-accent px-6 py-3 rounded-xl text-sm">{t('onboarding.startSetup')}</button>
             </div>
           )}
 
@@ -339,12 +337,12 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
                 {SAFETY_PRESETS.map((p) => (
                   <button key={p.id} onClick={() => setSafetyChoice(p.id)}
                     className={`w-full flex items-start gap-3 border rounded-xl px-4 py-3 text-left ${safetyChoice === p.id ? 'border-accent bg-accent-bg' : 'border-border hover:bg-hover'}`}>
-                    <IconShield size={16} className="text-accent shrink-0 mt-0.5" />
+                    <IconShield size={16} className="text-accent shrink-0 mt-1" />
                     <span className="flex-1 min-w-0">
                       <span className="text-sm font-medium block">{t(p.nameKey)}</span>
                       <span className="text-xs text-text2 block mt-1 leading-relaxed">{t(p.descKey)}</span>
                     </span>
-                    {safetyChoice === p.id && <IconCheck size={16} className="text-accent shrink-0 mt-0.5" />}
+                    {safetyChoice === p.id && <IconCheck size={16} className="text-accent shrink-0 mt-1" />}
                   </button>
                 ))}
               </div>
@@ -366,7 +364,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
               ) : employees.length === 0 ? (
                 <InlineAlert type="info">{t('onboarding.catalogEmpty')}</InlineAlert>
               ) : (
-                <div className="grid grid-cols-2 gap-2.5 max-h-[304px] overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-3 max-h-[304px] overflow-y-auto pr-1">
                   {employees.slice(0, 6).map((e) => {
                     const on = pickedEmployee === e.id;
                     return (
@@ -404,7 +402,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
               ) : catalogSkills.length === 0 ? (
                 <InlineAlert type="info">{t('onboarding.catalogEmpty')}</InlineAlert>
               ) : (
-                <div className="grid grid-cols-2 gap-2.5 max-h-[304px] overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-3 max-h-[304px] overflow-y-auto pr-1">
                   {catalogSkills.slice(0, 6).map((s) => {
                     const on = pickedSkills.includes(s.id);
                     return (
@@ -425,7 +423,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
                   })}
                 </div>
               )}
-              <p className="text-caption text-text2 mt-2.5">{t('onboarding.skillPickHint')}</p>
+              <p className="text-caption text-text2 mt-3">{t('onboarding.skillPickHint')}</p>
               <div className="flex justify-between items-center mt-4">
                 <button onClick={back} className="text-text2 text-sm hover:text-text">{t('onboarding.back')}</button>
                 <div className="flex items-center gap-3">
@@ -446,7 +444,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
               ) : connectors.length === 0 ? (
                 <InlineAlert type="info">{t('onboarding.catalogEmpty')}</InlineAlert>
               ) : (
-                <div className="grid grid-cols-2 gap-2.5 max-h-[304px] overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-3 max-h-[304px] overflow-y-auto pr-1">
                   {connectors.slice(0, 6).map((c) => {
                     const on = pickedConnectors.includes(c.id);
                     return (
@@ -465,7 +463,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
                   })}
                 </div>
               )}
-              <p className="text-caption text-text2 mt-2.5">{t('onboarding.connectorHint')}</p>
+              <p className="text-caption text-text2 mt-3">{t('onboarding.connectorHint')}</p>
               <div className="flex justify-between items-center mt-4">
                 <button onClick={back} className="text-text2 text-sm hover:text-text">{t('onboarding.back')}</button>
                 <div className="flex items-center gap-3">
@@ -528,7 +526,7 @@ export default function Onboarding({ globalProviders, userProviders, onFinish, o
                   connectors: pickedConnectors.length,
                 })}
               </p>
-              <button onClick={finish} disabled={finishing} aria-busy={finishing} className="bg-accent-solid text-on-accent px-6 py-2.5 rounded-xl text-sm disabled:opacity-60">{finishing ? t('onboarding.preparing') : t('onboarding.enter')}</button>
+              <button onClick={finish} disabled={finishing} aria-busy={finishing} className="bg-accent-solid text-on-accent px-6 py-3 rounded-xl text-sm disabled:opacity-60">{finishing ? t('onboarding.preparing') : t('onboarding.enter')}</button>
             </div>
           )}
         </div>

@@ -9,6 +9,8 @@
   "copyFailed": "Copy failed",
   "copyTitle": "Copy",
   "copyAria": "Copy message content",
+  "forkTitle": "Branch from here",
+  "forkAria": "Start a new thread branched from this message",
   "running": "Running",
   "elapsed": "Elapsed {dur}",
   "duration": "Duration {dur}",

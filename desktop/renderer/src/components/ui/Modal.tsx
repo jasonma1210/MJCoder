@@ -107,6 +107,11 @@ export interface ModalProps {
   overlayClassName?: string;
   /** 无标题时给对话框一个可访问名称（有 `title`/`titleNode` 时优先 aria-labelledby） */
   ariaLabel?: string;
+  /**
+   * 面板 role（默认 'dialog'）。命令式确认框需要 'alertdialog' 语义时显式传入；
+   * 两种取值都带 aria-modal="true"，故 foreignDialogOwnsFocus() 的 `closest` 判据不受影响。
+   */
+  role?: 'dialog' | 'alertdialog';
   className?: string;
   style?: CSSProperties;
 }
@@ -126,6 +131,7 @@ export default function Modal({
   frameless = false,
   overlayClassName,
   ariaLabel,
+  role = 'dialog',
   className = '',
   style,
 }: ModalProps) {
@@ -250,7 +256,7 @@ export default function Modal({
     >
       <div
         ref={panelRef}
-        role="dialog"
+        role={role}
         aria-modal="true"
         aria-labelledby={title || titleNode ? titleId : undefined}
         aria-label={!title && !titleNode && ariaLabel ? ariaLabel : undefined}

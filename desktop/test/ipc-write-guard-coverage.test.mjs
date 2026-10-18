@@ -68,12 +68,19 @@ const GUARDED_CHANNELS = [
   'model:testConnection',
   'local:preferences/set',
   'local:memories/add',
+  // 2026-10-18（P1-6）：会话分支写通道（复制历史落新会话，threadId/fromMessageId 须为数字）
+  'local:threads/fork',
   // main/ipc/mcp.js
   'mcp:disconnect',
   // 2026-10-17：按名重连已保存服务（连接成功会回写 mcp-servers.json）
   'mcp:reconnect',
   'mcp:setConfig',
   'github:createPr',
+  // main/ipc/sandbox.js（P1-4：Windows OS 级沙箱接线）
+  // setup 属高风险写系统通道（建专用用户 / 改 ACL / 加防火墙规则，提权执行）；
+  // teardown 删除专用用户与防火墙规则并清凭据。两条都必须保持 payloadGuard 边界校验。
+  'sandbox:windows/setup',
+  'sandbox:windows/teardown',
   // main/ipc/plugins.js
   'market:installGit',
   'market:setEnabled',

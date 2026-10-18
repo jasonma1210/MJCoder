@@ -11,6 +11,7 @@
   "localServiceDown": "无法连接本地服务（localhost:3001），已改由本机数据库处理",
   "authFailed": "服务器认证失败（桌面端已移除账户登录，数据由本机管理）",
   "compactOnlineUnsupported": "在线模式下压缩结果暂不持久化（仅本地模式生效）",
+  "forkOnlineUnsupported": "会话分支仅支持本地模式",
   "archiveNeedsLocal": "归档管理需离线模式或等待服务端支持",
   "serverModelDeleteUnsupported": "服务端共享模型不支持在本机删除",
   "serverModelEditUnsupported": "服务端共享模型不支持在本机编辑",

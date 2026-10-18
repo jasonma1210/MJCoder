@@ -218,7 +218,8 @@ check('P1-H：隔离工作区收口三动作接线（worktree 只建不收修复
 check('P1-M：MCP 配置出口剥离 env（敏感变量不出本机）', () => {
   // T2-1：mcp:getConfig 已拆出 main/ipc/mcp.js，断言随实现走
   const mainSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/mcp.js'), 'utf8');
-  assert.match(mainSrc, /map\(\(\{ env, \.\.\.rest \}\) => rest\)/,
+  // 期 2：mapper 在剥离 env 后追加了 tier（{ env, ...rest }) => ({ ...rest, tier })，env 仍被剥离
+  assert.match(mainSrc, /map\(\(\{ env, \.\.\.rest \}\) => \(\{ \.\.\.rest/,
     'mcp:getConfig 未剥离 env：用户配置的 API Key 会跨 IPC 进入渲染层');
 });
 

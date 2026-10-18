@@ -92,8 +92,8 @@ export default function TaskSummaryPanel({ threadId = null, cwd = '', events = [
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
       {/* 任务组快照 */}
-      <div className="px-2 py-1.5 border-b border-border">
-        <div className="flex items-center gap-1.5 mb-1">
+      <div className="px-2 py-2 border-b border-border">
+        <div className="flex items-center gap-2 mb-1">
           <IconBot size={12} className="text-text2 shrink-0" />
           <span className="text-caption text-text2">{t('rightPane.taskGroups')}</span>
           {groups.length > 0 && <span className="text-caption text-text2">{groups.length}</span>}
@@ -103,14 +103,14 @@ export default function TaskSummaryPanel({ threadId = null, cwd = '', events = [
         )}
         <div className="space-y-1">
           {groups.map((g) => (
-            <div key={g.group_id} className="rounded-lg border border-border bg-bg px-2 py-1.5">
+            <div key={g.group_id} className="rounded-lg border border-border bg-bg px-2 py-2">
               <div className="flex items-center gap-2">
                 <span className={`text-caption shrink-0 ${statusTone(g.status)}`}>
                   {groupStatusKey(g.status) ? t(groupStatusKey(g.status)) : g.status}
                 </span>
                 <span className="text-xs truncate flex-1" title={g.goal || g.group_id}>{g.goal || g.group_id}</span>
               </div>
-              {g.error && <div className="text-caption text-warn break-all mt-0.5">{g.error}</div>}
+              {g.error && <div className="text-caption text-warn break-all mt-1">{g.error}</div>}
             </div>
           ))}
         </div>

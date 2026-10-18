@@ -177,7 +177,7 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
               <p className="text-xs text-text2 mt-1">{t('settings.memoryAutoCaptureDesc')}</p>
             </div>
             <button onClick={toggleAutoCapture}
-              className={`text-xs px-3 py-1.5 rounded-lg border shrink-0 ${autoCapture ? 'bg-accent-solid text-on-accent border-accent' : 'border-border hover:bg-hover'}`}>
+              className={`text-xs px-3 py-2 rounded-lg border shrink-0 ${autoCapture ? 'bg-accent-solid text-on-accent border-accent' : 'border-border hover:bg-hover'}`}>
               {autoCapture ? t('settings.memoryAutoOn') : t('settings.memoryAutoOff')}
             </button>
           </div>
@@ -230,25 +230,25 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
                 {items.map((item) => (
                   <div key={item.id} className="border border-border rounded-xl px-3 py-2">
                     <div className="flex items-center gap-2 text-xs text-text2 mb-1">
-                      <span className="border border-border rounded px-1.5 py-0.5">
+                      <span className="border border-border rounded px-2 py-1">
                         {t(DOMAIN_KEYS[item.domain] || 'settings.memoryDomainSession')}
                       </span>
                       <span>{t('settings.memoryTrust')} {Math.round(item.trust * 100)}%</span>
                       <span>{t('settings.memoryImportance')} {item.importance.toFixed(2)}</span>
                       {item.tier >= 3 && (
-                        <span className="border border-border rounded px-1.5 py-0.5">{t('settings.memoryLongTerm')}</span>
+                        <span className="border border-border rounded px-2 py-1">{t('settings.memoryLongTerm')}</span>
                       )}
                       <span className="ml-auto shrink-0">{fmtTime(item.updatedAt, locale)}</span>
                     </div>
                     <p className="text-xs whitespace-pre-wrap break-all">{(item.summary || item.content).slice(0, 160)}</p>
                     <div className="flex items-center gap-2 mt-2">
                       <button onClick={() => invalidateItem(item.id)}
-                        className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
+                        className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">
                         {t('settings.memoryDelete')}
                       </button>
                       {item.tier < 3 && (
                         <button onClick={() => promoteItem(item.id)}
-                          className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover">
+                          className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">
                           {t('settings.memoryPromote')}
                         </button>
                       )}

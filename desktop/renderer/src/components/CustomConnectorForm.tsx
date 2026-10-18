@@ -13,6 +13,7 @@ import {
   emptyDraft, validateCustomConnector,
   type CustomDraft, type Transport,
 } from '../lib/customConnector';
+import Button from './ui/Button';
 
 interface Props {
   /** 已存在的服务名（已保存 ∪ 已连接），用于查重，避免同名覆盖旧配置 */
@@ -76,15 +77,14 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
         </button>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{t('ecosystem.custom.title')}</div>
-          <div className="text-xs text-text2 mt-0.5">{t('ecosystem.custom.subtitle')}</div>
+          <div className="text-xs text-text2 mt-1">{t('ecosystem.custom.subtitle')}</div>
         </div>
-        <button onClick={onCancel} className="h-8 px-3 rounded-lg border border-border text-xs text-text2 hover:bg-hover shrink-0">
+        <Button variant="secondary" size="md" className="shrink-0" onClick={onCancel}>
           {t('ecosystem.custom.cancel')}
-        </button>
-        <button onClick={save} disabled={busy || !result.ok}
-          className="h-8 px-4 rounded-lg bg-accent-solid text-on-accent text-xs hover:brightness-110 disabled:opacity-40 shrink-0">
+        </Button>
+        <Button variant="primary" size="md" className="shrink-0" onClick={save} disabled={busy || !result.ok}>
           {busy ? t('ecosystem.custom.saving') : t('ecosystem.custom.save')}
-        </button>
+        </Button>
       </div>
 
       {/* 配置文件路径：与 WorkBuddy 的「配置 MCP」页一致，明确告诉用户保存在哪 */}
@@ -157,8 +157,8 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
         {touched && result.issues.length > 0 && (
           <ul className="text-xs text-danger space-y-1">
             {result.issues.map((it, i) => (
-              <li key={i} className="flex items-start gap-1.5">
-                <IconAlert size={12} className="shrink-0 mt-0.5" />
+              <li key={i} className="flex items-start gap-2">
+                <IconAlert size={12} className="shrink-0 mt-1" />
                 <span>{t(it.key, it.params)}</span>
               </li>
             ))}
@@ -166,17 +166,17 @@ export default function CustomConnectorForm({ existingNames, configPath, onCance
         )}
 
         {status === 'ok' && (
-          <p className="inline-flex items-center gap-1.5 text-xs text-success">
+          <p className="inline-flex items-center gap-2 text-xs text-success">
             <IconCheck size={13} /> {t('ecosystem.custom.savedOk', { name: draft.name })}
           </p>
         )}
         {status === 'fail' && (
-          <p className="inline-flex items-center gap-1.5 text-xs text-danger break-all">
+          <p className="inline-flex items-center gap-2 text-xs text-danger break-all">
             <IconAlert size={13} /> {errMsg || t('ecosystem.custom.connectFailed')}
           </p>
         )}
         {status === 'idle' && !touched && (
-          <p className="inline-flex items-center gap-1.5 text-xs text-text2">
+          <p className="inline-flex items-center gap-2 text-xs text-text2">
             <IconPlug size={12} /> {t('ecosystem.custom.saveNote')}
           </p>
         )}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '../lib/api';
 import { getModelOverrides, setModelOverrides, OVERRIDE_SLOTS } from '../lib/modelConfig';
 import TeamSpace from './TeamSpace';
@@ -8,7 +8,11 @@ import InlineAlert from './InlineAlert';
 import RecordReplayPanel from './RecordReplayPanel';
 import UpdateSection from './UpdateSection';
 import MemorySection from './MemorySection';
-import { IconCheck, IconCpu, IconGitBranch, IconGlobe, IconPalette, IconSettings, IconUser, IconX } from './icons';
+// P1-5：用户自定义生命周期 hooks 设置分区（preToolUse / postToolUse）
+import HooksSection from './HooksSection';
+// P1-4：Windows OS 级沙箱接线入口（仅 win32 渲染，组件内部另有平台守卫）
+import WindowsSandboxSetup from './WindowsSandboxSetup';
+import { IconCheck, IconCpu, IconGitBranch, IconGlobe, IconPalette, IconSettings, IconTerminal, IconUser, IconX } from './icons';
 import Switch from './ui/Switch';
 import Modal from './ui/Modal';
 // T2-4：模型页 / 网络页与共享原语已抽到 settings/（God File 拆薄，文案与视觉零改动）
@@ -38,6 +42,7 @@ const NAV = [
     { id: 'network', icon: <IconGlobe size={16} />, labelKey: 'settings.tabNetwork' },
     { id: 'browser', icon: <IconGlobe size={16} />, labelKey: 'settings.tabBrowser' },
     { id: 'git', icon: <IconGitBranch size={16} />, labelKey: 'settings.tabGit' },
+    { id: 'hooks', icon: <IconTerminal size={16} />, labelKey: 'settings.tabHooks' },
     { id: 'teamspace', icon: <IconGitBranch size={16} />, labelKey: 'settings.tabTeamSpace' },
   ]},
 ];
@@ -144,11 +149,14 @@ export default function SettingsModal({
       .catch((err) => console.warn('[settings] failed to load feature flags:', err));
   }, []);
 
-  useEffect(() => {
+  // P1-4：抽出为可复用的加载函数——Windows 沙箱设置执行后需重新拉取就绪态
+  const loadSandboxStatus = useCallback(() => {
     window.mjcode?.sandboxStatus?.()
       .then((r) => { if (r?.ok) setSandboxStatus(r); })
       .catch((err) => console.warn('[settings] failed to load sandbox status:', err));
   }, []);
+
+  useEffect(() => { loadSandboxStatus(); }, [loadSandboxStatus]);
 
   // 战略收敛：collab 冻结时隐藏团队空间导航项
   const nav = NAV
@@ -195,7 +203,7 @@ export default function SettingsModal({
       overlayClassName="fixed inset-0 z-settings flex items-center justify-center bg-overlay p-6">
       <div className="w-[min(920px,calc(100vw-3rem))] h-[min(680px,calc(100vh-3rem))] bg-bg border border-border rounded-2xl shadow-[var(--shadow-modal)] flex overflow-hidden relative">
         <button onClick={onClose}
-          className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-1.5 rounded-lg hover:bg-hover"
+          className="absolute top-3 right-3 z-10 text-text2 hover:text-text p-2 rounded-lg hover:bg-hover"
           title={t('settings.closeSettingsEsc')} aria-label={t('settings.closeSettings')}>
           <IconX size={16} />
         </button>
@@ -215,7 +223,7 @@ export default function SettingsModal({
                     <div className="text-xs text-text2 px-2 mb-1">{t(group.groupKey)}</div>
                     {items.map((item) => (
                       <button key={item.id} onClick={() => setTab(item.id)}
-                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-0.5 ${tab === item.id ? 'bg-surface text-text' : 'text-text2 hover:bg-hover'}`}>
+                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-1 ${tab === item.id ? 'bg-surface text-text' : 'text-text2 hover:bg-hover'}`}>
                         <span className="shrink-0">{item.icon}</span> {t(item.labelKey)}
                       </button>
                     ))}
@@ -242,7 +250,7 @@ export default function SettingsModal({
               <div className="flex items-center justify-between gap-4 py-3">
                 <p className="text-xs text-text2 min-w-0">{t('settings.languageDesc')}</p>
                 <select value={locale} onChange={(e) => setLocale(e.target.value)}
-                  className="bg-input border border-border rounded-lg px-3 py-1.5 text-sm outline-none shrink-0">
+                  className="bg-input border border-border rounded-lg px-3 py-2 text-sm outline-none shrink-0">
                   <option value="zh-CN">简体中文</option>{/* i18n-literal */}
                   <option value="en-US">English</option>{/* i18n-literal */}
                 </select>
@@ -277,6 +285,7 @@ export default function SettingsModal({
                   </InlineAlert>
                 </div>
               )}
+              <WindowsSandboxSetup platform={sandboxStatus?.platform} ready={sandboxStatus?.available} onRefresh={loadSandboxStatus} />
             </Section>
             <Section title={t('settings.approvalMode')}>
               {APPROVAL_MODES.map((o) => (
@@ -316,7 +325,7 @@ export default function SettingsModal({
               <div className="flex items-center justify-between py-2">
                 <div className="min-w-0">
                   <div className="text-sm">{t('settings.autoDecomposeLabel')}</div>
-                  <p className="text-xs text-text2 mt-0.5">{t('settings.autoDecomposeDesc')}</p>
+                  <p className="text-xs text-text2 mt-1">{t('settings.autoDecomposeDesc')}</p>
                 </div>
                 <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)}
                   label={t('settings.autoDecomposeLabel')} />
@@ -329,7 +338,7 @@ export default function SettingsModal({
                 const cur = tiers?.[slot];
                 const value = cur?.model ? `${cur.providerId ?? ''}::${cur.model}` : '';
                 return (
-                  <div key={slot} className="flex items-center justify-between gap-3 py-1.5">
+                  <div key={slot} className="flex items-center justify-between gap-3 py-2">
                     <span className="text-sm shrink-0">{t(`settings.modelTier_${slot}`)}</span>
                     <select
                       value={value}
@@ -377,7 +386,7 @@ export default function SettingsModal({
             </Section>
             {/* TH5：强调色（覆盖主题 accent，持久化于 mj_accent） */}
             <Section title={t('settings.accentTitle')}>
-              <div className="flex items-center gap-2.5 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
                 {ACCENT_CHOICES.map((a) => {
                   const c = a.value;
                   const current = accentVer >= 0 ? localStorage.getItem('mj_accent') : null;
@@ -427,6 +436,9 @@ export default function SettingsModal({
 
         {/* Git 与 GitHub：环境只读探测 + 集成状态 + 审批边界说明 */}
         {tab === 'git' && <GitTab projectPath={projectPath} />}
+
+        {/* P1-5：生命周期 hooks（preToolUse / postToolUse）——工具执行前后的用户自定义校验 */}
+        {tab === 'hooks' && <HooksSection />}
         </div>
       </div>
     </Modal>
@@ -524,7 +536,7 @@ function GitTab({ projectPath }) {
       <div className="flex items-start justify-between gap-4 py-2 border-b border-border last:border-0">
         <div className="min-w-0">
           <div className="text-sm">{label}</div>
-          {hint && <div className="text-xs text-text2 mt-0.5 break-all">{hint}</div>}
+          {hint && <div className="text-xs text-text2 mt-1 break-all">{hint}</div>}
         </div>
         <div className={`text-sm shrink-0 ${tone || 'text-text2'}`}>{value}</div>
       </div>

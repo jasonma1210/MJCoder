@@ -23,13 +23,26 @@ const PROTOCOL_VERSION = '2025-11-25';
 const MIN_PROTOCOL_VERSION = '2024-11-05';
 const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', MIN_PROTOCOL_VERSION];
 
-// 客户端能力声明。
+// 客户端能力声明（P2-4 残差收敛）。
 //
-// 严守「宁可少声明，不可虚报」：roots / sampling / elicitation 一个都**未实现**，
-// 一旦声明，服务端就会主动向我们发 `roots/list`、`sampling/createMessage` 等**请求**，
-// 而我们没有应答实现 → 服务端一直等，表现为「连上了但一调用就挂死」（比少声明危险得多）。
-// 未来的开启条件：先在 mcpClient.handleServerMessage 里实现对应的请求应答，再改这里。
-const CLIENT_CAPABILITIES = Object.freeze({});
+// 严守「宁可少声明，不可虚报」：这里声明的每一项都必须在 mcpClient.handleServerMessage
+// 里有对应的请求应答实现——一旦声明，服务端就会主动向我们发请求，没有应答实现 →
+// 服务端一直等，表现为「连上了但一调用就挂死」（比少声明危险得多）。
+//
+// 当前声明（应答实现见 mcpClient.js 的 SERVER_REQUEST_HANDLERS）：
+//   · roots      —— roots/list 返回空清单（不为 MCP 服务暴露文件系统根，见该处注释）
+//   · completion —— completion/complete 返回空补全集（规范允许的最小合法应答）
+//   · logging    —— 接收 notifications/message 日志通知（mcpClient 已按级别落日志）
+//
+// 仍未声明（明确的非目标，不是缺位）：
+//   · sampling    —— 服务端借客户端跑模型推理：需要「用户逐次同意 + 模型通道中继」的
+//                    完整信任链路（规范建议客户端逐次征得同意），缺 UI 与治理面，开了就是裸奔
+//   · elicitation —— 服务端向用户征询输入：需要渲染层对话框通道与结果回传链路
+const CLIENT_CAPABILITIES = Object.freeze({
+  roots: Object.freeze({}),
+  completion: Object.freeze({}),
+  logging: Object.freeze({}),
+});
 const CLIENT_INFO = Object.freeze({ name: 'mj-coder', version: '1.0' });
 
 /** 服务端返回的版本是否在本客户端支持集内（空值视为「未声明」，由调用方决定回落）。 */

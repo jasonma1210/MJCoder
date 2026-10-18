@@ -62,7 +62,7 @@ export default function ContextMenu({ open, x = 0, y = 0, items = [], onClose })
             disabled={it.disabled}
             onClick={(e) => { e.stopPropagation(); onClose?.(); it.onClick?.(); }}
             title={it.title || undefined}
-            className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-left disabled:opacity-40 disabled:cursor-not-allowed ${
+            className={`w-full flex items-center gap-3 px-3 py-2 text-xs text-left disabled:opacity-40 disabled:cursor-not-allowed ${
               it.danger ? 'text-danger hover:bg-danger-bg' : 'text-text hover:bg-hover'
             }`}
           >

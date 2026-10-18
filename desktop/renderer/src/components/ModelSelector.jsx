@@ -83,7 +83,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
       <button
         type="button"
         onClick={() => window.dispatchEvent(new CustomEvent('mjcode:open-settings'))}
-        className="h-7 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2 text-xs text-text2 hover:text-text hover:border-accent transition-colors"
+        className="h-7 inline-flex items-center gap-2 rounded-lg border border-dashed border-border px-2 text-xs text-text2 hover:text-text hover:border-accent transition-colors"
         title={t('models.notConfigured')}
       >
         <IconCpu size={12} className="shrink-0" />
@@ -146,7 +146,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
           IconCpu 内联进按钮——此前图标挂在 ComposerControls 外层 span，与 chip 脱离不对齐 */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`h-7 inline-flex items-center gap-1.5 rounded-lg border px-2 text-xs text-text bg-transparent outline-none hover:bg-hover hover:border-accent cursor-pointer transition-colors max-w-[240px] ${
+        className={`h-7 inline-flex items-center gap-2 rounded-lg border px-2 text-xs text-text bg-transparent outline-none hover:bg-hover hover:border-accent cursor-pointer transition-colors max-w-[240px] ${
           open ? 'border-accent' : 'border-border'
         }`}
         aria-expanded={open}
@@ -166,7 +166,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
             <div className="flex-1 min-h-0 max-h-72 overflow-y-auto py-1">
               {providers.map((p) => (
                 <div key={`${p.isGlobal ? 'g' : p.source || 'u'}:${p.id}`}>
-                  <div className="px-3 pt-2 pb-1 text-caption text-text2 flex items-center gap-1.5">
+                  <div className="px-3 pt-2 pb-1 text-caption text-text2 flex items-center gap-2">
                     <IconCpu size={11} />
                     <span className="truncate">{p.name}</span>
                     <span className="shrink-0">{p.isGlobal ? t('models.scopeGlobal') : p.source === 'local' ? t('models.scopeLocal') : t('models.scopePrivate')}</span>
@@ -178,7 +178,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
                     const active = selected && String(selected.model.id) === String(m.id) && !!selected.provider.isGlobal === !!p.isGlobal && String(selected.provider.id) === String(p.id);
                     return (
                       <button key={valueOf(p, m)} onClick={() => choose(p, m)}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs ${active ? 'bg-select-bg text-text font-medium' : 'hover:bg-hover text-text'}`}>
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs ${active ? 'bg-select-bg text-text font-medium' : 'hover:bg-hover text-text'}`}>
                         <span className="flex-1 truncate">{m.display_name || m.model_id}</span>
                         {active && <IconCheck size={12} className="shrink-0 text-select-fg" />}
                       </button>
@@ -190,7 +190,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
             {/* 底部入口：打开设置管理自定义模型 */}
             <button
               onClick={() => { setOpen(false); window.dispatchEvent(new CustomEvent('mjcode:open-settings')); }}
-              className="shrink-0 border-t border-border px-3 py-2 text-left text-xs text-text2 hover:text-text hover:bg-hover flex items-center gap-1.5">
+              className="shrink-0 border-t border-border px-3 py-2 text-left text-xs text-text2 hover:text-text hover:bg-hover flex items-center gap-2">
               <IconPlus size={12} />
               {t('models.configureCustom')}
             </button>
@@ -199,11 +199,11 @@ export default function ModelSelector({ providers, selected, onSelect }) {
           {/* 右栏：模型详情 + 配置行（点行展开二级选项面板） */}
           {detail ? (
             <div className="flex-1 min-w-0 flex flex-col">
-              <div className="px-3.5 pt-3 pb-2 border-b border-border">
+              <div className="px-4 pt-3 pb-2 border-b border-border">
                 <div className="text-sm font-medium text-text truncate">
                   {detail.model.display_name || detail.model.model_id}
                 </div>
-                <div className="text-xs text-text2 mt-0.5 truncate" title={detail.model.model_id}>
+                <div className="text-xs text-text2 mt-1 truncate" title={detail.model.model_id}>
                   {detail.provider.name} · {detail.model.model_id}
                 </div>
               </div>
@@ -231,7 +231,7 @@ export default function ModelSelector({ providers, selected, onSelect }) {
                 title={ctxTitle}
                 warn={ctxUnconfirmed}
               />
-              <div className="mt-auto px-3.5 py-2 text-caption text-text2">
+              <div className="mt-auto px-4 py-2 text-caption text-text2">
                 {t('models.perModelSaved')}
               </div>
             </div>
@@ -256,16 +256,16 @@ function ConfigRow({ label, value, expanded, onToggle, options, picked, onPick, 
         onClick={onToggle}
         aria-expanded={expanded}
         title={title}
-        className={`w-full flex items-center px-3.5 py-2.5 text-xs ${expanded ? 'bg-hover' : 'hover:bg-hover'}`}
+        className={`w-full flex items-center px-4 py-3 text-xs ${expanded ? 'bg-hover' : 'hover:bg-hover'}`}
       >
         <span className="text-text">{label}</span>
         <span className={`ml-auto ${warn ? 'text-warn' : 'text-text2'}`}>{value}</span>
-        {warn && <IconAlert size={11} className="ml-1.5 shrink-0 text-warn" />}
+        {warn && <IconAlert size={11} className="ml-2 shrink-0 text-warn" />}
         <IconChevronRight size={12}
-          className={`ml-1.5 text-text2 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          className={`ml-2 text-text2 transition-transform ${expanded ? 'rotate-90' : ''}`} />
       </button>
       {expanded && (
-        <div className="pb-1.5">
+        <div className="pb-2">
           {options.map((o) => {
             const active = o.value === picked;
             const disabled = o.disabled === true;
@@ -276,7 +276,7 @@ function ConfigRow({ label, value, expanded, onToggle, options, picked, onPick, 
                 disabled={disabled}
                 aria-disabled={disabled || undefined}
                 title={o.title || undefined}
-                className={`w-full flex items-center px-6 py-1.5 text-xs ${
+                className={`w-full flex items-center px-6 py-2 text-xs ${
                   disabled
                     ? 'text-text2 opacity-50 cursor-not-allowed'
                     : (active ? 'bg-select-bg text-text font-medium' : 'text-text hover:bg-hover')

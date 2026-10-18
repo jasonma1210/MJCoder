@@ -413,6 +413,67 @@ export const BASE_TOOLS = [
       },
     }, required: ['todos'] },
   }},
+  // ── 期 3（2026-10-18）：原生内置工具（本地系统能力一律原生实现，不经 MCP 连接器）──
+  // 分级/摘要/可补偿性全部在 main/approval.js 单一事实来源（引擎侧只声明 schema 与通道名）。
+  { type: 'function', function: {
+    name: 'clipboard',
+    description: '读写系统剪贴板（原生能力，直接操作本机剪贴板）。'
+      + 'action=read 读取当前剪贴板文本（只读，不弹审批）；'
+      + 'action=write 写入文本（会弹审批确认——会覆盖用户当前的剪贴板内容，原内容无法恢复）。'
+      + '注意：剪贴板内容属于用户隐私，读取后仅在完成当前任务所必需时使用，不要写入文件或重复出现在无关回复中。',
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['read', 'write'], description: 'read 读取 / write 写入（默认 read）' },
+      text: { type: 'string', description: 'action=write 时要写入的文本' },
+    }, required: ['action'] },
+  }},
+  { type: 'function', function: {
+    name: 'notify',
+    description: '发送一条系统桌面通知提醒用户（原生能力）。长任务完成、需要用户回来看结果时用它替代'
+      + '在回复里干等；不要在每一轮都发，避免打扰用户。',
+    parameters: { type: 'object', properties: {
+      title: { type: 'string', description: '通知标题（缺省用应用名）' },
+      body: { type: 'string', description: '通知正文（一句话说清结论或下一步）' },
+    }, required: ['body'] },
+  }},
+  { type: 'function', function: {
+    name: 'http_request',
+    description: '发起一次 HTTP 请求（全方法：GET/POST/PUT/PATCH/DELETE 等，可带自定义请求头与 body）。'
+      + '用于调用公开 REST API；需要鉴权时把 token 放在 headers 里。'
+      + 'GET/HEAD 视为只读；其余方法会改变外部系统状态，需要用户审批。'
+      + '内网/本机地址与云元数据端点一律拒绝（SSRF 防护）；只想要网页正文时优先用 web_fetch。',
+    parameters: { type: 'object', properties: {
+      method: { type: 'string', description: 'HTTP 方法（默认 GET）' },
+      url: { type: 'string', description: '请求 URL（仅 http/https）' },
+      headers: { type: 'object', description: '自定义请求头（如 Authorization / Content-Type）' },
+      body: { type: 'string', description: '请求体（非 GET/HEAD 时生效；对象会自动 JSON 序列化）' },
+      timeout: { type: 'number', description: '超时毫秒（默认 30000，上限 120000）' },
+    }, required: ['url'] },
+  }},
+  { type: 'function', function: {
+    name: 'sqlite',
+    description: '对本地 SQLite 数据库文件执行 SQL（原生能力，复用内置 sql.js 驱动）。'
+      + 'action=query 只读查询（只接受 SELECT/PRAGMA/EXPLAIN/WITH，返回 rows）；'
+      + 'action=exec 执行写语句（INSERT/UPDATE/DELETE/DDL；会弹审批，且当前为只读文件能力档时被拒绝）；'
+      + 'action=tables 列出全部表名。path 必须是数据库文件的绝对路径。',
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['query', 'exec', 'tables'], description: 'query 查询 / exec 写入 / tables 列表（默认 query）' },
+      path: { type: 'string', description: 'SQLite 文件绝对路径' },
+      sql: { type: 'string', description: 'SQL 语句（action=query/exec 必填）' },
+      params: { type: 'array', description: 'SQL 绑定参数（按 ? 顺序）' },
+    }, required: ['path'] },
+  }},
+  { type: 'function', function: {
+    name: 'sandbox_code_run',
+    description: '在强隔离沙盒中运行一小段 JavaScript 做纯计算（一次性独立子进程 + 受限上下文，'
+      + '默认无文件访问、默认无网络——网络需用户在治理设置中开启）。'
+      + '适合数据计算、格式转换、正则处理、生成 JSON/文本这类不需要触盘的操作。'
+      + '需要读写文件、访问网络、装依赖或跨调用保持状态时改用 code_exec（Code Mode，开发者工具）。'
+      + 'console.log 的输出会回传；最后一条表达式的值作为结果返回（10s 默认超时）。',
+    parameters: { type: 'object', properties: {
+      code: { type: 'string', description: '要执行的 JavaScript 代码（最后一条表达式的值为返回值）' },
+      timeout: { type: 'number', description: '执行超时毫秒（默认 10000，上限 60000）' },
+    }, required: ['code'] },
+  }},
 ];
 
 const SKILL_PROMPTS = {
@@ -463,6 +524,9 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
   用 chrome_status 确认已连接再操作。适合「在我已登录的 XX 站点上帮我……」类任务；
   点击/填写逐次确认，截图可留证。与受控浏览器（browser_*）的取舍：复用用户登录态用 chrome_*，
   独立自动化/避免干扰用户用 browser_*
+- 原生系统能力（本地内置，不经 MCP）：clipboard（读写系统剪贴板，写需确认）、
+  notify（发桌面通知）、http_request（全方法 HTTP，GET/HEAD 只读、其余方法需确认）、
+  sqlite（本地 SQLite 读写，写语句需确认）、sandbox_code_run（强沙盒纯计算，默认无文件/无网络）
 - 启动子代理处理子任务（spawn_subagent）
 - 多 Agent 并行编排（orchestrate_task）：当用户要求多角色/多任务并行，或目标可拆为互不依赖的
   子任务时，主动调用它把目标转交编排系统并行执行；返回的聚合结果由你向用户转述，
@@ -529,9 +593,16 @@ export const DEFAULT_RUN_WALL_CLOCK_MS = 30 * 60 * 1000;
 // P1-6：技能索引层单行长度上限（每个技能约 100 tokens）与清单总长度上限
 export const SKILL_SUMMARY_MAX_CHARS = 300;
 export const SKILL_MANIFEST_MAX_CHARS = 8000;
+// P2-3：单会话技能条数上限（只对 skills 数组生效；enabledSkills 是引擎自有词表 BUILTIN_SKILL_IDS，无增长面）。
+// 40 ≈ summary 索引 8000 字符封顶内的安全行数（40 行 × ~120 字符 ≈ 4800）——条数闸先于字符闸生效，
+// 避免 guardUntrusted 对清单做**静默**中段截断（排在后面的技能整行消失，模型不知道它们存在）。
+export const MAX_SKILLS_PER_SESSION = 40;
 // P2-1：同轮只读工具并发上限（只读多为 IO 等待，4 路足够吃满；再高会与 provider 并发限制打架）
 export const READONLY_PARALLEL_LIMIT = 4;
-// P2-2a：首字节延迟告警阈值（只做告警，绝不参与任何闸门判定——可观测指标不该变成新的失败源）
+// P2-2：首字节延迟 SLO 目标值。**口径（端到端）**：用户发送消息 → 模型开始输出首字节，
+// 含引擎装配段（技能/记忆/guard/压缩闸）与模型网络首字节两段；模型段单独记 ttfbMs，
+// 端到端记 e2eTtfbMs（首个模型轮，= 装配耗时 + ttfbMs）。**行为**：只告警，绝不参与任何闸门判定
+// ——可观测指标不该变成新的失败源（推理模型首字节本来就慢）。**回归门禁**：test/ttfb-report.test.mjs。
 export const TTFB_TARGET_MS = 3000;
 
 // ── P1-6：技能按需加载（两段式渐进披露）──
@@ -738,7 +809,10 @@ const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch
   // T4-2：Chrome 接管六操作工具走审批中心（chrome_status 只读不在列；chrome_connect 由中继层直连审批）
   'chrome_tabs', 'chrome_navigate', 'chrome_click', 'chrome_fill', 'chrome_screenshot', 'chrome_extract',
   // T4-7：Code Mode 走审批中心（普通代码 L3 可规则豁免；危险代码由 approval 判 L1 恒逐次）
-  'code_exec']);
+  'code_exec',
+  // 期 3：原生内置工具走审批中心（分级在 approval.js：clipboard 写 L2 / http_request 非 GET L3 /
+  // sqlite 写语句 L3 / sandbox_code_run L2 / notify 不进审批面），需透传 approvalMode/conversationId
+  'clipboard', 'notify', 'http_request', 'sqlite', 'sandbox_code_run']);
 
 // V01：宿主治理保留字段——这些字段决定审批/沙箱/执行根/会话归属，
 // 只能由宿主（runAgent 参数）注入，模型工具参数里出现即剥离（见工具执行循环）。
@@ -786,6 +860,12 @@ const TOOL_HANDLER_NAMES = {
   chrome_screenshot: 'chromeScreenshot',
   chrome_extract: 'chromeExtract',
   code_exec: 'codeExec',
+  // 期 3：原生内置工具通道（主进程 createToolHandlers / 渲染层 window.mjcode 同名方法）
+  clipboard: 'clipboard',
+  notify: 'notify',
+  http_request: 'httpRequest',
+  sqlite: 'sqlite',
+  sandbox_code_run: 'sandboxCodeRun',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -1008,6 +1088,12 @@ ${transcript}` }],
       if (estimateMessagesTokens(next) >= baselineTokens) return convo;
       // P1-3：记账点必须在「确认改写生效」之后（放在 chatFn 调用前会把压缩失败也计成重写）
       if (opts.ledger) { opts.ledger.count += 1; opts.ledger.recomputeTokens += estimateMessagesTokens(next); }
+      // P0-2（记忆写入闭环）：摘要已确认生效，透出给宿主归档（引擎不碰存储）。
+      // 传**纯摘要**（clamped）而非带前缀的 summary——前缀「[早期对话摘要]」与尾部提示是给模型的，
+      // 作为记忆内容只会是噪音。钩子异常绝不影响压缩结果（与 onTrace 同纪律）。
+      try {
+        opts.onCompacted?.({ summary: clamped, aggressive, rounds: toCompact.length });
+      } catch { /* 归档钩子异常绝不影响主流程 */ }
       return next;
     }
   } catch (err) {
@@ -1413,6 +1499,10 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   web_search: 60000,
   spawn_subagent: 1200000,       // 子代理 8 轮 × 模型超时，看门狗必须大于其自然上限
   orchestrate_task: 1800000,     // 编排组同上，组级超时先于看门狗生效
+  // 期 3：原生工具——http_request 实现侧 30s 超时 → 看门狗 45s；
+  // sandbox_code_run 子进程 vm 上限 60s + 宿主 70s 兜底 kill → 看门狗必须大于宿主兜底
+  http_request: 45000,
+  sandbox_code_run: 90000,
 };
 
 export function withTimeout(promise, ms, label) {
@@ -1614,6 +1704,9 @@ function assertAgentModelShape(m) {
 }
 // 导出供测试交叉验证形状定义一致性
 export { assertAgentModelShape };
+// P1-5：工具展示名 ↔ 通道名映射对外导出——主进程的 hooks 匹配器需要「展示名」做用户友好的
+// `match`（write_file 而非 writeFile），从单一来源取表可避免两处各写一份而漂移。
+export { TOOL_HANDLER_NAMES };
 
 export async function runAgent({
   messages, model, onStream, onToolCall, onDone, onMessage, onSuspend, onBudget, onTodos,
@@ -1712,12 +1805,27 @@ export async function runAgent({
   for (const skillId of enabledSkills) {
     if (SKILL_PROMPTS[skillId]) sysSections.skills += SKILL_PROMPTS[skillId];
   }
+  // P2-3：单会话技能总量预算——渐进披露解决了「单个技能」的体量（正文按需加载、索引 8000 字符封顶），
+  // 但「技能条数」没有闸：full 模式 N×6000 字符无上限；summary 模式超出 8000 字符的部分被
+  // guardUntrusted 静默中段截断，排在后面的技能整行消失（装了等于没用）。这里加确定性条数闸：
+  // 同名去重（员工 starter_skills 与用户启用集可能重叠，重复条目只浪费预算）→ 按宿主传入顺序
+  // 保留前 MAX_SKILLS_PER_SESSION 个（宿主排序即优先级）。被裁数量在 system 里明示，不静默丢弃。
+  const sessionSkills = [];
+  const seenSkillNames = new Set();
+  for (const s of skills) {
+    const sName = String(s?.name || 'unnamed');
+    if (seenSkillNames.has(sName)) continue;
+    if (sessionSkills.length >= MAX_SKILLS_PER_SESSION) break;
+    seenSkillNames.add(sName);
+    sessionSkills.push(s);
+  }
+  const omittedSkillCount = Math.max(0, skills.length - sessionSkills.length);
   // P1-6：技能两段式（索引按需加载 / 全量正文）。
   // auto 模式下只在宿主提供 loadSkill 通道时启用（零破坏：旧宿主行为与改动前完全一致）；
   // 显式 'summary' 则无论有无 handler 都启用——正文优先走 handler，
   // 缺省从本次 run 传入的 skills[].content 里取（宿主已经把这些内容读进来了）。
   const hasSkillBodySource = typeof toolHandlers?.loadSkill === 'function'
-    || skills.some((s) => !!s?.content);
+    || sessionSkills.some((s) => !!s?.content);
   // P2-3（第二轮审查）：summary 模式的真正前提是「能按需加载正文」。
   // 此前**提示段**只看 mode、**注册段**还看 `!customTools` —— 宿主传 customTools 时会出现
   // 「提示模型调用 load_skill，但该工具没注册」，运行时必被 advertisedToolNames 拒。
@@ -1728,10 +1836,10 @@ export async function runAgent({
     : (skillDisclosure === 'summary'
       ? (canSummary ? 'summary' : 'full')
       : (typeof toolHandlers?.loadSkill === 'function' && !customTools ? 'summary' : 'full'));
-  if (skillDisclosureMode === 'summary' && skills.length) {
+  if (skillDisclosureMode === 'summary' && sessionSkills.length) {
     // 索引层只给 name + description（H-2：规范没有 when_to_use 字段，description 即「何时使用」）。
     // 清单本身是新的注入面，同样要过 guardUntrusted（不能省）。
-    const manifest = skills.map((s) => {
+    const manifest = sessionSkills.map((s) => {
       const name = String(s?.name || 'unnamed');
       const desc = skillDescriptionOf(s).replace(/\s+/g, ' ').slice(0, SKILL_SUMMARY_MAX_CHARS);
       return `- ${name}: ${desc || '（该技能未提供 description）'}`;
@@ -1746,7 +1854,7 @@ export async function runAgent({
   // 文件技能（~/.mjcode/skills 的 SKILL.md）内容注入——A1：按不可信内容处置
   // 技能包属第三方分发内容（插件市场 / 他人仓库），命中注入特征即整块不注入并留痕。
   // P1-6：summary 模式下正文不进 system（改由 load_skill 按需加载），这里跳过。
-  for (const s of skills) {
+  for (const s of sessionSkills) {
     if (skillDisclosureMode === 'summary') break;
     if (!s?.content) continue;
     const g = guardUntrusted(s.content, {
@@ -1762,6 +1870,13 @@ export async function runAgent({
       continue;
     }
     sysSections.skills += `\n\n${g.text}`;
+  }
+  // P2-3：预算裁剪明示——不静默丢弃，让模型（和用户经 trace/console）知道清单不完整
+  if (omittedSkillCount > 0) {
+    console.warn(`[agent] 技能总量超预算：传入 ${skills.length} 个，注入 ${sessionSkills.length} 个`
+      + `（上限 ${MAX_SKILLS_PER_SESSION}，同名去重 + 按传入顺序裁剪）`);
+    sysSections.skills += `\n\n> 注：本会话技能清单不完整——传入 ${skills.length} 个技能，超出单会话上限`
+      + `（${MAX_SKILLS_PER_SESSION}，按传入顺序保留、同名去重），未列出的技能本会话不可用。`;
   }
   // AGENTS.md 项目规范注入（Codex 语义）
   // P1-3 修复：此前此处把 AGENTS.md 内容**原样**拼进 system prompt，完全绕过了
@@ -1886,6 +2001,18 @@ export async function runAgent({
   // 事件形如 {type:'run_start'|'model'|'model_error'|'tool'|'run_end', ...}，
   // 由宿主（agentRunner）落 JSONL；任何 onTrace 异常都不得影响主流程（与 onBudget 同纪律）。
   const trace = (evt) => { try { onTrace?.(evt); } catch { /* trace 上报绝不影响主流程 */ } };
+  // ── P0-2（记忆写入闭环）：压缩摘要归档通道 ──
+  // 摘要产出后，引擎**只发事件**，落记忆库是宿主（agentRunner）的副作用——引擎保持 headless 纯净、
+  // 不引入任何存储依赖（与 LoopEngine 不碰 DB 同一纪律）。
+  // 为什么复用 trace 而不新增回调：trace 是**既有跨进程通道**（NOTIFY_CBS.onTrace，
+  // 子进程引擎→宿主已桥接，零接线），新增回调要同时改 registry/childEntry/runAgent 参数三处，
+  // 收益为零、漂移面更大。子代理压缩已由子代理路径的 onTrace 统一打上 sub 标（见下方 spawn 段），
+  // 宿主据此只归档主 run 的摘要（与 verify_ledger 同口径）。
+  const emitCompactedMemory = (info) => trace({
+    type: 'memory_saved', origin: 'auto_compact', source: 'compressor',
+    summary: String(info?.summary || '').slice(0, 4000),
+    aggressive: !!info?.aggressive, rounds: Number(info?.rounds) || 0,
+  });
   const runStartAt = Date.now();
   // ── P2-8 / V-L1（N1）：工具执行事实台账（run 内 ring buffer，上限 200 条）──
   // 为什么要单独存：trace() 只**外发不存储**，且 tool 事件只有 {round,name,ms,failed}——
@@ -2110,6 +2237,7 @@ export async function runAgent({
     onStream?.('');
     const compacted = await compactHistory(convo, model, chatFn, {
       knownTokens: lastPromptTokens, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
+      onCompacted: emitCompactedMemory,
     });
     // 压缩结果必须回写：此前只用于本次 outbound，下一轮仍按「已被压缩的 prompt_tokens」判阈值
     // → 跳过压缩 → 又发全量（10k↔220k 抖动）。回写后清空增量口径，避免连续两次压缩。
@@ -2149,16 +2277,27 @@ export async function runAgent({
       // 只测不杀：ttfb 是 SLI，做成闸门会引入新的误杀（推理模型首字节本来就慢）。
       roundTtfbMs = (result && result.ttfbMs != null) ? Number(result.ttfbMs) : null;
       lastTtfbMs = roundTtfbMs;
+      // P2-2：端到端口径（仅首个模型轮）——用户感知的「发送 → 出字」= 引擎装配（技能/记忆/guard/压缩闸）+ 模型首字节。
+      // roundTtfbMs 只是模型段；装配段平时毫秒级，但首轮压缩闸一旦触发就是整段 LLM 调用，会吃掉 SLO 预算。
+      // 口径：e2eTtfbMs = 装配耗时(modelStartAt - runStartAt) + 模型段 ttfbMs。
+      const e2eTtfbMs = (roundsUsed === 1 && roundTtfbMs != null)
+        ? roundTtfbMs + (modelStartAt - runStartAt)
+        : null;
       trace({
         type: 'model', round: roundsUsed, ms: Date.now() - modelStartAt,
         promptTokens: result?.usage?.prompt_tokens || 0, completionTokens: result?.usage?.completion_tokens || 0,
         toolCalls: Array.isArray(result.tool_calls) ? result.tool_calls.length : 0,
         finishReason: result.finish_reason || '',
         ttfbMs: roundTtfbMs,
+        ...(e2eTtfbMs != null ? { e2eTtfbMs } : {}),
       });
       if (roundTtfbMs != null && roundTtfbMs > TTFB_TARGET_MS) {
         console.warn(`[agent] 首字节延迟 ${roundTtfbMs}ms 超过目标 ${TTFB_TARGET_MS}ms（仅告警，不阻断）`);
         trace({ type: 'slow_ttfb', round: roundsUsed, ttfbMs: roundTtfbMs });
+      } else if (e2eTtfbMs != null && e2eTtfbMs > TTFB_TARGET_MS) {
+        // 模型段达标但端到端超标 → 装配段是主因，scope 区分归因（同一 SLO 值，两个口径）
+        console.warn(`[agent] 端到端首字节 ${e2eTtfbMs}ms 超过目标 ${TTFB_TARGET_MS}ms（装配段 ${modelStartAt - runStartAt}ms；仅告警，不阻断）`);
+        trace({ type: 'slow_ttfb', scope: 'e2e', round: roundsUsed, ttfbMs: e2eTtfbMs });
       }
     } catch (err) {
       trace({ type: 'model_error', round: roundsUsed, ms: Date.now() - modelStartAt, error: String(err?.message || err).slice(0, 500) });
@@ -2171,6 +2310,7 @@ export async function runAgent({
         console.warn(`[agent] 疑似上下文超限（${msg.slice(0, 200)}），强制压缩历史后重试`);
         convo = await compactHistory(convo, model, chatFn, {
           knownTokens: lastPromptTokens, force: true, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
+          onCompacted: emitCompactedMemory,
         });
         continue;
       }
@@ -2268,6 +2408,7 @@ export async function runAgent({
         ? convo
         : await compactHistory(convo, model, chatFn, {
           knownTokens: lastPromptTokens, force: true, window: ctxWindow, chatModel: compactModel, ledger: rewriteLedger,
+          onCompacted: emitCompactedMemory,
         });
       if (convo !== beforeConvo) {
         // 压缩真的改写了历史：口径失效，下一轮按新体积重估；窗口从零算

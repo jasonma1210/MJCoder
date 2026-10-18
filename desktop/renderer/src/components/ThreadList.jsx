@@ -96,7 +96,7 @@ export default function ThreadList({
           ))}
           {orphans.length > orphanVisible && (
             <button onClick={() => setOrphanVisible((v) => v + GROUP_PAGE_SIZE)}
-              className="w-full text-left px-3 py-1.5 text-xs text-text2 hover:text-text">
+              className="w-full text-left px-3 py-2 text-xs text-text2 hover:text-text">
               {t('threadList.loadMore', { n: orphans.length - orphanVisible })}
             </button>
           )}
@@ -161,7 +161,7 @@ function ProjectGroup({
 
   return (
     <div className="mb-1">
-      <div className="group flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-hover"
+      <div className="group flex items-center gap-1 px-2 py-2 rounded-lg hover:bg-hover"
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}>
         <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-text2 shrink-0" title={open ? t('threadList.collapse') : t('threadList.expand')}>
           {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
@@ -179,7 +179,7 @@ function ProjectGroup({
             }}
             // 重命名只改显示名，不动磁盘目录（会话归属与沙箱授权都按目录路径）
             title={t('threadList.renameDisplayHint')}
-            className="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-xs outline-none"
+            className="flex-1 min-w-0 bg-surface border border-accent rounded px-2 py-1 text-xs outline-none"
           />
         ) : (
           <button onClick={() => { onSelectProject(project); setOpen(true); }}
@@ -247,7 +247,7 @@ function ProjectGroup({
               })()}
               {items.length > visible && (
                 <button onClick={() => setVisible((v) => v + GROUP_PAGE_SIZE)}
-                  className="w-full text-left px-2 py-1.5 text-xs text-text2 hover:text-text">
+                  className="w-full text-left px-2 py-2 text-xs text-text2 hover:text-text">
                   {t('threadList.loadMore', { n: items.length - visible })}
                 </button>
               )}
@@ -307,7 +307,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
 
   return (
     <div
-      className={`px-2 py-1.5 rounded-lg cursor-pointer group flex items-center gap-1.5 ${
+      className={`px-2 py-2 rounded-lg cursor-pointer group flex items-center gap-2 ${
         active ? 'bg-hover font-medium' : 'hover:bg-hover'
       }`}
       onClick={() => onSelect(thread)}
@@ -327,7 +327,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
             if (e.key === 'Enter') commit();
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
           }}
-          className="flex-1 min-w-0 bg-bg border border-accent rounded px-1 py-0.5 text-xs outline-none"
+          className="flex-1 min-w-0 bg-bg border border-accent rounded px-1 py-1 text-xs outline-none"
           maxLength={100}
           aria-label={t('threadList.threadTitleAria')}
         />
@@ -350,7 +350,7 @@ function ThreadRow({ thread, active, onSelect, onDelete, onRename, assignMenu, o
               <div className="px-3 py-1 text-caption text-text2">{t('threadList.assignMenuLabel')}</div>
               {assignMenu.map((p) => (
                 <button key={p.path} onClick={() => { setAssignOpen(false); onAssign?.(thread, p.path); }}
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-hover truncate" title={p.path}>
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-hover truncate" title={p.path}>
                   {p.name || p.path}
                 </button>
               ))}

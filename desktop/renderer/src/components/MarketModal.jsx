@@ -141,7 +141,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
         <div className="flex gap-1 px-5 pt-3">
           {[['browse', t('market.tabBrowse')], ['installed', t('market.tabInstalled')]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
-              className={`h-9 inline-flex items-center px-3.5 rounded-lg text-sm ${tab === id ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:bg-hover'}`}>
+              className={`h-9 inline-flex items-center px-4 rounded-lg text-sm ${tab === id ? 'bg-accent-solid text-on-accent' : 'text-text2 hover:bg-hover'}`}>
               {label}
             </button>
           ))}
@@ -209,10 +209,10 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{p.name}</span>
                           <span className="text-xs text-text2">v{p.version}</span>
-                          <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
+                          <span className="text-xs px-2 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
                         </div>
                         <p className="text-xs text-text2 mt-1 line-clamp-2">{p.description || t('market.noDescription')}</p>
-                        <div className="flex items-center gap-3 mt-1.5">
+                        <div className="flex items-center gap-3 mt-2">
                           <span className={`text-xs ${sig.cls}`}>{t(sig.textKey, sig.vars)}</span>
                           <span className="text-xs text-text2">{t('market.downloadsCount', { n: p.downloads || 0 })}</span>
                           {p.author && <span className="text-xs text-text2">{p.author}</span>}
@@ -247,7 +247,7 @@ export default function MarketModal({ onClose, onInstalled, embedded = false }) 
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{p.name}</span>
                       <span className="text-xs text-text2">v{p.version}</span>
-                      <span className="text-xs px-1.5 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
+                      <span className="text-xs px-2 py-[3px] leading-none rounded bg-hover text-text2">{TYPE_LABELS[p.type] ? t(TYPE_LABELS[p.type]) : p.type}</span>
                       <span className={`text-xs ${p.enabled ? 'text-success' : 'text-text2'}`}>{p.enabled ? t('market.enabled') : t('market.disabled')}</span>
                     </div>
                     <p className="text-xs text-text2 mt-1">{p.description || t('market.noDescription')}</p>
@@ -291,7 +291,7 @@ function PermissionPanel({ plugin }) {
   const perms = Array.isArray(plugin.permissions) ? plugin.permissions : [];
   return (
     <div className="mt-3 pt-3 border-t border-border">
-      <div className="flex items-center gap-1.5 text-xs text-text2 mb-2">
+      <div className="flex items-center gap-2 text-xs text-text2 mb-2">
         <IconAlert size={13} />
         {t('market.preinstallNote')}
       </div>

@@ -39,6 +39,9 @@ export function toolNameCN(name: string): string {
     chrome_fill: 'toolTrace.chromeFill', chrome_screenshot: 'toolTrace.chromeScreenshot',
     chrome_extract: 'toolTrace.chromeExtract',
     code_exec: 'toolTrace.codeExec',
+    clipboard: 'toolTrace.clipboard', notify: 'toolTrace.notify',
+    http_request: 'toolTrace.httpRequest', sqlite: 'toolTrace.sqlite',
+    sandbox_code_run: 'toolTrace.sandboxCodeRun',
   };
   return map[name] ? tGlobal(map[name]) : name;
 }
@@ -81,7 +84,7 @@ function BigOutputBlock({ refObj, className }: { refObj: BigRef; className?: str
   };
   return (
     <>
-      <div className="text-caption text-text2 mt-1 mb-0.5">
+      <div className="text-caption text-text2 mt-1 mb-1">
         {t('toolTrace.bigOutputNote', { kb: (refObj.bytes / 1024).toFixed(0) })}
       </div>
       {state === 'idle' && (
@@ -124,7 +127,7 @@ function PlainOutputBlock({ text, className, max = 500 }: { text: unknown; class
 /** 文件路径 chip（read_file/list_dir/glob/grep 等路径类工具的关键参数展示） */
 function PathChip({ text }: { text: string }) {
   return (
-    <span className="font-mono text-code bg-hover rounded px-1.5 py-0.5 max-w-full truncate" title={text}>{text}</span>
+    <span className="font-mono text-code bg-hover rounded px-2 py-1 max-w-full truncate" title={text}>{text}</span>
   );
 }
 
@@ -140,10 +143,10 @@ function DiffLines({ text, max = 24 }: { text: string; max?: number }) {
         const cls = l.startsWith('+') ? 'bg-success-bg text-success'
           : l.startsWith('-') ? 'bg-danger-bg text-danger'
             : l.startsWith('@@') ? 'text-text2 bg-hover' : 'bg-surface text-text2';
-        return <div key={i} className={`px-2 py-0.5 whitespace-pre-wrap break-all ${cls}`}>{l || ' '}</div>;
+        return <div key={i} className={`px-2 py-1 whitespace-pre-wrap break-all ${cls}`}>{l || ' '}</div>;
       })}
       {lines.length > shown.length && (
-        <button onClick={() => setExpanded(true)} className="w-full text-left px-2 py-0.5 text-text2 hover:text-text bg-hover">
+        <button onClick={() => setExpanded(true)} className="w-full text-left px-2 py-1 text-text2 hover:text-text bg-hover">
           {t('toolTrace.moreLines', { n: lines.length - shown.length })}
         </button>
       )}
@@ -187,7 +190,7 @@ function FullArgs({ args }: { args: Obj }) {
   if (!text || text === '{}') return null;
   return (
     <div className="mt-1">
-      <div className="text-caption text-text2 mb-0.5">{t('toolTrace.fullArgs')}</div>
+      <div className="text-caption text-text2 mb-1">{t('toolTrace.fullArgs')}</div>
       <pre className="text-code font-mono bg-hover rounded p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{text}</pre>
     </div>
   );
@@ -245,11 +248,11 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
 
 function toolIcon(name: string, failed: boolean) {
   const cls = failed ? 'text-danger shrink-0' : 'text-accent shrink-0';
-  if (name === 'shell' || name === 'code_exec' || name.startsWith('mcp__')) return <IconTerminal size={13} className={cls} />;
-  if (name === 'read_file' || name === 'write_file' || name === 'list_dir') return <IconFile size={13} className={cls} />;
+  if (name === 'shell' || name === 'code_exec' || name === 'sandbox_code_run' || name.startsWith('mcp__')) return <IconTerminal size={13} className={cls} />;
+  if (name === 'read_file' || name === 'write_file' || name === 'list_dir' || name === 'sqlite') return <IconFile size={13} className={cls} />;
   if (name === 'edit_file' || name === 'apply_patch') return <IconFileDiff size={13} className={cls} />;
   if (name === 'grep' || name === 'glob' || name === 'web_search') return <IconSearch size={13} className={cls} />;
-  if (name === 'web_fetch' || name.startsWith('browser_') || name.startsWith('chrome_')) return <IconGlobe size={13} className={cls} />;
+  if (name === 'web_fetch' || name === 'http_request' || name.startsWith('browser_') || name.startsWith('chrome_')) return <IconGlobe size={13} className={cls} />;
   if (name.startsWith('git_')) return <IconEdit size={13} className={cls} />;
   if (name === 'spawn_subagent') return <IconBot size={13} className={cls} />;
   if (name === 'todo_write') return <IconCheck size={13} className={cls} />;
@@ -270,15 +273,15 @@ function SandboxNoticeBlock({ result }: { result: Obj | null }) {
   return (
     <div className="mt-1 text-xs leading-relaxed p-2 rounded border border-warn bg-warn-bg text-text">
       <p className="font-medium text-warn">{t(n.titleKey)}</p>
-      <p className="text-text2 mt-0.5">{t(n.reasonKey, { detail: n.detail || t('runtime.unknownError') })}</p>
-      <p className="text-text2 mt-0.5">{t(n.actionKey)}</p>
-      <p className="text-text2 mt-0.5">
+      <p className="text-text2 mt-1">{t(n.reasonKey, { detail: n.detail || t('runtime.unknownError') })}</p>
+      <p className="text-text2 mt-1">{t(n.actionKey)}</p>
+      <p className="text-text2 mt-1">
         {t('runtime.sandboxPolicyLine', {
           policy: n.policy,
           sandboxed: n.sandboxed ? t('runtime.sandboxIsolatedYes') : t('runtime.sandboxIsolatedNo'),
         })}
       </p>
-      <p className="mt-0.5">{t(n.nextStepKey)}</p>
+      <p className="mt-1">{t(n.nextStepKey)}</p>
     </div>
   );
 }
@@ -342,7 +345,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
     case 'browser_screenshot':
       return res?.previewUrl ? (
         <div className="mt-1">
-          <div className="text-caption text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+          <div className="text-caption text-text2 mb-1">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
           <img src={asStr(res.previewUrl)} alt={t('toolTrace.browserEvidence')} className="max-w-full rounded border border-border" loading="lazy" />
         </div>
       ) : null;
@@ -358,7 +361,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
     case 'chrome_screenshot':
       return res?.previewUrl ? (
         <div className="mt-1">
-          <div className="text-caption text-text2 mb-0.5">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+          <div className="text-caption text-text2 mb-1">{t('toolTrace.browserEvidence')} ({((Number(res?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
           <img src={asStr(res.previewUrl)} alt={t('toolTrace.browserEvidence')} className="max-w-full rounded border border-border" loading="lazy" />
         </div>
       ) : null;
@@ -367,9 +370,9 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
       const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
       if (!tabs.length) return <div className="mt-1 text-xs text-text2">{t('toolTrace.chromeNoTabs')}</div>;
       return (
-        <div className="mt-1 flex flex-col gap-0.5">
+        <div className="mt-1 flex flex-col gap-1">
           {tabs.slice(0, 12).map((tab) => (
-            <div key={tab.id} className="flex items-center gap-1.5 text-xs min-w-0">
+            <div key={tab.id} className="flex items-center gap-2 text-xs min-w-0">
               <span className="text-text2 font-mono shrink-0">#{tab.id}</span>
               {tab.active && <span className="text-accent shrink-0">{t('toolTrace.activeTab')}</span>}
               <span className="truncate">{asStr(tab.title)}</span>
@@ -399,7 +402,7 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
             <div className="mt-1 space-y-2">
               {imgs.slice(0, 8).map((im, i) => (
                 <div key={i}>
-                  <div className="text-caption text-text2 mb-0.5">{asStr(im?.name) || t('toolTrace.codeImage')} ({((Number(im?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
+                  <div className="text-caption text-text2 mb-1">{asStr(im?.name) || t('toolTrace.codeImage')} ({((Number(im?.bytes) || 0) / 1024).toFixed(0)}KB)</div>
                   {asStr(im?.previewUrl) && <img src={asStr(im.previewUrl)} alt={asStr(im?.name) || t('toolTrace.codeImage')} className="max-w-full rounded border border-border" loading="lazy" />}
                 </div>
               ))}
@@ -460,9 +463,9 @@ export default function ToolTrace({ name, args, result }: ToolTraceProps) {
         <span className={failed ? 'text-danger shrink-0' : 'text-accent shrink-0'}>{toolNameCN(name)}</span>
         <span className="text-text2 truncate flex-1 min-w-0"><ParamSummary name={name} a={a} /></span>
         {/* 状态徽标：失败 / 退出码 / 运行中 */}
-        {failed && <span className="shrink-0 text-caption text-danger bg-danger-bg border border-danger rounded px-1.5 py-0.5">{t('toolTrace.failed')}</span>}
+        {failed && <span className="shrink-0 text-caption text-danger bg-danger-bg border border-danger rounded px-2 py-1">{t('toolTrace.failed')}</span>}
         {!failed && exitCode != null && (
-          <span className={`shrink-0 text-caption rounded px-1.5 py-0.5 border ${exitCode === 0 ? 'text-text2 border-border' : 'text-warn border-border'}`}>{t('toolTrace.exitCode', { code: exitCode })}</span>
+          <span className={`shrink-0 text-caption rounded px-2 py-1 border ${exitCode === 0 ? 'text-text2 border-border' : 'text-warn border-border'}`}>{t('toolTrace.exitCode', { code: exitCode })}</span>
         )}
         {!failed && exitCode == null && (running ? (
           <span className="shrink-0 text-caption text-text2 inline-flex items-center gap-1"><IconSpinner size={10} className="animate-spin" />{t('toolTrace.running')}</span>
@@ -473,7 +476,7 @@ export default function ToolTrace({ name, args, result }: ToolTraceProps) {
         <OutputBlock className="mx-3 mb-2 text-code font-mono text-danger bg-danger-bg border border-danger p-2 rounded whitespace-pre-wrap" text={String(res.error)} />
       )}
       {open && (
-        <div className="px-3 pb-2 border-t border-border pt-1.5">
+        <div className="px-3 pb-2 border-t border-border pt-2">
           <DetailBody name={name} a={a} res={res} />
           <FullArgs args={a} />
           {!res && !!rawStr && (
@@ -520,11 +523,11 @@ export function ToolTraceGroup({ calls, toolResults, label, defaultOpen = false 
   const failedCount = items.filter((it) => asObj(it.result)?.error).length;
   return (
     <div className="mb-2">
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex items-center gap-2 mb-2">
         {label && <span className="text-xs text-text2 shrink-0">{label}</span>}
         {!open ? (
           <button onClick={() => setOpen(true)}
-            className="flex items-center gap-1.5 text-xs text-text2 hover:text-text bg-surface border border-border rounded-lg px-2.5 py-1.5">
+            className="flex items-center gap-2 text-xs text-text2 hover:text-text bg-surface border border-border rounded-lg px-3 py-2">
             <IconWrench size={11} className="text-accent" />
             {t('toolTrace.callCount', { n: items.length })}{failedCount > 0 ? <span className="text-danger">{t('toolTrace.failedCount', { n: failedCount })}</span> : null}
             <span className="text-text2/70">{t('toolTrace.clickExpand')}</span>
@@ -536,7 +539,7 @@ export function ToolTraceGroup({ calls, toolResults, label, defaultOpen = false 
         )}
       </div>
       {open && (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {items.map((it) => (
             <ToolTrace key={it.key} name={it.name} args={(it.args ?? null) as Record<string, unknown> | string | null} result={it.result} />
           ))}

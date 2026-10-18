@@ -16,12 +16,13 @@
 // 生命周期与原实现一致：initialize → notifications/initialized → tools/list 三步分离，
 // 各自超时；握手完成后的进程退出/SSE 断开才算「运行期崩溃」并回报上层。
 
-const { spawn } = require('child_process');
 // P1-8：协议版本/客户端能力的单一事实来源（mcpAuth.js 的 401 探测也引用同一份）
 const {
   PROTOCOL_VERSION, MIN_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
   CLIENT_CAPABILITIES, CLIENT_INFO, isSupportedProtocolVersion,
 } = require('./mcpProtocol');
+const { answerServerRequest } = require('./mcpServerRequests'); // P2-4：已声明能力的请求应答（ping/roots/completion）
+const { createStdioTransport } = require('./mcpStdioTransport'); // 2026-10-18：stdio 传输 + stderr 分级降噪
 
 const servers = new Map(); // name -> server 实例（跨传输统一注册表）
 
@@ -129,19 +130,24 @@ function resolveToolName(server, name) {
   return name;
 }
 
-// ── P1-8④：服务端主动消息处理（此前 onNotify 恒 null，dispatchMessage 的通知分支永不进入）──
+// ── 2026-10-18 MCP 日志降噪：notifications/message 的 level 分流 ──
+// MCP logging 规范级别集合；默认放行「warning 及以上」，丢弃 debug/info/notice。
+// 缺省 level 按规范视为 info（即默认丢弃）；MJCODE_MCP_VERBOSE=1 时放开全量（与 stderr 同一开关）。
+const MCP_LOG_KEPT = new Set(['warning', 'warn', 'error', 'critical', 'alert', 'emergency']);
+function shouldForwardLogLevel(level) {
+  if (process.env.MJCODE_MCP_VERBOSE) return true;
+  return MCP_LOG_KEPT.has(String(level || 'info').toLowerCase());
+}
+
+// ── P1-8④：服务端主动消息处理；P2-4 已声明能力的请求应答在 mcpServerRequests.js（门禁断言一致性）
 function handleServerMessage(server, msg, { onLog } = {}) {
   const log = typeof onLog === 'function' ? onLog : () => {};
   // 迟到的响应（请求已超时、pending 已清理）：静默忽略，不刷日志
   if (msg.id !== undefined && !msg.method) return;
-  // 服务端 → 客户端的**请求**（有 id 且有 method，但不在 pending 里）：
-  // 我们没实现 roots/sampling/elicitation，必须立刻回 -32601 让它失败，
-  // 绝不能静默丢弃——静默会让服务端一直等我们应答，表现为「调用挂死」。
+  // 服务端 → 客户端的**请求**：已实现能力的正常应答；未实现的必须立刻回 -32601（静默 = 服务端挂死）。
   if (msg.id !== undefined && msg.method) {
-    const payload = JSON.stringify({
-      jsonrpc: '2.0', id: msg.id,
-      error: { code: -32601, message: `客户端未实现 ${msg.method}（未声明该能力）` },
-    });
+    if (answerServerRequest(server, msg, log)) return;
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `客户端未实现 ${msg.method}（未声明该能力）` } });
     Promise.resolve(server.transport.send(payload, msg.id)).catch(() => { /* 回执失败不影响主流程 */ });
     log(`服务端请求 ${msg.method} 未实现，已回 -32601`);
     return;
@@ -156,9 +162,13 @@ function handleServerMessage(server, msg, { onLog } = {}) {
     return;
   }
   if (method === 'notifications/message') {
+    // 2026-10-18 降噪：服务端常把 info/debug 级日志**经 MCP 协议**发来
+    // （desktop-commander 的 12 行启动日志即此路径），与 stderr 是两条独立通道——
+    // 只过滤 stderr 挡不住它。按 MCP logging 的 level 字段分流：
+    // 默认只透传 warn/error 家族，info/debug 丢弃；MJCODE_MCP_VERBOSE=1 放开全量。
     const p = msg.params || {};
     const data = typeof p.data === 'string' ? p.data : JSON.stringify(p.data);
-    log(`[${p.level || 'info'}] ${data}`);
+    if (shouldForwardLogLevel(p.level)) log(`[${p.level || 'info'}] ${data}`);
     return;
   }
   if (method === 'notifications/progress') {
@@ -214,8 +224,12 @@ async function performHandshake(server, version = PROTOCOL_VERSION) {
   server.capabilities = (initRes && initRes.capabilities) || {};
   server.serverInfo = (initRes && initRes.serverInfo) || {};
   if (initRes && typeof initRes.instructions === 'string') server.instructions = initRes.instructions;
+  // 2026-10-18 ⑥降噪：服务端采纳的版本与本端提议不同，**且仍在支持集内**——这不是错误，
+  // 是 MCP 规范的正常协商结果（如 git-mcp 回 2025-03-26）。此前用 console.warn 每次都刷一行，
+  // 把启动日志里的真实告警淹没；降为 info 级并合并为「协商结论」一句话。
+  // 注意：真正不可接受的版本（不在 SUPPORTED_PROTOCOL_VERSIONS）已在上面 throw 断开，不走这里。
   if (peerVersion && peerVersion !== version) {
-    console.warn(`[MCP ${server.name}] 服务端协议版本 ${peerVersion}（本端提议 ${version}），按规范采纳服务端返回值`);
+    console.log(`[MCP ${server.name}] 协议已协商：服务端 ${peerVersion} / 本端提议 ${version}（均受支持，采纳服务端值）`);
   }
   await notifyInitialized(server);
   return initRes;
@@ -323,35 +337,8 @@ async function mcpRpcWithSessionRetry(server, method, params, timeoutMs) {
   }
 }
 
-// ── stdio 传输 ──
-function createStdioTransport({ name, command, args = [], env, onLog }) {
-  const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
-  let buf = '';
-  const transport = {
-    kind: 'stdio',
-    child,
-    send(payload) {
-      child.stdin.write(payload + '\n');
-    },
-    close() { try { child.kill('SIGTERM'); } catch { /* 已退出 */ } },
-    alive() { return child.exitCode === null && child.signalCode === null; },
-  };
-  child.stdout.on('data', (data) => {
-    buf += data.toString();
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try { dispatchMessage(transport.serverRef, JSON.parse(line)); }
-      catch (e) { if (onLog) onLog(`非 JSON 输出: ${line.slice(0, 120)}`); }
-    }
-  });
-  child.stderr.on('data', (d) => {
-    transport.stderrTail = (transport.stderrTail + d.toString()).slice(-2000);
-    if (onLog) onLog(d.toString().trim());
-  });
-  return transport;
-}
+// ── stdio 传输（2026-10-18 抽到 mcpStdioTransport.js，含 stderr 分级降噪）──
+// createStdioTransport 由下方 require 引入并在 connectMcpServer 中经 dispatch=dispatchMessage 装配
 
 // ── Streamable HTTP 传输 ──
 // auth（T7 OAuth 引擎注入，均可缺省）：
@@ -641,13 +628,16 @@ async function connectMcpServer({
       ? createHttpTransport({ name, url, headers, onLog, auth })
       : transport === 'sse'
         ? createSseTransport({ name, url, headers, onLog, auth })
-        : createStdioTransport({ name, command, args, env: env, onLog });
+        : createStdioTransport({ command, args, env, onLog, dispatch: dispatchMessage });
   } catch (e) {
     return { ok: false, error: e.message };
   }
 
   const server = {
     name,
+    // 2026-10-18：保留 stdio 启动参数——roots/list 据此回答「该服务被授权的目录」（见 mcpServerRequests.js）
+    command: transportObj.kind === 'stdio' ? command : undefined,
+    args: transportObj.kind === 'stdio' ? args : undefined,
     kind: transportObj.kind,
     transport: transportObj,
     pending: new Map(),
@@ -789,6 +779,7 @@ function killAllMcpServers() {
 
 module.exports = {
   mcpRpc, mcpRpcWithSessionRetry, dispatchMessage, handleServerMessage,
+  shouldForwardLogLevel,
   createStdioTransport, createHttpTransport, consumeSse,
   connectMcpServer, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
   refreshTools, sanitizeToolName, resolveToolName, recoverSession,

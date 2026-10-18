@@ -66,7 +66,7 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
             <h2 className="text-lg font-semibold">{t('archive.title')}</h2>
-            <p className="text-xs text-text2 mt-0.5">{t('archive.subtitle')}</p>
+            <p className="text-xs text-text2 mt-1">{t('archive.subtitle')}</p>
           </div>
           <button onClick={onClose} className="text-text2 hover:text-text" aria-label={t('archive.close')}><IconX size={16} /></button>
         </div>
@@ -78,17 +78,17 @@ export default function ArchiveModal({ onClose, onChanged, onSelect }) {
             <p className="text-text2 text-sm text-center py-8">{t('archive.empty')}</p>
           ) : (
             list.map((thread) => (
-              <div key={thread.id} className="flex items-center gap-3 py-2.5 border-b border-border last:border-0">
+              <div key={thread.id} className="flex items-center gap-3 py-3 border-b border-border last:border-0">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm truncate">{thread.title || t('archive.newSession')}</div>
-                  <div className="text-xs text-text2 mt-0.5">
+                  <div className="text-xs text-text2 mt-1">
                     {new Date(thread.updatedAt || thread.createdAt || Date.now()).toLocaleString('zh-CN')}
                   </div>
                 </div>
-                <button onClick={() => restore(thread)} className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-hover shrink-0">
+                <button onClick={() => restore(thread)} className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover shrink-0">
                   {t('archive.restore')}
                 </button>
-                <button onClick={() => purge(thread)} className="text-xs px-3 py-1.5 rounded-lg border border-border text-danger hover:bg-hover shrink-0">
+                <button onClick={() => purge(thread)} className="text-xs px-3 py-2 rounded-lg border border-border text-danger hover:bg-hover shrink-0">
                   {t('archive.purge')}
                 </button>
               </div>

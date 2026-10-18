@@ -32,17 +32,21 @@ export default function Sidebar({
       {/* 品牌头：左栏开关与搜索已上移到统一顶栏（常驻全宽，收起了也还能点），
           此处只留品牌与版本。顶栏已为 macOS 交通灯预留内边距，本行不再需要空出一行。 */}
       <div className="shrink-0 px-4 pt-3 pb-2">
-        <div className="flex items-center gap-2">
-          <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
-          <div className="font-semibold text-base leading-none">MJ Code</div>
+        {/* 品牌行：左 logo+名称，右版本号（右对齐）；下一行 slogan 单行显示 */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <img src={logo} alt="MJ Code" className="w-6 h-6 rounded-lg shrink-0 object-cover" draggable={false} />
+            <div className="font-semibold text-base leading-none">MJ Code</div>
+          </div>
+          {version && <div className="text-xs text-text2 shrink-0">{`v${version.replace(/-/g, ' ')}`}</div>}
         </div>
-        <div className="text-xs text-text2 mt-1">{version ? `v${version} ${t('sidebar.beta')}` : ''} · {t('sidebar.tagline')}</div>
+        <div className="text-xs text-text2 mt-1 truncate">{t('sidebar.tagline')}</div>
       </div>
 
       {/* 主操作（对标 Codex：New chat / Scheduled / Plugins）
           选中态由 App 计算 activeNav 后传入（互斥）；此前只有 New chat 传 active，
           且判据是 !activeThread —— 在定时任务页里没有打开会话，于是该亮的不亮。 */}
-      <div className="px-2 space-y-0.5">
+      <div className="px-2 space-y-1">
         <NavItem icon={<IconEdit size={16} />} label={t('sidebar.newChat')} onClick={onNew} active={activeNav === 'new'} />
         <NavItem icon={<IconClock size={16} />} label={t('sidebar.scheduled')} onClick={onOpenScheduled} active={activeNav === 'scheduled'} />
         <NavItem icon={<IconPuzzle size={16} />} label={t('sidebar.ecosystem')} onClick={onOpenEcosystem} active={activeNav === 'ecosystem'} />
