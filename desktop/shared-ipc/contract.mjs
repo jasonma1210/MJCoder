@@ -167,6 +167,21 @@ export const agentRunPayloadSchema = z
     skills: z.array(z.any()).optional(),
     memories: z.array(z.string()).optional(),
     agentsMd: z.object({ path: z.string(), content: z.string() }).nullable().optional(),
+    // ── P2-6（第二轮审查）：以下字段此前只靠 .passthrough() 放行，未显式登记 ──
+    // 后果是契约对这些字段「零校验 + 零字段名保护」：拼错字段名不会被拒，
+    // 非法枚举要一路穿透到宿主侧靠 includes() 兜底（verifyRun 目前归一成 off）。
+    // 现在显式登记形状，非法值在 IPC 边界即被拒。
+    verification: z
+      .object({
+        level: z.enum(['off', 'l1', 'l3']).optional(),
+        onBlock: z.enum(['annotate', 'continue']).optional(),
+        // 渲染层可传，但 agentRunner:139 会强制置 false（不得静默关判定）
+        stopHookActive: z.boolean().optional(),
+      })
+      .optional(),
+    skillDisclosure: z.enum(['auto', 'full', 'summary']).optional(),
+    // 分档覆盖：{ compact | decompose | worker } → 模型对象；未配置的槽位不出现
+    modelOverrides: z.record(z.string(), z.any()).nullable().optional(),
     // T4-3：角色模板（数字员工运行时预设）——systemPrompt/toolNames 进引擎，
     // approvalMode/sandboxPolicy 由主进程与用户设置取更严格者后生效
     rolePreset: z
@@ -175,6 +190,8 @@ export const agentRunPayloadSchema = z
         toolNames: z.array(z.string().min(1).max(64)).max(64).optional(),
         approvalMode: z.enum(['on-request', 'auto-safe', 'always', 'never']).optional(),
         sandboxPolicy: z.enum(['read-only', 'workspace-write', 'full-access']).optional(),
+        // P2-6：角色模板的技能白名单（agentRunner:213 读它决定注入哪些技能）
+        skillNames: z.array(z.string().min(1).max(120)).max(64).optional(),
       })
       .optional(),
   })

@@ -225,12 +225,30 @@ export function extractPaths(name, args) {
   return out;
 }
 
+// 凭证脱敏（第二轮审查抓到的真实缺陷）：ledger.command 会随 verify_ledger 事件进
+// traces/*.jsonl 落盘，而命令里常内联凭证（`curl -H "Authorization: Bearer sk-..."`）。
+// 落盘面必须比屏幕更严——这里在**提取时**就打码，不依赖后续导出环节过滤。
+const SECRET_PATTERNS = [
+  /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\b(sk|rk|pk)-[A-Za-z0-9_-]{10,}/g,
+  /\b(ghp|gho|ghs|ghu)_[A-Za-z0-9]{10,}/g,
+  /\b(xox[baprs])-[A-Za-z0-9-]{10,}/g,
+  /\b(AKIA)[0-9A-Z]{12,}/g,
+  /\b(password|passwd|token|secret|api[_-]?key)(\s*[=:]\s*)\S+/gi,
+];
+export function redactSecrets(s) {
+  let out = String(s == null ? '' : s);
+  for (const re of SECRET_PATTERNS) out = out.replace(re, (m, p1, p2) => `${p1}${p2 || ' '}***`);
+  return out;
+}
+
 export function extractCommand(args) {
   const a = (args && typeof args === 'object') ? args : {};
-  if (typeof a.command === 'string') return a.command.slice(0, MAX_FIELD_CHARS);
-  if (typeof a.cmd === 'string') return a.cmd.slice(0, MAX_FIELD_CHARS);
-  if (Array.isArray(a.argv)) return a.argv.map(String).join(' ').slice(0, MAX_FIELD_CHARS);
-  return '';
+  const raw = typeof a.command === 'string' ? a.command
+    : (typeof a.cmd === 'string' ? a.cmd
+      : (Array.isArray(a.argv) ? a.argv.map(String).join(' ') : ''));
+  // 先截断再脱敏：截断可能把 token 切成半截，交给 redactSecrets 时仍能匹配 `sk-` 前缀
+  return redactSecrets(raw.slice(0, MAX_FIELD_CHARS));
 }
 
 function extractExitCode(result) {

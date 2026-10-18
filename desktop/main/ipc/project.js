@@ -110,7 +110,10 @@ function register() {
     }
   });
 
-  ipcMain.handle('worktree:promote', async (_, { path: worktreePath }) => {
+  ipcMain.handle('worktree:promote', async (_, { path: worktreePath } = {}) => {
+    // 守卫 + 补默认解构：此前缺 `= {}`，渲染层传 undefined 会在解构处直接 TypeError（未捕获），
+    // 且路径未经校验就进 git 命令
+    guard.assertStrings({ path: worktreePath }, { path: 4096 });
     try {
       return { ok: true, ...(await worktree.promoteToBranch(worktreePath)) };
     } catch (e) {
@@ -118,7 +121,8 @@ function register() {
     }
   });
 
-  ipcMain.handle('worktree:sync', async (_, { path: worktreePath }) => {
+  ipcMain.handle('worktree:sync', async (_, { path: worktreePath } = {}) => {
+    guard.assertStrings({ path: worktreePath }, { path: 4096 });
     try {
       return { ok: true, ...(await worktree.syncToLocal(worktreePath)) };
     } catch (e) {

@@ -441,6 +441,9 @@ function register() {
     return m ? { ok: true, item: m } : { ok: false, error: '记忆不存在' };
   });
   ipcMain.handle('memory:promote', async (_, { id } = {}) => {
+    // IPC 边界守卫（第二轮审查：这是 168 条 handler 中少数完全没有校验的写通道之一，
+    // 且不在 ipc-write-guard 的清单里 → 改坏也没有门禁看守）
+    guard.assertStrings({ id }, { id: 200 });
     const memoryManager = deps.getMemoryManager();
     if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
     const m = memoryManager.promoteToLongTerm(id);

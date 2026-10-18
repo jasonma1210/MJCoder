@@ -260,6 +260,8 @@ function register() {
     ipcMain.handle('collab:docId', async (_, { type, entityId } = {}) => ({ docId: makeDocId(type, entityId) }));
 
     ipcMain.handle('collab:persist', async (_, { docId } = {}) => {
+      // IPC 边界守卫：此前直接 String(docId || '') 透传，任意类型都能进持久层
+      guard.assertStrings({ docId }, { docId: 200 });
       try {
         return getLocalCollab().persist(String(docId || ''));
       } catch (err) {

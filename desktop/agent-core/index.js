@@ -1641,11 +1641,16 @@ export async function runAgent({
   // 缺省从本次 run 传入的 skills[].content 里取（宿主已经把这些内容读进来了）。
   const hasSkillBodySource = typeof toolHandlers?.loadSkill === 'function'
     || skills.some((s) => !!s?.content);
+  // P2-3（第二轮审查）：summary 模式的真正前提是「能按需加载正文」。
+  // 此前**提示段**只看 mode、**注册段**还看 `!customTools` —— 宿主传 customTools 时会出现
+  // 「提示模型调用 load_skill，但该工具没注册」，运行时必被 advertisedToolNames 拒。
+  // 现在把 `!customTools` 收进 mode 推导，两处自然同源，不再需要各自记忆这条约束。
+  const canSummary = hasSkillBodySource && !customTools;
   const skillDisclosureMode = skillDisclosure === 'full'
     ? 'full'
     : (skillDisclosure === 'summary'
-      ? (hasSkillBodySource ? 'summary' : 'full')
-      : (typeof toolHandlers?.loadSkill === 'function' ? 'summary' : 'full'));
+      ? (canSummary ? 'summary' : 'full')
+      : (typeof toolHandlers?.loadSkill === 'function' && !customTools ? 'summary' : 'full'));
   if (skillDisclosureMode === 'summary' && skills.length) {
     // 索引层只给 name + description（H-2：规范没有 when_to_use 字段，description 即「何时使用」）。
     // 清单本身是新的注入面，同样要过 guardUntrusted（不能省）。

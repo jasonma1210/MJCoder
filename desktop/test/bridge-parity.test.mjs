@@ -56,23 +56,44 @@ function stripComments(source) {
 }
 
 const used = new Map(); // method -> [文件:行]
+// 别名盲区修复（第二轮审查）：渲染层核心链路用的是「整桥别名」，而不是字面量 `mjcode.xxx`——
+//   lib/agent.js:53   const mj = globalThis.window?.mjcode;  → mj.agentRun / mj.onAgentEvent
+//   TerminalPanel     const mj = window.mjcode;             → mj.shell
+//   TodoPanel         const api = window.mjcode;            → api.onAgentEvent
+// 只扫 `mjcode.xxx` 会把它们算进「死方法」，于是「渲染层用了但桥没暴露」这一支被静默漏掉，
+// 而那恰好是最核心的链路。别名按**文件内**生效：同名变量在别的文件里可能是别的对象。
+// 末尾 lookahead 是关键：`= window.mjcode?.getPathForFile?.(f)` 是**调用结果**而不是整桥别名，
+// 若放过会把它赋给的变量（如 p）也当成别名，于是 `p.split('/')` 被误报成「调用了未暴露的 split」。
+const ALIAS_SRC = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:globalThis\.)?(?:window\??\.)?mjcode\b(?=\s*[;,)\]}\n]|\s*(?:\|\||\?\?))/g;
+let aliasFiles = 0;
 for (const file of walk(SRC)) {
   const src = stripComments(fs.readFileSync(file, 'utf8'));
+  const aliases = new Set(['mjcode']);
+  for (const m of src.matchAll(ALIAS_SRC)) aliases.add(m[1]);
+  if (aliases.size > 1) aliasFiles += 1;
   src.split('\n').forEach((line, i) => {
-    // mjcode.xxx(  /  mjcode?.xxx?.(  /  mjcode['xxx'](
-    const re = /mjcode\??\.([A-Za-z_$][\w$]*)|mjcode\??\[['"]([A-Za-z_$][\w$]*)['"]\]/g;
-    let m;
-    while ((m = re.exec(line)) !== null) {
-      const name = m[1] || m[2];
-      if (!name) continue;
-      if (!used.has(name)) used.set(name, []);
-      used.get(name).push(`${path.relative(SRC, file)}:${i + 1}`);
+    for (const alias of aliases) {
+      // alias.xxx(  /  alias?.xxx?.(  /  alias['xxx'](
+      const re = new RegExp(`\\b${alias}\\??\\.([A-Za-z_$][\\w$]*)|\\b${alias}\\??\\[['"]([A-Za-z_$][\\w$]*)['"]\\]`, 'g');
+      let m;
+      while ((m = re.exec(line)) !== null) {
+        const name = m[1] || m[2];
+        if (!name) continue;
+        if (!used.has(name)) used.set(name, []);
+        used.get(name).push(`${path.relative(SRC, file)}:${i + 1}`);
+      }
     }
   });
 }
 
 check('preload 桥面非空（提取逻辑没跑偏）', () => {
   if (bridgeNames.size < 50) throw new Error(`只提取到 ${bridgeNames.size} 个方法，提取规则可能已失效`);
+});
+
+check('别名扫描确实生效（否则核心链路会退化成「死方法」）', () => {
+  // 自检：至少 2 个文件用整桥别名（lib/agent.js 的 mj、TerminalPanel 的 mj 等）。
+  // 若别名正则失效，这里会先红——避免「扫描退化成只认 mjcode.」后仍然全绿。
+  if (aliasFiles < 2) throw new Error(`只发现 ${aliasFiles} 个文件使用整桥别名，别名扫描可能已失效`);
 });
 
 check('渲染层调用的每个桥方法都真实存在于 preload', () => {
