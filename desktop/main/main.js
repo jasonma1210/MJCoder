@@ -1014,7 +1014,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     unattended: true,
     // 追加在 BASE_PROMPT 之后（不替换）：BASE_PROMPT 承载「可用工具/默认目录/路径怎么给」，替换掉它模型就不知道自己能写文件、该写哪
     appendSystemPrompt: rc.appendPrompt,
-    toolHandlers: sguard.wrap(scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd })),
+    // 编排工具补齐：定时通道原先没有 orchestrate_task（对话有），这就是"同一句话对话能 4 Agent 并行、定时只能串行"的差别；cwd 强制产出目录，子 Agent 写入才落在用户找得到的地方。
+    toolHandlers: sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}` }) }),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
     // trace 落盘用 runId（不是 taskId）：否则同一任务的多次运行互相覆盖，事后无法还原这一次发生了什么
     onTrace: (evt) => { sv.onTrace(evt); require('./runTrace').appendTraceEvent(runId, evt); },

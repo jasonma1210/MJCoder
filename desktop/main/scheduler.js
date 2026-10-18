@@ -33,7 +33,11 @@ function documentsDir() {
 const MAX_RUNS = 200;          // 全局运行历史上限
 const MAX_RUNS_PER_TASK = 50;  // 单任务保留条数
 const TICK_MS = 20 * 1000;
-const DEFAULT_TASK_TIMEOUT_MS = 10 * 60 * 1000; // 单任务墙钟上限
+// 单任务墙钟上限。2026-10-18：10 → 20 分钟。
+// 定时通道补上了 orchestrate_task（此前只有对话能用），并行抓 100 条 + 汇总写文件
+// 在 10 分钟内会被从中间掐断，死因只会写成「执行超时」，把真正在做的事掩盖掉。
+// 仍是有界值：编排组自己在 agent-core 里还有 30 分钟上限，这里先于它生效。
+const DEFAULT_TASK_TIMEOUT_MS = 20 * 60 * 1000;
 // P0-8a：补跑回放窗口上限（7 天）。应用数周未开时不做全量回放：只按窗口内实际到期的
 // 计划执行标记 missed，超长缺失不补跑（补跑数天前的任务没有意义，只是制造误导性执行记录）。
 const SCAN_WINDOW_MAX_MS = 7 * 24 * 60 * 60 * 1000;
