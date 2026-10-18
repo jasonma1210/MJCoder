@@ -270,9 +270,17 @@ async function runTask(id, trigger = 'manual') {
   if (!useAgent && typeof execCtx.chatOnce !== 'function') {
     return { ok: false, error: '执行通道未就绪（模型凭证未加载）' };
   }
-  const model = execCtx.model;
+  // 任务级模型优先，其次会话当前模型。任务模型的 provider 可能已被删除 ——
+  // 那种情况回落会话模型并留痕，绝不因为一个过期引用让任务永久跑不动。
+  const taskModel = normalizeTaskModel(t.model);
+  if (t.model && !taskModel) console.warn(`[scheduled] 任务「${t.name || id}」的模型配置形状不全，回落会话模型`);
+  const model = taskModel || execCtx.model;
   if (!model || !model.model) {
-    return { ok: false, error: '未配置执行模型：请在任意会话中选择模型（定时任务复用会话模型与凭证）' };
+    return { ok: false, error: '未配置执行模型：请在定时任务里选一个模型，或先在任意会话中选择模型' };
+  }
+  if (taskModel && !taskModel.baseUrl) {
+    // baseUrl 用于直连解析；缺它时凭证层仍可用（resolveSecret 会补），但明确记一笔便于排查
+    console.warn(`[scheduled] 任务「${t.name || id}」的模型缺少 baseUrl，按供应商默认地址解析`);
   }
 
   running.add(id);
@@ -495,8 +503,18 @@ function stopScheduler() {
 function getModel() { return execCtx.model; }
 function setModel(model) { execCtx.model = model || null; }
 
+// 任务级模型：形状不全或指向已删除的 provider 时一律返回 null（调用方回落到会话模型）。
+// 为什么不在保存时强校验：provider 可以被删/改名，任务存的是快照；运行时再判定更真实。
+function normalizeTaskModel(m) {
+  if (!m || typeof m !== 'object') return null;
+  const providerId = String(m.providerId || '').trim();
+  const model = String(m.model || '').trim();
+  if (!providerId || !model) return null;
+  return { providerId, isGlobal: !!m.isGlobal, baseUrl: String(m.baseUrl || ''), model };
+}
+
 // 创建定时任务（IPC 与模型工具共用同一实现，避免两套校验规则漂移）。
-function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw, external_policy: externalPolicy, trigger_type: triggerType, event_source: eventSource, event_name: eventName } = {}) {
+function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw, external_policy: externalPolicy, trigger_type: triggerType, event_source: eventSource, event_name: eventName, model: taskModel } = {}) {
   const nm = String(name || '').trim();
   const pr = String(prompt || '');
   const sc = String(schedule || '').trim();
@@ -523,6 +541,8 @@ function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRa
     enabled: enabled !== false,
     // 对外动作放行开关：缺省 block（无人值守默认不产生不可逆副作用）
     external_policy: externalPolicy === 'allow' ? 'allow' : 'block',
+    // 任务级模型（null = 跟随会话当前模型）。存快照而不是引用：运行时 provider 可能已被删。
+    model: normalizeTaskModel(taskModel),
     valid_until: validUntilRaw ? String(validUntilRaw).slice(0, 10) : null,
     created_at: new Date().toISOString(),
   };
@@ -550,6 +570,19 @@ function registerIpc() {
       return { ok: false, error: e.message };
     }
     const has = (k) => p[k] !== undefined && p[k] !== null;
+    // 任务级模型：对象形态，字段边界单独守（assertStrings 只管字符串）
+    if (p.model !== undefined && p.model !== null) {
+      try {
+        guard.assertObject(p.model, 'model');
+        guard.assertStrings(p.model, {
+          model: { max: 200 },
+          providerId: { max: 120, optional: true },
+          baseUrl: { max: 2000, optional: true, allowEmpty: true },
+        });
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
     if (p.id) {
       const t = store.tasks.find((x) => x.id === p.id);
       if (!t) return { ok: false, error: '任务不存在' };
@@ -564,6 +597,8 @@ function registerIpc() {
       if (has('enabled')) patch.enabled = p.enabled !== false;
       if (has('valid_until')) patch.valid_until = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
       if (has('external_policy')) patch.external_policy = p.external_policy === 'allow' ? 'allow' : 'block';
+      // 用「键存在」判定而不是非空：显式传 model:null 表示**恢复跟随会话模型**
+      if (Object.prototype.hasOwnProperty.call(p, 'model')) patch.model = normalizeTaskModel(p.model);
       Object.assign(t, patch);
       persist();
       notify(); // 更新后必须广播：此前 update 分支漏了 notify，其他视图看不到改动
@@ -575,7 +610,7 @@ function registerIpc() {
     if (!name || !prompt || !schedule) return { ok: false, error: '任务名称、提示词与 Cron 表达式必填' };
     if (!cronValid(schedule)) return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
     const validUntil = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
-    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil, external_policy: p.external_policy });
+    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil, external_policy: p.external_policy, model: p.model });
   });
   ipcMain.handle('scheduled:delete', async (_, { id } = {}) => {
     // X14：id 决定删掉哪条任务及其运行历史——非字符串会 filter 掉全部（id 不匹配任何记录），
@@ -678,4 +713,6 @@ module.exports = {
   createTask,
   // 2026-10-18：事件触发入口（去重 + 合并），HTTP 适配器见 scheduledEventServer
   ingestEvent, selectEventTargets,
+  // 2026-10-18：任务级模型快照归一（provider 可能被删，运行时再判定）
+  normalizeTaskModel,
 };

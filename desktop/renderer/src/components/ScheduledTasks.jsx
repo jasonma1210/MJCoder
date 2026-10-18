@@ -106,7 +106,32 @@ export default function ScheduledTasks() {
   const [filter, setFilter] = useState('all'); // all | enabled | disabled
   const [showForm, setShowForm] = useState(false);
   // Bug2：TRAE 同款表单——任务名称 + 提示词 + 重复/时间/有效期
-  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '' });
+  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
+  // 任务级模型选项：providers × models 展平（value 用 `providerId::modelId`，
+  // providerId 由主进程生成、不含 '::'，所以按第一个分隔符切分是安全的）
+  const [modelOptions, setModelOptions] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const ps = await api.providers();
+        const opts = [];
+        for (const p of Array.isArray(ps) ? ps : []) {
+          for (const m of Array.isArray(p.models) ? p.models : []) {
+            const mid = m.model_id || m.modelId;
+            if (!mid) continue;
+            opts.push({
+              value: `${p.id}::${mid}`,
+              label: `${p.name || p.id} · ${m.display_name || mid}`,
+              providerId: p.id, isGlobal: !!p.isGlobal, baseUrl: p.base_url || '', model: mid,
+            });
+          }
+        }
+        setModelOptions(opts);
+      } catch (e) {
+        console.warn('[scheduled] failed to load models for task form:', e);
+      }
+    })();
+  }, []);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busyId, setBusyId] = useState(null);
@@ -195,9 +220,14 @@ export default function ScheduledTasks() {
         // 时钟 or 事件触发（事件任务没有 cron，由 ingestEvent 驱动）
         trigger_type: isEvent ? 'event' : 'cron',
         ...(isEvent ? { event_source: form.eventSource.trim(), event_name: form.eventName.trim() } : {}),
+        // 任务级模型：null = 跟随会话当前模型
+        model: (() => {
+          const o = modelOptions.find((x) => x.value === form.modelRef);
+          return o ? { providerId: o.providerId, isGlobal: o.isGlobal, baseUrl: o.baseUrl, model: o.model } : null;
+        })(),
       });
       setShowForm(false);
-      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '' });
+      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
       setError('');
       setNotice(t('scheduled.createdNotice'));
       load();
@@ -361,6 +391,15 @@ export default function ScheduledTasks() {
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
               className="w-full bg-input border border-border rounded-xl px-3.5 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
 
+            {/* 任务级模型：不选就跟随会话当前模型（旧行为），选了就固定用这个跑 */}
+            <select value={form.modelRef} onChange={(e) => setForm({ ...form, modelRef: e.target.value })}
+              aria-label={t('scheduled.modelLabel')}
+              className="w-full h-10 bg-input border border-border rounded-xl px-2.5 text-sm mb-1 outline-none focus:border-accent">
+              <option value="">{t('scheduled.modelFollowSession')}</option>
+              {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <p className="text-xs text-text2 mb-3">{t('scheduled.modelHint')}</p>
+
             {/* 触发方式：时钟（cron）或外部事件（由 scheduled:ingestEvent / 本地事件入口驱动） */}
             <div className="flex items-center justify-between gap-3 mb-3 p-3 bg-input rounded-xl">
               <div className="min-w-0">
@@ -476,6 +515,10 @@ export default function ScheduledTasks() {
                     : humanSchedule(task.schedule)}
                   {task.trigger_type !== 'event' && (
                     <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
+                  )}
+                  {/* 任务级模型（未指定 = 跟随会话） */}
+                  {task.model?.model && (
+                    <span className="ml-2">{t('scheduled.modelTag', { model: task.model.model })}</span>
                   )}
                   {task.last_run_at && <span className="ml-2">{t('scheduled.lastRun', { time: new Date(task.last_run_at).toLocaleString('zh-CN') })}</span>}
                 </div>

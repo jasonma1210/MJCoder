@@ -45,3 +45,36 @@ export function applyThemeToDocument(theme: string): void {
     /* 隐私模式等写不进去：不影响本次渲染 */
   }
 }
+
+// ── 上次使用的模型（2026-10-18）──
+// 问题：`selectedModel` 每次启动都是 null，于是回落到「第一个供应商的第一个模型」——
+// 用户昨天整晚用的是某个模型，今天打开就变回默认，定时任务也跟着换模型跑。
+// 这里把「最后一次真正用过的模型」记在本地，启动时按 id 复原（按 id 而不是按引用：
+// 供应商列表可能在两次启动之间被改名/重排）。
+const SELECTED_MODEL_KEY = 'mj_selected_model';
+
+type AnyProvider = { id?: string; isGlobal?: boolean; base_url?: string; models?: Array<Record<string, unknown>> };
+
+export function rememberModel(sel: { provider?: { id?: string }; model?: { model_id?: string } } | null): void {
+  try {
+    const providerId = sel?.provider?.id;
+    const modelId = sel?.model?.model_id;
+    if (!providerId || !modelId) return;
+    localStorage.setItem(SELECTED_MODEL_KEY, JSON.stringify({ providerId, modelId }));
+  } catch {
+    /* 隐私模式等写不进去：不影响本次使用 */
+  }
+}
+
+/** 启动时挑初始模型：优先上次用过的（且仍存在），否则退回第一个可用的 */
+export function pickInitialModel(providers: AnyProvider[] | null | undefined): { provider: AnyProvider; model: Record<string, unknown> } | null {
+  const list = Array.isArray(providers) ? providers : [];
+  const saved = loadJSON<{ providerId?: string; modelId?: string } | null>(SELECTED_MODEL_KEY, null);
+  if (saved?.providerId && saved?.modelId) {
+    const p = list.find((x) => x?.id === saved.providerId);
+    const m = (p?.models || []).find((x) => (x?.model_id || (x as { modelId?: string })?.modelId) === saved.modelId);
+    if (p && m) return { provider: p, model: m };
+  }
+  const first = list.find((x) => Array.isArray(x?.models) && x.models.length > 0);
+  return first ? { provider: first, model: first.models![0] } : null;
+}

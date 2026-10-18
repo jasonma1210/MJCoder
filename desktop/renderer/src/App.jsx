@@ -26,7 +26,7 @@ import { loadAgentsMd } from './lib/agentsMd';
 import ipc from './lib/ipc';
 import FeedbackHost, { confirm, toast } from './components/feedback';
 import { projectDisplayName } from './lib/projectName';
-import { getDefaultProject, loadJSON, applyThemeToDocument } from './lib/appState';
+import { getDefaultProject, loadJSON, applyThemeToDocument, rememberModel, pickInitialModel } from './lib/appState';
 import usePendingExpert from './hooks/usePendingExpert';
 import THEMES from './lib/themes.json';
 import { useI18n } from './i18n';
@@ -72,6 +72,8 @@ export default function App() {
         cwd: activeProject?.path || '',
       });
     } catch (e) { console.warn('[app] failed to push scheduled-task model:', e); }
+    // 记住「最后一次真正用过的模型」：下次启动按 id 复原（否则永远回到第一个供应商的第一个模型）
+    rememberModel(selectedModel);
   }, [selectedModel, activeProject]);
   const [projects, setProjects] = useState(() => loadJSON('mj_projects', []));
   // 是否为「本次使用中主动选择」的项目：欢迎页据此区分「用户有意在此工作」与
@@ -371,9 +373,7 @@ export default function App() {
     if (t) setThreads(t);
     if (p) {
       setUserProviders(p);
-      if (!selectedModel && p.length > 0 && p[0].models?.length > 0) {
-        setSelectedModel({ provider: p[0], model: p[0].models[0] });
-      }
+      if (!selectedModel && p) { const m0 = pickInitialModel(p); if (m0) setSelectedModel(m0); }
     }
   }
 

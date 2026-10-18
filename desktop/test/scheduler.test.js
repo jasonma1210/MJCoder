@@ -154,7 +154,8 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
   scheduler.startScheduler({ runAgentTask: async () => ({ output: 'x' }), notify: noop });
   scheduler.setModel(null);
   const r5 = await scheduler.runTask(t1.id, 'manual');
-  checkOk('未配置模型时给出中文引导', r5.ok === false && String(r5.error).includes('请在任意会话中选择模型'), JSON.stringify(r5));
+  // 2026-10-18：文案改为同时提示「任务级模型」入口（现在任务可以单独选模型）
+  checkOk('未配置模型时给出中文引导', r5.ok === false && String(r5.error).includes('请在定时任务里选一个模型'), JSON.stringify(r5));
 
   // 6. 回落 chatOnce（无 runAgentTask 时兼容旧行为）
   let chatCalls = 0;
