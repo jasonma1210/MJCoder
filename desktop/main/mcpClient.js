@@ -27,11 +27,13 @@ const servers = new Map(); // name -> server 实例（跨传输统一注册表�
 
 const DEFAULT_TIMEOUT_MS = 30000;
 // P1-8：tools/list 分页上限——服务端若返回恒真的 nextCursor（实现 bug），无上限会死循环
-const MAX_TOOL_PAGES = 20;
-// H-4：工具名规范为 1–128 字符、仅 [A-Za-z0-9_.-]（SHOULD）。越界名字一律清洗后暴露给模型，
+const MAX_TOOL_PAGES = 20;// H-4：工具名规范为 1–128 字符、仅 [A-Za-z0-9_.-]（SHOULD）。越界名字一律清洗后暴露给模型，
 // 真实名字保留在 server.toolNameMap 里供 tools/call 还原。
 const TOOL_NAME_MAX = 128;
 const TOOL_NAME_BAD_CHARS = /[^A-Za-z0-9_.-]/g;
+// P2-5：缓存命中但**握手仍在途**时，最多等这么久让在途连接完成（略大于 initialize 超时）。
+// 不能直接返回 toolCount:0 —— 调用方会把它当成「已连接但没有工具」。
+const HANDSHAKE_WAIT_MS = DEFAULT_TIMEOUT_MS + 5000;
 
 // ── JSON-RPC 请求（跨传输通用）──
 function mcpRpc(server, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -276,6 +278,33 @@ async function refreshTools(server) {
 }
 
 /**
+ * 会话恢复互斥（P2-5）：并发请求同时收到 404 时，只让**一个**真正重建会话。
+ *
+ * 不互斥的后果：N 个并发请求各自 resetSession + initialize → N 次握手，http 传输的
+ * `sessionId` 被后完成者覆盖（`mcpClient.js` 的 createHttpTransport 里 sessionId 是闭包变量），
+ * 先完成的那次握手可能已被服务端作废 → 再次 404；而重试预算只有一次，于是这些请求全失败。
+ *
+ * 失败语义：在途者负责把错误抛给**它自己的**调用方；其余等待者吞掉错误后各自重试，
+ * 重试若再失败会抛出原始错误（不会静默成功）。
+ */
+async function recoverSession(server, version, { handshake = performHandshake } = {}) {
+  if (server._sessionRecovery) {
+    try { await server._sessionRecovery; } catch { /* 由在途者向其调用方抛出 */ }
+    return;
+  }
+  const recovery = (async () => {
+    if (server.transport && typeof server.transport.resetSession === 'function') server.transport.resetSession();
+    await handshake(server, version);
+  })();
+  server._sessionRecovery = recovery;
+  try {
+    await recovery;
+  } finally {
+    server._sessionRecovery = null;
+  }
+}
+
+/**
  * 带会话恢复的 RPC（H-4：HTTP 传输收到 404 MUST 重新 initialize（不带 session id））。
  * 仅对「传输层明确报告会话失效」的错误重试一次，其余错误原样抛出。
  */
@@ -285,9 +314,8 @@ async function mcpRpcWithSessionRetry(server, method, params, timeoutMs) {
   } catch (err) {
     if (!err || !err.mcpSessionExpired || method === 'initialize') throw err;
     console.warn(`[MCP ${server.name}] 会话已失效（HTTP 404），按规范重新握手后重试 ${method}`);
-    if (server.transport && typeof server.transport.resetSession === 'function') server.transport.resetSession();
     // 重新握手沿用上次协商用的提议版本（若已降级为 legacy，不要又提回 2025-11-25）
-    await performHandshake(server, server.proposedProtocolVersion || PROTOCOL_VERSION);
+    await recoverSession(server, server.proposedProtocolVersion || PROTOCOL_VERSION);
     return mcpRpc(server, method, params, timeoutMs);
   }
 }
@@ -559,7 +587,24 @@ async function connectMcpServer({
     // 缓存命中前校验底层是否还活着（stdio 子进程可能已崩；http 恒活但会话可能失效）
     const alive = cached.transport && cached.transport.alive();
     if (alive) {
-      return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+      // P2-5：握手在途时不能直接返回 toolCount:0（调用方会当成「已连接但无工具」）。
+      // 等它就绪；若等待超时或期间断开 → 转走重建路径（下面 servers.delete 之后的正常连接流程）。
+      if (cached.handshakeDone === false && cached.ready) {
+        let ready = false;
+        try {
+          ready = (await Promise.race([
+            cached.ready,
+            new Promise((r) => setTimeout(() => r(false), HANDSHAKE_WAIT_MS)),
+          ])) === true;
+        } catch { ready = false; }
+        if (ready && cached.transport && cached.transport.alive()) {
+          return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+        }
+        console.warn(`[MCP ${name}] 缓存命中但握手未完成或期间断开，转为重新连接`);
+        servers.delete(name);
+      } else {
+        return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+      }
     }
     console.warn(`[MCP ${name}] 缓存命中但底层已断开，转为重新连接`);
     servers.delete(name);
@@ -587,6 +632,9 @@ async function connectMcpServer({
     toolNameMap: new Map(),
     stderrTail: '',
     handshakeDone: false,
+    // P2-5：就绪信号（connectMcpServer 内新建）。缓存命中时若握手仍在途，等它完成再返回，
+    // 否则会把 `toolCount: 0` 当成「连上了但没有工具」返回给调用方。
+    ready: null,
     // P1-8②③：握手协商结果（由 performHandshake 写入，上层可查询）
     // protocolVersion 只放**服务端实际返回值**；我们提议的值单独存，避免把提议当协商结果。
     protocolVersion: '',
@@ -644,6 +692,9 @@ async function connectMcpServer({
       }
     });
   }
+  // P2-5：就绪信号必须在 set 之前建好——缓存分支可能在握手完成前就命中这个条目
+  let markServerReady;
+  server.ready = new Promise((resolve) => { markServerReady = resolve; });
   servers.set(name, server);
 
   try {
@@ -651,6 +702,7 @@ async function connectMcpServer({
     await negotiateHandshake(server);
     await refreshTools(server);
     server.handshakeDone = true;
+    markServerReady(true);
     return {
       ok: true, server: name, kind: server.kind, toolCount: server.tools.length, tools: server.tools,
       protocolVersion: server.protocolVersion, proposedProtocolVersion: server.proposedProtocolVersion,
@@ -658,6 +710,7 @@ async function connectMcpServer({
     };
   } catch (err) {
     // H-4：版本不受支持 → 这里就是规范要求的 disconnect（关传输 + 摘注册表）
+    markServerReady(false);
     transportObj.close();
     servers.delete(name);
     return {
@@ -712,6 +765,6 @@ module.exports = {
   mcpRpc, mcpRpcWithSessionRetry, dispatchMessage, handleServerMessage,
   createStdioTransport, createHttpTransport, consumeSse,
   connectMcpServer, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
-  refreshTools, sanitizeToolName, resolveToolName,
+  refreshTools, sanitizeToolName, resolveToolName, recoverSession,
   PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, DEFAULT_TIMEOUT_MS,
 };
