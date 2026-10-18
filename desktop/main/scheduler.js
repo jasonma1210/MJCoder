@@ -20,6 +20,8 @@ const scheduledOutput = require('./scheduledOutput');
 const guard = require('./ipc/payloadGuard');
 // 熔断判据是纯函数（连续失败 → 自动暂停），单测覆盖，见 test/scheduled-verify.test.mjs
 const { shouldAutoPause } = require('./verifyPolicy');
+// 供应商错误 → 人话（内容安全/上下文超限/限流/凭证），原文保留
+const { describeRunError } = require('./providerErrors');
 
 const STORE_FILE = () => path.join(app.getPath('userData'), 'scheduled-tasks.json');
 // 归档根目录：Documents（应用外可查阅）。取不到时返回空串，归档会被跳过而不是抛。
@@ -337,9 +339,14 @@ async function runTask(id, trigger = 'manual') {
   } catch (err) {
     run.status = 'failed';
     // 无人值守无用户中止入口，signal.aborted 即墙钟超时
-    run.error = ctl.signal.aborted
-      ? `执行超时（墙钟上限 ${Math.round(taskTimeoutMs / 60000)} 分钟），已中止`
-      : String(err?.message || err).slice(0, 2000);
+    if (ctl.signal.aborted) {
+      run.error = `执行超时（墙钟上限 ${Math.round(taskTimeoutMs / 60000)} 分钟），已中止`;
+    } else {
+      // 供应商原文直接甩给用户等于没解释：翻译成人话，但原文必须保留（见 providerErrors.js）
+      const d = describeRunError(err);
+      run.error = d.error;
+      run.error_kind = d.kind;
+    }
   } finally {
     clearTimeout(timeoutTimer);
   }
