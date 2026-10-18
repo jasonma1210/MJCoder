@@ -162,7 +162,10 @@ check('密钥缺失提示改为引导本机设置', () => {
 
 check('App 已向 ChatArea 传递控制台所需 props', () => {
   assert.match(app, /providers=\{allProviders\}/);
-  assert.match(app, /onSelectModel=\{setSelectedModel\}/);
+  // 2026-10-18：模型改为「绑定会话」，选模型必须走 chooseModel（它负责写回当前会话），
+  // 不能直接传裸的 setSelectedModel —— 否则换了模型但会话记录不更新，切走再回来就还原。
+  assert.match(app, /onSelectModel=\{chooseModel\}/);
+  assert.match(app, /useThreadModel\(\{ threadId: activeThreadId/);
   assert.match(app, /onApprovalChange=/);
   assert.match(app, /onThreadStatus=/);
 });

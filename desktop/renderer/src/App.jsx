@@ -28,6 +28,7 @@ import FeedbackHost, { confirm, toast } from './components/feedback';
 import { projectDisplayName } from './lib/projectName';
 import { getDefaultProject, loadJSON, applyThemeToDocument, rememberModel, pickInitialModel } from './lib/appState';
 import usePendingExpert from './hooks/usePendingExpert';
+import { useThreadModel } from './hooks/useThreadModel';
 import THEMES from './lib/themes.json';
 import { useI18n } from './i18n';
 
@@ -363,6 +364,7 @@ export default function App() {
     ...globalProviders.map(p => ({ ...p, isGlobal: true })),
     ...userProviders,
   ];
+  const { chooseModel } = useThreadModel({ threadId: activeThreadId, providers: allProviders, selectedModel, onRestore: setSelectedModel });
 
   // 服务端不可达时线程列表降级为本机，模型列表始终包含本机数据库条目（不因服务端失败中断）
   async function loadData() {
@@ -660,7 +662,7 @@ export default function App() {
             project={activeProject}
             projectPicked={projectPicked}
             providers={allProviders}
-            onSelectModel={setSelectedModel}
+            onSelectModel={chooseModel}
             onApprovalChange={(patch) => setApprovalSettings((prev) => ({ ...prev, ...patch }))}
             onAgentFilesChange={setAgentFiles}
             onSubagentEvent={(threadId, evt) => {
