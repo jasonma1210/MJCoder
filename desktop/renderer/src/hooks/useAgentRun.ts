@@ -6,6 +6,7 @@ import { getModelConfig, getModelOverrides, modelKeyOf, effectiveContextWindow }
 import { api } from '../lib/api';
 import { toast } from '../components/feedback';
 import { runRegistry, runIndex, makeRunState } from '../lib/runRegistry';
+import { abortGroupsForThread } from '../lib/stopThreadWork';
 import { arrayBufferToBase64, buildExpertPrompt, agentFilesOf } from '../lib/chatHelpers';
 import { tGlobal } from '../i18n';
 // A4：恢复决策（状态驱动）——纯函数，跨宿主共享（shared/resumeIntent.mjs），有单测覆盖
@@ -47,9 +48,22 @@ export default function useAgentRun(d) {
   // 此前全局 model:abort 会把后台运行一并杀光——正是「切页回来会话被关掉」的帮凶。
   function stop() {
     const tid = activeThreadIdRef.current;
-    const rs = tid != null ? runRegistry.get(tid) : null;
-    if (rs?.inFlight && rs.controller) { rs.controller.abort(); return; }
-    abortRef.current?.abort(); // 兜底：进程内回退模式无注册表
+    // 注册表键统一用 String(thread.id)（写入侧就是这么写的），这里跟着统一，
+    // 避免数字 id 取不到 controller 而落到下面的兜底分支
+    const rs = tid != null ? runRegistry.get(String(tid)) : null;
+    if (rs?.inFlight && rs.controller) { rs.controller.abort(); void abortGroupsForThread(tid); return; }
+    if (abortRef.current) { abortRef.current.abort(); void abortGroupsForThread(tid); return; }
+    // 兜底：run 已不在本实例（切过会话 / 实例重建 / 父 run 早已收尾）时，
+    // 按 runId 直接让主进程中止；若主进程说「没这个 run」，至少让用户知道点了但没东西可停，
+    // 不再静默无反应（真机问题：编排组在跑、父 run 已收尾，点击完全无反馈）。
+    const rid = activeRunIdRef.current;
+    if (rid) {
+      Promise.resolve(window.mjcode?.agentAbort?.(rid)).then((r) => {
+        if (!r?.ok) console.warn('[stop] no such run in main (already finished?), cancelling task groups instead');
+      }).catch(() => { /* 中止失败不影响下面的组取消 */ });
+    }
+    // 编排组：父 run 不在了，组可能还在跑 —— 这是「点了停止但子 Agent 还在烧 token」的直接原因
+    void abortGroupsForThread(tid);
   }
 
   // Esc 快捷停止生成
@@ -449,6 +463,16 @@ export default function useAgentRun(d) {
         endedAt: Date.now(),
       };
       if (activeRunIdRef.current === rs.runId) activeRunIdRef.current = null;
+      // 2026-10-18 真机修复：UI 复位必须在**同步段**完成。
+      // 此前复位在函数末尾（`stillActive` 那段），而它前面有若干 await（落库/记忆/排队接力）。
+      // 点「停止」后 agent.js 会立刻本地 settle 回调这里，可只要落库慢一拍，用户就盯着
+      // 「运行中」不动 —— 感受就是「停止按钮坏了」。这里先复位界面，持久化照旧在后面做。
+      if (activeThreadIdRef.current === threadKey) {
+        abortRef.current = null;
+        setStreamingText('');
+        setReasoningText('');
+        setLoading(false);
+      }
       // 2026-10-15 修复：落库去重 + 收尾加固——
       // ① 主进程模式（meta.mainPersisted 为布尔）最终消息由主进程负责落库，渲染层一律不重复写：
       //    落库失败（mainPersisted=false）时仅本地补显 + 提示（见上方 notDurable 分支）；
