@@ -6,6 +6,8 @@ import { IconCheck, IconClock, IconPlus, IconX } from './icons';
 import Switch from './ui/Switch';
 import Modal from './ui/Modal';
 import { useI18n, tGlobal } from '../i18n';
+// 窗口解析与主进程同一张表（lib/modelWindows.ts ↔ main/modelWindows.js 有 parity 测试）
+import { resolveWindow } from '../lib/modelWindows';
 
 // labelKey 而非 label：顶层常量不持有求值结果，渲染时经 t() 取文案
 // P0-8a：missed=应用未运行期间错过计划执行（主进程启动扫描标记，绝不静默）
@@ -119,10 +121,15 @@ export default function ScheduledTasks() {
           for (const m of Array.isArray(p.models) ? p.models : []) {
             const mid = m.model_id || m.modelId;
             if (!mid) continue;
+            // 窗口：模型自己声明的优先，否则按 (provider, modelId) 查表（与主进程同一张表）
+            const win = Number(m.context_window) > 0
+              ? Number(m.context_window)
+              : resolveWindow({ providerId: p.id, baseUrl: p.base_url, modelId: mid }).window;
             opts.push({
               value: `${p.id}::${mid}`,
-              label: `${p.name || p.id} · ${m.display_name || mid}`,
-              providerId: p.id, isGlobal: !!p.isGlobal, baseUrl: p.base_url || '', model: mid,
+              // 下拉里直接标窗口：选模型时最该看的就是它（「100 条新闻」在 32k 模型上必然跑不完）
+              label: `${p.name || p.id} · ${m.display_name || mid} (${win >= 1024 ? `${Math.round(win / 1024)}k` : win})`,
+              providerId: p.id, isGlobal: !!p.isGlobal, baseUrl: p.base_url || '', model: mid, window: win,
             });
           }
         }
@@ -188,6 +195,16 @@ export default function ScheduledTasks() {
     return r?.toCron ? r.toCron({ h: Number.isNaN(h) ? 9 : h, m: Number.isNaN(m) ? 0 : m }) : '';
   })();
   const formCronErr = formCron ? validateCron(formCron) : null;
+  // 任务量 vs 模型窗口：提示词里写了「100 条」这种量级，而所选模型窗口很小时给一条提醒。
+  // 不阻断（引擎会自动分批 + 续跑），但要让用户在创建时就知道为什么慢、该换什么。
+  const pickedModel = modelOptions.find((o) => o.value === form.modelRef);
+  const bulkCount = (() => {
+    // 量词用 unicode 转义写：i18n 扫描把代码里的裸中文当硬编码文案（注释不受影响）
+    // 条 / 个 / 篇 / 项 / 份
+    const m = String(form.prompt || '').match(/(\d{2,4})\s*(\u6761|\u4e2a|\u7bc7|\u9879|\u4efd)/);
+    return m ? Number(m[1]) : 0;
+  })();
+  const smallWindowForBulk = !!pickedModel && bulkCount >= 20 && pickedModel.window < 64 * 1024;
 
   async function createTask() {
     if (!form.name.trim() || !form.prompt.trim()) {
@@ -401,6 +418,14 @@ export default function ScheduledTasks() {
               {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
             <p className="text-xs text-text2 mb-3">{t('scheduled.modelHint')}</p>
+            {smallWindowForBulk && (
+              <p className="text-xs text-danger mb-3 -mt-2">
+                {t('scheduled.modelTooSmall', {
+                  n: bulkCount,
+                  win: pickedModel.window >= 1024 ? `${Math.round(pickedModel.window / 1024)}k` : pickedModel.window,
+                })}
+              </p>
+            )}
 
             {/* 触发方式：时钟（cron）或外部事件（由 scheduled:ingestEvent / 本地事件入口驱动） */}
             <div className="flex items-center justify-between gap-3 mb-3 p-3 bg-input rounded-xl">
