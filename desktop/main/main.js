@@ -1071,6 +1071,10 @@ function setupTaskOrchestration(db) {
       maxConcurrent: Number(localStore?.getPreference('tasks.max_concurrent')) || 4,
       // 2026-10-16：子任务继承用户当前审批档（此前硬编码 auto-safe，用户设 always 时被静默忽略）
       getApprovalMode: () => approvalSettings.getUserApprovalMode(),
+      // P1-11c：Worker 分档模型。渲染层设置页写入 → localSetPreference 同步到 preferences。
+      // 主进程读不到 localStorage，没有这行注入时 workerPool 的 `deps.getModelOverrides`
+      // 恒为 undefined → 分档永远回落主模型（此前正是这个状态）。
+      getModelOverrides: () => localStore?.getPreference('model_overrides') || null,
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
       createToolHandlers: ({ signal }) => ({

@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '../lib/api';
+import { getModelOverrides, setModelOverrides, OVERRIDE_SLOTS } from '../lib/modelConfig';
 import TeamSpace from './TeamSpace';
 import EcosystemModal from './EcosystemModal';
 import { confirm } from './feedback';
@@ -80,6 +81,41 @@ export default function SettingsModal({
   const [sandboxStatus, setSandboxStatus] = useState(null);
   // A10：读取时迁移遗留值（auto → auto-safe、always-ask → always）
   const approvalMode = migrateApprovalMode(approvalSettings?.approval_mode);
+
+  // ── P1-11c：任务-模型分档（compact / decompose / worker）──
+  // 主进程三槽位早已就绪（agent-core 读 modelOverrides、workerPool 读 deps.getModelOverrides），
+  // 但一直缺两半：设置页没有入口、且渲染层只写 localStorage 从不同步主进程
+  //（主进程读不到 localStorage）→ 分档配置等于永远不生效。这里补 UI，并在变更时同步偏好。
+  const [tiers, setTiers] = useState(() => getModelOverrides() || {});
+  const tierOptions = useMemo(() => {
+    const out = [];
+    for (const p of providers || []) {
+      for (const m of p?.models || []) {
+        if (!m?.model_id) continue;
+        out.push({
+          value: `${p.id}::${m.model_id}`,
+          label: `${p.name || p.id} / ${m.display_name || m.model_id}`,
+        });
+      }
+    }
+    return out;
+  }, [providers]);
+
+  function applyTier(slot, value) {
+    const next = { ...tiers };
+    if (!value) {
+      delete next[slot]; // 空 = 跟随主模型（不传该槽位，零破坏）
+    } else {
+      const idx = value.indexOf('::');
+      next[slot] = { providerId: value.slice(0, idx), model: value.slice(idx + 2) };
+    }
+    setTiers(next);
+    setModelOverrides(next); // 渲染层内生效（压缩/拆解路径直接读 localStorage）
+    // 主进程侧（Worker 通道）读 preferences，必须同步一份；失败只影响 worker 分档
+    try {
+      Promise.resolve(window.mjcode?.localSetPreference?.({ key: 'model_overrides', value: next })).catch(() => {});
+    } catch { /* 旧版 preload 无此桥：交互路径不受影响，仅 Worker 分档回落主模型 */ }
+  }
 
   // TH5：强调色备选（null = 跟随主题默认）；色值常量在 lib/accentColors.js
   // （ui-conventions 基线：组件文件零十六进制硬编码色）
@@ -281,6 +317,30 @@ export default function SettingsModal({
                 <Toggle on={autoDecompose} onChange={() => onAutoDecomposeChange?.(!autoDecompose)}
                   label={t('settings.autoDecomposeLabel')} />
               </div>
+            </Section>
+            {/* P1-11c：任务-模型分档。留空即跟随主模型（不传槽位字段，零破坏）。 */}
+            <Section title={t('settings.modelTiers')}>
+              <p className="text-xs text-text2 leading-relaxed mb-2">{t('settings.modelTiersDesc')}</p>
+              {OVERRIDE_SLOTS.map((slot) => {
+                const cur = tiers?.[slot];
+                const value = cur?.model ? `${cur.providerId ?? ''}::${cur.model}` : '';
+                return (
+                  <div key={slot} className="flex items-center justify-between gap-3 py-1.5">
+                    <span className="text-sm shrink-0">{t(`settings.modelTier_${slot}`)}</span>
+                    <select
+                      value={value}
+                      onChange={(e) => applyTier(slot, e.target.value)}
+                      aria-label={t(`settings.modelTier_${slot}`)}
+                      className="text-xs bg-raise border border-border rounded-lg px-2 py-1 max-w-[62%] text-text"
+                    >
+                      <option value="">{t('settings.modelTierFollow')}</option>
+                      {tierOptions.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
             </Section>
             <UpdateSection />
             {/* P0-2：记忆管理（统计/后台任务/列表/自动沉淀开关）——随常规设置页展示 */}
