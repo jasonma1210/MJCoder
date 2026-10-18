@@ -21,6 +21,27 @@
 
 ---
 
+## 一之二、修复状态（同日完成 · commit `f323046`）
+
+| 项 | 状态 | 改动要点 | 回归测试 |
+|---|---|---|---|
+| **P1-1** 二次反推窗口 | ✅ 已修 | `budgetDecision` 删除内部 `effectiveWindowOf`，窗口只在 `runAgent` 校准一次（4× 封顶恢复有效）；`lastPromptTokens` 保留签名不再参与判定 | `context-econ` +2（含"不影响未传该参数的既有调用"） |
+| **P1-2** crashed 五态失效 | ✅ 已修 | `LocalMcpSection.statusOf` 取消 `connected` 提前 return；`useMcpStatus.resolve` 删除 `derived==='ok'` 优先分支；状态机拆到 `lib/mcpStatusState.ts` 使纯 Node 可测 | 新套件 `mcp-status-resolve` 12 条 + **变异验证**（改回旧逻辑 → 2 条红） |
+| **P1-3** Esc 丢表单草稿 | ✅ 已修 | 子层自挂 Esc（capture + stopPropagation）+ 开箱 focus + `aria-modal`；底层 `closeOnEsc={!cfgConnector}`（该浮层是面板后代，`foreignDialogOwnsFocus` 结构上无法让路） | 无自动化（键盘行为需真机，已列未验证面） |
+| **P1-4** 契约 strip 窗口 | ✅ 已修 | `model.provider` / `model.model` 加 `.passthrough()` | `ipc-contract` +1（`data.model.model` 保留 `context_window`/`reasoning_effort`） |
+| **P2-2** 墙钟误报 | ✅ 已修 | 渲染层补 `cp.kind === 'wallclock'` 分支，文案明确"总时长 ≠ token 预算" | 随 queued-message/resume 套件覆盖 |
+| **P2-1** resumeContext 零守卫 | ✅ 已修 | 过 `wrapUntrusted`（与 rolePreset/技能/AGENTS.md/记忆同纪律） | 现有 agent-core 套件复跑通过 |
+| **P2-7** R4 误报 | ✅ 已修 | 提交证据面扩展为「`git_commit` 工具 **或** shell 里成功的 `git commit`」 | 现有 independent-verification 复跑通过 |
+| **P2-9** approvalNotice 零测试 | ✅ 已补 | 新套件 14 条：四条不发 + 可补偿性自洽 + sink 抛错不冒泡 | **变异验证**（去掉 `enabled` 判断 → ① 红）；并修正了首版一条**哑断言** |
+| P1-3 之外的 P2-3/4/5/6/8/10/11/12 | ⬜ 待办 | 见 §四 | — |
+| P3 全部 | ⬜ 待办 | 见 §五 | — |
+
+**门禁（修复后）**：`160/160` 套件通过（158 原有 + 2 新增）、`typecheck` 0、`lint` 0 error/155 warning、`i18n` 裸中文 0。
+
+> 一处方法论记录：`approval-notice` 首版第①条用默认 `on-request` 档测"偏好关闭"，而 `write_file` 在该档本就会弹卡返回 null —— **去掉 `if (!enabled)` 后测试仍然全绿**（变异无效格）。改用 `auto-safe` 隔离该分支后才真正具备判别力。**"测试通过了"不等于"测试能失败"**，这是本轮第二次在自家测试上踩到这个坑（第一次是 P1-2 的变异验证）。
+
+---
+
 ## 二、上轮修复落地验证（汇总）
 
 五路验证表合计 59 项核验，代表性结果：
