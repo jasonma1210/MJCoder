@@ -666,6 +666,44 @@ export function budgetDecision({
   return 'ok';
 }
 
+// 熔断/预算耗尽的收尾文案（纯函数，可单测）。
+//
+// 为什么单独抽出来：这段文案是用户唯一的诊断入口，而它此前把**三种完全不同的原因**
+// 用同一句话概括：
+//   · 累计花费超预算（真的没额度了）
+//   · 上下文已到窗口且压不动（历史里全是必留内容，压缩与硬截断都无处下手）
+//   · 整任务墙钟超时
+// 用户实测：窗口 32768、累计 50097 tokens，却看到「token 预算已用尽（累计 50097）」——
+// 会以为预算是 50k（实际 200k）。真实原因是第二种。
+// 另外定时任务是无人值守的，不能对用户说「发送继续」（没有人能发）。
+export function buildExhaustedNotice({
+  finalText = '', budgetKind = 'rounds', wallClockHit = false, runWallClockMs = 0,
+  tokenRescues = 0, usage = {}, contextStuck = false, unattended = false,
+} = {}) {
+  const total = Number(usage.prompt_tokens || 0) + Number(usage.completion_tokens || 0);
+  const head = finalText || '任务尚未完成。';
+  if (wallClockHit) {
+    return `${head}\n\n（整任务已运行超过 ${Math.round(runWallClockMs / 60000)} 分钟，触发总时长预算上限而停止；`
+      + '这是防失控上限，需要更长可调大任务时长预算。）'.trim();
+  }
+  if (budgetKind === 'tokens' && contextStuck) {
+    const tail = unattended
+      ? `（上下文已到模型窗口（累计 ${total} tokens），且历史里没有可裁的早期内容——压缩与硬截断都无处下手，`
+        + '继续跑只会空转。建议把任务拆小：分批抓取（例如每批 10 条、抓完立刻写进文件），'
+        + '或给这个任务换一个窗口更大的模型。）'
+      : `（上下文已到模型窗口（累计 ${total} tokens），且历史里没有可裁的早期内容。`
+        + '建议拆分任务，或换一个窗口更大的模型；也可以先「继续」让我基于现状收尾。）';
+    return `${head}\n\n${tail}`.trim();
+  }
+  if (budgetKind === 'tokens') {
+    return `${head}\n\n（单任务 token 预算已用尽（含每轮重复读取上下文的消耗，累计 ${total} tokens，`
+      + `期间已自动压缩续跑 ${tokenRescues} 次；这是防失控上限，不是上下文放不下），任务未完全完成。`
+      + `${unattended ? '下次运行请缩小任务范围或调高预算。' : '发送「继续」让我接着执行。'}）`.trim();
+  }
+  return `${head}\n\n（单任务执行轮次预算已用尽，任务未完全完成。`
+    + `${unattended ? '下次运行请缩小任务范围或调高轮次上限。' : '发送「继续」让我接着执行。'}）`.trim();
+}
+
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
 const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch', 'git_commit', 'git_add', 'install_plugin', 'pr_review', 'pr_comment',
   // T4-1：浏览器六工具全部走主进程审批中心（L3），需透传 approvalMode/conversationId
@@ -1562,6 +1600,8 @@ export async function runAgent({
   sandboxPolicy, memories = [], chatRetryBaseMs = 1000,
   toolHandlers, sessionDir, planMode = false,
   maxTotalRounds = AGENT_HARD_ROUND_CAP, tokenBudget = 0,
+  // 无人值守通道（定时任务/Worker）：收尾文案里不能出现「发送继续」——那边没有人能发。
+  unattended = false,
   resumeContext = '',
   // T0-4 看门狗：单轮模型调用（含重试链）与每个工具执行的 wall-clock 上限；
   // T0-5 trace：结构化运行事件透出（run_start/model/tool/run_end，含耗时与用量）。
@@ -1953,6 +1993,9 @@ export async function runAgent({
   let lengthContinues = 0;
   let budgetExhausted = false;
   let budgetKind = 'rounds'; // 'rounds' | 'tokens' | 'repeat' —— 收尾文案区分触发闸门
+  // 与 budgetKind='tokens' 并列的另一个真实原因：上下文已到窗口且**压不动**（历史里全是必留内容）。
+  // 旧文案把它和「累计花费超预算」混为一谈，用户看到「token 预算已用尽（累计 50k）」会以为预算只有 50k。
+  let contextStuck = false;
   let tokenRescues = 0; // token 超限后已执行的自动压缩救援次数（上限 TOKEN_RESCUE_MAX）
   let tokenWindowSpent = 0; // token 预算口径：当前窗口累计消耗（压缩救援后清零）
   let contextRescued = false; // 上下文超限（provider 400）压缩救援已尝试过
@@ -2214,7 +2257,7 @@ export async function runAgent({
       }
       // 降级二：连硬截断都无处可裁（历史里全是必留内容）——挂起让用户「继续」或新开会话，
       // 而不是继续空转烧预算。kind 保持 'tokens'（新增取值会外溢到 workerPool 与收尾文案）。
-      budgetExhausted = true; budgetKind = 'tokens';
+      budgetExhausted = true; budgetKind = 'tokens'; contextStuck = true;
       console.warn('[agent] 压缩与硬截断均无收益（历史已无早期内容可裁），挂起而非继续空转');
       try {
         suspendNoticed = !!onSuspend?.({
@@ -2684,17 +2727,12 @@ export async function runAgent({
       finalText = `${finalText || ''}\n\n（已主动停止：工具 \`${repeatFailTool}\` 用相同参数连续失败 ${repeatFailCount} 次，`
         + '判定为无效重试而非任务不可完成，继续跑只会空转。请根据上述失败原因调整，或换个说法让我重新尝试。）'.trim();
     } else {
-      // P1-1：墙钟闸命中时不能只说「执行轮次预算已用尽」——那会让用户以为还能靠「继续」续轮次，
-      // 实际是整个任务跑太久了。budgetKind 仍复用 'rounds'（不新增枚举值），文案单独区分。
-      const kindText = wallClockHit ? '总时长预算' : (budgetKind === 'tokens' ? 'token 预算' : '执行轮次预算');
-      const exhaustDetail = wallClockHit
-        ? `（整任务已运行超过 ${Math.round(runWallClockMs / 60000)} 分钟，这是防失控上限；需要更长可调大 runWallClockMs）`
-        : (budgetKind === 'tokens'
-          ? `（含每轮重复读取上下文的消耗，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens，期间已自动压缩续跑 ${tokenRescues} 次；这是防失控上限，不是上下文放不下——上下文会自动压缩）`
-          : '');
-      finalText = `${finalText || '任务尚未完成。'}\n\n（单任务${kindText}已用尽${exhaustDetail}，任务未完全完成。发送「继续」让我接着执行。）`.trim();
+      finalText = buildExhaustedNotice({
+        finalText, budgetKind, wallClockHit, runWallClockMs, tokenRescues, usage,
+        contextStuck, unattended,
+      });
       // Phase 3-1：断点保存成功 → 明示恢复语义（继续 = 断点摘要接续，不重读全部文件）
-      if (suspendNoticed && (budgetKind === 'tokens' || wallClockHit)) {
+      if (suspendNoticed && (budgetKind === 'tokens' || wallClockHit) && !unattended) {
         finalText += '\n\n（断点已保存：回复「继续」将从断点摘要接续执行，已完成部分不会重做。）';
       }
     }

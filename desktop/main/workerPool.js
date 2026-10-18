@@ -240,6 +240,8 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
           maxRounds: 20,
           chatRetryBaseMs: 2000,
           tokenBudget: 200000,
+          // Worker 也是无人值守：收尾文案不能出现「发送继续」
+          unattended: true,
           toolHandlers: handlers,
           onToolCall,
           // P2-8 / V-L1：只为收 verify_ledger（其余 trace 事件本通道不落盘，保持零额外写盘）

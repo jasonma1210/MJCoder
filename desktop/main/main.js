@@ -999,6 +999,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     // P0-8c：无人值守成本闸——定时执行强制注入 tokenBudget，与 workerPool.js:211 的 200k 口径对齐
     tokenBudget: 200000,
     chatRetryBaseMs: 2000, // 无人值守：退避基数放宽，弱网下更耐心
+    // 无人值守：收尾文案不能对用户说「发送继续」（没有人能发），改为给出可操作的下一步
+    unattended: true,
     systemPrompt: '你是定时任务执行器：使用工具完成任务提示词中的要求，产出精炼可读的结果摘要。'
       + '不要反问、不要输出无关寒暄；工具失败时换方式重试或如实说明，不要假装完成。',
     toolHandlers: sguard.wrap(scheduledToolHandlers()),

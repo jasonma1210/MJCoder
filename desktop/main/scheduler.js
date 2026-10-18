@@ -262,6 +262,21 @@ function detectUnfinished(output, toolCalls = 0) {
   return hit ? `模型未调用任何工具且自述无法完成（命中「${String(hit).replace(/^\/|\/$/g, '')}」）——请检查任务所需能力是否已配置` : '';
 }
 
+// 引擎自己写的「未完成」收尾（熔断/预算耗尽）。与 FAIL_MARKERS 刻意分开：
+// FAIL_MARKERS 是**措辞猜测**（模型嘴上说做不到），且只在零工具调用时生效；
+// 这里是引擎给出的事实陈述（它确实因为闸门停了），**与工具调用次数无关**。
+// 实测事故：抓 50 条新闻的任务被上下文闸停下，输出写着「任务尚未完成」，
+// 但卡片显示绿色「成功」——因为 detectUnfinished 见到 toolCalls>0 就直接放行。
+const EXHAUSTED_MARKERS = [
+  /任务未完全完成/, /上下文已到模型窗口/, /单任务 token 预算已用尽/,
+  /单任务执行轮次预算已用尽/, /整任务已运行超过/,
+];
+function detectExhausted(output) {
+  const text = String(output || '');
+  const hit = EXHAUSTED_MARKERS.find((re) => re.test(text));
+  return hit ? `引擎报告任务未完成（命中「${String(hit).replace(/^\/|\/$/g, '')}」）——已产出部分结果，详见运行输出` : '';
+}
+
 async function runTask(id, trigger = 'manual') {
   const t = store.tasks.find((x) => x.id === id);
   if (!t) return { ok: false, error: '任务不存在' };
@@ -328,7 +343,12 @@ async function runTask(id, trigger = 'manual') {
       run.verify = r?.verify || null;
       // 没抛异常 ≠ 成功：模型自述做不到时要如实标失败
       const unfinished = detectUnfinished(run.output, run.tools);
-      if (unfinished) { run.status = 'failed'; run.error = unfinished; } else if (r?.delivery?.downgrade) {
+      // 引擎因闸门停下（上下文压不动/预算耗尽/墙钟）同样是「未完成」，不能标成功
+      const exhausted = unfinished ? '' : detectExhausted(run.output);
+      if (unfinished) { run.status = 'failed'; run.error = unfinished; } else if (exhausted) {
+        run.status = 'failed';
+        run.error = exhausted;
+      } else if (r?.delivery?.downgrade) {
         // 无人值守 fail-closed：判不出来 / 守卫型 L3 判 FLAG → 不宣告成功（产物仍归档）
         run.status = 'failed';
         run.error = `未通过交付校验：${r.delivery.reason}`;
@@ -709,6 +729,8 @@ module.exports = {
   scanMissedTasks, collectMatchesBetween,
   // 2026-10-17:假成功识别（纯函数，单测直调）
   detectUnfinished,
+  // 2026-10-18：引擎侧「未完成」收尾（熔断/预算耗尽）识别，与工具调用次数无关
+  detectExhausted,
   // 2026-10-17：模型侧 scheduled_create 工具的落地实现（与 IPC 共用同一校验）
   createTask,
   // 2026-10-18：事件触发入口（去重 + 合并），HTTP 适配器见 scheduledEventServer

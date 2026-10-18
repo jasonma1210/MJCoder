@@ -241,6 +241,22 @@ const TEST_MODEL = { providerId: 1, isGlobal: false, baseUrl: 'https://api.test/
   const r9 = await scheduler.runTask(tF.id, 'manual');
   checkOk('空输出 → 判失败并给出原因', r9.ok === false && /空结果/.test(String(r9.error)), JSON.stringify(r9));
 
+  // 2026-10-18：引擎因闸门停下（熔断）时，**即使有工具调用**也不能标成功。
+  // 实测事故：抓 50 条新闻的任务被上下文闸停下，输出写着「任务尚未完成」，卡片却是绿色成功。
+  scheduler.startScheduler({
+    runAgentTask: async () => ({
+      output: '任务尚未完成。\n\n（上下文已到模型窗口（累计 50097 tokens），且历史里没有可裁的早期内容…）',
+      toolCalls: 7,
+    }),
+    notify: noop,
+  });
+  const r10 = await scheduler.runTask(tF.id, 'manual');
+  checkOk('引擎报告未完成（有工具调用也算失败）', r10.ok === false && /引擎报告任务未完成/.test(String(r10.error)), JSON.stringify(r10));
+  checkOk('未完成识别与工具调用次数无关',
+    scheduler.detectExhausted('上下文已到模型窗口（累计 1 tokens）').length > 0
+    && scheduler.detectExhausted('正常完成，共抓到 50 条').length === 0,
+    `命中=${scheduler.detectExhausted('上下文已到模型窗口')}`);
+
   scheduler.stopScheduler();
   fs.rmSync('/tmp/mjcode-test/scheduled-tasks.json', { force: true });
   console.log(`\nPASS：${pass}/${total} 项通过`);
