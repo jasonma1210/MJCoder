@@ -147,8 +147,13 @@ export const agentRunPayloadSchema = z
     model: z.object({
       // 引擎入口 assertAgentModelShape 要求嵌套形 {provider:{id}, model:{model_id}}；
       // 边界先拦住扁平形（历史 TypeError 事故根因），错误信息直接给出期望形状
-      provider: z.object({ id: z.union([z.number(), z.string()]) }),
-      model: z.object({ model_id: z.string().min(1) }),
+      //
+      // ⚠️ 内层必须 passthrough：引擎真正消费的 `context_window` / `reasoning_effort`
+      // 就挂在 model.model 上（useAgentRun 注入）。若内层 strip，validateAgentRunPayload
+      // 返回的 `data` 会静默丢掉窗口 —— 今天 agentRunner 只用 `v.ok` 继续用原始 payload
+      // 所以无害，但任何人改成消费 `r.data` 就会复现「128K 模型按 4K 频繁压缩」事故。
+      provider: z.object({ id: z.union([z.number(), z.string()]) }).passthrough(),
+      model: z.object({ model_id: z.string().min(1) }).passthrough(),
     }),
     cwd: z.string().optional(),
     conversationId: z.string().optional(),

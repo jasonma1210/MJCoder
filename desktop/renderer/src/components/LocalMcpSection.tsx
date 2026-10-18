@@ -114,10 +114,12 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
   for (const c of connected) rowMap.set(c.name, { ...(rowMap.get(c.name) || { name: c.name }), toolCount: c.toolCount || 0 });
   const rows = [...rowMap.values()];
   const statusOf = (name: string): ConnState => {
-    if (connected.some((c) => c.name === name)) return 'ok';
     const st = statusMap[name] || '';
+    // connected 只用于推导派生态，**不能提前 return**：它是上一次 load() 的快照，
+    // 崩溃后仍含该服务，提前 return 'ok' 会让崩溃标记永远不可见（P0-5④ 失效根因）。
     const derived: Exclude<ConnState, 'crashed'> =
-      st === 'fail' ? 'fail' : st === 'connecting' ? 'connecting' : 'saved';
+      connected.some((c) => c.name === name) ? 'ok'
+        : st === 'fail' ? 'fail' : st === 'connecting' ? 'connecting' : 'saved';
     // 崩溃覆盖：主进程上报过 crashed 且尚未重连成功 → 优先展示崩溃（连接列表可能还没刷新）
     return mcpStatus.resolve(name, derived);
   };

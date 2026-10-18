@@ -597,7 +597,7 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
   // P1-9⑤：外壳交给 ui/Modal（dialog 语义 + 焦点陷阱 + Esc + 关闭归还焦点）。
   // frameless = 只换外壳：content 自带 width/max-h/rounded/bg/border，视觉零改动。
   return (
-    <Modal open onClose={onClose} frameless ariaLabel={t('ecosystem.title')}>
+    <Modal open onClose={onClose} frameless ariaLabel={t('ecosystem.title')} closeOnEsc={!cfgConnector}>
       {content}
     </Modal>
   );

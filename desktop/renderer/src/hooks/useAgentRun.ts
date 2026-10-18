@@ -367,6 +367,11 @@ export default function useAgentRun(d) {
           // 不是结构化摘要，直接当「摘要」展示会误导。
           resumeContext = '任务中断原因：模型调用超时（网络或供应商侧无响应，已保存断点）。' // i18n-literal
             + '请从中断处继续，不要重复已完成的工作；如反复超时，可换模型或检查网络。'; // i18n-literal
+        } else if (cp.kind === 'wallclock') {
+          // C2：整任务墙钟（默认 30min）触顶 —— 与 token 预算触顶是两回事，混说会让用户
+          // 去调大 token 预算（改错方向）。墙钟暂停时引擎已产出结构化摘要，可正常回拼。
+          resumeContext = '任务暂停原因：单任务**总时长**预算触顶（默认 30 分钟），不是 token 预算。' // i18n-literal
+            + `\n\n断点摘要（上一任务中断前的最后输出）：\n${cp.summary || '（无）'}`; // i18n-literal
         } else {
           const total = cp.usage ? (cp.usage.prompt_tokens || 0) + (cp.usage.completion_tokens || 0) : 0;
           resumeContext = `任务暂停原因：单任务 token 预算触顶（已自动压缩续跑 ${cp.rescues || 0} 次，累计消耗 ${total} tokens）。` // i18n-literal

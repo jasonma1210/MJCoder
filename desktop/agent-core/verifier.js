@@ -361,8 +361,17 @@ export function reconcile({
     }
   }
 
-  // ── R4 claim_commit_no_evidence：说提交了 → 必须有成功的 git_commit ──
-  if (commitClaims.length > 0 && !entries.some((e) => e.name === 'git_commit' && e.ok)) {
+  // ── R4 claim_commit_no_evidence：说提交了 → 必须有成功的提交证据 ──
+  // 证据面必须含 shell 里的 `git commit`：强模型常用 shell 提交，只认 git_commit 工具
+  // 会把**真实完成的提交**判成 BLOCK —— 那正是「宁漏不误报」最要避免的一类误报
+  // （用户对着已完成的工作看到「你说提交了你没提交」，且无法自证）。
+  const hasCommitEvidence = entries.some(
+    (e) => e.ok && (
+      e.name === 'git_commit'
+      || (e.name === 'shell' && /\bgit\s+commit\b/.test(String(e.command || '')))
+    ),
+  );
+  if (commitClaims.length > 0 && !hasCommitEvidence) {
     findings.push({
       ruleId: 'claim_commit_no_evidence',
       severity: 'block',

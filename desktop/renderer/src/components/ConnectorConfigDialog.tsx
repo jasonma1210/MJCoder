@@ -9,7 +9,7 @@
 //   none             → 按启动计划四态：ready 直连 / needs-config 变量表单 / manual 指引。
 // 表单值经 saveConnectorValueLocal 持久化到 mj_ecosystem_connector_values，
 // 「+」菜单与本页共用同一份值喂 buildLaunchPlan（lib/ecosystemConnectorLaunch.ts）。
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import {
   buildLaunchPlan, remotePayload,
@@ -38,6 +38,25 @@ type Status = 'idle' | 'connecting' | 'ok' | 'fail';
 
 export default function ConnectorConfigDialog({ connector, onClose, onConnected }: Props) {
   const { t } = useI18n();
+
+  // 键盘接管（本浮层叠在生态中心面板**内部**）：
+  // ui/Modal 的 foreignDialogOwnsFocus 靠 `closest('[aria-modal],[role=dialog]')` 让路，
+  // 但本浮层是 Modal 面板的后代 → Modal.tsx 的 `root.contains(active)` 恒真 → 让路永远
+  // 不触发 → 第一次 Esc 会把**整个生态中心**关掉，用户填了一半的变量/Key 全丢。
+  // 因此：① 本组件自己处理 Esc（capture + stopPropagation）；② 宿主在打开本浮层时
+  // 必须给底层 Modal 传 closeOnEsc={false}（见 EcosystemModal 的 `closeOnEsc={!cfgConnector}`）。
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
   const id = String(connector.id ?? connector.name ?? '');
   // 表单草稿：初值取已持久化的配置值（弹窗重开不丢）
   const [values, setValues] = useState<Record<string, string>>(() => connectorValuesForLocal(id));
@@ -185,9 +204,12 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
   return (
     <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onClick={onClose}>
       <div
-        className="w-[480px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded-2xl bg-raise border border-border p-5"
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-[480px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded-2xl bg-raise border border-border p-5 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label={connector.display_name || connector.name}
       >
         {/* 标题行 */}

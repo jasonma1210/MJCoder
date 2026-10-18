@@ -335,6 +335,15 @@ function buildLongConvo(rounds = 30) {
   check('预算为 0 视为不设限，但体积闸仍生效',
     budgetDecision({ ctxEst: 27071, ctxWindow: 128000, spent: 9e9, budget: 0, rescues: 0 }) === 'ok'
     && budgetDecision({ ctxEst: 100000, ctxWindow: 128000, spent: 0, budget: 0, rescues: 0 }) === 'compact');
+  // P1-1 回归（2026-10-18 第二轮审查）：窗口校准**只能在调用方做一次**。
+  // 旧实现 budgetDecision 内部又对「已抬高的 ctxWindow」用同一个 lastPromptTokens
+  // 反推一遍：declared=32768 → 上游抬到 131072 → 内部算成 285715（≈8.7×），
+  // 0.7×285715≈200000 恰好不过线 → 返回 'ok'，压力闸永久失敏。
+  check('已抬高的窗口不得被二次反推绕过 4× 封顶',
+    budgetDecision({ ctxEst: 200000, ctxWindow: 131072, lastPromptTokens: 200000, budget: 0, rescues: 0 }) === 'compact',
+    '旧实现：二次反推后 win≈285715 → 误判 ok（闸门失敏）');
+  check('窗口校准不影响未传 lastPromptTokens 的既有调用',
+    budgetDecision({ ctxEst: 200000, ctxWindow: 131072, budget: 0, rescues: 0 }) === 'compact');
 }
 
 console.log(`\ncontext-econ: ${pass}/${pass + fail} 通过`);

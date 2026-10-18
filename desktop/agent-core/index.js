@@ -646,11 +646,16 @@ export function effectiveWindowOf(declared, lastPromptTokens) {
 }
 
 export function budgetDecision({
+  // ⚠️ 窗口校准**只能在这里的上游做一次**（runAgent 已用 effectiveWindowOf 反推并按 4× 封顶）。
+  // 本函数内绝不能再对 ctxWindow 二次反推：已抬高的窗口配同一个 lastPromptTokens 会再算一遍，
+  // 4× 封顶被绕过（实测 declared=32768/seen=200000 → 上游 131072 → 这里 285715 ≈ 8.7×），
+  // 压力闸从此永久失敏，最终以 400 硬失败代替挂起。
+  // lastPromptTokens 仍接收但**不参与判定**，仅为兼容既有调用方与测试签名。
   ctxEst = 0, ctxWindow = DEFAULT_CONTEXT_WINDOW_FALLBACK, lastPromptTokens = null,
   spent = 0, budget = 0, rescues = 0, rescueMax = 3,
 } = {}) {
-  // P0-2：入口统一做一次窗口校准——调用方传声明值时也要能被真实回传量修正
-  const win = effectiveWindowOf(ctxWindow, lastPromptTokens);
+  void lastPromptTokens; // 见上：保留参数只为签名兼容，禁止用于二次反推
+  const win = ctxWindow;
   const ctxHot = win > 0 && ctxEst > win * TOKEN_COMPACTION_TRIGGER;
   if (ctxHot) return rescues < rescueMax ? 'compact' : 'suspend-context';
   if (budget > 0 && spent > budget * TOKEN_COMPACTION_TRIGGER) {
@@ -1723,7 +1728,14 @@ export async function runAgent({
   // 断点恢复注入（Phase 3-1）：上一任务因预算触顶暂停，恢复时把断点摘要放进 system——
   // 只进 system 消息不进持久化历史（与续期指令同语义），模型据此接续待办而非重读全部文件
   if (resumeContext) {
-    sysSections.resume = `## 断点恢复（上一任务因预算触顶暂停，以下是断点摘要）\n${String(resumeContext).slice(0, 6000)}\n\n请从「待办」处接续执行，已完成部分不要重做；需要细节时按摘要中的文件路径按需重读。`;
+    // 断点摘要同源于**模型自己的输出**（暂停时 summary = 当时的 finalText），而模型输出
+    // 可能被工具结果里的注入载荷污染（工具结果是「标注但不改写」）。因此这条注入路径与
+    // rolePreset / 技能清单 / AGENTS.md / 记忆同属不可信面，必须过同一道守卫——
+    // 此前它是五个入口中**唯一零守卫**的一个。
+    const safeResume = wrapUntrusted(String(resumeContext).slice(0, 6000), {
+      source: 'resume', label: '断点恢复（上一任务暂停时的摘要）',
+    });
+    sysSections.resume = `## 断点恢复（上一任务因预算触顶暂停，以下是断点摘要）\n${safeResume.text}\n\n请从「待办」处接续执行，已完成部分不要重做；需要细节时按摘要中的文件路径按需重读。`;
   }
   // 段序即契约：空段不产生空行（否则「有没有记忆」会平移后续所有内容的字节偏移）
   let systemPrompt = PROMPT_SECTIONS
@@ -2135,7 +2147,7 @@ export async function runAgent({
     }
     const ctxEst = Number(lastPromptTokens) || estimateMessagesTokens(convo);
     let gate = budgetDecision({
-      ctxEst, ctxWindow, lastPromptTokens, spent: tokenWindowSpent, budget: tokenBudget,
+      ctxEst, ctxWindow, spent: tokenWindowSpent, budget: tokenBudget,
       rescues: tokenRescues, rescueMax: TOKEN_RESCUE_MAX,
     });
     // 抬高后的窗口下 0.7 阈值恰好等于 lastPromptTokens（取整可能差不到 1 token），
