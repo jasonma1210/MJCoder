@@ -39,7 +39,8 @@
 | **P2-10** 桥面别名盲区 | ✅ 已修 | 支持文件内「整桥别名」（`const mj = window.mjcode` → `mj.agentRun`）；引用 133→**143**（10 个核心链路引用被看见）；新增"别名扫描失效即红"自检 | 门禁自检 + 4/4 通过 |
 | **P2-11** 4 条无守卫写通道 | ✅ 已修 | `memory:promote` / `collab:persist` / `worktree:promote` / `worktree:sync`（后两者同时补 `= {}`，此前传 undefined 直接 TypeError） | `ipc-write-guard` 复跑通过 |
 | **P2-5** MCP 并发竞态 | ✅ 已修 | ①`recoverSession` 互斥：并发 404 只重建一次（此前 N 次握手互相覆盖 `sessionId`）；②`server.ready` 就绪信号：缓存命中但握手在途时等待，不再返回误导性的 `toolCount:0` | 新套件 `mcp-session-recovery` 5 条 + **变异验证**（删互斥 → reset=3 且 2 条红） |
-| P2-4（compact 丢弃已计费响应）/ P2-12（浮层行为测试） | ⬜ 待办 | 见 §四 | — |
+| **P2-12** 浮层行为测试 | ⚠️ 部分（结构门禁） | 项目无 jsdom（只有 SSR），键盘行为无法动态测 → 新增 `modal-keyboard-guard` **10 条**静态钉住 P1-3 的代码前提（子层独立 Esc 分支 / capture 监听 / aria-modal / 开箱 focus / `closeOnEsc={!cfgConnector}` / `foreignDialogOwnsFocus`）。**真机待验项已在门禁输出中显式标注** | **变异验证**（精确删除 Esc 分支内 `stopPropagation` → 9/10 红） |
+| **P2-4** compact 丢弃已计费响应 | 🚫 **判定不修**（尝试已回退） | 改为"压缩后复用本轮响应"后，`rewrite-ledger` 实测压缩次数 **5→6**：压缩刚腾出的空间被本次响应立刻填回，反而触发更多压缩（每次摘要同样是 LLM 调用）；更关键的是**压缩已把早期历史换成摘要，而该响应基于旧历史生成**，复用它会让"回答依据"与后续 convo 不一致。结论：`continue` 是更安全的选择 | — |
 | P3 全部 | ⬜ 待办 | 见 §五 | — |
 
 > **附带发现（由新单测抓到，属 §五 P3-3 的实证）**：`ledger.command` 明文保留凭证
