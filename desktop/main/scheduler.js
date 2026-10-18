@@ -612,15 +612,18 @@ function registerIpc() {
       return { ok: false, error: e.message };
     }
     const has = (k) => p[k] !== undefined && p[k] !== null;
-    // 任务级模型：对象形态，字段边界单独守（assertStrings 只管字符串）
+    // 任务级模型：对象形态，字段边界单独守
     if (p.model !== undefined && p.model !== null) {
       try {
         guard.assertObject(p.model, 'model');
         guard.assertStrings(p.model, {
           model: { max: 200 },
-          providerId: { max: 120, optional: true },
           baseUrl: { max: 2000, optional: true, allowEmpty: true },
         });
+        // providerId 两种形态都合法：本机 provider 是自增**数字** id，全局/服务端是字符串
+        // （main.js 的 resolveSecret 注释里早就写明这点）。用 assertStrings 会在数字 id 上直接抛
+        // 「providerId 必须是字符串（收到 number）」——2026-10-18 用户就在「改模型」时撞到这行。
+        guard.assertIdLike(p.model, ['providerId']);
       } catch (e) {
         return { ok: false, error: e.message };
       }
@@ -739,6 +742,8 @@ function registerIpc() {
           baseUrl: { max: 2000, optional: true, allowEmpty: true },
           cwd: { max: 1024, optional: true, allowEmpty: true },
         });
+        // providerId 是数字（本机自增）或字符串（全局/服务端）——只挡对象/数组/空串
+        guard.assertIdLike(model, ['providerId']);
       } catch (e) {
         return { ok: false, error: e.message };
       }

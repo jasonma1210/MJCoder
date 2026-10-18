@@ -79,6 +79,39 @@ function assertIds(payload, keys, label = 'payload') {
   return payload;
 }
 
+/**
+ * 「id 有多种合法形态」的字段：数字（本机自增 id）或非空字符串（厂商名 / 's…' 前缀 / 全局 id）。
+ *
+ * 为什么不能直接用 assertStrings 或 assertIds（2026-10-18 用户实测）：
+ *   定时任务卡片改模型报「载荷非法：providerId 必须是字符串（收到 number）」——
+ *   本机 provider 的 id 是自增**数字**，用只收字符串的断言会把**合法主路径**整个拦掉。
+ *   反向也不能用 assertIds：全局/服务端 provider 的 id 是字符串（见 main.js 里
+ *   「providerId 不在此列：本机 provider 是数字 id、服务端是 's…' 前缀串，两种形态都合法」）。
+ *   这与 2026-10-17 的 local:messages/add 事故同型：校验加严却没带正样本，把真实调用挡在门外。
+ *
+ * 语义：键缺省（undefined/null）视为「未提供」，由调用方决定是否回落；空串明确拒绝。
+ * @param {object} payload
+ * @param {string[]} keys
+ * @param {string} [label]
+ */
+function assertIdLike(payload, keys, label = 'payload') {
+  assertObject(payload, label);
+  for (const key of keys) {
+    const value = payload[key];
+    if (value === undefined || value === null) continue; // 未提供 ≠ 非法
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new PayloadError(`${key} 必须是有限数字（收到 ${value}）`);
+      continue;
+    }
+    if (typeof value === 'string') {
+      if (value.trim() === '') throw new PayloadError(`${key} 不能为空`);
+      continue;
+    }
+    throw new PayloadError(`${key} 必须是数字或非空字符串（收到 ${typeOf(value)}）`);
+  }
+  return payload;
+}
+
 /** 标识符型（threadId/projectPath 这类不透明串）：非空、无空白、有上限 */
 function assertTokens(payload, spec, label = 'payload') {
   assertObject(payload, label);
@@ -124,6 +157,8 @@ module.exports = {
   assertObject,
   assertStrings,
   assertIds,
+  // 「数字或非空字符串」的 id（providerId 两种形态都合法，见函数上方注释）
+  assertIdLike,
   assertTokens,
   assertArray,
   assertEnum,

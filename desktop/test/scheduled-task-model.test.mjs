@@ -87,6 +87,59 @@ const B = { providerId: 'p-b', isGlobal: true, baseUrl: 'https://b.example', mod
     assert.equal(seen.at(-1).model, 'model-b');
   });
 
+  // ── IPC 边界：providerId 的两种合法形态都必须能过（2026-10-18 用户实测）──
+  // 报错原文：「切换模型失败：载荷非法：providerId 必须是字符串（收到 number）」
+  // 本机 provider 是自增数字 id，用只收字符串的断言会把**合法主路径**整个拦掉。
+  // 这与 2026-10-17 的 local:messages/add 事故同型：加严校验却没带正样本。
+  scheduler.registerIpc();
+  const save = handlers.get('scheduled:save');
+  const setModel = handlers.get('scheduled:setModel');
+
+  const NUMERIC = { providerId: 3, isGlobal: false, baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3-8b' };
+  const created = await save(null, { name: '数字 id', prompt: 'x', schedule: '0 9 * * *', model: NUMERIC });
+  await check('正样本：数字 providerId 能创建任务（本机自增 id）', () => {
+    assert.equal(created.ok, true, created.error);
+    // 快照统一存字符串，避免「3」与 3 在不同通道各自成立（运行时 resolveSecret 有 Number() 兜底）
+    assert.equal(created.task.model.providerId, '3');
+    assert.equal(created.task.model.model, 'qwen3-8b');
+  });
+
+  const patched = await save(null, { id: created.task.id, model: { ...NUMERIC, providerId: 7 } });
+  await check('正样本：已有任务改模型也能过（用户报错走的正是这条）', () => {
+    assert.equal(patched.ok, true, patched.error);
+    assert.equal(patched.task.model.providerId, '7');
+  });
+
+  const patchedStr = await save(null, { id: created.task.id, model: { ...NUMERIC, providerId: 'deepseek' } });
+  await check('正样本：字符串 providerId（厂商名/全局）同样能过', () => {
+    assert.equal(patchedStr.ok, true, patchedStr.error);
+    assert.equal(patchedStr.task.model.providerId, 'deepseek');
+  });
+
+  const cleared = await save(null, { id: created.task.id, model: null });
+  await check('正样本：model:null 能清空（恢复跟随会话）', () => {
+    assert.equal(cleared.ok, true, cleared.error);
+    assert.equal(cleared.task.model, null);
+  });
+
+  for (const [label, bad] of [['对象', {}], ['数组', []], ['空串', ''], ['布尔', true]]) {
+    const r2 = await save(null, { id: created.task.id, model: { ...NUMERIC, providerId: bad } });
+    await check(`负样本：providerId 为${label}必须拒绝`, () => {
+      assert.equal(r2.ok, false, '应拒绝而放过了');
+      assert.match(String(r2.error), /providerId/);
+    });
+  }
+
+  const sm = await setModel(null, { ...NUMERIC });
+  await check('正样本：scheduled:setModel 收数字 providerId', () => {
+    assert.equal(sm.ok, true, sm.error);
+    assert.equal(scheduler.getModel().providerId, 3);
+  });
+  const smBad = await setModel(null, { ...NUMERIC, providerId: { nested: 1 } });
+  await check('负样本：setModel 拒对象形态 providerId', () => {
+    assert.equal(smBad.ok, false);
+  });
+
   // startScheduler 会起 20s 轮询，不关掉进程永不退出（run-all 会按 180s 超时判崩溃）
   scheduler.stopScheduler();
   console.log(`\nscheduled-task-model: ${pass}/${total} 通过`);
