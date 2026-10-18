@@ -829,4 +829,65 @@ requiring third-party attribution declares it within the asset itself.
   期 2 / 期 3 的 UI（tier 徽章 / Profile 选择器 / 能力降级双段控件 / 工具轨迹标签）**未在真机做视觉复核**，
   建议重点验证「本机服务」展开区与对话工具轨迹两处的观感一致性。
 
+## 2026-10-19 v0.6.0-beta 发布：品牌头改版 + slogan 更新 + 打包与 GitHub Release
+
+- **会话的背景**：期 1/2/3（MCP 三层治理）全部落地并通过整体审查后，用户要求发版：版本号升至
+  `0.6.0-beta`，侧边栏品牌头改版（版本号右对齐到 logo 同行、slogan 改为「专注于本地隐私的AI工作台」
+  并在版本号下一行单行显示），推送到 GitHub 并把 dmg 挂到 Release。本轮还回答了「MCP 本地启动
+  如何验证」与「还有哪些任务没做」两个问题。
+- **会话的主要目的**：① 品牌头 UI 改版与双语 slogan 更新；② 三处 package.json 版本提升；
+  ③ 门禁验证；④ electron-builder 打包 dmg；⑤ git commit + tag + push + GitHub Release 上传产物。
+- **完成的主要任务**：
+  1. `Sidebar.jsx` 品牌行重构：`justify-between` 布局让版本号右对齐（`v0.6.0 beta`，自动去连字符、
+     删除「（早期预览版）」后缀引用），slogan 单独一行 `truncate` 单行显示；
+  2. `sidebar.json`（zh/en）：`tagline` 改为「专注于本地隐私的AI工作台」/
+     "Privacy-focused local AI workbench"，删除不再被引用的 `beta` key；
+  3. `desktop/`、`desktop/renderer/`、`server/` 三处 `package.json` 版本 `0.5.5-beta → 0.6.0-beta`；
+  4. 打包：`npx electron-builder --mac --publish never` 产出 `MJCode-0.6.0-beta-mac-arm64.dmg`（120MB）、
+     `.zip`、两个 `.blockmap` 与更新清单 `latest-mac.yml`（0.6.0-beta，供 electron-updater 差量升级）；
+  5. 发布（网络阻断 workaround，见下）：Git Data API 复刻提交 + tag → Release 创建 + 5 产物上传；
+  6. 顺带答疑：MCP 启动成功判据（日志 103 工具汇总对账 / 设置→本机服务绿勾 / 对话实测工具调用）；
+     未尽事项盘点（灰度切换、真机验证、tools-cwd 既有失败等）。
+- **会话中主要使用的技术栈**：React 布局（flex justify-between / truncate）、i18n 双语包、
+  electron-builder（dmg/zip/blockmap/latest-mac.yml）、GitHub REST API
+  （Git Data：blobs/trees/commits/refs；Releases：create/upload assets）、git 内容寻址原理。
+- **关键决策和解决方案**：
+  - **git push 被阻断（github.com:443 连接超时，系统代理关闭且无本地代理端口），但 api.github.com /
+    uploads.github.com / ssh.github.com 全通** → 改走 **Git Data API 复刻提交**：逐文件传 blob
+    （内容寻址，返回 SHA 必须等于本地 SHA）→ 以 `base_tree` 建 tree（校验等于本地 tree SHA）→
+    复刻 author/committer/message 建 commit → PATCH refs/heads/main → 建 tag ref；
+  - **commit SHA 与本地不一致的排障**：远端 commit `a586c12d` ≠ 本地 `1d05d48d`（tree/parent/时间全同），
+    定位为 `%B` 取消息时携带了格式层尾换行、而本地对象消息**无**尾换行——用
+    `git hash-object -t commit` 对两种变体哈希比对确认（as-is 命中远端 SHA），
+    在本地重建远端 commit 对象后 `reset --hard` + 同步 tracking ref + `tag -f`，
+    本地与远端回到 **0 分叉**，后续网络恢复可正常 push 不冲突；
+  - **打包自动发布报 GH_TOKEN 缺失**：`package.json` 的 `build.publish` 指向 GitHub 导致
+    `npm run dist:mac` 在上传阶段失败（产物已产出但 `latest-mac.yml` 未更新）→ 改用
+    `--publish never` 重打，得到 0.6.0 的完整更新清单；后续若走 CI 自动发布再配 GH_TOKEN；
+  - **Release 资产上传**：`gh api` 创建 Release（沿用历史 Pre-release 风格），产物经
+    `curl → uploads.github.com` 逐个上传（dmg/zip/2×blockmap/latest-mac.yml）。
+- **会话中主要使用的工具**：Read/Grep（定位品牌头与 i18n key）、Edit、Shell（门禁/打包/API 发布）、
+  `node` 内联脚本（commit 对象哈希比对与重建）、TodoWrite、后台任务上传产物。
+- **修改了哪些文件**：
+  - 修改：`desktop/renderer/src/components/Sidebar.jsx`、
+    `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/sidebar.json`、
+    `desktop/package.json`、`desktop/renderer/package.json`、`server/package.json`、`README.md`。
+- **文件修改的详细内容**：
+  - **`Sidebar.jsx`**：品牌行拆为「左 logo+名称 / 右版本号」双列（版本号 `shrink-0` 防挤压，
+    `version.replace(/-/g,' ')` 显示为 `v0.6.0 beta`），slogan 行移除版本拼接改为纯 `tagline`；
+    原因：兑现「版本号右对齐 + slogan 独立一行」的视觉要求，同时去掉冗余的「beta（早期预览版）」重复文案。
+  - **`sidebar.json`（zh/en）**：`tagline` 文案更新、`beta` key 删除；原因：新 slogan 定位（隐私优先），
+    且 key 已无引用（i18n 双向一致性门禁验证通过）。
+  - **三处 `package.json`**：版本号 0.6.0-beta；原因：发版（electron-builder 产物命名与
+    `app.getVersion()` 均取自 desktop 版本）。
+- **验证结果（真实输出）**：
+  - `npm run typecheck` exit 0；`npm run lint` **0 error**（159 条既有 warning，零新增）；
+  - `i18n` 6/6、`i18n-placeholder` 3/3、`render-smoke` 7/7 通过；
+  - 打包：dmg 120,665,005 bytes + zip 115,090,056 bytes + blockmap ×2 + `latest-mac.yml`（version 0.6.0-beta）；
+  - API 复刻：122 blob 全部 SHA 一致；tree `b3edc409` 与本地一致；远端 main/tag `a586c12d`，
+    本地重建对象后 0 分叉；
+  - Release：`v0.6.0-beta` 创建成功（id 416781245），5 个资产上传完成。
+- **未验证部分（诚实声明）**：改版后的品牌头 UI 未在 Electron 真机做视觉复核；
+  dmg 安装包未做安装运行验证；Release 资产的下载可用性以 GitHub 页面为准。
+
 
