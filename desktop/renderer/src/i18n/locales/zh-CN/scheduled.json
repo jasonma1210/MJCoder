@@ -31,6 +31,7 @@
   "statusRunning": "执行中",
   "statusMissed": "已错过",
   "autoPaused": "已自动暂停：{reason}",
+  "pendingCount": "待确认 {n} 项",
   "catchupTrigger": "· 补跑",
   "autoLaunch": "开机自动运行",
   "autoLaunchHint": "开机时自动启动 MJ Coder，定时任务不再因应用未开而错过",

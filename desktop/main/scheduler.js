@@ -286,6 +286,9 @@ async function runTask(id, trigger = 'manual') {
     channel: useAgent ? 'agent' : 'chat', // P0-D：执行通道可观测
     tools: 0,                              // Agent 通道的工具调用计数
     tokens: null,                          // Agent 通道的 token 用量 {prompt_tokens, completion_tokens}
+    // 待确认动作：只有 Agent 通道会用对外闸门，但字段必须在**所有**路径上都存在
+    //（chat 通道与异常路径不写它，缺省会让收尾处的 .length 直接抛，把整个任务变成崩溃）
+    pending_actions: [],
   };
   store.runs.unshift(run);
   store.runs = store.runs.slice(0, MAX_RUNS);
@@ -297,10 +300,16 @@ async function runTask(id, trigger = 'manual') {
   const timeoutTimer = setTimeout(() => ctl.abort(), taskTimeoutMs);
   try {
     if (useAgent) {
-      const r = await execCtx.runAgentTask({ prompt: t.prompt, model, signal: ctl.signal, taskId: id });
+      const r = await execCtx.runAgentTask({
+        prompt: t.prompt, model, signal: ctl.signal, taskId: id,
+        // 任务级放行开关：默认（缺省）拦截对外/不可逆动作，转成「待确认动作清单」
+        externalPolicy: t.external_policy === 'allow' ? 'allow' : 'block',
+      });
       run.output = String(r?.output || '').slice(0, 20000);
       run.tools = Number(r?.toolCalls) || 0;
       run.tokens = r?.usage || null;
+      // 被闸门拦下的对外动作：随运行记录 + 归档 md 一起落盘（早上人工确认的唯一入口）
+      run.pending_actions = Array.isArray(r?.pendingActions) ? r.pendingActions.slice(0, 20) : [];
       // V 层结论随运行记录落盘：无人值守下这是唯一能回答「这次到底判过没判、判成什么」的地方
       run.verify = r?.verify || null;
       // 没抛异常 ≠ 成功：模型自述做不到时要如实标失败
@@ -343,6 +352,8 @@ async function runTask(id, trigger = 'manual') {
     : String(run.error || run.output || '')).slice(0, LAST_RESULT_MAX);
   t.missed = false; // 实际执行过（无论成败）即不再是「错过」态
   delete t.missed_at;
+  // 待确认动作计数写回任务：UI 卡片据此显示「N 项待确认」（不把清单塞进任务对象，它随 run 走）
+  t.pending_count = Array.isArray(run.pending_actions) ? run.pending_actions.length : 0;
   // ── 任务级熔断 ──
   // 无人值守最贵的故障不是「某一次判错」，而是「半夜起每小时挂一次、早上才发现」。
   // 连续失败到阈值就自动暂停任务并留痕，人早上回来再决定是否恢复 —— 与 ChatGPT 定时任务的
@@ -375,7 +386,7 @@ async function runTask(id, trigger = 'manual') {
   }
   persist();
   notify();
-  return { ok: run.status === 'success', output: run.output, error: run.error };
+  return { ok: run.status === 'success', output: run.output, error: run.error, pendingActions: run.pending_actions };
 }
 
 function tick() {

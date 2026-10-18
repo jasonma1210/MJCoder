@@ -364,6 +364,12 @@ export default function ScheduledTasks() {
                   <span className="truncate">{task.name}</span>
                   {!task.enabled && <span className="text-xs text-text2 shrink-0">{t('scheduled.paused')}</span>}
                   {meta && <span className={`text-xs shrink-0 ${meta.cls}`}>{t('scheduled.lastStatus', { label: t(meta.labelKey) })}</span>}
+                  {/* 待确认动作：定时任务默认不执行对外动作，被拦下的会攒成清单（归档 md 里有明细） */}
+                  {Number(task.pending_count) > 0 && (
+                    <span className="text-xs shrink-0 px-1.5 rounded bg-input text-text2">
+                      {t('scheduled.pendingCount', { n: task.pending_count })}
+                    </span>
+                  )}
                   {task.valid_until && (
                     <span className="text-xs text-text2 shrink-0" title={t('scheduled.validUntilTitle')}>{t('scheduled.untilPrefix', { date: task.valid_until })}</span>
                   )}

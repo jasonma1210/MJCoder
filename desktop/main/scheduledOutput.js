@@ -67,7 +67,15 @@ function renderRunSection(run, at = new Date()) {
   const body = ok
     ? String(run.output || '（本次运行没有产出文本）').trim()
     : String(run.output || '').trim() || '（无输出）';
-  return `${head}\n\n${meta}\n\n${body}\n\n`;
+  // 待确认动作清单：定时任务默认不执行对外/不可逆动作，把它们攒在这里让人早上处理。
+  // 放在产物里而不是只留在任务对象里 —— 归档 md 是应用外唯一可查阅的出口。
+  const pending = Array.isArray(run.pending_actions) ? run.pending_actions : [];
+  const pendingBlock = pending.length
+    ? `\n\n### 待确认动作（${pending.length} 项，本次未执行）\n\n`
+      + pending.map((p, i) => `${i + 1}. \`${p.tool}\`${p.command ? `：\`${String(p.command).slice(0, 200)}\`` : ''}`).join('\n')
+      + '\n\n> 无人值守不执行对外/不可逆动作。确认无风险后请手动执行，或在该任务设置中允许对外动作。'
+    : '';
+  return `${head}\n\n${meta}\n\n${body}${pendingBlock}\n\n`;
 }
 
 // 追加一次运行记录到当天文件；首次写入时补文件头（任务名 + 日期 + 计划）

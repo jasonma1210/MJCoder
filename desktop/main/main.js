@@ -255,7 +255,15 @@ runTrace.initRunTrace(app.getPath('userData'));
 // P2-8 / V-L1：V 层判定落盘目录（userData/eval/verdicts-YYYYMMDD.jsonl，仅元数据，不上报）
 require('./verifyRun').initVerifyRun(app.getPath('userData'));
 // 定时通道的 V 层装配（L1 全量 + L3 风险门/抽样 + 无人值守 fail-closed）
-const { createScheduledVerify } = require('./scheduledVerify');
+const { createScheduledVerify, createScheduledL3Target } = require('./scheduledVerify');
+// 对外动作闸门（产物形态即校验）：默认拦截提交/推送/MCP/破坏性 shell，转成「待确认动作清单」
+const { createScheduledGuard } = require('./scheduledGuard');
+// L3 评审目标工厂：延迟到调用时解析（配置可变，且启动早期 model 尚未就绪）
+const scheduledL3Target = createScheduledL3Target({
+  resolveModel: () => scheduler.getModel(),
+  getModelOverrides: () => localStore?.getPreference('model_overrides') || {},
+  chatOnce: (p, m) => scheduledChatOnce(p, m),
+});
 
 // T2-5：本地崩溃/异常聚合（结构化 JSONL + trace 尾部 + 渲染层错误转发 + 原生崩溃 dump）。
 // 全部落本机不上传；agentRunner 在本文件后段声明，经 getter 延迟读取（异常发生才调用）。
@@ -960,6 +968,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
   // V 层：L1 对账全量跑（零成本）+ L3 按风险门/抽样触发，且**无人值守 fail-closed**
   //（判不出来就不许宣告成功）。策略与成本口径见 main/scheduledVerify.js 的注释。
   const sv = createScheduledVerify({ taskId, cwd, ...scheduledL3Target() });
+  // 对外动作闸门：默认拦（无人值守没有人能批准），任务显式 allow 才放行
+  const sguard = createScheduledGuard({ enabled: schedModel.externalPolicy !== 'allow' });
   let toolCount = 0;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };
   const agentCore = await loadAgentCore();
@@ -981,7 +991,7 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     chatRetryBaseMs: 2000, // 无人值守：退避基数放宽，弱网下更耐心
     systemPrompt: '你是定时任务执行器：使用工具完成任务提示词中的要求，产出精炼可读的结果摘要。'
       + '不要反问、不要输出无关寒暄；工具失败时换方式重试或如实说明，不要假装完成。',
-    toolHandlers: scheduledToolHandlers(),
+    toolHandlers: sguard.wrap(scheduledToolHandlers()),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
     onTrace: (evt) => sv.onTrace(evt),
     onToolCall: (tc) => { toolCount += 1; sv.onToolCall(tc); },
@@ -991,33 +1001,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
   const vres = await sv.finish(finalText || '');
   return {
     output: finalText || '', toolCalls: toolCount, usage: totalUsage,
-    verify: vres.verify, delivery: vres.delivery,
+    verify: vres.verify, delivery: vres.delivery, pendingActions: sguard.take(),
   };
-}
-
-// L3 独立评审用的模型与通道：优先分档的 compact 槽（便宜档），未配置则跟随主模型。
-// 用非流式单轮通道（scheduledChatOnce）：评审不需要工具，也不需要流式。
-// 返回 { l3Model, l3Chat }；拿不到模型时返回空对象（宿主会如实标「未注入 chat」→ fail-closed）。
-function scheduledL3Target() {
-  try {
-    const ov = (localStore?.getPreference('model_overrides') || {}).compact;
-    const base = scheduler.getModel();
-    // 分档槽位形状不全（缺 providerId/model）时**回落主模型**：与 workerPool 同一纪律，
-    // 否则一个坏配置会让每次「有对外动作」的定时任务都判成未验证（fail-closed 放大故障）。
-    const m = (ov && ov.model && ov.providerId)
-      ? { providerId: ov.providerId, isGlobal: !!ov.isGlobal, baseUrl: ov.baseUrl || '', model: ov.model }
-      : base;
-    if (!m || !m.model) return {};
-    return {
-      l3Model: m.model,
-      l3Chat: (p) => scheduledChatOnce({ messages: p.messages }, {
-        providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model,
-      }),
-    };
-  } catch (e) {
-    console.warn('[scheduled] L3 评审目标解析失败（将按未注入处理）:', e.message);
-    return {};
-  }
 }
 
 // ═══════════════════════════════════════════

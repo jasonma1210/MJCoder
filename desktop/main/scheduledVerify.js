@@ -79,4 +79,34 @@ function createScheduledVerify({
   };
 }
 
-module.exports = { createScheduledVerify, DEFAULT_SAMPLE_RATE };
+/**
+ * L3 独立评审用的模型与通道（从 main.js 抽出，避免 main 行数门禁逼着写丑代码）。
+ * 优先分档的 compact 槽（便宜档：guardrail 本质是分类任务），未配置或形状不全则跟随主模型。
+ * 用非流式单轮通道（chatOnce）：评审不需要工具，也不需要流式。
+ * 返回一个工厂函数：调用时再解析（配置可能在运行期变更，且启动早期 model 尚未就绪）。
+ */
+function createScheduledL3Target({ resolveModel, getModelOverrides, chatOnce } = {}) {
+  return () => {
+    try {
+      const ov = (typeof getModelOverrides === 'function' ? getModelOverrides() || {} : {}).compact;
+      const base = typeof resolveModel === 'function' ? resolveModel() : null;
+      // 分档槽位形状不全（缺 providerId/model）时**回落主模型**：与 workerPool 同一纪律，
+      // 否则一个坏配置会让每次「有对外动作」的定时任务都判成未验证（fail-closed 放大故障）。
+      const m = (ov && ov.model && ov.providerId)
+        ? { providerId: ov.providerId, isGlobal: !!ov.isGlobal, baseUrl: ov.baseUrl || '', model: ov.model }
+        : base;
+      if (!m || !m.model || typeof chatOnce !== 'function') return {};
+      return {
+        l3Model: m.model,
+        l3Chat: (p) => chatOnce({ messages: p.messages }, {
+          providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model,
+        }),
+      };
+    } catch (e) {
+      console.warn('[scheduled] L3 评审目标解析失败（将按未注入处理）:', e.message);
+      return {};
+    }
+  };
+}
+
+module.exports = { createScheduledVerify, createScheduledL3Target, DEFAULT_SAMPLE_RATE };
