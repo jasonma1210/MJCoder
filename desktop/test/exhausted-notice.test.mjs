@@ -7,7 +7,7 @@
 //
 // 判据：把 contextStuck 分支删掉（退回旧文案）、或让 unattended 仍出现「发送继续」、
 // 或把窗口压不动说成「预算已用尽」—— 本套件必须变红。
-import { buildExhaustedNotice } from '../agent-core/index.js';
+import { buildExhaustedNotice, buildHandoff, runAgent } from '../agent-core/index.js';
 
 let pass = 0;
 let fail = 0;
@@ -64,5 +64,57 @@ const usage = { prompt_tokens: 48000, completion_tokens: 2097 }; // 用户实测
   check('已有部分产出时保留它（不覆盖模型写的正文）', withText.startsWith('已抓到 12 条'));
 }
 
+// ⑦ 自动换新窗口续跑（2026-10-18 新增）：交接文本零模型调用、来自台账
+{
+  const ledger = [
+    { name: 'web_search', command: 'AI news 2026-10-18', ok: true },
+    { name: 'write_file', paths: ['2026-10-18_news.md'], ok: true },
+    { name: 'git_commit', ok: false },
+  ];
+  const h = buildHandoff({ ledger, roundsUsed: 3, restartNo: 1, maxRestarts: 2 });
+  check('交接说明是第几次自动续跑', /第 1\/2 次自动换新窗口/.test(h));
+  check('交接带轮数与最近的工具动作（模型据此知道做到哪了）',
+    /已执行 3 轮/.test(h) && /write_file/.test(h) && /2026-10-18_news\.md/.test(h));
+  check('交接明确告诉模型「不要重做已完成步骤」', /不要重做已完成的步骤/.test(h));
+  check('交接自带「自动分批」指令（这正是用户要的：拆活由模型做，不用用户写）',
+    /每批不超过 10 条/.test(h) && /立即写入文件/.test(h));
+  check('失败的工具动作被标注出来（避免模型以为那步成功了）', /（失败）/.test(h));
+  check('台账为空时不炸', buildHandoff({}).length > 0);
+  const many = buildHandoff({ ledger: Array.from({ length: 50 }, (_, i) => ({ name: `t${i}` })) });
+  check('交接只带最近 20 条（否则新窗口一开始就被塞满）',
+    (many.match(/^- t\d+/gm) || []).length === 20, `${(many.match(/^- t\d+/gm) || []).length} 条`);
+}
+{
+  const t = buildExhaustedNotice({ budgetKind: 'tokens', contextStuck: true, unattended: true, usage, autoRestarts: 2 });
+  check('续跑额度用尽时如实说「已自动续跑 2 次仍不够」（而不是说压不动）', /已自动换新窗口续跑 2 次/.test(t));
+}
+
 console.log(`\nexhausted-notice: ${pass}/${pass + fail} 通过`);
 if (fail) process.exitCode = 1;
+
+// ⑧ 真实链路：窗口压不动时**自动换新窗口续跑**（而不是立刻挂起）
+{
+  const traces = [];
+  let doneText = '';
+  const model = { provider: { id: 'p', isGlobal: false, base_url: 'https://x' }, model: { model_id: 'tiny', context_window: 800 } };
+  const bigUser = '请抓取 100 条新闻并写入文件。'.repeat(200); // ≈ 3000+ chars ≈ 900+ tokens
+  await runAgent({
+    messages: [{ role: 'user', content: bigUser }],
+    model,
+    // chat 通道必须挂在 toolHandlers.chat 上（runAgent 的模型调用入口）
+    toolHandlers: { chat: async () => ({ content: 'done', tool_calls: [] }) },
+    tokenBudget: 0,
+    maxRounds: 8,
+    unattended: true,
+    onMessage: () => {},
+    onTrace: (e) => traces.push(e),
+    onDone: (t) => { doneText = t; },
+  });
+  const restarts = traces.filter((e) => e.type === 'auto_restart');
+  check('窗口压不动时自动续跑，且有次数上限（不会无限重启）',
+    restarts.length === 2, `restarts=${restarts.length}`);
+  check('每次续跑都留 trace（可观测，便于事后判断"它偷偷重启了"）',
+    restarts.every((e) => typeof e.n === 'number' && e.n >= 1));
+  check('续跑额度用尽后如实收尾，不提「发送继续」（无人值守）',
+    /自动换新窗口续跑 2 次/.test(doneText) && !/发送「继续」/.test(doneText), doneText.slice(0, 80));
+}

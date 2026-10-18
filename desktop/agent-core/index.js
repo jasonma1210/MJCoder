@@ -600,6 +600,11 @@ function stoppedEarlyHint(budgetKind, tokenExhausted, objective) {
 // 真机复盘：单次救援对文件密集型审查任务不够（逐文件读源码单窗口仍打满），
 // 放宽到 3 次（累计消耗上限 ≈ 4 × tokenBudget），仍保留失控烧 token 的硬防线。
 const TOKEN_RESCUE_MAX = 3;
+// 上下文压不动时「自动换新窗口续跑」的次数上限。
+// 为什么需要：压缩与硬截断都无处下手时，旧实现直接挂起并让用户「发送继续」——
+// 定时任务没人能发，任务就报废了。改成自动用台账交接、换新窗口继续跑。
+// 上限 2 次：每次重启都要重新读一遍任务上下文，再多就是在为一个跑不完的任务烧钱。
+const MAX_AUTO_RESTARTS = 2;
 // 预判式触发比例（复盘文档 P1-2 采纳）：上下文达模型窗口 70% 即压缩。
 // 2026-10-17 语义修正：这个比例**只作用于上下文体积**，不再作用于「累计花费」——
 // 拿花费判"上下文过长"会导致小上下文被强制压缩（详见 budgetDecision 注释）。
@@ -678,7 +683,7 @@ export function budgetDecision({
 // 另外定时任务是无人值守的，不能对用户说「发送继续」（没有人能发）。
 export function buildExhaustedNotice({
   finalText = '', budgetKind = 'rounds', wallClockHit = false, runWallClockMs = 0,
-  tokenRescues = 0, usage = {}, contextStuck = false, unattended = false,
+  tokenRescues = 0, usage = {}, contextStuck = false, unattended = false, autoRestarts = 0,
 } = {}) {
   const total = Number(usage.prompt_tokens || 0) + Number(usage.completion_tokens || 0);
   const head = finalText || '任务尚未完成。';
@@ -687,11 +692,13 @@ export function buildExhaustedNotice({
       + '这是防失控上限，需要更长可调大任务时长预算。）'.trim();
   }
   if (budgetKind === 'tokens' && contextStuck) {
+    const why = autoRestarts > 0
+      ? `已自动换新窗口续跑 ${autoRestarts} 次仍不够`
+      : '且历史里没有可裁的早期内容——压缩与硬截断都无处下手';
     const tail = unattended
-      ? `（上下文已到模型窗口（累计 ${total} tokens），且历史里没有可裁的早期内容——压缩与硬截断都无处下手，`
-        + '继续跑只会空转。建议把任务拆小：分批抓取（例如每批 10 条、抓完立刻写进文件），'
-        + '或给这个任务换一个窗口更大的模型。）'
-      : `（上下文已到模型窗口（累计 ${total} tokens），且历史里没有可裁的早期内容。`
+      ? `（上下文已到模型窗口（累计 ${total} tokens），${why}，继续跑只会空转。`
+        + '请把任务拆小：分批抓取（例如每批 10 条、抓完立刻写进文件），或给这个任务换一个窗口更大的模型。）'
+      : `（上下文已到模型窗口（累计 ${total} tokens），${why}。`
         + '建议拆分任务，或换一个窗口更大的模型；也可以先「继续」让我基于现状收尾。）';
     return `${head}\n\n${tail}`.trim();
   }
@@ -702,6 +709,21 @@ export function buildExhaustedNotice({
   }
   return `${head}\n\n（单任务执行轮次预算已用尽，任务未完全完成。`
     + `${unattended ? '下次运行请缩小任务范围或调高轮次上限。' : '发送「继续」让我接着执行。'}）`.trim();
+}
+
+// 自动续跑的交接文本（纯函数）。上下文已经压满，**不能再调模型来写摘要**——
+// 所以交接内容只能来自台账（工具名 + 命令/路径）与轮数，零模型调用。
+export function buildHandoff({ ledger = [], roundsUsed = 0, restartNo = 1, maxRestarts = 2 } = {}) {
+  const lines = (Array.isArray(ledger) ? ledger : []).slice(-20).map((e) => {
+    const name = String(e?.name || '?');
+    const raw = String(e?.command || (Array.isArray(e?.paths) ? e.paths.slice(0, 3).join(', ') : '') || '');
+    const detail = raw.slice(0, 120);
+    return `- ${name}${detail ? `：${detail}` : ''}${e?.ok === false ? '（失败）' : ''}`;
+  });
+  return `【续跑交接】上一段因上下文达到模型窗口而中断（第 ${restartNo}/${maxRestarts} 次自动换新窗口）。\n`
+    + `已执行 ${roundsUsed} 轮，最近的工具动作为：\n${lines.join('\n') || '- （无）'}\n\n`
+    + '请从断点继续，**不要重做已完成的步骤**。若剩余工作量大，请自动分批处理：'
+    + '每批不超过 10 条，每批结果立即写入文件，写完不要再引用该批原文。';
 }
 
 // 需要透传审批档位的工具（主进程审批中心据此判定是否询问）
@@ -1996,6 +2018,8 @@ export async function runAgent({
   // 与 budgetKind='tokens' 并列的另一个真实原因：上下文已到窗口且**压不动**（历史里全是必留内容）。
   // 旧文案把它和「累计花费超预算」混为一谈，用户看到「token 预算已用尽（累计 50k）」会以为预算只有 50k。
   let contextStuck = false;
+  // 自动换新窗口续跑次数（用户实测：「获取 100 条新闻」在 32k 窗口上 3 轮就压不动）
+  let autoRestarts = 0;
   let tokenRescues = 0; // token 超限后已执行的自动压缩救援次数（上限 TOKEN_RESCUE_MAX）
   let tokenWindowSpent = 0; // token 预算口径：当前窗口累计消耗（压缩救援后清零）
   let contextRescued = false; // 上下文超限（provider 400）压缩救援已尝试过
@@ -2255,8 +2279,28 @@ export async function runAgent({
         tokenWindowSpent = 0;
         continue;
       }
-      // 降级二：连硬截断都无处可裁（历史里全是必留内容）——挂起让用户「继续」或新开会话，
-      // 而不是继续空转烧预算。kind 保持 'tokens'（新增取值会外溢到 workerPool 与收尾文案）。
+      // 降级二：连硬截断都无处可裁（历史里全是必留内容）。
+      // 2026-10-18：**先自动换新窗口续跑**，而不是立刻挂起。
+      // 用户实测「获取 100 条 AI 新闻」在 32k 窗口模型上 3 轮就压不动；旧实现直接停下并
+      // 让用户「发送继续」——定时任务没人能发，等于任务报废。
+      // 交接不调模型（上下文已满）：用台账重建一个精简上下文继续跑。
+      if (autoRestarts < MAX_AUTO_RESTARTS) {
+        autoRestarts += 1;
+        const head = splitFixedHead(convo);
+        convo = [
+          ...head.systems,
+          ...(head.firstUser ? [head.firstUser] : []),
+          { role: 'user', content: buildHandoff({ ledger: toolLedger, roundsUsed, restartNo: autoRestarts, maxRestarts: MAX_AUTO_RESTARTS }) },
+        ];
+        lastPromptTokens = null;
+        tokenWindowSpent = 0;
+        tokenRescues = 0;
+        contextStuck = false;
+        trace({ type: 'auto_restart', n: autoRestarts, roundsUsed, ledger: toolLedger.length });
+        console.warn(`[agent] 上下文压不动 → 自动换新窗口续跑（第 ${autoRestarts}/${MAX_AUTO_RESTARTS} 次），交接 ${toolLedger.length} 条台账`);
+        continue;
+      }
+      // 降级三：续跑额度也用尽——挂起并如实说明，绝不继续空转烧预算。
       budgetExhausted = true; budgetKind = 'tokens'; contextStuck = true;
       console.warn('[agent] 压缩与硬截断均无收益（历史已无早期内容可裁），挂起而非继续空转');
       try {
@@ -2729,7 +2773,7 @@ export async function runAgent({
     } else {
       finalText = buildExhaustedNotice({
         finalText, budgetKind, wallClockHit, runWallClockMs, tokenRescues, usage,
-        contextStuck, unattended,
+        contextStuck, unattended, autoRestarts,
       });
       // Phase 3-1：断点保存成功 → 明示恢复语义（继续 = 断点摘要接续，不重读全部文件）
       if (suspendNoticed && (budgetKind === 'tokens' || wallClockHit) && !unattended) {
