@@ -25,9 +25,28 @@ const WEB_FETCH_IMPL_TIMEOUT_MS = 30000;
 /** web_fetch 引擎看门狗（60s）：与实现侧保持 2 倍关系 */
 const WEB_FETCH_WATCHDOG_TIMEOUT_MS = 60000;
 
+// ── 工具组实现侧超时（P3 收口：原先 5 处散落在 exec.js 里的字面量）──
+// 这些值本身没变，集中到这里是为了「改超时只改一处」——散落字面量的问题是
+// 调一个数时永远不知道还有几处需要同步（与 P1-2 的三处不自洽同源）。
+/** apply_patch 执行（30s）：本地补丁应用，超时按失败返回而非挂死 */
+const PATCH_IMPL_TIMEOUT_MS = 30000;
+/** grep 检索（15s）：仓库级单次检索的 P99 */
+const GREP_IMPL_TIMEOUT_MS = 15000;
+/** find 检索（20s）：比 grep 多 5s（遍历目录树比读文件慢） */
+const FIND_IMPL_TIMEOUT_MS = 20000;
+/** git 写/网络类（30s）：commit / clone / fetch */
+const GIT_IMPL_TIMEOUT_MS = 30000;
+/** git 轻量只读（8s）：status / rev-parse 这类本地瞬时命令 */
+const GIT_QUICK_TIMEOUT_MS = 8000;
+
 module.exports = {
   SHELL_DEFAULT_TIMEOUT_MS,
   SHELL_WATCHDOG_TIMEOUT_MS,
   WEB_FETCH_IMPL_TIMEOUT_MS,
   WEB_FETCH_WATCHDOG_TIMEOUT_MS,
+  PATCH_IMPL_TIMEOUT_MS,
+  GREP_IMPL_TIMEOUT_MS,
+  FIND_IMPL_TIMEOUT_MS,
+  GIT_IMPL_TIMEOUT_MS,
+  GIT_QUICK_TIMEOUT_MS,
 };

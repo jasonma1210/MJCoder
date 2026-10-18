@@ -97,6 +97,9 @@ export const doneDataSchema = z.object({
 // 语义边界：verdict 只表示「自述与执行记录是否一致」，**不表示代码正确**（见 verifier.js 诚实边界）。
 export const verifyDataSchema = z.object({
   level: z.enum(['l1', 'l3']),
+  // 注：'UNKNOWN' 当前**没有生产方**（verifier 只产出 PASS/BLOCK/SKIP）。
+  // 保留它只为向前兼容 —— 若将来引入「无法判定」态（如台账格式变更），
+  // 旧版渲染层不会因未知枚举把整条事件降级成 error。**不要**按四态写 switch 的必填分支。
   verdict: z.enum(['PASS', 'BLOCK', 'SKIP', 'UNKNOWN']),
   ruleId: z.string().max(64).optional(),
   reason: z.string().max(600).optional(),

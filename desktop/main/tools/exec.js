@@ -82,7 +82,11 @@ const shellProfile = require('../cmd/shellProfile');
 // 文件预览单元（file:preview，2026-10-16 拆出）
 const preview = require('./previewTool');
 // P1-2：超时数字单一事实来源（与 webTools.js / 引擎看门狗对账；见 tools/timeouts.js 的不变式说明）
-const { SHELL_DEFAULT_TIMEOUT_MS } = require('./timeouts');
+const {
+  SHELL_DEFAULT_TIMEOUT_MS,
+  PATCH_IMPL_TIMEOUT_MS, GREP_IMPL_TIMEOUT_MS, FIND_IMPL_TIMEOUT_MS,
+  GIT_IMPL_TIMEOUT_MS, GIT_QUICK_TIMEOUT_MS,
+} = require('./timeouts');
 // 非沙箱兜底执行路径（P1-2 前置抽离：本文件 800 行门禁，改默认超时前必须先抽）
 const { runUnconfinedShell } = require('./execFallback');
 
@@ -458,7 +462,7 @@ async function executeWriteTool(toolName, { path: p, content, search, replace, p
     const timer = setTimeout(() => {
       child.kill();
       resolve({ stdout: stdout.slice(0, 10000), stderr: 'patch 执行超时', error: 'timeout', exitCode: -1 });
-    }, 30000);
+    }, PATCH_IMPL_TIMEOUT_MS);
     child.on('close', (code) => {
       clearTimeout(timer);
       // 已应用过的补丁：--forward 会跳过（hunk ignored），语义上应视为幂等成功。
@@ -570,7 +574,7 @@ async function toolGrep({ pattern, path: p, glob: include, cwd } = {}) {
   if (include) args.push('--include', String(include));
   args.push(String(pattern), p || '.');
   return new Promise((resolve) => {
-    execFile('grep', args, { cwd: base, timeout: 15000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout) => {
+    execFile('grep', args, { cwd: base, timeout: GREP_IMPL_TIMEOUT_MS, maxBuffer: 5 * 1024 * 1024 }, (error, stdout) => {
       resolve({ matches: (stdout || '').slice(0, 20000), cwd: base });
     });
   });
@@ -582,7 +586,7 @@ async function toolGlob({ pattern, path: p, cwd } = {}) {
   const base = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
   const args = [p || '.', '-name', String(pattern), '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*'];
   return new Promise((resolve) => {
-    execFile('find', args, { cwd: base, timeout: 20000 }, (error, stdout) => {
+    execFile('find', args, { cwd: base, timeout: FIND_IMPL_TIMEOUT_MS }, (error, stdout) => {
       resolve({ files: (stdout || '').trim().split('\n').filter(Boolean).slice(0, 100), cwd: base });
     });
   });
@@ -630,7 +634,7 @@ function runGit(args, cwd) {
   const target = cwd || defaultToolCwd(deps); // N2：漏传不回主进程 cwd
   return new Promise((resolve) => {
     // P0-1：git 子进程同样注册 + detached（随运行取消终止）；无 run 上下文的直连 IPC 自动跳过
-    const child = execFileDetached('git', args, { cwd: target, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFileDetached('git', args, { cwd: target, timeout: GIT_IMPL_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       resolve({ stdout: (stdout || '').slice(0, 30000), stderr: (stderr || '').slice(0, 5000), error: error?.message || null, cwd: target });
     });
     deps.registerChild(child);
@@ -691,7 +695,7 @@ function registerIpc() {
   // Git 环境信息（设置页 Git 面板：署名与可用性探测，只读）
   ipcMain.handle('tool:gitConfig', async (_, { cwd } = {}) => {
     const run = (args) => new Promise((resolve) => {
-      execFile('git', args, { cwd: cwd || process.cwd(), timeout: 8000 }, (err, stdout) => {
+      execFile('git', args, { cwd: cwd || process.cwd(), timeout: GIT_QUICK_TIMEOUT_MS }, (err, stdout) => {
         resolve(err ? '' : String(stdout).trim());
       });
     });

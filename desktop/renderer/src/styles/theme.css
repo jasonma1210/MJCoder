@@ -160,6 +160,9 @@
      浅色把描边加深一档保证可辨——不新增十六进制，只新增 token。 */
   --sem-knob: #ffffff;            --sem-knob-rgb: 255 255 255;
   --sem-knob-ring: #313131;       --sem-knob-ring-rgb: 49 49 49;
+  /* 注：`-rgb` 变体当前**无消费方**（Switch 只用 hex 版）。保留它们是为了满足
+     「每个颜色 token 必须 hex + rgb 双份」的纪律——一旦有人用 /opacity 修饰符
+     （rgb(var(--x-rgb) / .5)）就能直接复用，不必再补。宁留不删。 */
 }
 
 [data-theme="midnight"] {
