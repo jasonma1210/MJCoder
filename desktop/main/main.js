@@ -258,6 +258,10 @@ require('./verifyRun').initVerifyRun(app.getPath('userData'));
 const { createScheduledVerify, createScheduledL3Target } = require('./scheduledVerify');
 // 对外动作闸门（产物形态即校验）：默认拦截提交/推送/MCP/破坏性 shell，转成「待确认动作清单」
 const { createScheduledGuard } = require('./scheduledGuard');
+// 待确认动作的重放执行器（清单的一键执行）
+const { createScheduledReplay } = require('./scheduledReplay');
+// 事件触发入口（本地回环 HTTP，默认不监听）
+const { createScheduledEventServer } = require('./scheduledEventServer');
 // L3 评审目标工厂：延迟到调用时解析（配置可变，且启动早期 model 尚未就绪）
 const scheduledL3Target = createScheduledL3Target({
   resolveModel: () => scheduler.getModel(),
@@ -410,12 +414,16 @@ if (!app.requestSingleInstanceLock()) {
     scheduler.startScheduler({
       chatOnce: scheduledChatOnce,
       runAgentTask: runScheduledAgentTask,
+      // 清单的一键执行（幂等 + 重放前重新校验）
+      replayAction: replayScheduledAction,
       notify: (payload) => {
         for (const w of BrowserWindow.getAllWindows()) {
           try { w.webContents.send('scheduled:changed', payload); } catch { /* 窗口已销毁 */ }
         }
       },
     });
+    // 事件入口（默认不监听；MJ_SCHEDULED_EVENT_PORT 显式开启，仅绑 127.0.0.1 + token）
+    createScheduledEventServer({ ingest: (p) => scheduler.ingestEvent(p) }).start();
   });
 
 // T2-5：崩溃/异常聚合收口升级（原 M3-5 crash.log 纯文本 → 结构化 JSONL）：
@@ -792,6 +800,8 @@ const scheduledToolHandlers = () => buildScheduledToolHandlers({
   toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd,
   callMcpTool, prTools,
 });
+// 待确认动作的一键执行：拿**未包装**的原始工具表（用户点「执行」= 这次批准）
+const replayScheduledAction = createScheduledReplay({ getHandlers: scheduledToolHandlers });
 
 // P0-4：主进程 Agent 运行器——交互式会话工具循环迁移至主进程。
 // 渲染层只负责发起（agent:run）、订阅事件（agent:event）、中止（agent:abort）；
@@ -958,7 +968,7 @@ ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun
 // 定时任务 Agent 入口：scheduler.runTask 到点调用
 // 审批策略 auto-safe：L2 写操作自动放行（本地审计已留痕），L1 危险命令/L3 MCP 仍弹审批卡
 // （2 分钟无响应按拒绝，与交互式一致）；沙箱有项目目录 workspace-write、无目录 read-only（P0-B 一致）
-async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId = '' }) {
+async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId = '', runId = '', externalPolicy = 'block' }) {
   if (!schedModel || !schedModel.model) {
     throw new Error('未配置执行模型：请在任意会话中选择模型（定时任务复用会话模型与凭证）');
   }
@@ -969,7 +979,7 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
   //（判不出来就不许宣告成功）。策略与成本口径见 main/scheduledVerify.js 的注释。
   const sv = createScheduledVerify({ taskId, cwd, ...scheduledL3Target() });
   // 对外动作闸门：默认拦（无人值守没有人能批准），任务显式 allow 才放行
-  const sguard = createScheduledGuard({ enabled: schedModel.externalPolicy !== 'allow' });
+  const sguard = createScheduledGuard({ enabled: externalPolicy !== 'allow', runId, cwd });
   let toolCount = 0;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };
   const agentCore = await loadAgentCore();

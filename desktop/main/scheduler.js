@@ -36,7 +36,7 @@ const SCAN_WINDOW_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const LAST_RESULT_MAX = 500;   // P0-8b：任务对象上 last_result 的截断长度（运行记录内 output 仍为 20000）
 
 let store = { tasks: [], runs: [] };
-let execCtx = { chatOnce: null, runAgentTask: null, model: null };
+let execCtx = { chatOnce: null, runAgentTask: null, replayAction: null, model: null };
 let timer = null;
 let notifying = null;
 let taskTimeoutMs = DEFAULT_TASK_TIMEOUT_MS;
@@ -191,6 +191,8 @@ function markMissed(t, reason, latestMatch) {
 async function scanMissedTasks(now = new Date()) {
   for (const t of store.tasks) {
     if (!t.enabled) continue;
+    // 事件触发任务不走时钟（由 ingestEvent 驱动），否则会拿空 schedule 去匹配
+    if (t.trigger_type === 'event') continue;
     if (t.valid_until && now.getTime() > new Date(`${t.valid_until}T23:59:59`).getTime()) continue;
     if (!cronValid(t.schedule)) continue;
     const rawFrom = t.last_fired || t.last_run_at || t.created_at;
@@ -302,6 +304,8 @@ async function runTask(id, trigger = 'manual') {
     if (useAgent) {
       const r = await execCtx.runAgentTask({
         prompt: t.prompt, model, signal: ctl.signal, taskId: id,
+        // 单次运行的唯一 id：待确认动作的幂等键 = `${runId}#序号`，必须按 run 唯一
+        runId: run.id,
         // 任务级放行开关：默认（缺省）拦截对外/不可逆动作，转成「待确认动作清单」
         externalPolicy: t.external_policy === 'allow' ? 'allow' : 'block',
       });
@@ -359,9 +363,9 @@ async function runTask(id, trigger = 'manual') {
   // 连续失败到阈值就自动暂停任务并留痕，人早上回来再决定是否恢复 —— 与 ChatGPT 定时任务的
   // auto-pause 同一取向（宁可停摆也不静默烧钱/静默失败）。
   t.fail_streak = run.status === 'success' ? 0 : (Number(t.fail_streak) || 0) + 1;
-  // 只在**自动触发**（scheduled/catchup）时熔断：用户手动点「立即运行」失败三次不该把任务停掉，
-  // 那是他在排查问题。trigger 取值见 runTask 的四个调用点。
-  const autoTrigger = trigger === 'scheduled' || trigger === 'catchup';
+  // 只在**自动触发**（scheduled/catchup/event）时熔断：用户手动点「立即运行」失败三次不该把任务停掉，
+  // 那是他在排查问题。trigger 取值见 runTask 的调用点（事件触发同样会自动反复来，必须计入）。
+  const autoTrigger = trigger === 'scheduled' || trigger === 'catchup' || trigger === 'event';
   if (autoTrigger && t.enabled && shouldAutoPause({ failStreak: t.fail_streak })) {
     t.enabled = false;
     t.auto_paused_at = new Date().toISOString();
@@ -394,6 +398,8 @@ function tick() {
   const key = minuteIso(now);
   for (const t of store.tasks) {
     if (!t.enabled) continue;
+    // 事件触发任务不走时钟（由 ingestEvent 驱动），否则会拿空 schedule 去匹配
+    if (t.trigger_type === 'event') continue;
     if (t.valid_until && now.getTime() > new Date(`${t.valid_until}T23:59:59`).getTime()) continue;
     if (!cronValid(t.schedule) || !cronMatches(t.schedule, now)) continue;
     // P0-8a：幂等游标从内存 Map 改为任务对象上的持久化字段（重启后不重复触发，
@@ -410,13 +416,58 @@ function notify() {
   try { notifying({ tasks: store.tasks, runs: store.runs }); } catch { /* 通知失败不影响调度 */ }
 }
 
+// ── 事件触发 ──
+// 去重环：同一事件 id 不重复触发（webhook 重投、适配器重连都会重放同一事件）。
+// 合并：任务正在跑就直接合掉（不进队列）—— 一个 PR 能连发 opened/synchronize/commented 三条，
+// 排队只会把同一件事做三遍、烧三份 token。
+const EVENT_SEEN_MAX = 50;
+
+// 纯判定：哪些任务该为此事件 fired（去重 + 合并），抽出来便于单测（不碰 store / 不真跑）
+function selectEventTargets(tasks, { source, event, id }, isRunning = () => false) {
+  const targets = [];
+  const skipped = [];
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (!t || !t.enabled || t.trigger_type !== 'event') continue;
+    if (t.event_source !== source || t.event_name !== event) continue;
+    const seen = Array.isArray(t.event_seen) ? t.event_seen : [];
+    if (seen.includes(id)) { skipped.push({ id: t.id, reason: 'duplicate' }); continue; }
+    if (isRunning(t.id)) { skipped.push({ id: t.id, reason: 'busy' }); continue; }
+    targets.push(t);
+  }
+  return { targets, skipped };
+}
+
+async function ingestEvent({ source, event, id } = {}) {
+  const src = String(source || '').trim();
+  const evt = String(event || '').trim();
+  if (!src || !evt) return { ok: false, error: 'source 与 event 必填', matched: 0, started: 0, skipped: [] };
+  const eid = String(id || '').trim() || cryptoId();
+  const { targets, skipped } = selectEventTargets(store.tasks, { source: src, event: evt, id: eid }, (tid) => running.has(tid));
+  let started = 0;
+  for (const t of targets) {
+    const seen = Array.isArray(t.event_seen) ? t.event_seen : [];
+    t.event_seen = [...seen, eid].slice(-EVENT_SEEN_MAX);
+    t.last_fired = minuteIso(new Date());
+    persist();
+    runTask(t.id, 'event').catch((e) => console.error('[scheduled] 事件触发失败:', e.message));
+    started += 1;
+  }
+  if (started) notify();
+  return { ok: true, eventId: eid, matched: targets.length + skipped.length, started, skipped };
+}
+
+function cryptoId() {
+  try { return require('node:crypto').randomBytes(6).toString('hex'); } catch { return String(Date.now()); }
+}
+
 // ── 对外 API ──
 // startScheduler 对执行上下文是权威定义：未提供的通道显式置空（不保留上一次的注入），
 // 避免调用方换了通道组合后旧通道仍然生效
-function startScheduler({ chatOnce, runAgentTask, notify: n, taskTimeoutMs: tt } = {}) {
+function startScheduler({ chatOnce, runAgentTask, replayAction, notify: n, taskTimeoutMs: tt } = {}) {
   loadStore();
   execCtx.chatOnce = typeof chatOnce === 'function' ? chatOnce : null;
   execCtx.runAgentTask = typeof runAgentTask === 'function' ? runAgentTask : null;
+  execCtx.replayAction = typeof replayAction === 'function' ? replayAction : null;
   if (Number(tt) > 0) taskTimeoutMs = Number(tt);
   notifying = n || null;
   if (timer) clearInterval(timer);
@@ -438,16 +489,33 @@ function getModel() { return execCtx.model; }
 function setModel(model) { execCtx.model = model || null; }
 
 // 创建定时任务（IPC 与模型工具共用同一实现，避免两套校验规则漂移）。
-function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw } = {}) {
+function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw, external_policy: externalPolicy, trigger_type: triggerType, event_source: eventSource, event_name: eventName } = {}) {
   const nm = String(name || '').trim();
   const pr = String(prompt || '');
   const sc = String(schedule || '').trim();
-  if (!nm || !pr || !sc) return { ok: false, error: '任务名称、提示词与 Cron 表达式必填' };
-  if (!cronValid(sc)) return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
+  const isEvent = triggerType === 'event';
+  if (!nm || !pr) return { ok: false, error: '任务名称与提示词必填' };
+  if (isEvent) {
+    if (!String(eventSource || '').trim() || !String(eventName || '').trim()) {
+      return { ok: false, error: '事件触发任务必须填写事件来源与事件名' };
+    }
+  } else if (!cronValid(sc)) {
+    return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
+  }
   const t = {
     id: `t-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
-    name: nm, prompt: pr, schedule: sc,
+    name: nm, prompt: pr,
+    // 事件触发任务没有 cron（schedule 留空，tick 会跳过它）
+    schedule: isEvent ? '' : sc,
+    trigger_type: isEvent ? 'event' : 'cron',
+    ...(isEvent ? {
+      event_source: String(eventSource).trim().slice(0, 60),
+      event_name: String(eventName).trim().slice(0, 60),
+      event_seen: [], // 去重环：同一事件 id 不重复触发
+    } : {}),
     enabled: enabled !== false,
+    // 对外动作放行开关：缺省 block（无人值守默认不产生不可逆副作用）
+    external_policy: externalPolicy === 'allow' ? 'allow' : 'block',
     valid_until: validUntilRaw ? String(validUntilRaw).slice(0, 10) : null,
     created_at: new Date().toISOString(),
   };
@@ -462,10 +530,37 @@ function registerIpc() {
   ipcMain.handle('scheduled:save', async (_, p = {}) => {
     // X14：调度任务会被无人值守执行，名称/提示词/表达式都必须在边界校验。
     // 保持既有信封契约（调用方读 r.ok），故把校验异常转成 {ok:false}
+    // P1（2026-10-18 实测）：原来是「三件套必填」，但 UI 的启用/停用开关只发 { id, enabled }
+    // → 边界直接拒绝，开关点了没反应（错误还被 UI 吞掉）。改为**部分更新**：
+    // 新建仍要求三件套；带 id 时只校验实际提供的字段。
     try {
-      guard.assertStrings(p, { name: 120, prompt: 20000, schedule: 120 });
+      guard.assertStrings(p, {
+        name: { max: 120, optional: true },
+        prompt: { max: 20000, optional: true },
+        schedule: { max: 120, optional: true },
+      });
     } catch (e) {
       return { ok: false, error: e.message };
+    }
+    const has = (k) => p[k] !== undefined && p[k] !== null;
+    if (p.id) {
+      const t = store.tasks.find((x) => x.id === p.id);
+      if (!t) return { ok: false, error: '任务不存在' };
+      const patch = {};
+      if (has('name')) patch.name = String(p.name).trim();
+      if (has('prompt')) patch.prompt = String(p.prompt);
+      if (has('schedule')) {
+        const sc = String(p.schedule).trim();
+        if (!cronValid(sc)) return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
+        patch.schedule = sc;
+      }
+      if (has('enabled')) patch.enabled = p.enabled !== false;
+      if (has('valid_until')) patch.valid_until = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
+      if (has('external_policy')) patch.external_policy = p.external_policy === 'allow' ? 'allow' : 'block';
+      Object.assign(t, patch);
+      persist();
+      notify(); // 更新后必须广播：此前 update 分支漏了 notify，其他视图看不到改动
+      return { ok: true, task: t };
     }
     const name = String(p.name || '').trim();
     const prompt = String(p.prompt || '');
@@ -473,14 +568,7 @@ function registerIpc() {
     if (!name || !prompt || !schedule) return { ok: false, error: '任务名称、提示词与 Cron 表达式必填' };
     if (!cronValid(schedule)) return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
     const validUntil = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
-    if (p.id) {
-      const t = store.tasks.find((x) => x.id === p.id);
-      if (!t) return { ok: false, error: '任务不存在' };
-      Object.assign(t, { name, prompt, schedule, enabled: p.enabled !== false, valid_until: validUntil });
-      persist();
-      return { ok: true, task: t };
-    }
-    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil });
+    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil, external_policy: p.external_policy });
   });
   ipcMain.handle('scheduled:delete', async (_, { id } = {}) => {
     // X14：id 决定删掉哪条任务及其运行历史——非字符串会 filter 掉全部（id 不匹配任何记录），
@@ -510,8 +598,50 @@ function registerIpc() {
     ok: true,
     runs: store.runs.filter((r) => r.task_id === id).slice(0, MAX_RUNS_PER_TASK),
   }));
-  ipcMain.handle('scheduled:setModel', async (_, model = null) => {
-    // X14：model 会作为定时任务/编排的执行模型（含凭证解析用的 providerId/baseUrl）——
+  // 待确认动作的一键执行：幂等（同一条只能执行一次）+ 重放前重新校验（HEAD 变了判 stale）
+  ipcMain.handle('scheduled:replayAction', async (_, { runId, actionId } = {}) => {
+    try {
+      guard.assertStrings({ runId, actionId }, { runId: 120, actionId: 200 });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    const run = store.runs.find((r) => r.id === runId);
+    if (!run) return { ok: false, error: '运行记录不存在（可能已被清理）' };
+    const action = (Array.isArray(run.pending_actions) ? run.pending_actions : []).find((a) => a.id === actionId);
+    if (!action) return { ok: false, error: '待确认动作不存在' };
+    if (action.status !== 'pending') return { ok: false, error: '该动作已处理过（同一动作不能执行两次）' };
+    if (typeof execCtx.replayAction !== 'function') return { ok: false, error: '重放执行器未就绪' };
+    const r = await execCtx.replayAction({ action, cwd: action.cwd || getModel()?.cwd || '' });
+    // 无论成功失败都落状态：失败也要让人看到「试过了、为什么不行」，否则会反复点
+    action.status = r.ok ? 'executed' : (r.code === 'stale' || r.code === 'manual' ? r.code : 'failed');
+    action.executed_at = new Date().toISOString();
+    action.error = String(r.error || '').slice(0, 500);
+    if (r.stdout) action.result = String(r.stdout).slice(0, 1000);
+    // 任务卡片的计数只反映「还剩几项待处理」
+    const taskObj = store.tasks.find((t) => t.id === run.task_id);
+    if (taskObj) {
+      taskObj.pending_count = store.runs
+        .filter((x) => x.task_id === run.task_id)
+        .reduce((n, x) => n + (Array.isArray(x.pending_actions) ? x.pending_actions.filter((a) => a.status === 'pending').length : 0), 0);
+    }
+    persist();
+    notify();
+    return { ok: r.ok, code: r.code, error: r.error || '', stdout: r.stdout || '' };
+  });
+  // 事件入口（IPC 版）：供渲染层/适配器投递事件；HTTP 版见 main/scheduledEventServer.js
+  ipcMain.handle('scheduled:ingestEvent', async (_, p = {}) => {
+    try {
+      guard.assertStrings(p, {
+        source: { max: 60, optional: true },
+        event: { max: 60, optional: true },
+        id: { max: 120, optional: true, allowEmpty: true },
+      });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    return ingestEvent(p);
+  });
+  ipcMain.handle('scheduled:setModel', async (_, model = null) => {    // X14：model 会作为定时任务/编排的执行模型（含凭证解析用的 providerId/baseUrl）——
     // 允许 null（清空），非 null 时必须是对象且关键字段是短字符串
     if (model !== null && model !== undefined) {
       try {
@@ -539,4 +669,6 @@ module.exports = {
   detectUnfinished,
   // 2026-10-17：模型侧 scheduled_create 工具的落地实现（与 IPC 共用同一校验）
   createTask,
+  // 2026-10-18：事件触发入口（去重 + 合并），HTTP 适配器见 scheduledEventServer
+  ingestEvent, selectEventTargets,
 };

@@ -106,7 +106,7 @@ export default function ScheduledTasks() {
   const [filter, setFilter] = useState('all'); // all | enabled | disabled
   const [showForm, setShowForm] = useState(false);
   // Bug2：TRAE 同款表单——任务名称 + 提示词 + 重复/时间/有效期
-  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '' });
+  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busyId, setBusyId] = useState(null);
@@ -154,7 +154,10 @@ export default function ScheduledTasks() {
     return off;
   }, [expandedRuns?.taskId]);
 
-  const formCron = form.repeat === 'custom' ? form.schedule : (() => {
+  // 事件触发任务没有 cron：返回空串（不参与 cron 校验，也不会被 tick 匹配）
+  const formCron = (() => {
+    if (form.triggerType === 'event') return '';
+    if (form.repeat === 'custom') return form.schedule;
     const [h, m] = String(form.time || '09:00').split(':').map(Number);
     const r = REPEATS.find((x) => x.id === form.repeat);
     return r?.toCron ? r.toCron({ h: Number.isNaN(h) ? 9 : h, m: Number.isNaN(m) ? 0 : m }) : '';
@@ -166,7 +169,20 @@ export default function ScheduledTasks() {
       setError(t('scheduled.namePromptRequired'));
       return;
     }
-    if (formCronErr) { setError(t('scheduled.invalidSchedule', { err: formCronErr })); return; }
+    const isEvent = form.triggerType === 'event';
+    if (isEvent && (!form.eventSource.trim() || !form.eventName.trim())) {
+      setError(t('scheduled.eventRequired'));
+      return;
+    }
+    if (!isEvent && formCronErr) { setError(t('scheduled.invalidSchedule', { err: formCronErr })); return; }
+    if (form.allowExternal) {
+      const ok = await confirm({
+        title: t('scheduled.allowExternalLabel'),
+        message: t('scheduled.allowExternalConfirm', { name: form.name.trim() }),
+        danger: true,
+      });
+      if (!ok) return;
+    }
     try {
       await api.createScheduledTask({
         name: form.name.trim(),
@@ -174,9 +190,14 @@ export default function ScheduledTasks() {
         schedule: formCron,
         enabled: true,
         valid_until: form.validType === 'until' && form.validUntil ? form.validUntil : null,
+        // 默认 block：无人值守不产生对外/不可逆动作，被拦的进「待确认动作清单」
+        external_policy: form.allowExternal ? 'allow' : 'block',
+        // 时钟 or 事件触发（事件任务没有 cron，由 ingestEvent 驱动）
+        trigger_type: isEvent ? 'event' : 'cron',
+        ...(isEvent ? { event_source: form.eventSource.trim(), event_name: form.eventName.trim() } : {}),
       });
       setShowForm(false);
-      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '' });
+      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '' });
       setError('');
       setNotice(t('scheduled.createdNotice'));
       load();
@@ -187,6 +208,22 @@ export default function ScheduledTasks() {
 
   async function toggle(id, enabled) {
     await api.updateScheduledTask(id, { enabled: !enabled });
+    load();
+  }
+
+  // 对外动作放行：把「无人值守」变成「能在没人看着时写外部系统」，开它必须二次确认。
+  async function toggleExternal(task) {
+    const next = task.external_policy !== 'allow';
+    if (next) {
+      const ok = await confirm({
+        title: t('scheduled.allowExternalLabel'),
+        message: t('scheduled.allowExternalConfirm', { name: String(task.name || '') }),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const r = await api.updateScheduledTask(task.id, { external_policy: next ? 'allow' : 'block' });
+    if (r && r.ok === false) setError(r.error || t('runtime.unknownError'));
     load();
   }
 
@@ -248,6 +285,24 @@ export default function ScheduledTasks() {
     }
   }
 
+  // 待确认动作的一键执行：动作本身幂等（同一 actionId 只能执行一次），按钮只做防抖
+  const [busyAction, setBusyAction] = useState('');
+  async function replayAction(runId, actionId) {
+    setBusyAction(actionId);
+    setError('');
+    try {
+      const r = await window.mjcode?.scheduledReplayAction?.({ runId, actionId });
+      if (r && r.ok === false) setError(t('scheduled.replayFailed', { msg: r.error || r.code || '' }));
+      else setNotice(t('scheduled.replayDone'));
+      if (expandedRuns?.taskId) await showRuns(expandedRuns.taskId, true);
+      load();
+    } catch (err) {
+      setError(t('scheduled.replayFailed', { msg: err.message }));
+    } finally {
+      setBusyAction('');
+    }
+  }
+
   const enabledCount = tasks.filter((task) => task.enabled).length;
   const filtered = tasks.filter((task) => (filter === 'all' ? true : filter === 'enabled' ? task.enabled : !task.enabled));
 
@@ -306,6 +361,29 @@ export default function ScheduledTasks() {
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
               className="w-full bg-input border border-border rounded-xl px-3.5 py-3 text-sm mb-3 h-28 outline-none focus:border-accent" />
 
+            {/* 触发方式：时钟（cron）或外部事件（由 scheduled:ingestEvent / 本地事件入口驱动） */}
+            <div className="flex items-center justify-between gap-3 mb-3 p-3 bg-input rounded-xl">
+              <div className="min-w-0">
+                <div className="text-xs font-medium">{t('scheduled.triggerEventLabel')}</div>
+                <div className="text-xs text-text2 mt-1">{t('scheduled.triggerEventHint')}</div>
+              </div>
+              <Switch checked={form.triggerType === 'event'}
+                onChange={(v) => setForm({ ...form, triggerType: v ? 'event' : 'cron' })}
+                label={t('scheduled.triggerEventLabel')} />
+            </div>
+
+            {form.triggerType === 'event' ? (
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <input placeholder={t('scheduled.eventSourcePlaceholder')} value={form.eventSource}
+                  onChange={(e) => setForm({ ...form, eventSource: e.target.value })}
+                  className="h-10 bg-input border border-border rounded-xl px-3 text-sm outline-none focus:border-accent" />
+                <input placeholder={t('scheduled.eventNamePlaceholder')} value={form.eventName}
+                  onChange={(e) => setForm({ ...form, eventName: e.target.value })}
+                  className="h-10 bg-input border border-border rounded-xl px-3 text-sm font-mono outline-none focus:border-accent" />
+                <p className="col-span-2 text-xs text-text2">{t('scheduled.eventExample')}</p>
+              </div>
+            ) : (
+            <>
             {/* 重复 / 时间 / 有效期（TRAE 三联行） */}
             <div className="grid grid-cols-3 gap-2 mb-3">
               <select value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })}
@@ -339,6 +417,18 @@ export default function ScheduledTasks() {
                 {form.validType === 'until' && form.validUntil && t('scheduled.untilDate', { date: form.validUntil })}
               </p>
             )}
+            </>
+            )}
+
+            {/* 对外动作放行：默认关。开它 = 允许无人值守时写外部系统（提交/推送/发消息） */}
+            <div className="flex items-start justify-between gap-3 mt-3 p-3 bg-input rounded-xl">
+              <div className="min-w-0">
+                <div className="text-xs font-medium">{t('scheduled.allowExternalLabel')}</div>
+                <div className="text-xs text-text2 mt-1">{t('scheduled.allowExternalHint')}</div>
+              </div>
+              <Switch checked={!!form.allowExternal} onChange={(v) => setForm({ ...form, allowExternal: !!v })}
+                label={t('scheduled.allowExternalLabel')} />
+            </div>
 
             <div className="flex justify-end gap-3 mt-5">
               <button onClick={() => setShowForm(false)}
@@ -380,8 +470,13 @@ export default function ScheduledTasks() {
                   <div className="text-xs text-danger mt-1 line-clamp-2">{t('scheduled.autoPaused', { reason: task.auto_pause_reason })}</div>
                 )}
                 <div className="text-xs text-text2 mt-1 flex items-center gap-1">
-                  <IconClock size={12} /> {humanSchedule(task.schedule)}
-                  <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
+                  <IconClock size={12} />
+                  {task.trigger_type === 'event'
+                    ? t('scheduled.eventTrigger', { source: task.event_source || '?', event: task.event_name || '?' })
+                    : humanSchedule(task.schedule)}
+                  {task.trigger_type !== 'event' && (
+                    <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
+                  )}
                   {task.last_run_at && <span className="ml-2">{t('scheduled.lastRun', { time: new Date(task.last_run_at).toLocaleString('zh-CN') })}</span>}
                 </div>
                 {/* 结果只渲染一处：刚跑完用 runResult（带成功/失败配色），否则回落到 last_result。
@@ -403,6 +498,11 @@ export default function ScheduledTasks() {
                 </button>
                 <button onClick={() => showRuns(task.id)}
                   className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border hover:bg-hover text-xs">{t('scheduled.runs')}</button>
+                {/* 对外动作放行状态 + 一键切换（开的时候要二次确认，见 toggleExternal） */}
+                <button onClick={() => toggleExternal(task)} title={t('scheduled.allowExternalLabel')}
+                  className={`h-7 inline-flex items-center justify-center px-2.5 rounded-lg border text-xs ${task.external_policy === 'allow' ? 'border-danger text-danger' : 'border-border text-text2 hover:bg-hover'}`}>
+                  {task.external_policy === 'allow' ? t('scheduled.externalAllowed') : t('scheduled.externalBlocked')}
+                </button>
                 <Switch checked={!!task.enabled} onChange={() => toggle(task.id, task.enabled)}
                   label={t('settings.enableToggle', { name: String(task.name || task.id || '') })} />
                 <button onClick={() => remove(task.id, task.name)} className="text-text2 hover:text-danger" title={t('scheduled.delete')}><IconX size={14} /></button>
@@ -430,6 +530,31 @@ export default function ScheduledTasks() {
                       </div>
                       {(r.output || r.error) && (
                         <div className="text-text2 mt-1 whitespace-pre-wrap max-h-20 overflow-y-auto">{(r.output || r.error).slice(0, 300)}</div>
+                      )}
+                      {/* 待确认动作：无人值守时被拦截的对外动作，可在这里一键执行（幂等） */}
+                      {Array.isArray(r.pending_actions) && r.pending_actions.length > 0 && (
+                        <div className="mt-2 rounded-lg bg-input p-2">
+                          <div className="text-text2 mb-1">{t('scheduled.pendingTitle', { n: r.pending_actions.length })}</div>
+                          {r.pending_actions.map((a) => (
+                            <div key={a.id} className="flex items-center gap-2 py-1">
+                              <span className="flex-1 min-w-0 truncate font-mono">
+                                {a.tool}{a.command ? ` · ${a.command}` : ''}
+                              </span>
+                              <span className={`shrink-0 ${a.status === 'executed' ? 'text-success' : a.status === 'pending' ? 'text-text2' : 'text-danger'}`}>
+                                {t(`scheduled.action_${a.status || 'pending'}`)}
+                              </span>
+                              {a.status === 'pending' && a.replayable && (
+                                <button onClick={() => replayAction(r.id, a.id)} disabled={busyAction === a.id}
+                                  className="h-6 shrink-0 px-2 rounded-md border border-border hover:bg-hover disabled:opacity-50">
+                                  {busyAction === a.id ? t('scheduled.replayBusy') : t('scheduled.replay')}
+                                </button>
+                              )}
+                              {a.status === 'pending' && !a.replayable && (
+                                <span className="shrink-0 text-text2">{t('scheduled.replayManual')}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   );

@@ -46,14 +46,31 @@ function describe(handlerKey, args) {
   return '';
 }
 
+// 可重放的子集：这三个的入参自带 cwd、且不需要会话上下文，重放时补 requireApproval:false 即可。
+// MCP / PR 类不进这个名单：它们依赖外部会话与鉴权上下文，盲目重放等于绕开原来的授权路径。
+const REPLAYABLE = new Set(['git_commit', 'git_add', 'shell']);
+
+// HEAD 快照：重放前要能判断「这 8 小时里工作区有没有变」。
+// 只有真的拦下第一个动作时才取一次（懒加载 + 记忆化），不给没被拦的任务加成本。
+function readHead(cwd) {
+  try {
+    const { execFileSync } = require('node:child_process');
+    return String(execFileSync('git', ['rev-parse', 'HEAD'], { cwd, timeout: 3000, encoding: 'utf8' })).trim();
+  } catch {
+    return '';
+  }
+}
+
 /**
- * createScheduledGuard({ enabled })
+ * createScheduledGuard({ enabled, runId, cwd })
  *   enabled=false 时 wrap 原样返回（任务显式设为 allow）。
  * 返回 { wrap(handlers), take() }
  *   take() 取出并清空待确认清单，供宿主写进运行记录。
  */
-function createScheduledGuard({ enabled = true } = {}) {
+function createScheduledGuard({ enabled = true, runId = '', cwd = '' } = {}) {
   const pending = [];
+  let head; // undefined = 还没取过
+  const seq = { n: 0 };
   // 同一动作重复被拦只记一次（模型常会重试 2–3 次），否则清单里全是同一条
   const seen = new Set();
 
@@ -62,10 +79,20 @@ function createScheduledGuard({ enabled = true } = {}) {
     const key = `${handlerKey}::${cmd || JSON.stringify(args || {}).slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
+    const tool = BLOCKED.get(handlerKey) || handlerKey;
+    if (head === undefined) head = cwd ? readHead(cwd) : '';
     pending.push({
-      tool: BLOCKED.get(handlerKey) || handlerKey,
+      // id 是幂等键：同一个 run 的同一个动作只能被执行一次（双击也不会提交两次）
+      id: `${runId || 'run'}#${seq.n++}`,
+      tool,
       command: cmd,
+      // 只有可重放的才留 args：MCP 的参数里可能有凭证，落盘即泄漏
+      ...(REPLAYABLE.has(tool) ? { args: args && typeof args === 'object' ? args : {} } : {}),
+      replayable: REPLAYABLE.has(tool),
+      cwd,
+      head,
       at: Date.now(),
+      status: 'pending',
     });
   }
 
@@ -99,4 +126,4 @@ function createScheduledGuard({ enabled = true } = {}) {
   };
 }
 
-module.exports = { createScheduledGuard, blockedReason, describe, BLOCKED };
+module.exports = { createScheduledGuard, blockedReason, describe, readHead, REPLAYABLE, BLOCKED };

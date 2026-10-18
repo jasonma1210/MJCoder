@@ -209,6 +209,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   scheduledDelete: (payload) => ipcRenderer.invoke('scheduled:delete', payload),
   scheduledRun: (payload) => ipcRenderer.invoke('scheduled:run', payload),
   scheduledRuns: (payload) => ipcRenderer.invoke('scheduled:runs', payload),
+  // 待确认动作的一键执行（幂等：同一 actionId 只能执行一次）
+  scheduledReplayAction: (payload) => ipcRenderer.invoke('scheduled:replayAction', payload),
   scheduledSetModel: (payload) => ipcRenderer.invoke('scheduled:setModel', payload),
   onScheduledChanged: (cb) => {
     const handler = (_, d) => cb(d);
