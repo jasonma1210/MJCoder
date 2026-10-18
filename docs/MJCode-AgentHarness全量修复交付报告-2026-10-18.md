@@ -137,14 +137,14 @@
 
 | 项 | 状态 | 原因 |
 |---|---|---|
-| **P1-9⑤ 模态外壳替换** | ⚠️ **4/9 完成** | 已换壳：Settings / Ecosystem / Market / Archive（各 `<Modal>` 引用 1 处，门禁全绿）。**SettingsModal 的解法值得记**：保留自有表头与关闭按钮（`settings-coverage` 的 5 条源码断言原样满足，含 `onClick={onClose}` **恰好 1 处**的计数断言），只换 overlay+panel，两个 className 作为**真实生效的 props** 传入。未做：CommandPalette / ProjectPicker / ConnectorConfigDialog（基线本就有 `role="dialog"`）/ CustomConnectorForm（页面级视图非弹窗）/ feedback.jsx（全局确认层，影响面最大）；另发现 `ScheduledTasks.jsx` 新建任务浮层为审计清单外第 10 处裸壳，未动 |
-| **P1-11c 分档设置 UI** | ❌ | 同上；主进程侧三槽位已就绪 |
-| **P2-5 布局收敛** | ❌ | 纯视觉优化，收益低于改动风险 |
-| **P2-6 拆 SettingsModal** | ❌ | 仍 1084 行；拆分连撞 `settings-coverage` 三条源码断言（含 `onClick={onClose}` **计数**断言），风险高 |
-| **P2-7 的 UI 两半** | ❌ | `approval.notice.executed` 的 i18n key 与 `approval_notice` 渲染分支未落；`approvalNotice` 设置开关未做。**主进程机制已实测可用，用户界面暂看不到通知** |
-| **V 层 J3（L3 独立 verifier turn）** | ❌ | 设计已就绪（`J-V层落地设计.md`），需第二次模型调用，本批不做 |
-| `crashed` 自动重连 | ❌ | 仅手动重连。后台反复拉起子进程比"用户点一下"代价大，静默重连还会掩盖持续崩溃 |
-| 定时任务通道的 V 层 | ❌ | `off` 且无配置源（已知留白，非漏接；若强行开 l1，N9 会刷 `no_ledger` 告警而非静默 PASS） |
+| **P1-9⑤ 模态外壳替换** | ✅ **8/9 完成** | 已换壳 8 处：Settings / Ecosystem / Market / Archive / CommandPalette（顶部锚定，用 `overlayClassName` 覆盖居中）/ ProjectPicker / ScheduledTasks 新建浮层 / ConnectorConfigDialog（保留自挂 Esc + `closeOnEsc={false}`，因它是面板后代、`foreignDialogOwnsFocus` 无法让路）。**唯一保留自绘**：`feedback.jsx` 的 confirm——它是 `role="alertdialog"`（语义与 dialog 不同），已改为「开箱 focus」满足 Modal 的让路判据。另：`CustomConnectorForm` 经核实是**页面级视图非弹窗**，本就不该换壳 |
+| **P1-11c 分档设置 UI** | ✅ | 设置页三槽位下拉 + 留空跟随主模型 + `localSetPreference('model_overrides')` 同步 + `main.js` 注入 `getModelOverrides`（此前断三处：无入口、不同步主进程、主进程未注入 → 全部静默回落） |
+| **P2-5 布局收敛** | ⬜ **不做（需设计决策）** | 「29 种 padding / 6 档圆角」的收敛必然改变视觉，而没有设计稿时硬改会让界面变乱；且本项目对存量组件有「保留原视觉」的硬要求。属**需要你给设计意图**才能做的项，不是技术债清理 |
+| **P2-6 拆 SettingsModal** | ✅ | 1161 → **646 行**（低于 800 软档，已移出 `BASELINE_800`）。抽出 `settings/ModelsTab.tsx` / `NetworkTab.tsx` / `shared.tsx`（全 `.tsx` + 显式 props 类型）。注意：`settings-coverage` 除 5 条断言外还有**两条函数体长度断言**，所以 `BrowserTab`/`GitTab` 不能抽（会变一行引用） |
+| **P2-7 的 UI 两半** | ✅ | 设置页开关 + `FeedbackHost` 消费 `approval_notice`（不可补偿追加 `reversibleNote`、8s）+ 中英 7 key + 接线门禁 14 条 |
+| **V 层 J3（L3 独立 verifier turn）** | ✅ **能力就绪、默认不接线** | `agent-core/verifierL3.js`（零依赖，chat 注入）+ `verifyRun` 在 `level='l3'` 时执行：L1 已 BLOCK 则不跑 L3（省一次调用）、fail-open、未注入 chat 则显式降级并标记 `skipped`。**桌面端默认不注入 `l3Chat`**——避免每个 run 增加一次 LLM 成本；需要时由宿主注入即生效 |
+| `crashed` 自动重连 | ⬜ | 仅手动重连。后台反复拉起子进程比"用户点一下"代价大，静默重连还会掩盖持续崩溃 |
+| 定时任务通道的 V 层 | ⬜ | `off` 且无配置源（已知留白，非漏接；若强行开 l1，N9 会刷 `no_ledger` 告警而非静默 PASS） |
 
 ---
 
