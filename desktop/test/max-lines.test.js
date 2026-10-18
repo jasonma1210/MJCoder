@@ -20,7 +20,6 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'assets']);
 const BASELINE_800 = [
   'main/computerUse.js',
   'main/main.js',
-  'renderer/src/components/SettingsModal.jsx',
   'agent-core/index.js',
 ];
 
