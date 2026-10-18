@@ -111,5 +111,10 @@
   "recoverAction": "恢复",
   "recoverDone": "已从备份恢复 {n} 个任务",
   "recoverFailed": "恢复失败：{msg}",
-  "modelWindowUndeclared": "所选模型的上下文窗口未声明，这里按 {win} 估算（带 ~ 号的都是估算值）。去「模型设置 → 上下文窗口」确认真实值后，分批与压缩才会按真实窗口走。"
+  "modelWindowUndeclared": "所选模型的上下文窗口未声明，这里按 {win} 估算（带 ~ 号的都是估算值）。去「模型设置 → 上下文窗口」确认真实值后，分批与压缩才会按真实窗口走。",
+  "expectsFileLabel": "要求产出文件",
+  "expectsFileHint": "默认开启。开启后，若这一轮没有任何文件产出，任务判为失败（避免「成功了但什么也没生成」）。只做提交或只做汇报的任务可以关掉。",
+  "expectsFileOff": "不校验产出文件（其他失败仍会判失败）",
+  "expectsFileOn": "产出：校验",
+  "expectsFileOffShort": "产出：不校验（其他失败仍判失败）"
 }

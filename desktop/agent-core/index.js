@@ -164,12 +164,17 @@ export const BASE_TOOLS = [
       + '用户说「每天/每周/每月 X 点帮我做某事」这类需要反复执行的安排时使用。'
       + 'schedule 是 5 段 cron（分 时 日 月 周）：每天 09:41 → "41 9 * * *"，每周一 10:00 → "0 10 * * 1"。'
       + 'prompt 要写成"无人值守执行时能独立看懂"的完整指令（不要出现"帮我""上面说的"这类需要追问的措辞）。'
-      + '只创建一次即可——调度器会在到点时自己触发，不要用 chat 或 shell 模拟定时。',
+      + '只创建一次即可——调度器会在到点时自己触发，不要用 chat 或 shell 模拟定时。'
+      + '注意 expects_file：定时任务默认要求产出文件（没有文件产出即判失败），'
+      + '提醒/通知/只做汇报/只提交代码这类任务必须显式传 false，否则会天天被判失败。',
     parameters: { type: 'object', properties: {
       name: { type: 'string', description: '任务名（简短，用于任务列表展示）' },
       schedule: { type: 'string', description: '5 段 cron 表达式：分 时 日 月 周' },
       prompt: { type: 'string', description: '每次执行时给执行器的完整指令' },
       enabled: { type: 'boolean', description: '是否立即启用，默认 true；false 表示建好先暂停' },
+      // 语义判断归模型：这里只说清两种任务的差别，不用任何关键词规则去猜
+      expects_file: { type: 'boolean', description: '这个任务是否需要产出文件：要生成文档/报告/清单/表格 → true（默认）；'
+        + '只是提醒、通知、口头汇报、只提交代码 → false。选错会让提醒类任务因「没产出文件」被判失败。' },
     }, required: ['schedule', 'prompt'] },
   }},
   // ── GitHub PR 审查闭环（对标 Codex 的 diff 审查交付出口）──
@@ -737,7 +742,7 @@ const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch
 
 // V01：宿主治理保留字段——这些字段决定审批/沙箱/执行根/会话归属，
 // 只能由宿主（runAgent 参数）注入，模型工具参数里出现即剥离（见工具执行循环）。
-const GOVERNANCE_FIELDS = ['cwd', 'approvalMode', 'sandboxPolicy', 'conversationId', 'requireApproval', 'signal'];
+const GOVERNANCE_FIELDS = ['cwd', 'approvalMode', 'sandboxPolicy', 'conversationId', 'requireApproval', 'signal', 'unattended'];
 
 // 工具名 → toolHandlers / window.mjcode 上的方法名（camelCase）
 const TOOL_HANDLER_NAMES = {
@@ -1615,7 +1620,7 @@ export async function runAgent({
   // T1-3：子代理事件透出——spawn_subagent 生命周期（spawn/progress/done/failed + tokens + 结论摘要）
   onSubagentEvent,
   mcpTools = [], enabledSkills = [], skills = [], maxRounds = 40, signal, cwd, agentsMd,
-  approvalMode = 'on-request', conversationId, tools: customTools, systemPrompt: customSystemPrompt,
+  approvalMode = 'on-request', conversationId, tools: customTools, systemPrompt: customSystemPrompt, appendSystemPrompt = '',
   // T4-3：角色模板（数字员工）——{systemPrompt: 角色设定文本, toolNames: 具体工具名白名单}；
   // 角色提示拼进 system（不替换 BASE_PROMPT），工具子集过滤 BASE_TOOLS（见下方 allTools 组装）
   rolePreset,
@@ -1672,7 +1677,12 @@ export async function runAgent({
   // 仍是**同一条 system 消息**（DeepSeek 系端点只认首部 system，拆成多条会把内容丢掉）。
   const PROMPT_SECTIONS = ['base', 'role', 'tools', 'skills', 'agentsMd', 'memory', 'resume'];
   const sysSections = {
-    base: customSystemPrompt || BASE_PROMPT, // S1 恒定：禁止任何运行时插值（日期/时间戳/随机 id 一律下沉尾部）
+    // S1 恒定：禁止任何运行时插值（日期/时间戳/随机 id 一律下沉尾部）。
+    // appendSystemPrompt 是**通道级追加**（定时任务/Worker 的产出契约），拼在 base 之后而不是替换：
+    // customSystemPrompt 是整体替换语义，用它当无人值守通道的系统提示会把 BASE_PROMPT 里
+    // 「可用工具 / 默认在当前目录读写 / 路径怎么给」整段丢掉 —— 模型于是不知道自己能写文件。
+    // 追加位置在 base 末尾，BASE_PROMPT 本身仍是完整前缀（prompt cache 的前缀匹配不受影响）。
+    base: `${customSystemPrompt || BASE_PROMPT}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
     role: '',    // S2 每 run 定：数字员工角色设定
     tools: '',   // S2 每 run 定：工具表说明（工具 schema 本身经 allTools 下发，这里留位以备补充说明）
     skills: '',  // S2/S3：启用技能提示 + 技能索引（summary）或技能正文（full）

@@ -501,7 +501,8 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 // 审批中心（requestApproval/applyApprovalDecision/alwaysRules/conversationRules）归属本文件，经注入同源。
 const toolExec = require('./tools/exec');
 toolExec.initToolExec({
-  requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules,
+  // 无人值守审批终结器：定时/Worker 通道需要的审批**立即 deny**，不等 approvalChannel 的 120s 超时（交互式原样透传）
+  requestApproval: require('./scheduledGuard').unattendedApproval(requestApproval), applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules,
   // N2 cwd 信任契约：漏传 cwd 的工具调用落到「最近打开的项目目录」（无项目则 HOME），
   // 绝不回主进程 cwd（打包版=应用安装目录，既无意义又危险）；结果以 cwdFallback 标记、审计留痕。
   getDefaultCwd: () => {
@@ -977,56 +978,53 @@ ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun
 
 // 定时任务 Agent 入口：scheduler.runTask 到点调用
 // 审批策略 auto-safe：L2 写操作自动放行（本地审计已留痕），L1 危险命令/L3 MCP 仍弹审批卡
-// （2 分钟无响应按拒绝，与交互式一致）；沙箱有项目目录 workspace-write、无目录 read-only（P0-B 一致）
-async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId = '', runId = '', externalPolicy = 'block' }) {
+// （2 分钟无响应按拒绝，与交互式一致）；沙箱：有 cwd → workspace-write（只约束 shell 子进程），无 → read-only。writeFile 走 Node fs、不经沙箱，能否落盘看 main/writeGuard.js 的白名单（只放行 cwd/userData/tmp）
+async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId = '', taskName = '', runId = '', externalPolicy = 'block' }) {
   if (!schedModel || !schedModel.model) {
     throw new Error('未配置执行模型：请在任意会话中选择模型（定时任务复用会话模型与凭证）');
   }
   // 扁平形 → 嵌套形：改用共享转换（此前是此处手抄，Worker 路径漏抄导致崩溃）
   const runModel = toAgentModel(schedModel);
-  const cwd = schedModel.cwd || '';
+  const rc = require('./scheduledOutput').scheduledRunContext({ app, taskName, contextCwd: schedModel.cwd }); // 产出目录 + 追加提示（cwd 一律用产出目录，会话 cwd 仅作可读参考）
   // V 层：L1 对账全量跑（零成本）+ L3 按风险门/抽样触发，且**无人值守 fail-closed**
   //（判不出来就不许宣告成功）。策略与成本口径见 main/scheduledVerify.js 的注释。
-  const sv = createScheduledVerify({ taskId, cwd, ...scheduledL3Target() });
+  const sv = createScheduledVerify({ taskId, cwd: rc.dir, ...scheduledL3Target() });
   // 对外动作闸门：默认拦（无人值守没有人能批准），任务显式 allow 才放行
-  const sguard = createScheduledGuard({ enabled: externalPolicy !== 'allow', runId, cwd });
+  const sguard = createScheduledGuard({ enabled: externalPolicy !== 'allow', runId, cwd: rc.dir });
   let toolCount = 0;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };
   const agentCore = await loadAgentCore();
   const finalText = await agentCore.runAgent({
     messages: [{ role: 'user', content: String(prompt || '') }],
     model: runModel,
-    cwd,
+    cwd: rc.dir,
     signal,
     // P0-8c/P1-1：审批档与用户设置对齐——原为硬编码 'auto-safe'，用户选「全部询问」时被静默
     // 忽略（产品对用户设置撒谎）。与 workerPool.js:206 同源：取「用户当前档（或调用方显式传入）
     // 与 auto-safe 地板」中更严者。2026-10-17（P1-1）：用户档来源改为 approvalSettings.getUserApprovalMode()
     // （读持久化设置，而不是「最后一次交互 run 的档」）；stricterApproval 仍由 approvalPolicy.js 提供。
     approvalMode: agentRunner.stricterApproval(schedModel.approvalMode || approvalSettings.getUserApprovalMode(), 'auto-safe'),
-    sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
+    sandboxPolicy: rc.dir ? 'workspace-write' : 'read-only',
     conversationId: 'scheduled',
-    maxRounds: 20,
-    // P0-8c：无人值守成本闸——定时执行强制注入 tokenBudget，与 workerPool.js:211 的 200k 口径对齐
-    tokenBudget: 200000,
+    maxRounds: 40, // 100 篇 ≈ 10 批 ×(抓取+落盘) ≈ 20 轮，原 20 轮零余量；40 轮留重试余量（按「100 篇」量级定的默认值，非永久最优）
+    // P0-8c：无人值守成本闸仍保留（有界防失控，不是放开）：按每轮 ~15k prompt 估算，200k 约 13 轮就见底 → 提到 400k（交互通道 trace 里是 600k，定时取 400k 属保守）
+    tokenBudget: 400000,
     chatRetryBaseMs: 2000, // 无人值守：退避基数放宽，弱网下更耐心
     // 无人值守：收尾文案不能对用户说「发送继续」（没有人能发），改为给出可操作的下一步
     unattended: true,
-    systemPrompt: '你是定时任务执行器：使用工具完成任务提示词中的要求，产出精炼可读的结果摘要。'
-      + '不要反问、不要输出无关寒暄；工具失败时换方式重试或如实说明，不要假装完成。'
-      // 大任务自动分批：用户只会写「获取 100 条新闻」，不会自己拆。
-      // 不拆的后果是上下文 3 轮就撑爆（32k 窗口模型实测），任务报废。
-      + '遇到需要枚举/抓取/处理大量条目（超过 10 条）的任务，**自动分批**：每批不超过 10 条，'
-      + '每批结果立即写入目标文件，写完不要再引用该批原文，然后继续下一批；全部完成后只输出一句汇总。',
-    toolHandlers: sguard.wrap(scheduledToolHandlers()),
+    // 追加在 BASE_PROMPT 之后（不替换）：BASE_PROMPT 承载「可用工具/默认目录/路径怎么给」，替换掉它模型就不知道自己能写文件、该写哪
+    appendSystemPrompt: rc.appendPrompt,
+    toolHandlers: sguard.wrap(scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd })),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
-    onTrace: (evt) => sv.onTrace(evt),
+    // trace 落盘用 runId（不是 taskId）：否则同一任务的多次运行互相覆盖，事后无法还原这一次发生了什么
+    onTrace: (evt) => { sv.onTrace(evt); require('./runTrace').appendTraceEvent(runId, evt); },
     onToolCall: (tc) => { toolCount += 1; sv.onToolCall(tc); },
     onDone: (_text, usage) => { if (usage) totalUsage = usage; },
   });
-  // 收尾判定：产物照常返回，但 delivery.downgrade=true 时调用方不得标成功
+  // 收尾判定：产物照常返回；writes 是 V 层确定性对账的「成功写入次数」，调度器据此判「零写入不成功」
   const vres = await sv.finish(finalText || '');
   return {
-    output: finalText || '', toolCalls: toolCount, usage: totalUsage,
+    output: finalText || '', toolCalls: toolCount, usage: totalUsage, writes: vres.writes, shellWrites: vres.shellWrites, workDir: rc.dir,
     verify: vres.verify, delivery: vres.delivery, pendingActions: sguard.take(),
   };
 }
@@ -1125,8 +1123,8 @@ function setupTaskOrchestration(db) {
       getModelOverrides: () => localStore?.getPreference('model_overrides') || null,
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
-      createToolHandlers: ({ signal }) => ({
-        ...scheduledToolHandlers(),
+      createToolHandlers: ({ signal, cwd }) => ({
+        ...scheduledToolHandlers({ unattended: true, contextCwd: cwd }), // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
         // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联
         chat: (payload) => scheduledAgentChat(payload),
         // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）

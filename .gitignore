@@ -93,6 +93,8 @@ fetch_ai_news.sh
 
 # 审计/并行子代理临时产出目录（一次性中间产物，不进版本库）
 .audit-tmp/
+# 带日期的审计目录（如 .audit-2026-10-18/）：过程材料与测试取证，结论另写 docs/
+.audit-*/
 
 # Vite 临时配置快照（dev server 运行期产物）
 *.timestamp-*.mjs

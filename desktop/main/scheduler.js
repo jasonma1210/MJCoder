@@ -22,6 +22,8 @@ const guard = require('./ipc/payloadGuard');
 const { shouldAutoPause } = require('./verifyPolicy');
 // 供应商错误 → 人话（内容安全/上下文超限/限流/凭证），原文保留
 const { describeRunError } = require('./providerErrors');
+// 成败判定（四条并列规则，见该模块头注释）；detectUnfinished/detectExhausted 仍由本文件转导出
+const { judgeRun, detectUnfinished, detectExhausted } = require('./scheduledVerdict');
 
 const STORE_FILE = () => path.join(app.getPath('userData'), 'scheduled-tasks.json');
 // 归档根目录：Documents（应用外可查阅）。取不到时返回空串，归档会被跳过而不是抛。
@@ -60,6 +62,7 @@ function loadStore() {
   store = r.store;
   recoverable = r.recoverable;
   storeLoaded = true; // 已判定过磁盘状态（即使文件不存在），此后允许写盘
+  convergeInterruptedRuns(); // B：上次进程在任务中途退出时遗留的 running 记录，加载后收敛成 failed
   if (r.reason === 'corrupt-restored') {
     console.error(`[scheduled] 主存储损坏，已从 .bak 恢复 ${r.recoverable.tasks} 个任务`);
     persist(); // 立刻回写，避免下次启动再走一遍恢复
@@ -68,6 +71,29 @@ function loadStore() {
   } else if (r.reason === 'empty-main') {
     console.warn(`[scheduled] 主存储为空但备份含 ${r.recoverable.tasks} 个任务：等待用户确认恢复`);
   }
+}
+
+// ── B：僵尸 running 收敛 ──
+// 真机现场：进程被杀/崩溃后，store.runs 里那条 run 永远停在 status='running'
+// （实例 r-1792301285937-1698 在进程早已退出后仍是 running），UI 上「一直运行中」，last_run_at 不更新。
+// 终点只能由**下次启动**补齐 —— 进程已经不在，没人能写 finished_at 了。
+// 关键：这类 run 的 output:''/tools:0 是**初始化值**，不是「跑了 0 次工具」。tools 置 null（未知），
+// 文案里写明「工具调用与输出未收尾」，否则它看起来像一次「0 次调用、空输出」的可信失败。
+const INTERRUPTED_MSG = '运行被中断（应用在任务执行期间退出），工具调用与输出未收尾，本次数据不可信';
+function convergeInterruptedRuns() {
+  // 同进程内正在跑的 run 不算遗留（loadStore 若被中途再调一次，不能把活着的记录判死）
+  const stale = store.runs.filter((r) => r && r.status === 'running' && !running.has(r.task_id));
+  if (stale.length === 0) return 0;
+  const at = new Date().toISOString();
+  for (const r of stale) {
+    Object.assign(r, { status: 'failed', error: INTERRUPTED_MSG, finished_at: at, interrupted: true, tools: null });
+    // 卡片字段同步成同一句（否则「上次状态」还停在 running）；last_run_at 保留原始启动时刻，不假装刚跑过
+    const t = store.tasks.find((x) => x.id === r.task_id);
+    if (t) Object.assign(t, { last_status: 'failed', last_result: INTERRUPTED_MSG.slice(0, LAST_RESULT_MAX), last_run_at: r.started_at || t.last_run_at });
+  }
+  console.warn(`[scheduled] 收敛 ${stale.length} 条遗留 running 记录（应用上次在任务执行期间退出，已判失败）`);
+  persist(); // 只在确需收敛时写盘：每次启动都 persist 是另一类事故（见下）
+  return stale.length;
 }
 
 function persist() {
@@ -258,41 +284,9 @@ async function scanMissedTasks(now = new Date()) {
 }
 
 // ── 执行 ──
-// 无人值守的「假成功」识别。
-//
-// 事故背景（2026-10-17）：定时任务因宿主漏注入 web 工具，模型回了一整段「无法完成…如实说明」，
-// 而 runTask 只在**抛异常**时判 failed，于是这条任务在 UI 上显示「成功」——
-// 用户看到的是「成功了，但内容是说做不到」。这是比失败更坏的信号。
-//
-// 判定刻意保守：只有在**全程没调用过任何工具**且输出明确自述做不到时才判负。
-// 有工具调用说明真干了活，结尾一句「部分数据缺失」不该推翻整轮结论。
-const FAIL_MARKERS = [
-  /无法完成/, /未能完成/, /无法获取/, /不具备/, /工具.{0,12}不存在/, /全部失败/, /没有任何(工具|结果)/,
-  /unable to (complete|access|fetch)/i, /not available/i, /cannot complete/i, /no tools? (available|found)/i,
-];
-function detectUnfinished(output, toolCalls = 0) {
-  const text = String(output || '').trim();
-  if (!text) return '执行器返回空结果（模型未产出任何内容）';
-  if (toolCalls > 0) return '';
-  const hit = FAIL_MARKERS.find((re) => re.test(text));
-  return hit ? `模型未调用任何工具且自述无法完成（命中「${String(hit).replace(/^\/|\/$/g, '')}」）——请检查任务所需能力是否已配置` : '';
-}
-
-// 引擎自己写的「未完成」收尾（熔断/预算耗尽）。与 FAIL_MARKERS 刻意分开：
-// FAIL_MARKERS 是**措辞猜测**（模型嘴上说做不到），且只在零工具调用时生效；
-// 这里是引擎给出的事实陈述（它确实因为闸门停了），**与工具调用次数无关**。
-// 实测事故：抓 50 条新闻的任务被上下文闸停下，输出写着「任务尚未完成」，
-// 但卡片显示绿色「成功」——因为 detectUnfinished 见到 toolCalls>0 就直接放行。
-const EXHAUSTED_MARKERS = [
-  /任务未完全完成/, /上下文已到模型窗口/, /单任务 token 预算已用尽/,
-  /单任务执行轮次预算已用尽/, /整任务已运行超过/,
-];
-function detectExhausted(output) {
-  const text = String(output || '');
-  const hit = EXHAUSTED_MARKERS.find((re) => re.test(text));
-  return hit ? `引擎报告任务未完成（命中「${String(hit).replace(/^\/|\/$/g, '')}」）——已产出部分结果，详见运行输出` : '';
-}
-
+// 成败判定（未完成措辞 / 引擎闸门 / 零写入 / 交付校验降级）收敛在 main/scheduledVerdict.js 的
+// 纯函数里：四条规则并列、命中即失败、文案取第一个命中。为什么搬出去：判定已经长到四条，
+// 留在本文件既顶行数门禁，也没法把「同时命中两条时用哪条文案」写成断言。
 async function runTask(id, trigger = 'manual') {
   const t = store.tasks.find((x) => x.id === id);
   if (!t) return { ok: false, error: '任务不存在' };
@@ -329,6 +323,8 @@ async function runTask(id, trigger = 'manual') {
     channel: useAgent ? 'agent' : 'chat', // P0-D：执行通道可观测
     tools: 0,                              // Agent 通道的工具调用计数
     tokens: null,                          // Agent 通道的 token 用量 {prompt_tokens, completion_tokens}
+    writes: null,                          // Agent 通道的写工具成功次数（V 层对账）；null=未知，不能用它判「没写文件」
+    shellWrites: null,                     // Agent 通道的 shell 重定向写次数（同上：任一 >0 都算有产出）
     // 待确认动作：只有 Agent 通道会用对外闸门，但字段必须在**所有**路径上都存在
     //（chat 通道与异常路径不写它，缺省会让收尾处的 .length 直接抛，把整个任务变成崩溃）
     pending_actions: [],
@@ -344,7 +340,7 @@ async function runTask(id, trigger = 'manual') {
   try {
     if (useAgent) {
       const r = await execCtx.runAgentTask({
-        prompt: t.prompt, model, signal: ctl.signal, taskId: id,
+        prompt: t.prompt, model, signal: ctl.signal, taskId: id, taskName: String(t.name || ''),
         // 单次运行的唯一 id：待确认动作的幂等键 = `${runId}#序号`，必须按 run 唯一
         runId: run.id,
         // 任务级放行开关：默认（缺省）拦截对外/不可逆动作，转成「待确认动作清单」
@@ -357,18 +353,18 @@ async function runTask(id, trigger = 'manual') {
       run.pending_actions = Array.isArray(r?.pendingActions) ? r.pendingActions.slice(0, 20) : [];
       // V 层结论随运行记录落盘：无人值守下这是唯一能回答「这次到底判过没判、判成什么」的地方
       run.verify = r?.verify || null;
-      // 没抛异常 ≠ 成功：模型自述做不到时要如实标失败
-      const unfinished = detectUnfinished(run.output, run.tools);
-      // 引擎因闸门停下（上下文压不动/预算耗尽/墙钟）同样是「未完成」，不能标成功
-      const exhausted = unfinished ? '' : detectExhausted(run.output);
-      if (unfinished) { run.status = 'failed'; run.error = unfinished; } else if (exhausted) {
-        run.status = 'failed';
-        run.error = exhausted;
-      } else if (r?.delivery?.downgrade) {
-        // 无人值守 fail-closed：判不出来 / 守卫型 L3 判 FLAG → 不宣告成功（产物仍归档）
-        run.status = 'failed';
-        run.error = `未通过交付校验：${r.delivery.reason}`;
-      } else { run.status = 'success'; }
+      // 四条判定（未完成措辞 / 引擎闸门 / 零产出 / 交付降级）收敛成一次调用，命中即失败、取第一个文案。
+      // writes/shellWrites 来自 V 层的确定性对账；hasVerify 为 false 或任一计数未知时不判——不把「没数据」当成「没写文件」。
+      const verdict = judgeRun({
+        output: run.output, tools: run.tools, writes: r?.writes, shellWrites: r?.shellWrites,
+        hasVerify: !!(r?.verify && r.verify.stats), delivery: r?.delivery, dir: r?.workDir,
+        expectsFile: t.expects_file !== false,
+      });
+      run.status = verdict.status;
+      if (verdict.error) run.error = verdict.error;
+      if (typeof r?.writes === 'number') run.writes = r.writes; // 让「没写文件」这件事进运行记录（UI/排障要看得见）
+      if (typeof r?.shellWrites === 'number') run.shellWrites = r.shellWrites;
+      run.workDir = r?.workDir || ''; // 产物目录进运行记录：事后要知道文件写在哪
     } else {
       const out = await execCtx.chatOnce({
         messages: [
@@ -546,11 +542,15 @@ function normalizeTaskModel(m) {
   const providerId = String(m.providerId || '').trim();
   const model = String(m.model || '').trim();
   if (!providerId || !model) return null;
-  return { providerId, isGlobal: !!m.isGlobal, baseUrl: String(m.baseUrl || ''), model };
+  // cwd 必须保留：任务级模型是运行时快照，丢掉它等于把「用户在这个项目里跑」变成「没有项目」
+  //（真机事故的现场 cwd 是 /Users/.../Documents/.MJCoder/20261017-5742，非空）。
+  // 可选字段：老快照里没有 cwd 时**不凭空补空串**，保持「未指定」语义（跟随会话）。
+  const cwd = typeof m.cwd === 'string' ? m.cwd.slice(0, 1024) : '';
+  return { providerId, isGlobal: !!m.isGlobal, baseUrl: String(m.baseUrl || ''), model, ...(cwd ? { cwd } : {}) };
 }
 
 // 创建定时任务（IPC 与模型工具共用同一实现，避免两套校验规则漂移）。
-function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw, external_policy: externalPolicy, trigger_type: triggerType, event_source: eventSource, event_name: eventName, model: taskModel } = {}) {
+function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRaw, external_policy: externalPolicy, trigger_type: triggerType, event_source: eventSource, event_name: eventName, model: taskModel, expects_file: expectsFile } = {}) {
   const nm = String(name || '').trim();
   const pr = String(prompt || '');
   const sc = String(schedule || '').trim();
@@ -577,6 +577,9 @@ function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRa
     enabled: enabled !== false,
     // 对外动作放行开关：缺省 block（无人值守默认不产生不可逆副作用）
     external_policy: externalPolicy === 'allow' ? 'allow' : 'block',
+    // 是否要求产出文件（默认 true）：关掉后「零产出」不再判失败——只做 git 提交/只做汇报的任务
+    // 本来就不该产出文件，硬判会让它连续失败并触发 auto-pause。用户可在任务设置里关。
+    expects_file: expectsFile !== false,
     // 任务级模型（null = 跟随会话当前模型）。存快照而不是引用：运行时 provider 可能已被删。
     model: normalizeTaskModel(taskModel),
     valid_until: validUntilRaw ? String(validUntilRaw).slice(0, 10) : null,
@@ -611,6 +614,10 @@ function registerIpc() {
     } catch (e) {
       return { ok: false, error: e.message };
     }
+    // expects_file 是布尔（payloadGuard 没有布尔断言）：显式给非布尔值时拒绝，别让 "false" 字符串悄悄变 true
+    if (p.expects_file !== undefined && p.expects_file !== null && typeof p.expects_file !== 'boolean') {
+      return { ok: false, error: 'expects_file 必须是布尔值（true/false）' };
+    }
     const has = (k) => p[k] !== undefined && p[k] !== null;
     // 任务级模型：对象形态，字段边界单独守
     if (p.model !== undefined && p.model !== null) {
@@ -619,6 +626,8 @@ function registerIpc() {
         guard.assertStrings(p.model, {
           model: { max: 200 },
           baseUrl: { max: 2000, optional: true, allowEmpty: true },
+          // cwd 是路径字符串（不是 id）：用 assertStrings 的 optional 形态收，最多 1024
+          cwd: { max: 1024, optional: true, allowEmpty: true },
         });
         // providerId 两种形态都合法：本机 provider 是自增**数字** id，全局/服务端是字符串
         // （main.js 的 resolveSecret 注释里早就写明这点）。用 assertStrings 会在数字 id 上直接抛
@@ -642,6 +651,7 @@ function registerIpc() {
       if (has('enabled')) patch.enabled = p.enabled !== false;
       if (has('valid_until')) patch.valid_until = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
       if (has('external_policy')) patch.external_policy = p.external_policy === 'allow' ? 'allow' : 'block';
+      if (has('expects_file')) patch.expects_file = p.expects_file !== false;
       // 用「键存在」判定而不是非空：显式传 model:null 表示**恢复跟随会话模型**
       if (Object.prototype.hasOwnProperty.call(p, 'model')) patch.model = normalizeTaskModel(p.model);
       Object.assign(t, patch);
@@ -655,7 +665,7 @@ function registerIpc() {
     if (!name || !prompt || !schedule) return { ok: false, error: '任务名称、提示词与 Cron 表达式必填' };
     if (!cronValid(schedule)) return { ok: false, error: 'Cron 表达式无效（5 字段：分 时 日 月 周）' };
     const validUntil = p.valid_until ? String(p.valid_until).slice(0, 10) : null;
-    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil, external_policy: p.external_policy, model: p.model });
+    return createTask({ name, prompt, schedule, enabled: p.enabled, valid_until: validUntil, external_policy: p.external_policy, model: p.model, expects_file: p.expects_file });
   });
   ipcMain.handle('scheduled:delete', async (_, { id } = {}) => {
     // X14：id 决定删掉哪条任务及其运行历史——非字符串会 filter 掉全部（id 不匹配任何记录），
@@ -757,7 +767,7 @@ module.exports = {
   startScheduler, stopScheduler, registerIpc, getModel, setModel,
   cronValid, cronMatches, runTask, persist,
   // 2026-10-18：存储守卫与自救（未加载禁止写盘 / 从 .bak 恢复 / 可恢复提示）
-  loadStore, storeState, restoreBackup,
+  loadStore, storeState, restoreBackup, convergeInterruptedRuns,
   // P0-8a：补跑扫描与区间回放导出（测试可注入固定 now 做确定性断言）
   scanMissedTasks, collectMatchesBetween,
   // 2026-10-17:假成功识别（纯函数，单测直调）

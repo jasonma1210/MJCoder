@@ -65,6 +65,7 @@ function createScheduledVerify({
         return {
           verify: { level: vrun.level, verdict: 'SKIP', reason: `verify_error: ${String(e?.message || e).slice(0, 200)}`, annotation: '', l3: null },
           delivery: { downgrade: true, reason: 'V 层执行异常，无人值守按未验证处理' },
+          writes: null, shellWrites: null, // 判定异常 ⇒ 产出计数未知，调用方不得据此判「没写文件」
         };
       }
       const verify = {
@@ -72,9 +73,19 @@ function createScheduledVerify({
         verdict: r.verdict || 'SKIP',
         reason: String(r.reason || '').slice(0, 600),
         annotation: String(r.annotation || '').slice(0, 2000),
+        // stats 是 L1 确定性对账的事实（tools/writes/shellWrites/tests/claims）。
+        // 定时任务的交付判定要用它判「本轮到底写没写文件」，所以必须往上传，不能只留在 trace 里。
+        stats: r.stats && typeof r.stats === 'object' ? r.stats : null,
         l3: r.l3 || null,
       };
-      return { verify, delivery: verifyPolicy.decideDelivery({ verify, failClosed: true }) };
+      return {
+        verify,
+        delivery: verifyPolicy.decideDelivery({ verify, failClosed: true }),
+        // 产出证据：写入次数 + shell 重定向写次数（有机数才给数字，否则 null = 未知）。
+        // 调用方用它们做「零产出不判成功」的确定性判定；两者都未知时必须不判（防假失败）。
+        writes: verify.stats && typeof verify.stats.writes === 'number' ? verify.stats.writes : null,
+        shellWrites: verify.stats && typeof verify.stats.shellWrites === 'number' ? verify.stats.shellWrites : null,
+      };
     },
   };
 }

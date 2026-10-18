@@ -7,6 +7,8 @@
 // 2026-10-17 事故：这里曾漏注入 webSearch / webFetch，导致「搜索最新 AI 新闻」的定时任务
 // 直接回「web_search 工具不存在」——模型没撒谎，是宿主没给它工具。Worker 路径早已补上，
 // 定时任务这条路径漏了。现在两条路径共用本模块，不会再各自维护一份清单。
+const fs = require('fs');
+const path = require('path');
 const { denialText, approvalReasonOf } = require('./approvalChannel');
 const { audit } = require('./audit/auditLog');
 
@@ -16,32 +18,75 @@ function scheduledToolHandlers(deps = {}) {
     toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob,
     toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd,
     callMcpTool, prTools,
+    // 无人值守是**显式入参、默认关闭**：这张表同时被交互式会话复用（main.js 的 createToolHandlers
+    // 直接 spread 它），一旦在这里写死，人就在屏幕前也批不了 —— 真机回归实测：sudo 原本 3025ms 弹卡，
+    // 变成了 6ms 被「无人值守…没有人在场」拒绝；越界写同样从弹卡变成硬拒。只允许定时/Worker 通道传 true。
+    unattended = false,
+    // 上下文目录：只给**读类与 git 类**兜底 cwd。写工具与 shell 不注入 —— 写必须落产出目录
+    //（agent-core 会把 runAgent 的 cwd 注入写工具入参），shell 也不能被 cd 到项目目录里写脏。
+    // 为什么需要：定时任务的 runAgent cwd 已固定为产出目录，而 git_* 的 cwd 由宿主注入、模型无法指定，
+    // 不兜底就会在非 git 的产出目录里执行（fatal: not a git repository），读类相对路径也全落错地方。
+    contextCwd = '',
   } = deps;
+  const ctxDir = typeof contextCwd === 'string' ? contextCwd : '';
+  // 读/git 类：**contextCwd 优先**，没有才回落 args.cwd。
+  //
+  // 为什么是这个方向（真实链路实测，别改回去）：agent-core 对 CWD_TOOLS 会**无条件**把宿主
+  // cwd（= 产出目录）写进 toolArgs.cwd（见 agent-core/index.js「cwd 贯通」那行），所以
+  // `args.cwd || ctxDir` 里的 args.cwd 永远非空 → ctxDir 变死代码，git_status 依旧在非 git 的
+  // 产出目录里跑（fatal: not a git repository），read_file('README.md') 也 still notFound。
+  // 单元级直调 h[t]({}) 测不出这一点，门禁必须是「过 agent-core 循环」的形态（见
+  // test/scheduled-context-cwd.test.mjs）。
+  // 安全性：模型传来的 cwd 已被 agent-core 剥离并覆盖为宿主 cwd，这里反转不会把「模型指定任意目录」
+  // 放开；contextCwd 为空（任务没有项目上下文）时自然回落 args.cwd，行为与之前一致。
+  const withCtx = (fn) => (args) => fn({ ...args, ...(ctxDir || (args && args.cwd) ? { cwd: ctxDir || (args && args.cwd) } : {}) });
+  // 读类双根解析（S-1）：写进产出目录的文件，用**相对路径**回读时不能落到项目目录里 notFound。
+  //   · 写：`write_file('news.md')` → 产出目录；读：`read_file('news.md')` 按 contextCwd 解析 → 项目目录 → notFound
+  //     → 模型换绝对路径重试，白烧一轮（40 轮预算里这种浪费要避免）。
+  //   · 判据是「目标在 contextCwd 下不存在、但在 args.cwd（产出目录）下存在」，用 existsSync 而不是
+  //     「结果为空/notFound 就重试」：后者会把「目录确实为空」误当成未命中，还会把权限/语法错误吞成
+  //     「文件不存在」。两处都没有时仍按 contextCwd 解析（错误信息指向项目目录，语义不变）。
+  const withRead = (fn) => (args) => {
+    const primary = ctxDir || (args && args.cwd) || '';
+    const fallback = (args && args.cwd) || '';
+    const rel = String((args && args.path) || '');
+    const pick = primary && fallback && primary !== fallback
+      && !fs.existsSync(path.resolve(primary, rel)) && fs.existsSync(path.resolve(fallback, rel))
+      ? fallback : primary;
+    return fn({ ...args, ...(pick ? { cwd: pick } : {}) });
+  };
+  // 写工具：无人值守下越界写必须**立即失败**而不是等 120s 审批（交互式保持既有审批行为）。
+  // requireApproval 放在 spread 之后：模型自传 true 也改不回来。
+  const writeTool = (name) => (args) => runWriteTool(name, { ...args, ...(unattended ? { requireApproval: false } : {}) });
   return {
     chat: scheduledAgentChat,
     // P0-A：无人值守任务同样需要出网能力（查新闻/查文档/查报错）
     webSearch: (args) => webTools.webSearch(args),
     webFetch: (args) => webTools.webFetch(args),
-    shell: toolShell,
-    readFile: toolReadFile,
-    writeFile: (args) => runWriteTool('writeFile', args),
-    editFile: (args) => runWriteTool('editFile', args),
-    applyPatch: (args) => runWriteTool('applyPatch', args),
-    listDir: toolListDir,
-    grep: toolGrep,
-    glob: toolGlob,
-    gitStatus: toolGitStatus,
-    gitDiff: toolGitDiff,
-    gitLog: toolGitLog,
-    gitBranch: toolGitBranch,
-    gitCommit: toolGitCommit,
-    gitAdd: toolGitAdd,
+    // shell 在无人值守下打 unattended 标记：需要审批的危险命令由 scheduledGuard.unattendedApproval 立即 deny，
+    // 而不是等 approvalChannel 的 120s 超时（一次 2 分钟，重试几次直接撞 10 分钟墙钟）。
+    // 不要改成 requireApproval:false —— 后者在 runShellTool 里是「跳过审批直接执行」，
+    // 等于让无人值守真跑 rm -rf（沙箱按目录放行，挡不住目录内破坏性命令）。
+    shell: (args) => toolShell({ ...args, ...(unattended ? { unattended: true } : {}) }),
+    readFile: withRead(toolReadFile),
+    writeFile: writeTool('writeFile'),
+    editFile: writeTool('editFile'),
+    applyPatch: writeTool('applyPatch'),
+    listDir: withRead(toolListDir),
+    grep: withCtx(toolGrep),
+    glob: withCtx(toolGlob),
+    gitStatus: withCtx(toolGitStatus),
+    gitDiff: withCtx(toolGitDiff),
+    gitLog: withCtx(toolGitLog),
+    gitBranch: withCtx(toolGitBranch),
+    gitCommit: withCtx(toolGitCommit),
+    gitAdd: withCtx(toolGitAdd),
     mcpCallTool: callMcpTool,
-    prList: prTools.prList,
-    prView: prTools.prView,
-    prDiff: prTools.prDiff,
-    prReview: prTools.prReview,
-    prComment: prTools.prComment,
+    prList: withCtx(prTools.prList),
+    prView: withCtx(prTools.prView),
+    prDiff: withCtx(prTools.prDiff),
+    prReview: withCtx(prTools.prReview),
+    prComment: withCtx(prTools.prComment),
   };
 }
 
@@ -64,7 +109,13 @@ async function scheduledCreate(args = {}, ctx = {}) {
     return { ok: false, error: `Cron 表达式无效：「${schedule}」（需 5 段：分 时 日 月 周，如每天 09:41 写作 "41 9 * * *"）` };
   }
 
-  const payload = { name, schedule, prompt, enabled: args.enabled !== false };
+  // expects_file 由**模型**按任务语义判断（"每天提醒我开会" 不产文件；"生成周报" 产文件），
+  // 缺省不传 → createTask 落 true（与旧行为一致）。不在这里用关键词猜语义：那是模型的判断，
+  // 猜错会让提醒类任务天天被判「未产出文件」并连续 3 次 auto-pause（tester 实测）。
+  const payload = {
+    name, schedule, prompt, enabled: args.enabled !== false,
+    ...(typeof args.expects_file === 'boolean' ? { expects_file: args.expects_file } : {}),
+  };
   // 用户明确选了「全不询问」（approvalMode=never）时不弹卡——产品不能对用户设置撒谎；
   // 其余所有档位一律弹卡（含 auto-safe：L3 不在自动放行之列）。
   if (ctx.approvalMode === 'never') {

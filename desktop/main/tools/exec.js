@@ -136,7 +136,10 @@ async function runShellTool(args) {
     if (verdict.matched) ruleMatched = verdict.matched;
     if (verdict.need) {
       neededApproval = true;
-      const { decision, reason } = await awaitApproval(deps.requestApproval, 'shell', { command });
+      // unattended 由宿主通道注入（定时任务/Worker）：审批终结器据此**立即 deny**，
+      // 而不是在无人值守下等满 approvalChannel 的 120s 超时（模型重试几次就吃光 10 分钟墙钟，
+      // 死因还会被写成「执行超时」，掩盖真正原因）。模型自己传的同名参数已在 agent-core 剥离。
+      const { decision, reason } = await awaitApproval(deps.requestApproval, 'shell', { command, unattended: args.unattended === true });
       if (decision === 'deny') {
         audit('shell', command, reason ? `用户拒绝（理由：${reason}，cwd=${cwd}）` : `用户拒绝（cwd=${cwd}）`, 'denied');
         return { stdout: '', stderr: denialText(reason), exitCode: -1, error: 'Approval denied', ...cwdMeta };

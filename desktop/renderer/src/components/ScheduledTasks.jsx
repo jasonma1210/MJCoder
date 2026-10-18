@@ -108,7 +108,7 @@ export default function ScheduledTasks() {
   const [filter, setFilter] = useState('all'); // all | enabled | disabled
   const [showForm, setShowForm] = useState(false);
   // Bug2：TRAE 同款表单——任务名称 + 提示词 + 重复/时间/有效期
-  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
+  const [form, setForm] = useState({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, expectsFile: true, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
   // 任务级模型选项：providers × models 展平（value 用 `providerId::modelId`，
   // providerId 由主进程生成、不含 '::'，所以按第一个分隔符切分是安全的）
   const [modelOptions, setModelOptions] = useState([]);
@@ -250,6 +250,8 @@ export default function ScheduledTasks() {
         valid_until: form.validType === 'until' && form.validUntil ? form.validUntil : null,
         // 默认 block：无人值守不产生对外/不可逆动作，被拦的进「待确认动作清单」
         external_policy: form.allowExternal ? 'allow' : 'block',
+        // 是否要求产出文件（默认开）：关掉后「零产出」不再判失败，适合只做提交/只做汇报的任务
+        expects_file: form.expectsFile !== false,
         // 时钟 or 事件触发（事件任务没有 cron，由 ingestEvent 驱动）
         trigger_type: isEvent ? 'event' : 'cron',
         ...(isEvent ? { event_source: form.eventSource.trim(), event_name: form.eventName.trim() } : {}),
@@ -260,7 +262,7 @@ export default function ScheduledTasks() {
         })(),
       });
       setShowForm(false);
-      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
+      setForm({ name: '', prompt: '', repeat: 'daily', time: '09:00', schedule: '0 9 * * *', validType: 'forever', validUntil: '', allowExternal: false, expectsFile: true, triggerType: 'cron', eventSource: '', eventName: '', modelRef: '' });
       setError('');
       setNotice(t('scheduled.createdNotice'));
       load();
@@ -306,6 +308,16 @@ export default function ScheduledTasks() {
     } catch (err) {
       setError(t('scheduled.recoverFailed', { msg: err.message }));
     }
+  }
+
+  // 要求产出文件（expects_file）：关掉 = 这一轮没有文件产出也不算失败。
+  // 为什么卡片上也要能改：删任务会连运行历史一起删（scheduler 的 scheduled:delete），
+  // 只留「新建时可设」等于让存量任务没有安全的关闭方式（tester S-a）。
+  async function toggleExpectsFile(task) {
+    const next = task.expects_file === false; // 当前关闭 → 打开
+    const r = await api.updateScheduledTask(task.id, { expects_file: next });
+    if (r && r.ok === false) setError(r.error || t('runtime.unknownError'));
+    load();
   }
 
   // 对外动作放行：把「无人值守」变成「能在没人看着时写外部系统」，开它必须二次确认。
@@ -566,6 +578,16 @@ export default function ScheduledTasks() {
                 label={t('scheduled.allowExternalLabel')} />
             </div>
 
+            {/* 要求产出文件：默认开。关掉 = 该任务不产出文件也不算失败（只做提交/只做汇报的任务） */}
+            <div className="flex items-start justify-between gap-3 mt-3 p-3 bg-input rounded-xl">
+              <div className="min-w-0">
+                <div className="text-xs font-medium">{t('scheduled.expectsFileLabel')}</div>
+                <div className="text-xs text-text2 mt-1">{t('scheduled.expectsFileHint')}</div>
+              </div>
+              <Switch checked={form.expectsFile !== false} onChange={(v) => setForm({ ...form, expectsFile: !!v })}
+                label={t('scheduled.expectsFileLabel')} />
+            </div>
+
             <div className="flex justify-end gap-3 mt-5">
               <button onClick={() => setShowForm(false)}
                 className="h-9 inline-flex items-center justify-center px-4 rounded-xl text-sm border border-border hover:bg-hover">{t('scheduled.cancel')}</button>
@@ -657,11 +679,20 @@ export default function ScheduledTasks() {
                   className={`h-7 inline-flex items-center justify-center px-2.5 rounded-lg border text-xs ${task.external_policy === 'allow' ? 'border-danger text-danger' : 'border-border text-text2 hover:bg-hover'}`}>
                   {task.external_policy === 'allow' ? t('scheduled.externalAllowed') : t('scheduled.externalBlocked')}
                 </button>
+                {/* 产出校验状态 + 一键切换（关掉后零产出不判失败；只做提交/汇报的任务用） */}
+                <button onClick={() => toggleExpectsFile(task)} title={t('scheduled.expectsFileLabel')}
+                  className="h-7 inline-flex items-center justify-center px-2.5 rounded-lg border border-border text-text2 hover:bg-hover text-xs">
+                  {task.expects_file === false ? t('scheduled.expectsFileOffShort') : t('scheduled.expectsFileOn')}
+                </button>
                 <Switch checked={!!task.enabled} onChange={() => toggle(task.id, task.enabled)}
                   label={t('settings.enableToggle', { name: String(task.name || task.id || '') })} />
                 <button onClick={() => remove(task.id, task.name)} className="text-text2 hover:text-danger" title={t('scheduled.delete')}><IconX size={14} /></button>
               </div>
             </div>
+            {/* 产出校验状态：关掉时明确写出来，否则用户会以为「没产出文件」的失败是 bug */}
+            {task.expects_file === false && (
+              <p className="text-xs text-text2 mt-1">{t('scheduled.expectsFileOff')}</p>
+            )}
 
             {expandedRuns?.taskId === task.id && Array.isArray(expandedRuns.list) && (
               <div className="mt-3 border-t border-border pt-3">

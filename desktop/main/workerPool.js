@@ -173,7 +173,7 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
     let abortReason = null;
     try {
       const core = await deps.loadAgentCore();
-      const handlers = deps.createToolHandlers({ signal: controller.signal });
+      const handlers = deps.createToolHandlers({ signal: controller.signal, cwd: runCwd });
       // ── P2-8 / V-L1：Worker 通道 V 层（默认 off；opt-in 经 deps.getVerifyConfig()）──
       // 判定事实来源：ledger（引擎 verify_ledger，经下方 onTrace 收）+ diff（runCwd 的
       // git status，非 git 工作区返回 null → R5 降级 SKIP，不阻断任务）。

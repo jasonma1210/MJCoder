@@ -126,4 +126,34 @@ function createScheduledGuard({ enabled = true, runId = '', cwd = '' } = {}) {
   };
 }
 
-module.exports = { createScheduledGuard, blockedReason, describe, readHead, REPLAYABLE, BLOCKED };
+// ── 无人值守的「审批终结器」──
+//
+// 为什么需要：approvalChannel 的无人值守等待是 **120s 超时按 deny**。定时任务里任何需要审批的动作
+// （shell 的危险模式、MCP 等）都会干等 2 分钟；模型重试 5 次就把 10 分钟墙钟吃光，而最终死因被写成
+// 「执行超时」，把真正的「越界/高危动作」掩盖掉（与 writeFile 越界写是同一枚硬币的两面）。
+//
+// 与写工具的 `requireApproval:false` 是**两层，互不覆盖**：
+//   · 写工具：requireApproval:false → 白名单内直接放行 / 白名单外立刻结构化失败，根本不进本函数；
+//   · 其余需要审批的工具（shell 危险模式等）→ 本函数**立即** deny，并把理由回给模型，
+//     让它在同一轮里改做法，而不是等 2 分钟后拿到一句「用户拒绝执行」。
+// 判定依据是宿主注入的 `args.unattended`（定时/Worker 通道在工具入参里置 true；
+// 模型自传的同名参数已被 agent-core 的 GOVERNANCE_FIELDS 剥离，无法自我降级审批）。
+const UNATTENDED_DENY_REASON = '无人值守执行：本次动作需要用户审批，但当前没有人在场，已直接拒绝。'
+  + '请改用允许范围内的做法（例如在产出目录内用写工具），或把这一步写进摘要，等用户手动执行。';
+
+function unattendedApproval(requestApproval) {
+  if (typeof requestApproval !== 'function') return requestApproval;
+  return function approvalForTools(tool, args) {
+    if (!args || args.unattended !== true) return requestApproval(tool, args);
+    // 决议值保持字符串（既有消费方全在比较 decision === 'deny'）；理由挂在 Promise 的只读 reason 上
+    // ——与 approvalChannel.wait() 的返回形状一致，exec.js 的 awaitApproval/approvalReasonOf 零改动可用。
+    const p = Promise.resolve('deny');
+    Object.defineProperty(p, 'reason', { value: UNATTENDED_DENY_REASON, enumerable: false, configurable: true });
+    return p;
+  };
+}
+
+module.exports = {
+  createScheduledGuard, blockedReason, describe, readHead, REPLAYABLE, BLOCKED,
+  unattendedApproval, UNATTENDED_DENY_REASON,
+};
