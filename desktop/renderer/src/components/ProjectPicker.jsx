@@ -1,4 +1,5 @@
 import CreateProjectForm from './CreateProjectForm';
+import Modal from './ui/Modal';
 import { IconFolder, IconX } from './icons';
 import { useI18n } from '../i18n';
 
@@ -8,12 +9,17 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
   const { t } = useI18n();
   if (!open) return null;
 
+  // P1-9：外壳交给 ui/Modal（role=dialog + 焦点陷阱 + Esc + 关闭归还焦点），
+  // frameless 只换外壳：遮罩类名沿用原字符串（顶部 96px 落位 + 可滚动），面板样式原样保留。
   return (
-    <div className="fixed inset-0 bg-overlay flex items-start justify-center pt-24 z-settings overflow-y-auto" onClick={onClose}>
-      <div
-        className="bg-surface border border-border rounded-2xl w-[min(620px,calc(100vw-2rem))] p-6 shadow-[var(--shadow-pop)] my-8"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      open
+      onClose={onClose}
+      frameless
+      ariaLabel={t('project.title')}
+      overlayClassName="fixed inset-0 bg-overlay flex items-start justify-center pt-24 z-settings overflow-y-auto"
+    >
+      <div className="bg-surface border border-border rounded-2xl w-[min(620px,calc(100vw-2rem))] p-6 shadow-[var(--shadow-pop)] my-8">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-semibold">{t('project.title')}</h3>
           <button onClick={onClose} aria-label={t('project.close')} className="text-text2 hover:text-text">
@@ -45,6 +51,6 @@ export default function ProjectPicker({ open, onClose, onSelect, projects = [], 
           onCancel={onClose}
         />
       </div>
-    </div>
+    </Modal>
   );
 }

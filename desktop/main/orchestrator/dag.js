@@ -9,6 +9,11 @@ const MAX_TASKS = 8;
 const MIN_TASKS = 2;
 const MAX_DEPS = 4;
 
+// P3 收口：单任务墙钟与组等待的数值必须在同一处（此前分居本文件与 invoke.js，互不知情）
+const {
+  ORCHESTRATE_TASK_MIN_MS, ORCHESTRATE_TASK_DEFAULT_MS, ORCHESTRATE_TASK_MAX_MS,
+} = require('../tools/timeouts');
+
 function slugId(v) {
   return String(v || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -47,7 +52,10 @@ function validateDag(raw) {
       dependsOn: Array.isArray(t.dependsOn) ? [...new Set(t.dependsOn.map(slugId).filter(Boolean))] : [],
       critical: t.critical === true,
       maxRetry: Math.min(Math.max(Number(t.maxRetry) || 0, 0), 3),
-      timeoutMs: Math.min(Math.max(Number(t.timeoutMs) || 10 * 60 * 1000, 30 * 1000), 30 * 60 * 1000),
+      timeoutMs: Math.min(
+        Math.max(Number(t.timeoutMs) || ORCHESTRATE_TASK_DEFAULT_MS, ORCHESTRATE_TASK_MIN_MS),
+        ORCHESTRATE_TASK_MAX_MS,
+      ),
     });
   }
   // 依赖引用存在性 + 自依赖 + 上限

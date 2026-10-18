@@ -39,6 +39,18 @@ const GIT_IMPL_TIMEOUT_MS = 30000;
 /** git 轻量只读（8s）：status / rev-parse 这类本地瞬时命令 */
 const GIT_QUICK_TIMEOUT_MS = 8000;
 
+// ── 编排（orchestrator）两级墙钟（P3 收口）──
+// 此前两个 30min 分居 dag.js:50 与 invoke.js:8，互不知情：
+//   · TASK_*   = 「一个子任务最多跑多久」（dag 解析时钳制）
+//   · GROUP_*  = 「一次 orchestrate_task 调用最多等多久」（invoke 的轮询上限）
+// 两者独立叠加时**先撞组等待**：默认 10min/任务时串行 3 层恰好用满 30min，
+// 第 4 层起会被组等待强停 —— 这是有意的（单次调用不该无限挂），不是缺陷。
+// 不变式：GROUP_WAIT >= TASK_MAX（至少容纳一个满预算任务），由 test/timeouts-contract 断言锁住。
+const ORCHESTRATE_TASK_MIN_MS = 30 * 1000;
+const ORCHESTRATE_TASK_DEFAULT_MS = 10 * 60 * 1000;
+const ORCHESTRATE_TASK_MAX_MS = 30 * 60 * 1000;
+const ORCHESTRATE_GROUP_WAIT_MS = 30 * 60 * 1000;
+
 module.exports = {
   SHELL_DEFAULT_TIMEOUT_MS,
   SHELL_WATCHDOG_TIMEOUT_MS,
@@ -49,4 +61,8 @@ module.exports = {
   FIND_IMPL_TIMEOUT_MS,
   GIT_IMPL_TIMEOUT_MS,
   GIT_QUICK_TIMEOUT_MS,
+  ORCHESTRATE_TASK_MIN_MS,
+  ORCHESTRATE_TASK_DEFAULT_MS,
+  ORCHESTRATE_TASK_MAX_MS,
+  ORCHESTRATE_GROUP_WAIT_MS,
 };

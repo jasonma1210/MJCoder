@@ -2379,6 +2379,11 @@ export async function runAgent({
               maxRounds: 8,
               systemPrompt: `你是 MJ Coder 的子代理（任务类型：${args.task_type || 'explore'}）。\n目标：${args.objective}\n约束：只能使用只读工具探索与分析，不做任何修改；结论要具体、可执行，附文件路径与行号线索。`,
               toolHandlers,
+              // P3（第二轮审查）：子代理事件也进 trace，但打 `sub: true` 标记 ——
+              // 宿主据此区分「子代理的 run_end / verify_ledger」与「本 run 的终态」，
+              // 既不丢子代理轨迹（此前完全不传 onTrace，JSONL 里看不到子代理做过什么），
+              // 也不污染「每 run 恰好一条 run_end / 一条 verify_ledger」的不变量。
+              onTrace: (e) => trace({ ...e, sub: true }),
               onMessage: (m) => {
                 if (m.role === 'assistant') {
                   // 2026-10-15 修复：此前只累计 provider 回传的 usage——

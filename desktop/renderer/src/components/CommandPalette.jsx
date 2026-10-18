@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconEdit, IconFile, IconFolder, IconMessage, IconSearch, IconSettings } from './icons';
+import Modal from './ui/Modal';
 import { useI18n } from '../i18n';
 
 // 全局命令面板（⌘K / Ctrl+K）：会话 / 文件 / 命令 / 设置 四类统一入口
@@ -66,13 +67,17 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
 
   if (!open) return null;
 
+  // P1-9：外壳交给 ui/Modal（role=dialog + 焦点陷阱 + Esc + 关闭归还焦点），
+  // frameless 只换外壳：面板宽度/底色/圆角/阴影与顶部 12vh 的落位仍由下面这层/遮罩类名自带。
   return (
-    <div className="fixed inset-0 z-palette flex items-start justify-center pt-[12vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-[var(--sem-overlay)]" />
-      <div
-        className="relative w-[min(560px,calc(100vw-2rem))] bg-raise border border-border rounded-xl shadow-[var(--shadow-pop)] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      open
+      onClose={onClose}
+      frameless
+      ariaLabel={tr('palette.searchPlaceholder')}
+      overlayClassName="fixed inset-0 z-palette flex items-start justify-center pt-[12vh] bg-[var(--sem-overlay)]"
+    >
+      <div className="relative w-[min(560px,calc(100vw-2rem))] bg-raise border border-border rounded-xl shadow-[var(--shadow-pop)] overflow-hidden">
         <div className="flex items-center gap-2 px-4 h-12 border-b border-border">
           <IconSearch size={16} />
           <input
@@ -83,7 +88,7 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
               if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(i + 1, flatItems.length - 1)); }
               else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
               else if (e.key === 'Enter') { e.preventDefault(); exec(flatItems[active]); }
-              else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+              // Esc 由 ui/Modal 统一处理（document 捕获阶段），此处不再重复挂监听
             }}
             placeholder={tr('palette.searchPlaceholder')}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-text2"
@@ -126,6 +131,6 @@ export default function CommandPalette({ open, onClose, threads, onSelectThread,
           <span>{tr('palette.hintNavigate')}</span><span>{tr('palette.hintEnter')}</span><span>{tr('palette.hintToggle')}</span>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

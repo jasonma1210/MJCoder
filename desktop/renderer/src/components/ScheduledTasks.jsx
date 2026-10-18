@@ -4,6 +4,7 @@ import InlineAlert from './InlineAlert';
 import { confirm } from './feedback';
 import { IconCheck, IconClock, IconPlus, IconX } from './icons';
 import Switch from './ui/Switch';
+import Modal from './ui/Modal';
 import { useI18n, tGlobal } from '../i18n';
 
 // labelKey 而非 label：顶层常量不持有求值结果，渲染时经 t() 取文案
@@ -287,10 +288,12 @@ export default function ScheduledTasks() {
         </div>
       )}
 
-      {/* 新建任务弹窗（TRAE 同款：名称 / 提示词 / 重复 / 时间 / 有效期） */}
+      {/* 新建任务弹窗（TRAE 同款：名称 / 提示词 / 重复 / 时间 / 有效期）
+          外壳交给 ui/Modal frameless：dialog 语义 + 焦点陷阱 + Esc + 关闭归还焦点，
+          面板的尺寸/底色/圆角仍是下面这层（视觉零改动） */}
       {showForm && (
-        <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onClick={() => setShowForm(false)}>
-          <div className="w-[min(560px,calc(100vw-2rem))] max-h-[86vh] overflow-y-auto bg-surface border border-border rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+        <Modal open onClose={() => setShowForm(false)} frameless ariaLabel={t('scheduled.formTitle')}>
+          <div className="w-[min(560px,calc(100vw-2rem))] max-h-[86vh] overflow-y-auto bg-surface border border-border rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold">{t('scheduled.formTitle')}</h3>
               <button onClick={() => setShowForm(false)} className="text-text2 hover:text-text"><IconX size={16} /></button>
@@ -344,7 +347,7 @@ export default function ScheduledTasks() {
                 className="h-9 inline-flex items-center justify-center px-4 rounded-xl bg-accent-solid text-on-accent text-sm hover:brightness-110">{t('scheduled.confirm')}</button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {filtered.length === 0 ? (

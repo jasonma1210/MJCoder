@@ -112,6 +112,18 @@ export default function FeedbackHost() {
     setDialog(null);
   }
 
+  // 开箱接管焦点（P3-F3）：ui/Modal 的「别人的对话框在接管键盘」判据要求
+  // `document.activeElement` 落在对方弹层内（closest('[aria-modal],[role=dialog]')）。
+  // 此前 confirm 打开时不 focus 任何元素 → 判据不成立 → 底层 Modal 会先吃掉 Esc
+  // （第一下关掉底层浮层、第二下才取消确认框），Tab 也会跑到底层去。
+  const dialogPanelRef = useRef(null);
+  useEffect(() => {
+    if (!dialog) return;
+    // countConfirm 自带 autoFocus 的输入框（它本身就在弹层内），不要去抢
+    if (dialog.count != null) return;
+    dialogPanelRef.current?.focus();
+  }, [dialog]);
+
   // Esc 关闭 = 取消（危险操作默认安全侧）
   // P1-6：finish 走 latest-ref 模式。finish 是组件内普通函数（每次渲染新建），
   // 直接列入依赖会让 keydown 监听每轮渲染卸载重挂；但遗漏又会用到过期闭包。
@@ -134,7 +146,9 @@ export default function FeedbackHost() {
       {dialog && (
         <div className="fixed inset-0 z-palette flex items-center justify-center bg-overlay" onMouseDown={() => finish(false)}>
           <div
-            className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)] p-5"
+            ref={dialogPanelRef}
+            tabIndex={-1}
+            className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)] p-5 focus:outline-none"
             onMouseDown={(e) => e.stopPropagation()}
             role="alertdialog"
             aria-modal="true"

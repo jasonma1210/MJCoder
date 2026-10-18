@@ -17,6 +17,7 @@ import {
 } from '../lib/ecosystemConnectorLaunch';
 import { connectorValuesForLocal, saveConnectorValueLocal } from '../lib/ecosystemEnabled';
 import { IconAlert, IconCheck, IconEdit, IconGlobe, IconPlug, IconX } from './icons';
+import Modal from './ui/Modal';
 
 // 目录条目在 ConnectorLike 之外的展示/授权字段
 interface ConnectorEntry extends ConnectorLike {
@@ -43,7 +44,8 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
   // ui/Modal 的 foreignDialogOwnsFocus 靠 `closest('[aria-modal],[role=dialog]')` 让路，
   // 但本浮层是 Modal 面板的后代 → Modal.tsx 的 `root.contains(active)` 恒真 → 让路永远
   // 不触发 → 第一次 Esc 会把**整个生态中心**关掉，用户填了一半的变量/Key 全丢。
-  // 因此：① 本组件自己处理 Esc（capture + stopPropagation）；② 宿主在打开本浮层时
+  // 因此：① 本组件自己处理 Esc（capture + stopPropagation），且套壳时给 ui/Modal 传
+  // closeOnEsc={false}（否则同一层里 Modal 也会响应）；② 宿主在打开本浮层时
   // 必须给底层 Modal 传 closeOnEsc={false}（见 EcosystemModal 的 `closeOnEsc={!cfgConnector}`）。
   const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -202,12 +204,16 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
   ) : null;
 
   return (
-    <div className="fixed inset-0 z-settings flex items-center justify-center bg-overlay" onClick={onClose}>
+    // 外壳交给 ui/Modal frameless（遮罩 + dialog 语义 + 焦点陷阱），面板视觉由下面这层自带。
+    // closeOnEsc={false}：Esc 仍由本组件自己的 window 捕获监听处理（见上），
+    // 若这里也留 Esc，同一次按键会被两层各关一层。
+    <Modal open onClose={onClose} frameless closeOnEsc={false} ariaLabel={connector.display_name || connector.name}>
+      {/* 面板保留 role/aria-modal：这是「对话框内的子对话框」（叠在生态中心之上），
+          同时让 Modal 的 foreignDialogOwnsFocus 判据能识别出「键盘归子层」 */}
       <div
         ref={panelRef}
         tabIndex={-1}
         className="w-[480px] max-w-[92vw] max-h-[80vh] overflow-y-auto rounded-2xl bg-raise border border-border p-5 focus:outline-none"
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={connector.display_name || connector.name}
@@ -375,6 +381,6 @@ export default function ConnectorConfigDialog({ connector, onClose, onConnected 
           {cfgErr && <p className="text-xs text-danger mt-1.5 break-all">{cfgErr}</p>}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

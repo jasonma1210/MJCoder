@@ -43,6 +43,17 @@ const verifierReady = import('../agent-core/verifier.js')
     console.error('[verifyRun] 规则引擎加载失败（V 层将跳过，不阻断运行）:', e.message);
   });
 
+// J3：L3 规则引擎（同 ESM 加载模式）。加载失败只让 L3 失效，不影响 L1。
+// ⚠️ then 里**必须 return m**：调用方用 `await verifierL3Ready` 取模块，
+// 若只赋值不返回，await 得到 undefined → 永远走「未注入」降级分支（踩过一次）。
+let verifierL3Mod = null;
+const verifierL3Ready = import('../agent-core/verifierL3.js')
+  .then((m) => { verifierL3Mod = m; return m; })
+  .catch((e) => {
+    console.error('[verifyRun] L3 引擎加载失败（L3 将降级为 L1）:', e.message);
+    return null;
+  });
+
 // ── N4：宿主 diff 能力 ──
 // 只取「有没有改动」与「改了哪些」，不取完整 patch 正文（L1 不需要；L3 才需要 -U0，见 J3）。
 // 任何失败（git 不存在 / 非 git 目录 / 权限不足 / 超时）都返回 null，**绝不抛**——
@@ -93,7 +104,8 @@ async function getWorktreeDiff(cwd) {
  */
 async function runVerification({
   runId = '', conversationId = '', level = 'l1', ledger = null, finalText = '',
-  diff = null, stopHookActive = false, emit = null, warn = null,
+  diff = null, stopHookActive = false, emit = null, warn = null, l3 = null,
+  lastTestOutput = '',
 } = {}) {
   const startedAt = Date.now();
   const say = (msg) => { try { (warn || console.warn)(msg); } catch { /* 日志失败不影响判定 */ } };
@@ -168,6 +180,30 @@ async function runVerification({
     annotated = annotation.length > 0;
   }
 
+  // ── J3：L3 独立评审 ──
+  // 只在 level==='l3' 且 L1 **未** BLOCK 时跑：L1 已经拦住就没必要再花一次模型调用。
+  // fail-open：任何异常/超时/解析失败都按 PASS 处理（基础设施失败不能把用户的活判死）。
+  let l3Result = null;
+  if (level === 'l3' && verdict !== 'BLOCK') {
+    const modL3 = await verifierL3Ready;
+    if (modL3 && l3 && typeof l3.chat === 'function') {
+      l3Result = await modL3.runL3Verify({
+        finalText, ledger, diff, lastTestOutput, chat: l3.chat, model: l3.model,
+      });
+      if (l3Result.verdict === 'FLAG') {
+        const a3 = modL3.formatL3Annotation(l3Result.reasons);
+        if (a3) { annotation = `${annotation}${a3}`; annotated = true; }
+      }
+      if (l3Result.skipped) {
+        say(`[verify] L3 本次未产出有效判定（${l3Result.reason}），已按 PASS 处理（fail-open）`);
+      }
+    } else {
+      // 未注入 chat：能力就绪但未接线 —— 与「配置看起来启用、实际没做」相反，这里明确说出来
+      say('[verify] level=l3 但宿主未注入 l3Chat → 本次仅执行 L1 确定性对账');
+      l3Result = { verdict: 'PASS', skipped: true, reason: 'no_chat', reasons: [], ms: 0 };
+    }
+  }
+
   appendTrace(runId, {
     type: 'verify_result',
     level,
@@ -178,6 +214,15 @@ async function runVerification({
     stats: res.stats || null,
     ms,
     diffAvailable: diff != null,
+    ...(l3Result ? {
+      l3: {
+        verdict: l3Result.verdict,
+        skipped: !!l3Result.skipped,
+        reason: l3Result.reason || '',
+        ms: l3Result.ms || 0,
+        reasons: (l3Result.reasons || []).length,
+      },
+    } : {}),
   });
 
   // 落 verdicts JSONL（离线分析用；不含 args / 文件内容 / 用户文本，与 runTrace 同纪律）。
@@ -198,6 +243,14 @@ async function runVerification({
     annotation,
     annotated,
     diffAvailable: diff != null,
+    ...(l3Result ? {
+      l3: {
+        verdict: l3Result.verdict,
+        skipped: !!l3Result.skipped,
+        reason: l3Result.reason || '',
+        reasons: l3Result.reasons || [],
+      },
+    } : {}),
   });
 }
 
@@ -240,17 +293,15 @@ const OFF_HANDLE = Object.freeze({
  */
 function createVerificationRun({
   runId = '', conversationId = '', cwd = '', config = null, emit = null,
-  defaultLevel = 'l1', fetchDiff = getWorktreeDiff,
+  defaultLevel = 'l1', fetchDiff = getWorktreeDiff, l3Chat = null, l3Model = null,
 } = {}) {
   const rawLevel = config && typeof config === 'object' && config.level ? config.level : defaultLevel;
   let level = ['off', 'l1', 'l3'].includes(rawLevel) ? rawLevel : 'off';
-  // J2 只落地 L1。若配置写了 l3，**不能**直接用 l3 名义跑 L1——那会让日志/事件谎称
-  // 「独立 verifier turn 跑过了」，而实际只做了确定性对账（L3 的独立性是它全部的价值）。
-  // 显式降级 + 告警，等 J3 落地后自然恢复。
-  if (level === 'l3') {
-    console.warn('[verify] level=l3（独立 verifier turn）本批未落地，已降级为 l1 确定性对账'
-      + '（零额外模型调用；L3 接入后自动按配置生效）');
-    level = 'l1';
+  // J3：L3 已落地，不再把 l3 改写成 l1（改写会让事件/日志谎称级别）。
+  // 宿主未注入 l3Chat 时，由 runVerification 只做 L1 并在 trace 里如实标记 skipped。
+  if (level === 'l3' && typeof l3Chat !== 'function') {
+    console.warn('[verify] level=l3 已请求，但宿主未注入 l3Chat（独立 verifier turn 需要一次模型调用）'
+      + ' → 本次仅执行 L1 确定性对账（能力就绪、默认不接线，避免每个 run 多一次 LLM 成本）');
   }
   if (level === 'off') return OFF_HANDLE;
 
@@ -297,6 +348,9 @@ function createVerificationRun({
       const diff = ledger == null ? null : await fetchDiff(cwd);
       const r = await runVerification({
         runId, conversationId, level, ledger, finalText: ft, diff, stopHookActive, emit,
+        l3: typeof l3Chat === 'function' ? { chat: l3Chat, model: l3Model } : null,
+        // J3：L3 的输入之一（最近一次测试命令的输出）—— 在 onToolCall 旁路里缓存
+        lastTestOutput,
       });
       return { ...r, lastTestOutput, lastTestExitCode };
     },

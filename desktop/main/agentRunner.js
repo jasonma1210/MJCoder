@@ -319,11 +319,15 @@ function startAgentRun(payload, sender) {
         // T0-5：结构化运行 trace 落本机 JSONL（userData/traces/<runId>.jsonl）。
         // 写失败由 runTrace 内部告警兜底，绝不影响运行；run_end 后顺带做文件级 LRU 淘汰。
         onTrace: (evt) => {
+          if (!evt) return;
           // P2-8 / V-L1（N1/N2）：收下引擎出的执行事实快照（in-process 直传，子进程宿主
           // 经 engineProcess/registry.js 的 NOTIFY_CBS（onTrace 已在内）桥接，零额外接线）
-          if (evt?.type === 'verify_ledger') vrun.onLedger(evt);
+          // P3：子代理事件带 `sub:true` —— 只记录、**不参与本 run 的台账与终态判据**。
+          // 否则子代理的 verify_ledger 会让台账多一条、run_end 会让「最后一条即终态」
+          // 的判据被子代理收尾覆盖。
+          if (evt.type === 'verify_ledger' && !evt.sub) vrun.onLedger(evt);
           runTrace.appendTraceEvent(runId, evt);
-          if (evt?.type === 'run_end') runTrace.evictOldTraces();
+          if (evt.type === 'run_end' && !evt.sub) runTrace.evictOldTraces();
         },
         // P2-8 / V-L1（J2）：收尾时先做 L1 对账，再落库/推送。
         // ⚠️ 契约：回调**本身是同步函数**（引擎 `onDone?.(...)` 既不 await 也不看返回值），

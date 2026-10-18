@@ -5,7 +5,10 @@
 //   · 墙钟上限防挂死（默认 30 分钟）
 //   · T1-3：onPoll 可选回调——每次轮询拿到组快照即调用（任务≤8，2s 轮询开销可忽略），
 //     供 toolOrchestrateTask 做状态 diff 上报子任务事件（spawn/progress/done/failed）
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+// P3 收口：组等待上限与单任务墙钟同源（见 tools/timeouts.js 的两级墙钟说明）。
+// 不变式 GROUP_WAIT >= TASK_MAX 由 test/timeouts-contract 锁住。
+const { ORCHESTRATE_GROUP_WAIT_MS } = require('../tools/timeouts');
+const DEFAULT_TIMEOUT_MS = ORCHESTRATE_GROUP_WAIT_MS;
 const POLL_INTERVAL_MS = 2000;
 
 const SETTLED = ['done', 'failed', 'paused', 'cancelled'];
