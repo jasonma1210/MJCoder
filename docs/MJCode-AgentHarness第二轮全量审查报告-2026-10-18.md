@@ -126,9 +126,11 @@
 7. EmployeeFormModal 更新路径恒等覆写 `display_name`（`EmployeeFormModal.tsx:121-126`），原有别名静默丢失；description/approval_policy 等字段表单不可见（盲区而非丢失）
 8. `--sem-knob-rgb`/`-ring-rgb` 是无人消费的死 token（5 套主题 × 2 个）；HISTORY 抑制分支是 no-op（`verifier.js:155` 两条路径同值）；`UNKNOWN` 是死枚举（`contract.mjs:100`）——三处「看起来有语义、实际无行为」的误导点
 
-**本轮已修（8 项）**：ledger 序号改全局递增（#2）· traces 凭证脱敏（#3，上一轮）· `mcp-oauth.json` 读时权限自愈（#4）· 子代理 `parentContext` 过 `wrapUntrusted`（#6）· `display_name` 不再恒等覆写（#7）· HISTORY no-op 分支删除 + verifier 头注更正（#8 的一部分）· 死字段 `server.stderrTail` 删除 · `finishRun` 兜底 `emit('error')`。
+**本轮已修（13 项）**：ledger 序号改全局递增（#2）· traces 凭证脱敏（#3）· `mcp-oauth.json` 读时权限自愈（#4）· **`exec.js` 5 处硬编码超时收敛到 `tools/timeouts.js`**（#5）· 子代理 `parentContext` 过 `wrapUntrusted`（#6）· `display_name` 不再恒等覆写（#7）· HISTORY no-op 分支删除 + verifier 头注更正 + `--sem-knob-rgb` 与 `UNKNOWN` 死定义加注释（#8）· 死字段 `server.stderrTail` 删除 · `finishRun` 兜底 `emit('error')` · **P1-11c 分档设置 UI + 两处断链**（见下表）· **P2-7 的 UI 消费者**（见下表）。
 
-**仍未修（低危，无需排期）**：墙钟两个 30min 出处（需要先定"实现侧 < 看门狗"式不变式，属设计工作）· `exec.js` 5 处硬编码超时（仅余 20 行，须先抽模块）· 子代理不继承 `onTrace`（子代理轨迹不进 JSONL）· `--sem-knob-rgb` 死 token · `UNKNOWN` 死枚举。
+**仍不做（2 项，均已有明确理由）**：
+- **墙钟两个 30min 出处**（per-task 钳制 vs 组等待）：要先定"实现侧 < 看门狗"式不变式，属设计工作；现在硬改会改变现有的超时叠加语义。
+- **子代理不继承 `onTrace`**：子代理的 trace 会混入父 run 的 JSONL，与"每 run 恰好一条 `run_start`/`run_end`"的账冲突——V 层台账会看到两条 `run_end`，而"最后一条即终态"的判据会被子代理的收尾覆盖。**宁可不做，也不破坏已有不变量。**
 
 ---
 
