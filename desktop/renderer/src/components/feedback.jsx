@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconAlert, IconX } from './icons';
-import { useI18n } from '../i18n';
+import { useI18n, tGlobal } from '../i18n';
 
 // ── 命令式确认框 + Toast（A2 统一规格）──
 // 用法（无需在各组件挂 state/JSX）：
@@ -62,6 +62,10 @@ export default function FeedbackHost() {
   // 为什么挂在这里：本项目所有提示的出口都在本文件（confirm / toast），崩溃提示也在此；
   // 另起一套会出现两种提示样式，用户还要记两处。
   // 只订阅一次：文案在事件到达时才解析，语言切换后新通知用新语言（已在屏上的 toast 保持原样）。
+  // ⚠️ 这里必须用 tGlobal，**不能用渲染期的 tr**（2026-10-18 实测缺陷）：
+  // 本 effect 的依赖是 []，闭包捕获的是**首帧**的 tr；而 useI18n 的 t 在切语言时会换实体，
+  // 于是「切语言后新通知用新语言」这句承诺实际上从未成立 —— 订阅永远说旧语言。
+  // tGlobal 每次调用读 activeLocale，正是为这种非 React 回调场景准备的通道。
   useEffect(() => {
     const mj = typeof window !== 'undefined' ? window.mjcode : undefined;
     if (typeof mj?.onTasksEvent !== 'function') return undefined;
@@ -69,13 +73,13 @@ export default function FeedbackHost() {
     try {
       off = mj.onTasksEvent((evt) => {
         if (!evt || evt.type !== 'approval_notice') return;
-        const result = evt.ok ? tr('settings.approvalNoticeOk') : tr('settings.approvalNoticeFail');
+        const result = evt.ok ? tGlobal('settings.approvalNoticeOk') : tGlobal('settings.approvalNoticeFail');
         const base = Number.isFinite(evt.ms)
-          ? tr('settings.approvalNoticeExecuted', { tool: evt.tool, level: evt.level || '-', result, ms: evt.ms })
-          : tr('settings.approvalNoticeExecutedNoMs', { tool: evt.tool, level: evt.level || '-', result });
+          ? tGlobal('settings.approvalNoticeExecuted', { tool: evt.tool, level: evt.level || '-', result, ms: evt.ms })
+          : tGlobal('settings.approvalNoticeExecutedNoMs', { tool: evt.tool, level: evt.level || '-', result });
         // 不可补偿必须明说 —— 这条通知的全部价值就在这里（不是「顺手告诉你一声」）
         const message = evt.reversible === false && evt.reversibleNote
-          ? `${base} | ${tr('settings.approvalNoticeIrreversible', { note: evt.reversibleNote })}`
+          ? `${base} | ${tGlobal('settings.approvalNoticeIrreversible', { note: evt.reversibleNote })}`
           : base;
         toast({ message, duration: evt.reversible === false ? 8000 : 5000 });
       });
@@ -83,7 +87,7 @@ export default function FeedbackHost() {
       console.warn('[feedback] approval_notice subscribe failed:', e);
     }
     return () => { try { off?.(); } catch { /* 卸载失败无副作用 */ } };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 依赖保持 []：文案走 tGlobal（不捕获渲染期 tr），订阅本身不需要随语言重建
   }, []);
 
   // C2（2026-10-17）：领取「上次渲染进程崩溃」的通知（主进程取完即清）。

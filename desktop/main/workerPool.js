@@ -243,7 +243,9 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
           toolHandlers: handlers,
           onToolCall,
           // P2-8 / V-L1：只为收 verify_ledger（其余 trace 事件本通道不落盘，保持零额外写盘）
-          onTrace: (evt) => vrun.onLedger(evt),
+          // sub:true 是子代理（spawn_subagent）的事件 —— 那批工具调用属于子代理自己的 run，
+          // 若混进 worker 的台账，L1 会把「子代理跑过测试」算成「worker 跑过测试」（R2 假绿）。
+          onTrace: (evt) => { if (evt && !evt.sub) vrun.onLedger(evt); },
           onMessage: onUsage,
           systemPrompt: '你是 MJ Coder 的并行任务 Worker：只完成分配给你的子任务，产出精炼、可执行的结论。'
             + '完成前必须自测验证：能运行测试/命令验证的就实际运行，写完的文件就回读确认关键内容存在；验证不过要修复后再收尾。'

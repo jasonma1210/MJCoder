@@ -843,7 +843,12 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
   const declaredWindow = Number(model?.model?.context_window) > 0
     ? Number(model?.model?.context_window)
     : DEFAULT_CONTEXT_WINDOW_FALLBACK;
-  const contextWindow = effectiveWindowOf(declaredWindow, opts.knownTokens);
+  // opts.window：调用方（runAgent 闸门）给出的**本轮有效窗口**。传了就以它为准，
+  // 不再用 declared + knownTokens 自行反推——反推在 knownTokens 被清空（压缩成功）后
+  // 会退回到声明值，把已经证伪的窗口重新贴回来（详见 runAgent 里 runCtxWindow 的注释）。
+  const contextWindow = Number(opts.window) > 0
+    ? Number(opts.window)
+    : effectiveWindowOf(declaredWindow, opts.knownTokens);
   const est = typeof opts.knownTokens === 'number' ? opts.knownTokens : estimateMessagesTokens(convo);
   // 触发只看体积：此前的 `|| convo.length <= 8` 会让「消息少但内容大」的历史永不压缩
   // （/compact 压平后、单条超长粘贴都会踩到）。条数少到无可裁内容时，下面
@@ -1905,6 +1910,16 @@ export async function runAgent({
   const declaredWindow = Number(model?.model?.context_window) > 0
     ? Number(model?.model?.context_window)
     : DEFAULT_CONTEXT_WINDOW_FALLBACK;
+  // **本轮有效窗口**：一旦 provider 用真实 prompt_tokens 证伪声明值（它接受过这么大的 prompt），
+  // 这个值会被抬到 effectiveWindowOf 的结果（只抬不降、上限 4×），并被下游的**每一次**压缩沿用。
+  // 为什么必须持有它、而不是让 compactHistory 自己反推（2026-10-18 实测缺陷）：
+  //   窗口被证伪后闸门按 131072 判定（deferred 之外的一切都不该再压）；
+  //   但压缩成功会把 lastPromptTokens 清成 null，于是下一轮 pre-call 压缩
+  //   `compactHistory(..., {knownTokens: null})` 只能反推回**声明值 32768** ——
+  //   同一个模型、同一个 108k 的历史，在闸门眼里「没事」，在压缩器眼里「3.3 倍超标、必压」，
+  //   而且 aggressive 档把尾部保留压到 15%（≈4.9k），刚读过的文件内容被抹掉。
+  //   两个组件各算一次窗口 = 两份真值，必然打架。现在窗口只在闸门这一处定，压缩器只接收。
+  let runCtxWindow = declaredWindow;
   // 入口裁剪（C3）：run 开始前按轮裁掉中段（见 trimHistoryForRun 注释）。
   // 落库不做——展示历史 ≠ 模型上下文，会话记录仍保留全文。
   // P1-5：**只在接近上限时才裁**。此前无条件调用 → 历史刚过 45% 就被砍，
@@ -2017,7 +2032,7 @@ export async function runAgent({
     roundsUsed += 1;
     onStream?.('');
     const compacted = await compactHistory(convo, model, chatFn, {
-      knownTokens: lastPromptTokens, chatModel: compactModel, ledger: rewriteLedger,
+      knownTokens: lastPromptTokens, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
     });
     // 压缩结果必须回写：此前只用于本次 outbound，下一轮仍按「已被压缩的 prompt_tokens」判阈值
     // → 跳过压缩 → 又发全量（10k↔220k 抖动）。回写后清空增量口径，避免连续两次压缩。
@@ -2078,7 +2093,7 @@ export async function runAgent({
         contextRescued = true;
         console.warn(`[agent] 疑似上下文超限（${msg.slice(0, 200)}），强制压缩历史后重试`);
         convo = await compactHistory(convo, model, chatFn, {
-          knownTokens: lastPromptTokens, force: true, chatModel: compactModel, ledger: rewriteLedger,
+          knownTokens: lastPromptTokens, force: true, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
         });
         continue;
       }
@@ -2126,6 +2141,10 @@ export async function runAgent({
       }
       tokenWindowSpent += windowDelta;
     }
+    // 窗口口径必须在**上报之前**定好：仪表盘的 contextWindow 与闸门判定必须是同一个数，
+    // 否则「面板显示 128k、闸门按 32k 压」这种自相矛盾又会出现（P0-1⑤ 的初衷就是这个）。
+    const ctxWindow = effectiveWindowOf(declaredWindow, lastPromptTokens);
+    runCtxWindow = ctxWindow; // 下发给后续一切压缩（见 runCtxWindow 定义处注释）
     // Phase 3-4：逐轮 token 用量上报（仪表盘数据源）——runner 侧缓存最新状态供渲染层轮询
     try {
       onBudget?.({
@@ -2137,8 +2156,8 @@ export async function runAgent({
         rewrites: rewriteLedger.count, rewriteTokens: rewriteLedger.recomputeTokens,
         // P2-2a：首字节延迟（取不到为 null，宿主可据此区分「没测到」与「0ms」）
         ttfbMs: roundTtfbMs,
-        // P0-1⑤：本次运行实际采用的窗口口径（与收尾快照同口径，宿主不需自己再猜）
-        contextWindow: declaredWindow,
+        // P0-1⑤：本次运行实际采用的窗口口径（与闸门、收尾快照同一口径）
+        contextWindow: ctxWindow,
       });
     } catch (e) { /* 仪表盘上报绝不影响主流程 */ }
 
@@ -2146,7 +2165,6 @@ export async function runAgent({
     // 事故（2026-10-17 用户实测）：「取 10 条最新新闻」5 轮累计 143k（每轮重发 ~27k 上下文），
     // 原实现拿**累计花费**判「上下文过长」，把只有 27k 的上下文 force 压成 376 tokens 摘要；
     // 新闻原文被抹掉 → 模型重搜 → 再撞闸再压，用户看到「后台一直在压缩、还没有任何输出」。
-    const ctxWindow = effectiveWindowOf(declaredWindow, lastPromptTokens);
     const windowInferred = ctxWindow > declaredWindow;
     if (windowInferred && !windowRescued) {
       // P0-2：声明窗口被 provider 真实回传的 prompt_tokens 证伪（它接受了这么大的 prompt）。
@@ -2172,7 +2190,7 @@ export async function runAgent({
       convo = rewriteLedger.count >= MAX_REWRITES_PER_RUN
         ? convo
         : await compactHistory(convo, model, chatFn, {
-          knownTokens: lastPromptTokens, force: true, chatModel: compactModel, ledger: rewriteLedger,
+          knownTokens: lastPromptTokens, force: true, window: ctxWindow, chatModel: compactModel, ledger: rewriteLedger,
         });
       if (convo !== beforeConvo) {
         // 压缩真的改写了历史：口径失效，下一轮按新体积重估；窗口从零算

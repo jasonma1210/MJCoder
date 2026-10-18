@@ -580,8 +580,30 @@ function createSseTransport({ name, url, headers = {}, onLog, auth }) {
   return transport;
 }
 
-// ── 连接（IPC 处理器与启动重连共用）──
-// transport: 'stdio'（默认，command/args/env）| 'http'（url/headers）
+// 按身份摘除的纯核：只在「registry 里这个名字仍指向同一个 server」时才删；抽成 registry 入参以便纯 Node 单测。
+function detachFrom(registry, name, server) {
+  if (registry.get(name) !== server) return false;
+  registry.delete(name);
+  return true;
+}
+
+// 回调侧摘注册表**必须按身份判断**：同名重连后新条目已注册，而旧 stdio 子进程的 'close'/'error'
+// 回调只认 name，无条件 delete 会把新连接一起摘掉（表现为「刚显示已连接就掉线、工具全失效」）。
+function detachServer(name, server) {
+  return detachFrom(servers, name, server);
+}
+
+// 丢弃缓存条目：**先关传输再摘除**（只 delete 不 close → 子进程成孤儿，且它稍后退出会触发上面那条）。
+function retireCached(name, cached) {
+  try {
+    if (cached && cached.transport && typeof cached.transport.close === 'function') cached.transport.close();
+  } catch (e) {
+    console.warn(`[MCP ${name}] 关闭旧传输失败（继续重建）：${e.message}`);
+  }
+  detachServer(name, cached);
+}
+
+// ── 连接（IPC 处理器与启动重连共用）── transport: 'stdio'（默认，command/args/env）| 'http' | 'sse'
 async function connectMcpServer({
   name, transport = 'stdio', command, args = [], env = {}, url, headers = {},
   auth, onStatus, onLog,
@@ -591,28 +613,26 @@ async function connectMcpServer({
     const cached = servers.get(name);
     // 缓存命中前校验底层是否还活着（stdio 子进程可能已崩；http 恒活但会话可能失效）
     const alive = cached.transport && cached.transport.alive();
-    if (alive) {
-      // P2-5：握手在途时不能直接返回 toolCount:0（调用方会当成「已连接但无工具」）。
-      // 等它就绪；若等待超时或期间断开 → 转走重建路径（下面 servers.delete 之后的正常连接流程）。
-      if (cached.handshakeDone === false && cached.ready) {
-        let ready = false;
-        try {
-          ready = (await Promise.race([
-            cached.ready,
-            new Promise((r) => setTimeout(() => r(false), HANDSHAKE_WAIT_MS)),
-          ])) === true;
-        } catch { ready = false; }
-        if (ready && cached.transport && cached.transport.alive()) {
-          return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
-        }
-        console.warn(`[MCP ${name}] 缓存命中但握手未完成或期间断开，转为重新连接`);
-        servers.delete(name);
-      } else {
+    if (alive && cached.handshakeDone === false && cached.ready) {
+      // P2-5：握手在途时不能直接返回 toolCount:0（调用方会当成「已连接但无工具」）；等它就绪，超时则丢弃旧条目重建。
+      let ready = false;
+      try {
+        ready = (await Promise.race([
+          cached.ready,
+          new Promise((r) => setTimeout(() => r(false), HANDSHAKE_WAIT_MS)),
+        ])) === true;
+      } catch { ready = false; }
+      if (ready && cached.transport && cached.transport.alive()) {
         return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
       }
+      console.warn(`[MCP ${name}] 缓存命中但握手未完成或期间断开，转为重新连接`);
+      retireCached(name, cached);
+    } else if (alive) {
+      return { ok: true, server: name, toolCount: cached.tools.length, tools: cached.tools, cached: true };
+    } else {
+      console.warn(`[MCP ${name}] 缓存命中但底层已断开，转为重新连接`);
+      retireCached(name, cached);
     }
-    console.warn(`[MCP ${name}] 缓存命中但底层已断开，转为重新连接`);
-    servers.delete(name);
   }
 
   let transportObj;
@@ -668,17 +688,17 @@ async function connectMcpServer({
       try { cb({ error: { message } }); } catch (e) { /* 回调所属请求已结束 */ }
     }
   };
-  // stderr 尾巴由**传输层**写入（transport.stderrTail），server.stderrTail 从来没人写。
-  // 此前读 server.stderrTail 恒为空 ⇒ 「握手阶段退出」与「启动失败」的真实原因被吞掉，
-  // 用户只看到 code=1 而看不到服务端自己打印的报错。统一从传输层取。
+  // stderr 尾巴由**传输层**写入（transport.stderrTail），server.stderrTail 从来没人写：
+  // 此前读它恒为空 ⇒「握手阶段退出」与「启动失败」的真实原因被吞掉（只剩 code=1）。
   const stderrTailOf = () => String((transportObj && transportObj.stderrTail) || server.stderrTail || '');
   if (transportObj.kind === 'stdio') {
     transportObj.child.on('close', (code) => {
-      servers.delete(name);
+      const current = detachServer(name, server); // 只在本条仍是当前注册时摘除（被新连接取代时不动新条目）
       const wasConnected = server.handshakeDone === true;
       console.log(`[MCP ${name}] 进程退出 code=${code}${wasConnected ? '（运行期崩溃，工具已失效）' : '（握手阶段退出）'}`);
       if (wasConnected) {
         if (server.disconnecting) return; // 主动断开：不上报 crashed
+        if (!current) return; // 已被新连接取代：旧进程退出不是故障，不能把新连接状态覆盖成 crashed
         if (onStatus) onStatus(name, 'crashed', code);
       } else {
         const tail = stderrTailOf().trim().slice(0, 300);
@@ -686,10 +706,11 @@ async function connectMcpServer({
       }
     });
     transportObj.child.on('error', (err) => {
-      servers.delete(name);
+      const current = detachServer(name, server);
       console.error(`[MCP ${name}] 启动失败:`, err.message);
       if (server.handshakeDone === true) {
         if (server.disconnecting) return; // 主动断开：不上报 crashed
+        if (!current) return; // 同上：不覆盖新连接状态
         if (onStatus) onStatus(name, 'crashed', null);
       } else {
         // spawn ENOENT 就是这条路径：命令/解释器不存在
@@ -771,5 +792,8 @@ module.exports = {
   createStdioTransport, createHttpTransport, consumeSse,
   connectMcpServer, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
   refreshTools, sanitizeToolName, resolveToolName, recoverSession,
+  // 纯核 + 缓存丢弃：可在纯 Node 下观测「按身份摘除」「先关传输再摘除」两条语义，
+  // 无需起真实子进程（起进程验证会 flake，见 MAX_LINES 与并发纪律）
+  detachFrom, detachServer, retireCached,
   PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, DEFAULT_TIMEOUT_MS,
 };

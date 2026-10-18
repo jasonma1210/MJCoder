@@ -82,10 +82,17 @@ function lookup(pack: Dict, key: string): string | null {
   return typeof cur === 'string' ? cur : null;
 }
 
+// 占位符插值。语料的主流写法是单花括号 `{name}`，本函数**同时容忍双花括号 `{{name}}`**。
+// 为什么要容忍（2026-10-18 实测缺陷）：只认单花括号时，文案写成 `{{tool}}` 不会被替换，
+// 而是命中内层 `{tool}` → 渲染成 `{shell}`——用户看到的是「多了一层花括号」，
+// 既不是兜底原文也不是插值结果，静态扫描与缺 key 告警都发现不了（这条路径一路绿）。
+// 两种写法都吃，是让「作者手滑」不再变成「UI 上多一层括号」的唯一低成本办法。
 function interpolate(text: string, params?: Record<string, string | number>): string {
   if (!params) return text;
-  return text.replace(/\{(\w+)\}/g, (whole, name) =>
-    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : whole);
+  return text.replace(/\{\{(\w+)\}\}|\{(\w+)\}/g, (whole, dbl, sgl) => {
+    const name = dbl ?? sgl;
+    return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : whole;
+  });
 }
 
 // 命令式场景（toast/工具函数等非 React 上下文）用 tGlobal：

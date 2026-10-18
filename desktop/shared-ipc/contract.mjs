@@ -174,15 +174,27 @@ export const agentRunPayloadSchema = z
     // 后果是契约对这些字段「零校验 + 零字段名保护」：拼错字段名不会被拒，
     // 非法枚举要一路穿透到宿主侧靠 includes() 兜底（verifyRun 目前归一成 off）。
     // 现在显式登记形状，非法值在 IPC 边界即被拒。
+    // ⚠️ 本字段的校验必须是**宽容**的（.catch + .nullable），不能直接抛。
+    // 事故（2026-10-18 实测）：把 verification 从「passthrough 透传」改成显式 z.enum 后，
+    //   verification:null          → 契约拒绝整轮对话
+    //   verification.level:'l9'    → 契约拒绝整轮对话
+    // 而 agentRunner.js:109 对契约失败是 fail-closed（return {ok:false}）——
+    // 一个**可选**的判定档位字段写错，代价是用户连消息都发不出去（改动前它只会被
+    // verifyRun 的 includes() 归一成 off）。可选字段的非法值不能升级成致命错误。
+    // 现在：非法枚举 .catch 回落产品默认档（l1/annotate），null 视同未指定，
+    // 既保住「字段名/取值防漂移」的登记价值，又不会把可用性问题变成启动失败。
     verification: z
       .object({
-        level: z.enum(['off', 'l1', 'l3']).optional(),
-        onBlock: z.enum(['annotate', 'continue']).optional(),
+        level: z.enum(['off', 'l1', 'l3']).catch('l1'),
+        onBlock: z.enum(['annotate', 'continue']).catch('annotate'),
         // 渲染层可传，但 agentRunner:139 会强制置 false（不得静默关判定）
-        stopHookActive: z.boolean().optional(),
+        stopHookActive: z.boolean().optional().catch(false),
       })
+      .passthrough()
+      .nullable()
       .optional(),
-    skillDisclosure: z.enum(['auto', 'full', 'summary']).optional(),
+    // 同 verification：可选档位字段的非法值回落引擎默认档，不得升级成整轮拒绝
+    skillDisclosure: z.enum(['auto', 'full', 'summary']).catch('auto').optional(),
     // 分档覆盖：{ compact | decompose | worker } → 模型对象；未配置的槽位不出现
     modelOverrides: z.record(z.string(), z.any()).nullable().optional(),
     // T4-3：角色模板（数字员工运行时预设）——systemPrompt/toolNames 进引擎，

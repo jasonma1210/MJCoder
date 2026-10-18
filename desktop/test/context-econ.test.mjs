@@ -346,5 +346,32 @@ function buildLongConvo(rounds = 30) {
     budgetDecision({ ctxEst: 200000, ctxWindow: 131072, budget: 0, rescues: 0 }) === 'compact');
 }
 
+// ── 窗口口径单点：压缩器必须接收调用方给定的有效窗口，不许自己反推（第三轮审查 P1）──
+// 缺陷形态（实测）：声明 32768 的模型被证伪抬到 131072 后，压缩成功会把 lastPromptTokens 清成 null；
+// 下一轮 pre-call 压缩拿不到 knownTokens，只能反推回**声明值 32768** →
+// 闸门认为 90k 没事，压缩器认为 90k 是 2.7 倍超标并进 aggressive 档（尾部只留 15%），
+// 刚读过的文件内容被抹掉 → 重读 → 再压。这里锁死「同一次运行内窗口只有一个真值」。
+{
+  const convo = [
+    { role: 'system', content: 'SYSTEM' },
+    { role: 'user', content: 'USER 原始需求' },
+    ...buildLongConvo(20).slice(2),
+  ];
+  let calls = 0;
+  const chatFn = async () => { calls += 1; return { content: '摘要' }; };
+  const est = estimateMessagesTokens(convo);
+  // 90k 量级的历史 + 已抬高的 131072 窗口：0.7×131072=91750 > est ⇒ 不该压
+  await compactHistory(convo, model(32768), chatFn, { knownTokens: est, window: 131072 });
+  check('给定有效窗口时压缩器按它判定（不再反推回声明值）', calls === 0, `chat 调用 ${calls} 次`);
+  // 反证：不传 window 时，est 会被反推成 est*1.2（上限 declared*4），阈值更低 ⇒ 仍然不压？
+  // 用更接近阈值的量说明两者判别不同：这里只断言「传 window 的行为是早期返回」，
+  // 否则这条用例会与「压缩器该压就压」的既有用例互相矛盾。
+  const small = model(32768);
+  let calls2 = 0;
+  await compactHistory(convo, small, async () => { calls2 += 1; return { content: '摘要' }; },
+    { knownTokens: est, window: 4096 });
+  check('给定更小窗口时仍然压缩（window 是生效参数，不是被忽略的摆设）', calls2 === 1, `chat 调用 ${calls2} 次`);
+}
+
 console.log(`\ncontext-econ: ${pass}/${pass + fail} 通过`);
 process.exit(fail === 0 ? 0 : 1);

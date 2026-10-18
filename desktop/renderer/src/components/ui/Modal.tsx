@@ -138,6 +138,13 @@ export default function Modal({
   // onClose 放 ref：避免调用方每次渲染传新函数导致 effect 反复重装（焦点会被反复重置）
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // closeOnEsc 同理必须放 ref、**不能进 deps**（2026-10-18 实测缺陷）：
+  // 调用方常在「内层弹层打开时」把 closeOnEsc 从 true 改成 false（self-Esc 子对话框模式）。
+  // 一旦它进 deps，effect 就会在弹窗**开着的时候**重装：cleanup 先弹出 stack、把焦点还给
+  // 打开它的按钮（焦点飞出面板），再 push 回栈尾 —— 于是父弹窗跑到栈顶，
+  // 压在它上面的子对话框的 isTopOfStack() 全变 false，Esc/Tab 失效。
+  const closeOnEscRef = useRef(closeOnEsc);
+  closeOnEscRef.current = closeOnEsc;
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -147,17 +154,28 @@ export default function Modal({
     MODAL_STACK.push(modalId);
 
     const panel = panelRef.current;
-    // 优先尊重子元素显式声明的 autoFocus，否则取面板内第一个可聚焦元素（通常右上关闭按钮）；
-    // 两者都没有时聚焦面板自身（tabIndex=-1），保证焦点一定落在对话框内。
-    const preferred = panel?.querySelector<HTMLElement>('[autofocus]');
-    const first = preferred || focusableIn(panel)[0];
-    (first || panel)?.focus();
+    // 开箱焦点：优先尊重子元素已抢到的焦点，其次 [data-autofocus]，再次第一个可聚焦元素，
+    // 最后聚焦面板自身（tabIndex=-1），保证焦点一定落在对话框内。
+    // 为什么要先判「已在面板内」（2026-10-18 实测缺陷）：React 的 autoFocus 在 commit 阶段
+    // 就已执行，而本 effect 在其后运行 —— 无条件 focus() 会把子元素刚抢到的焦点**抢走**，
+    // 落到右上关闭按钮上。所以「子元素声明了 autoFocus」只能靠**已落位**来识别，
+    // 不能靠选择器：React 不写 autofocus 属性，`querySelector('[autofocus]')` 恒不命中
+    //（原实现依赖它，等于恒失效，注释里的承诺从未生效）。
+    const activeInPanel = (() => {
+      const a = typeof document !== 'undefined' ? document.activeElement as HTMLElement | null : null;
+      return !!(panel && a && a !== document.body && panel.contains(a));
+    })();
+    if (!activeInPanel) {
+      const preferred = panel?.querySelector<HTMLElement>('[data-autofocus],[autofocus]');
+      const first = preferred || focusableIn(panel)[0];
+      (first || panel)?.focus();
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (!isTopOfStack(modalId)) return;
       // 别人的对话框（命令式 confirm 等）正在接管键盘时，Esc/Tab 一律让路
       if (foreignDialogOwnsFocus(panelRef.current)) return;
-      if (e.key === 'Escape' && closeOnEsc) {
+      if (e.key === 'Escape' && closeOnEscRef.current) {
         // 先拦下再关：避免同一次 Esc 又被宿主（面板/浮层）的全局监听吃掉
         e.preventDefault();
         e.stopPropagation();
@@ -212,7 +230,8 @@ export default function Modal({
       const prev = previousActiveRef.current;
       if (prev && typeof prev.focus === 'function' && document.contains(prev)) prev.focus();
     };
-  }, [open, closeOnEsc, modalId]);
+    // deps 里**不要**放 closeOnEsc：见上方 closeOnEscRef 的说明（进 deps 会让弹窗开着时重装 effect）
+  }, [open, modalId]);
 
   if (!open) return null;
 

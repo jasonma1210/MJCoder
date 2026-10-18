@@ -8,7 +8,7 @@
 // 判据：删掉任一规则分支、或把 R5 的 skip 改成 block、或把 R4 的证据面收回只认工具，
 // 本套件必须变红。
 import {
-  reconcile, buildLedgerEntry, formatAnnotation, normalizeLevel,
+  reconcile, buildLedgerEntry, formatAnnotation, normalizeLevel, redactSecrets,
 } from '../agent-core/verifier.js';
 
 let pass = 0;
@@ -182,6 +182,24 @@ check('buildLedgerEntry 只记白名单：不落 args 原文与输出，且命�
 check('buildLedgerEntry 的 paths 最多 8 条', (() => {
   const e = buildLedgerEntry({ name: 'shell', args: { command: `rm ${Array.from({ length: 20 }, (_, i) => `f${i}.txt`).join(' ')}` } });
   return e.paths.length <= 8;
+})());
+
+// ── 脱敏器自身的两个真实缺陷（第三轮审查实测抓到的，行为已被修，这里锁死形态）──
+// ① replacer 位置参数伪影：只有一个捕获组时第 3 个参数是 **offset**，
+//    旧实现 (m, p1, p2) 把它当前缀拼回去 → `Bearer24***`（24 = 匹配起点偏移）。
+// ② 值用 \S+ 会把 shell 分隔符一起吃掉 → `export TOKEN=abc;npm test` 变成
+//    `export TOKEN=*** test`，命令序列被破坏，R2 拿到一条不存在的命令。
+check('脱敏不得把匹配偏移当后缀拼回（Bearer24*** 类伪影）', (() => {
+  const out = redactSecrets('curl -H "Authorization: Bearer abcdefghijklmnop" https://x');
+  return !/Bearer\d+\*\*\*/.test(out) && out.includes('Bearer ***') && out.includes('https://x');
+})());
+check('脱敏必须保留 shell 分隔符（否则 R2 拿到被吃掉的命令）', (() => {
+  const out = redactSecrets('export TOKEN=abc;npm test');
+  return out.includes(';npm test') && !out.includes('abc') && out.includes('TOKEN=***');
+})());
+check('脱敏不得误伤无凭证的命令', (() => {
+  const cmd = 'npm test -- --grep "password"';
+  return redactSecrets(cmd) === cmd;
 })());
 
 console.log(`\nverifier-rules: ${pass}/${pass + fail} 通过`);

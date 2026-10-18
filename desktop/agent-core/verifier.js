@@ -229,17 +229,35 @@ export function extractPaths(name, args) {
 // 凭证脱敏（第二轮审查抓到的真实缺陷）：ledger.command 会随 verify_ledger 事件进
 // traces/*.jsonl 落盘，而命令里常内联凭证（`curl -H "Authorization: Bearer sk-..."`）。
 // 落盘面必须比屏幕更严——这里在**提取时**就打码，不依赖后续导出环节过滤。
+// ⚠️ 两条硬约束（第三轮审查实测踩到，两根都是「打码区污染命令」）：
+// 1) **不许用位置参数取前缀**：`String.replace` 的 replacer 在「只有一个捕获组」时签名是
+//    (match, g1, offset, s)。写成 (m, p1, p2) 会把 **offset 当成 p2** —— 实测：
+//      `Bearer abcdefghijklmnop` → `Bearer24***`（24 = 匹配起点偏移）
+//      `sk-abcdefghijklmnopqrst`  → `sk11***`
+//    一律改用命名组，位置参数只当不存在。
+// 2) **值不许用 \S+**：它会把 shell 分隔符一起吃掉 —— 实测
+//      `export TOKEN=abc;npm test` → `export TOKEN=*** test`
+//    分号被吞掉，R2「改完代码跑过测试吗」于是拿到一条**不存在的命令**（误报/漏报都来了）。
+//    值只吃到空白与 shell 分隔符为止。
 const SECRET_PATTERNS = [
-  /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b(sk|rk|pk)-[A-Za-z0-9_-]{10,}/g,
-  /\b(ghp|gho|ghs|ghu)_[A-Za-z0-9]{10,}/g,
-  /\b(xox[baprs])-[A-Za-z0-9-]{10,}/g,
-  /\b(AKIA)[0-9A-Z]{12,}/g,
-  /\b(password|passwd|token|secret|api[_-]?key)(\s*[=:]\s*)\S+/gi,
+  /\b(?<head>Bearer)(?<sep>\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{10,}/g,
+  /\b(?:ghp|gho|ghs|ghu)_[A-Za-z0-9]{10,}/g,
+  /\b(?:xox[baprs])-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{12,}/g,
+  /\b(?<head>password|passwd|token|secret|api[_-]?key)(?<sep>\s*[=:]\s*)[^\s;&|()<>"']+/gi,
 ];
 export function redactSecrets(s) {
   let out = String(s == null ? '' : s);
-  for (const re of SECRET_PATTERNS) out = out.replace(re, (m, p1, p2) => `${p1}${p2 || ' '}***`);
+  for (const re of SECRET_PATTERNS) {
+    out = out.replace(re, (...args) => {
+      // 末位参数在有命名组时是 groups 对象；无命名组时是原字符串 → typeof 判别
+      const groups = args[args.length - 1];
+      const named = groups && typeof groups === 'object' ? groups : null;
+      if (!named) return '***';
+      return `${named.head || ''}${named.sep || ' '}***`;
+    });
+  }
   return out;
 }
 

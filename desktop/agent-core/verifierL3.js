@@ -44,7 +44,11 @@ export const L3_RUBRIC = [
  */
 export function buildL3Messages({ finalText, ledger, diff = null, lastTestOutput = '' } = {}) {
   const entries = (Array.isArray(ledger) ? ledger : []).slice(-60).map((e) => ({
-    name: String(e?.name || ''),
+    // name 必须**带上限**：`mcp__<server>__<tool>` 这类工具名由外部服务端决定（sanitizeToolName
+    // 只裁到 128，服务名仍可能很长）。逐级缩字段只缩 answer 与条数、不缩单条字段，
+    // 于是 60 条超长 name 就能把 payload 顶过 L3_MAX_INPUT_CHARS ——
+    // 两条缩容循环都以「已无可缩」告终，最后发出去一个超限请求（等于白花一次调用）。
+    name: String(e?.name || '').slice(0, 128),
     ok: e?.ok === true,
     exitCode: Number.isFinite(e?.exitCode) ? e.exitCode : null,
     paths: (Array.isArray(e?.paths) ? e.paths : []).slice(0, 4).map((p) => String(p).slice(0, 160)),

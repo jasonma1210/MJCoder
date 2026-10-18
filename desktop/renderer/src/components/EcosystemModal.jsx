@@ -597,7 +597,10 @@ export default function EcosystemModal({ onClose, embedded = false, enabledSkill
   // P1-9⑤：外壳交给 ui/Modal（dialog 语义 + 焦点陷阱 + Esc + 关闭归还焦点）。
   // frameless = 只换外壳：content 自带 width/max-h/rounded/bg/border，视觉零改动。
   return (
-    <Modal open onClose={onClose} frameless ariaLabel={t('ecosystem.title')} closeOnEsc={!cfgConnector}>
+    // closeOnOverlay={false}：本面板内有**表单草稿**（员工表单 / 技能勾选）。默认的
+    // 「点遮罩关闭」会让用户在填了一半时误点一下就丢掉全部输入（Modal 只在可丢弃的
+    // 纯浏览类弹窗上才该开它）。关闭请走右上角 × 或 Esc。
+    <Modal open onClose={onClose} frameless ariaLabel={t('ecosystem.title')} closeOnEsc={!cfgConnector} closeOnOverlay={false}>
       {content}
     </Modal>
   );
