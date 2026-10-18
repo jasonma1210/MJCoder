@@ -2,8 +2,9 @@
 // P2-8 / V-L1（N3）：L1「日志对账」规则引擎 —— 规则单一事实来源，零依赖纯函数
 // ═══════════════════════════════════════════════════════════════
 // 为什么单独成文件（设计 §2.1）：
-//   桌面端（main/verifyRun.js）、eval/run-eval.mjs、CLI 三方必须共用同一套判定，
-//   否则规则一定漂移——与 shared/untrustedContent.mjs 的「跨宿主共享同一份规则」模式同构。
+//   规则必须**跨宿主共用**，否则一定漂移（与 shared/untrustedContent.mjs 同构）。
+//   本仓当前接入方：桌面端 main/verifyRun.js（其余宿主——eval/ 与 CLI——尚未接入，
+//   属设计目标而非现状；P3 审查曾据此指出原注释「三方必须共用」表述虚高，已更正）。
 // 硬纪律：**本文件零依赖**——不 import 任何模块（连 fs 与「派生子进程」类内建模块也不行）。
 //   agent-core 被渲染层（Vite 打包）、主进程、引擎子进程三宿主加载，
 //   任何一个 node: 内建 import 都会让渲染层打包失败或让判定在多宿主间分叉。
@@ -92,7 +93,7 @@ const PATCH_PATH_SRC = '^\\*\\*\\* (?:Update|Add|Delete) File: (.+)$|^\\+\\+\\+ 
 // 假阳性抑制层（设计 §3.2）
 const NEGATION_SRC = '没有|没|未|无需|不必|无法|\\bnot\\b|didn\'?t|no\\s+need';
 const SUGGESTION_SRC = '建议|可以|should|recommend|下一步';
-const HISTORY_SRC = '(?:之前|此前|上次|原本)\\s*(?:已|就)';
+// 第③层「历史引用」刻意不抑制，因此这里不需要对应正则（原 HISTORY_SRC/RE 已随 no-op 分支删除）
 
 // 文件名 token：与 CLAIM_WRITE_RE 里的 {1,6} 不同，这里要求扩展名 ≥2 字符——
 // 否则 "e.g." / "i.e." 会被当成文件名（英文自述里极常见），产生纯噪声的 BLOCK。
@@ -143,16 +144,16 @@ function sentenceAround(text, idx) {
 
 const NEGATION_RE = new RegExp(NEGATION_SRC, 'i');
 const SUGGESTION_RE = new RegExp(SUGGESTION_SRC, 'i');
-const HISTORY_RE = new RegExp(HISTORY_SRC);
 
 // 三层假阳性抑制（设计 §3.2）：
 //   ① 否定语境：匹配点前 CLAIM_WINDOW 字符内出现「没有/未/无法/not…」→ 丢弃该 claim
 //   ② 建议语气：同句出现「建议/可以/should/recommend…」→ 丢弃（那是提议，不是完成声明）
-//   ③ 历史引用：「之前已」「原本就」→ **保留**为 claim（保守：宁多提示，不少提示）
+//   ③ 历史引用（「之前已」「原本就」）→ **刻意不抑制**（保守：宁多提示，不少提示）。
+//      注意：这里曾有一句 `if (HISTORY_RE.test(sentence)) return false;`，与末尾
+//      `return false` 同值（纯 no-op），却让后人误以为第③层参与了判定——已删除。
 function isSuppressed(text, idx, sentence) {
   if (NEGATION_RE.test(text.slice(Math.max(0, idx - CLAIM_WINDOW), idx))) return true;
   if (SUGGESTION_RE.test(sentence)) return true;
-  if (HISTORY_RE.test(sentence)) return false; // 显式保留（第 ③ 层不抑制）
   return false;
 }
 

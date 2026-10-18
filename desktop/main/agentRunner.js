@@ -244,6 +244,11 @@ function startAgentRun(payload, sender) {
       // 把 async 函数直接挂在 onDone 上会让 Promise 逃逸——一旦将来有人在里面抛错，
       // Node 15+ 会把未捕获 rejection 变成进程终止（主进程崩 = 用户所有会话一起丢）。
       // 因此回调保持同步、异步体显式 .catch，语义与事件顺序都不变。
+      // 是否已把 done 事件发出去。仅用于下面 .catch 的兜底：finishRun 若在 emit('done')
+      // **之前**抛错，doneSent 已是 true（兜底分支不会再补发），渲染层就会收不到任何终止
+      // 事件、UI 永久停在 running。当前 finishRun 每步都有 try/catch，实际不可达，
+      // 但这条不变量不该只靠"没人改动"来维持（P3：第二轮审查）。
+      let doneEmitted = false;
       const finishRun = async (ft, usage, aborted) => {
         console.warn(`[agentRun] 完成 runId=${runId} 耗时=${Math.round((Date.now() - startedAt) / 1000)}s aborted=${!!aborted} usage=${usage ? `in=${usage.prompt_tokens}/out=${usage.completion_tokens}` : 'null'} textLen=${(ft || '').length}`);
         let outText = ft;
@@ -267,6 +272,7 @@ function startAgentRun(payload, sender) {
         // 失败/未落库时如实上报（渲染层据此本地补显 + 提示保存状态），绝不假成功
         const dur = confirmDurable(accepted);
         emit('done', { finalText: outText, usage, aborted, mainPersisted: dur.persisted, persistState: dur.state });
+        doneEmitted = true;
       };
       const cb = {
         // 中间轮（assistant+tool_calls / tool 结果）主进程直接落库，再照常推事件
@@ -330,6 +336,12 @@ function startAgentRun(payload, sender) {
           doneSent = true;
           finishRun(ft, usage, aborted).catch((e) => {
             console.warn(`[agentRun] 收尾流程异常（已产出的结果仍会随下方兜底/前序事件送达） runId=${runId}:`, e?.message || e);
+            // 兜底：finishRun 在 emit('done') 之前失败时，渲染层收不到任何终止事件
+            // （doneSent 已置真 → 下方"引擎未触发 onDone"的兜底分支不会再补发 done）。
+            // 补一条 error，至少让 UI 结束 running 态，而不是永久转圈。
+            if (!doneEmitted) {
+              try { emit('error', `收尾流程异常：${e?.message || String(e)}`); } catch { /* emit 失败无处可报 */ }
+            }
           });
         },
       };

@@ -51,6 +51,16 @@ class McpAuthManager {
   //      现区分 ENOENT（尚未授权，正常）与解析失败（损坏），损坏时保留副本 + 显著告警。
   _load() {
     if (!fs.existsSync(this.storeFile)) return {}; // 尚未授权过，正常
+    // P3（第二轮审查）：读时权限自愈。写入路径已恒 0600，但**存量文件不会自己变**——
+    // 历史上被裸 writeFileSync 写成 0644 的令牌文件，升级后会一直保持宽松权限。
+    // 与 mcp-servers.json 的自愈（ipc/mcp.js）保持同一策略。
+    try {
+      const st = fs.statSync(this.storeFile);
+      if (process.platform !== 'win32' && (st.mode & 0o777) !== 0o600) {
+        fs.chmodSync(this.storeFile, 0o600);
+        console.warn(`[mcpAuth] OAuth 令牌文件权限为 ${(st.mode & 0o777).toString(8)}，已收紧为 600`);
+      }
+    } catch { /* 权限检查失败不阻断读取（读取本身仍可用） */ }
     try {
       const map = JSON.parse(fs.readFileSync(this.storeFile, 'utf8'));
       if (!map || typeof map !== 'object') throw new Error('结构非法');

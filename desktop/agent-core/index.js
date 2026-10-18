@@ -1818,6 +1818,11 @@ export async function runAgent({
   // 因此它可以直接随 trace 跨进程传递（子进程宿主经 NOTIFY_CBS 的 onTrace 零改动到达主进程）。
   const toolLedger = [];
   let ledgerTruncated = false;
+  // P3（第二轮审查）：序号必须**全局递增**。原实现用 `i: toolLedger.length`，
+  // 而 ring buffer 截断后 length 恒为 199/200 → 尾部所有条目 i 都相同（实测 205 次调用后
+  // 尾部 6 条 i 全为 199）。normalizeLedger 会丢弃 i，所以只影响 trace 可读性，
+  // 但它会让「第几次调用」这个排查线索失效。
+  let ledgerSeq = 0;
   const pushLedger = (tc, toolArgs, toolResult, ms) => {
     try {
       // 截断策略：**保留首 20 + 末 180**（首尾都要，中间丢）——任务开头的行为形态
@@ -1827,7 +1832,7 @@ export async function runAgent({
         toolLedger.splice(Math.min(MAX_LEDGER_KEEP_HEAD, toolLedger.length - 1), 1);
       }
       toolLedger.push(buildLedgerEntry({
-        i: toolLedger.length, round: roundsUsed, name: tc?.function?.name,
+        i: ledgerSeq++, round: roundsUsed, name: tc?.function?.name,
         args: toolArgs, result: toolResult,
         ok: !isToolFailure(toolResult), ms,
       }));
@@ -2349,11 +2354,18 @@ export async function runAgent({
                 objective: subObjective, taskType: subTaskType, tokens: 0, round: 0,
               });
             } catch { /* 事件上报绝不影响主流程（与 onBudget 同纪律） */ }
-            const parentContext = convo
+            const parentContextRaw = convo
               .filter((m) => m.role !== 'system')
               .slice(-6)
               .map((m) => `${m.role}: ${(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')).slice(0, 800)}`)
               .join('\n');
+            // P3（第二轮审查）：父上下文里含**工具结果原文**，与 rolePreset / 技能清单 /
+            // AGENTS.md / 记忆 / 断点摘要同属不可信面。它是六个注入入口中此前唯一没过守卫的
+            // 一个——子代理只读确实降低了危害，但「同一份数据在主代理扫、在子代理不扫」
+            // 的口径不一致本身就是隐患（守卫一旦有例外，例外就会扩散）。
+            const parentContext = wrapUntrusted(parentContextRaw, {
+              source: 'subagent-parent', label: '父代理上下文（含工具结果原文）',
+            }).text;
             const subResult = await runAgent({
               messages: [{ role: 'user', content: `父代理上下文：\n${parentContext}\n\n你的目标：${args.objective}\n请用只读工具探索并给出结论。` }],
               // P1-11a：子代理可用独立模型（modelOverrides.worker）；缺省回落主模型

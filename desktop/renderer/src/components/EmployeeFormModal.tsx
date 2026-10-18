@@ -120,7 +120,11 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
     // 字段集（不含 id）：create/update 的公共部分
     const fields = {
       name: name.trim(),
-      display_name: name.trim(),
+      // P3（第二轮审查）：display_name 只在**用户确实改了 name** 时才同步。
+      // 原来无条件 `display_name: name.trim()`，导致编辑任意字段保存都会把用户
+      // 原有的别名静默覆写成 name（主进程 update 是 {...prev, ...patch} 合并，
+      // 不传该字段就会保留原值）。
+      ...(name.trim() !== String(employee?.name || '').trim() ? { display_name: name.trim() } : {}),
       system_prompt: prompt,
       tools,
     };

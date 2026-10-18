@@ -300,6 +300,9 @@ async function recoverSession(server, version, { handshake = performHandshake } 
   try {
     await recovery;
   } finally {
+    // 说明：只有「发起者」会走到这里（并发调用方在上面的 if 分支就 return 了），
+    // 因此不存在多个 finally 竞争置 null 的情形；eslint 只看到 await 之后的属性赋值。
+    // eslint-disable-next-line require-atomic-updates
     server._sessionRecovery = null;
   }
 }
@@ -570,7 +573,9 @@ function createSseTransport({ name, url, headers = {}, onLog, auth }) {
       try { abortCtl?.abort(); } catch { /* 已关闭 */ }
     },
     alive() { return started && !closed; },
-    stderrTail: '',
+    // 注意：stdio 传输的 stderr 尾巴写在 transport.stderrTail（下方 on('data') 里持续写入）。
+    // 这里**不要**再加一个同名的 server.stderrTail 空字段——它从来没人写，
+    // 后人读到会以为「拿到空串 = 服务端没输出」，把真实报错原因又吞回去。
   };
   return transport;
 }
