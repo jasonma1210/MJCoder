@@ -18,6 +18,8 @@ const { app, ipcMain } = require('electron');
 const { writeFileDurable } = require('./data/durableWrite');
 const scheduledOutput = require('./scheduledOutput');
 const guard = require('./ipc/payloadGuard');
+// 熔断判据是纯函数（连续失败 → 自动暂停），单测覆盖，见 test/scheduled-verify.test.mjs
+const { shouldAutoPause } = require('./verifyPolicy');
 
 const STORE_FILE = () => path.join(app.getPath('userData'), 'scheduled-tasks.json');
 // 归档根目录：Documents（应用外可查阅）。取不到时返回空串，归档会被跳过而不是抛。
@@ -295,13 +297,19 @@ async function runTask(id, trigger = 'manual') {
   const timeoutTimer = setTimeout(() => ctl.abort(), taskTimeoutMs);
   try {
     if (useAgent) {
-      const r = await execCtx.runAgentTask({ prompt: t.prompt, model, signal: ctl.signal });
+      const r = await execCtx.runAgentTask({ prompt: t.prompt, model, signal: ctl.signal, taskId: id });
       run.output = String(r?.output || '').slice(0, 20000);
       run.tools = Number(r?.toolCalls) || 0;
       run.tokens = r?.usage || null;
+      // V 层结论随运行记录落盘：无人值守下这是唯一能回答「这次到底判过没判、判成什么」的地方
+      run.verify = r?.verify || null;
       // 没抛异常 ≠ 成功：模型自述做不到时要如实标失败
       const unfinished = detectUnfinished(run.output, run.tools);
-      if (unfinished) { run.status = 'failed'; run.error = unfinished; } else { run.status = 'success'; }
+      if (unfinished) { run.status = 'failed'; run.error = unfinished; } else if (r?.delivery?.downgrade) {
+        // 无人值守 fail-closed：判不出来 / 守卫型 L3 判 FLAG → 不宣告成功（产物仍归档）
+        run.status = 'failed';
+        run.error = `未通过交付校验：${r.delivery.reason}`;
+      } else { run.status = 'success'; }
     } else {
       const out = await execCtx.chatOnce({
         messages: [
@@ -335,6 +343,20 @@ async function runTask(id, trigger = 'manual') {
     : String(run.error || run.output || '')).slice(0, LAST_RESULT_MAX);
   t.missed = false; // 实际执行过（无论成败）即不再是「错过」态
   delete t.missed_at;
+  // ── 任务级熔断 ──
+  // 无人值守最贵的故障不是「某一次判错」，而是「半夜起每小时挂一次、早上才发现」。
+  // 连续失败到阈值就自动暂停任务并留痕，人早上回来再决定是否恢复 —— 与 ChatGPT 定时任务的
+  // auto-pause 同一取向（宁可停摆也不静默烧钱/静默失败）。
+  t.fail_streak = run.status === 'success' ? 0 : (Number(t.fail_streak) || 0) + 1;
+  // 只在**自动触发**（scheduled/catchup）时熔断：用户手动点「立即运行」失败三次不该把任务停掉，
+  // 那是他在排查问题。trigger 取值见 runTask 的四个调用点。
+  const autoTrigger = trigger === 'scheduled' || trigger === 'catchup';
+  if (autoTrigger && t.enabled && shouldAutoPause({ failStreak: t.fail_streak })) {
+    t.enabled = false;
+    t.auto_paused_at = new Date().toISOString();
+    t.auto_pause_reason = `连续 ${t.fail_streak} 次失败，已自动暂停（最近一次：${String(run.error || '未知原因').slice(0, 200)}）`;
+    console.warn(`[scheduled] ${t.name || id} ${t.auto_pause_reason}`);
+  }
   // 归档到 ~/Documents/.MJCoder/tasks/<任务名>/<YYYY-MM-DD>.md
   // 无人值守任务在应用外没有任何可查阅的产出，这里落一份按天归档的完整记录。
   // 写盘失败只告警：归档是附加能力，不能反噬任务本身的成败判定。

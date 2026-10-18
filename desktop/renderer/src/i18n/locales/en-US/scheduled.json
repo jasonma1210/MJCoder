@@ -30,6 +30,7 @@
   "statusFailed": "Failed",
   "statusRunning": "Running",
   "statusMissed": "Missed",
+  "autoPaused": "Auto-paused: {reason}",
   "catchupTrigger": "· Catch-up run",
   "autoLaunch": "Run at login",
   "autoLaunchHint": "Launch MJ Coder at login so scheduled tasks stop being missed while the app is closed",

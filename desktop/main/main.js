@@ -254,6 +254,8 @@ const runTrace = require('./runTrace');
 runTrace.initRunTrace(app.getPath('userData'));
 // P2-8 / V-L1：V 层判定落盘目录（userData/eval/verdicts-YYYYMMDD.jsonl，仅元数据，不上报）
 require('./verifyRun').initVerifyRun(app.getPath('userData'));
+// 定时通道的 V 层装配（L1 全量 + L3 风险门/抽样 + 无人值守 fail-closed）
+const { createScheduledVerify } = require('./scheduledVerify');
 
 // T2-5：本地崩溃/异常聚合（结构化 JSONL + trace 尾部 + 渲染层错误转发 + 原生崩溃 dump）。
 // 全部落本机不上传；agentRunner 在本文件后段声明，经 getter 延迟读取（异常发生才调用）。
@@ -948,13 +950,16 @@ ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun
 // 定时任务 Agent 入口：scheduler.runTask 到点调用
 // 审批策略 auto-safe：L2 写操作自动放行（本地审计已留痕），L1 危险命令/L3 MCP 仍弹审批卡
 // （2 分钟无响应按拒绝，与交互式一致）；沙箱有项目目录 workspace-write、无目录 read-only（P0-B 一致）
-async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
+async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId = '' }) {
   if (!schedModel || !schedModel.model) {
     throw new Error('未配置执行模型：请在任意会话中选择模型（定时任务复用会话模型与凭证）');
   }
   // 扁平形 → 嵌套形：改用共享转换（此前是此处手抄，Worker 路径漏抄导致崩溃）
   const runModel = toAgentModel(schedModel);
   const cwd = schedModel.cwd || '';
+  // V 层：L1 对账全量跑（零成本）+ L3 按风险门/抽样触发，且**无人值守 fail-closed**
+  //（判不出来就不许宣告成功）。策略与成本口径见 main/scheduledVerify.js 的注释。
+  const sv = createScheduledVerify({ taskId, cwd, ...scheduledL3Target() });
   let toolCount = 0;
   let totalUsage = { prompt_tokens: 0, completion_tokens: 0 };
   const agentCore = await loadAgentCore();
@@ -977,10 +982,42 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal }) {
     systemPrompt: '你是定时任务执行器：使用工具完成任务提示词中的要求，产出精炼可读的结果摘要。'
       + '不要反问、不要输出无关寒暄；工具失败时换方式重试或如实说明，不要假装完成。',
     toolHandlers: scheduledToolHandlers(),
-    onToolCall: () => { toolCount += 1; },
+    // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
+    onTrace: (evt) => sv.onTrace(evt),
+    onToolCall: (tc) => { toolCount += 1; sv.onToolCall(tc); },
     onDone: (_text, usage) => { if (usage) totalUsage = usage; },
   });
-  return { output: finalText || '', toolCalls: toolCount, usage: totalUsage };
+  // 收尾判定：产物照常返回，但 delivery.downgrade=true 时调用方不得标成功
+  const vres = await sv.finish(finalText || '');
+  return {
+    output: finalText || '', toolCalls: toolCount, usage: totalUsage,
+    verify: vres.verify, delivery: vres.delivery,
+  };
+}
+
+// L3 独立评审用的模型与通道：优先分档的 compact 槽（便宜档），未配置则跟随主模型。
+// 用非流式单轮通道（scheduledChatOnce）：评审不需要工具，也不需要流式。
+// 返回 { l3Model, l3Chat }；拿不到模型时返回空对象（宿主会如实标「未注入 chat」→ fail-closed）。
+function scheduledL3Target() {
+  try {
+    const ov = (localStore?.getPreference('model_overrides') || {}).compact;
+    const base = scheduler.getModel();
+    // 分档槽位形状不全（缺 providerId/model）时**回落主模型**：与 workerPool 同一纪律，
+    // 否则一个坏配置会让每次「有对外动作」的定时任务都判成未验证（fail-closed 放大故障）。
+    const m = (ov && ov.model && ov.providerId)
+      ? { providerId: ov.providerId, isGlobal: !!ov.isGlobal, baseUrl: ov.baseUrl || '', model: ov.model }
+      : base;
+    if (!m || !m.model) return {};
+    return {
+      l3Model: m.model,
+      l3Chat: (p) => scheduledChatOnce({ messages: p.messages }, {
+        providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model,
+      }),
+    };
+  } catch (e) {
+    console.warn('[scheduled] L3 评审目标解析失败（将按未注入处理）:', e.message);
+    return {};
+  }
 }
 
 // ═══════════════════════════════════════════

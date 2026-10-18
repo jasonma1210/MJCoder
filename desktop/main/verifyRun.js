@@ -105,7 +105,7 @@ async function getWorktreeDiff(cwd) {
 async function runVerification({
   runId = '', conversationId = '', level = 'l1', ledger = null, finalText = '',
   diff = null, stopHookActive = false, emit = null, warn = null, l3 = null,
-  lastTestOutput = '',
+  lastTestOutput = '', l3Gate = null,
 } = {}) {
   const startedAt = Date.now();
   const say = (msg) => { try { (warn || console.warn)(msg); } catch { /* 日志失败不影响判定 */ } };
@@ -181,26 +181,45 @@ async function runVerification({
   }
 
   // ── J3：L3 独立评审 ──
-  // 只在 level==='l3' 且 L1 **未** BLOCK 时跑：L1 已经拦住就没必要再花一次模型调用。
+  // 只在 level==='l3' 且**触发闸门**放行时跑。
+  // 触发策略由调用方注入（l3Gate）：定时通道用 verifyPolicy.shouldRunL3（风险门 + 抽样），
+  // 主对话不注入 → 默认维持旧行为（L1 BLOCK 时跳过）。
+  // L1 BLOCK 时即便触发也不改判决：确定性对账（"声称写了但没有证据"）不需要第二意见，
+  // L3 只往 annotation 里补理由，供人复核 —— 让模型翻转 L1 的 BLOCK 等于把确定性问题变成概率问题。
   // fail-open：任何异常/超时/解析失败都按 PASS 处理（基础设施失败不能把用户的活判死）。
   let l3Result = null;
-  if (level === 'l3' && verdict !== 'BLOCK') {
-    const modL3 = await verifierL3Ready;
-    if (modL3 && l3 && typeof l3.chat === 'function') {
-      l3Result = await modL3.runL3Verify({
-        finalText, ledger, diff, lastTestOutput, chat: l3.chat, model: l3.model,
-      });
-      if (l3Result.verdict === 'FLAG') {
-        const a3 = modL3.formatL3Annotation(l3Result.reasons);
-        if (a3) { annotation = `${annotation}${a3}`; annotated = true; }
-      }
-      if (l3Result.skipped) {
-        say(`[verify] L3 本次未产出有效判定（${l3Result.reason}），已按 PASS 处理（fail-open）`);
-      }
+  if (level === 'l3') {
+    const decision = typeof l3Gate === 'function'
+      ? (l3Gate({ verdict, ledger, level }) || { run: true, why: 'gate_default' })
+      : { run: verdict !== 'BLOCK', why: verdict === 'BLOCK' ? 'block_short_circuit' : 'gate_default' };
+    if (!decision.run) {
+      l3Result = {
+        verdict: 'SKIP', skipped: true, triggered: false,
+        reason: String(decision.why || 'not_triggered'), reasons: [], ms: 0,
+      };
     } else {
-      // 未注入 chat：能力就绪但未接线 —— 与「配置看起来启用、实际没做」相反，这里明确说出来
-      say('[verify] level=l3 但宿主未注入 l3Chat → 本次仅执行 L1 确定性对账');
-      l3Result = { verdict: 'PASS', skipped: true, reason: 'no_chat', reasons: [], ms: 0 };
+      const modL3 = await verifierL3Ready;
+      if (modL3 && l3 && typeof l3.chat === 'function') {
+        l3Result = await modL3.runL3Verify({
+          finalText, ledger, diff, lastTestOutput, chat: l3.chat, model: l3.model,
+        });
+        l3Result.triggered = true;
+        l3Result.why = String(decision.why || 'gate_default');
+        if (l3Result.verdict === 'FLAG') {
+          const a3 = modL3.formatL3Annotation(l3Result.reasons);
+          if (a3) { annotation = `${annotation}${a3}`; annotated = true; }
+        }
+        if (l3Result.skipped) {
+          say(`[verify] L3 本次未产出有效判定（${l3Result.reason}），已按 PASS 处理（fail-open）`);
+        }
+      } else {
+        // 未注入 chat：能力就绪但未接线 —— 与「配置看起来启用、实际没做」相反，这里明确说出来
+        say('[verify] level=l3 但宿主未注入 l3Chat → 本次仅执行 L1 确定性对账');
+        l3Result = {
+          verdict: 'PASS', skipped: true, triggered: true, why: String(decision.why || ''),
+          reason: 'no_chat', reasons: [], ms: 0,
+        };
+      }
     }
   }
 
@@ -218,6 +237,8 @@ async function runVerification({
       l3: {
         verdict: l3Result.verdict,
         skipped: !!l3Result.skipped,
+        triggered: l3Result.triggered !== false,
+        why: l3Result.why || '',
         reason: l3Result.reason || '',
         ms: l3Result.ms || 0,
         reasons: (l3Result.reasons || []).length,
@@ -247,6 +268,8 @@ async function runVerification({
       l3: {
         verdict: l3Result.verdict,
         skipped: !!l3Result.skipped,
+        triggered: l3Result.triggered !== false,
+        why: l3Result.why || '',
         reason: l3Result.reason || '',
         reasons: l3Result.reasons || [],
       },
@@ -294,6 +317,7 @@ const OFF_HANDLE = Object.freeze({
 function createVerificationRun({
   runId = '', conversationId = '', cwd = '', config = null, emit = null,
   defaultLevel = 'l1', fetchDiff = getWorktreeDiff, l3Chat = null, l3Model = null,
+  l3Gate = null,
 } = {}) {
   const rawLevel = config && typeof config === 'object' && config.level ? config.level : defaultLevel;
   let level = ['off', 'l1', 'l3'].includes(rawLevel) ? rawLevel : 'off';
@@ -349,6 +373,8 @@ function createVerificationRun({
       const r = await runVerification({
         runId, conversationId, level, ledger, finalText: ft, diff, stopHookActive, emit,
         l3: typeof l3Chat === 'function' ? { chat: l3Chat, model: l3Model } : null,
+        // 触发闸门：调用方决定「这一轮值不值得多花一次模型调用」（不传=旧行为）
+        l3Gate: typeof l3Gate === 'function' ? l3Gate : null,
         // J3：L3 的输入之一（最近一次测试命令的输出）—— 在 onToolCall 旁路里缓存
         lastTestOutput,
       });

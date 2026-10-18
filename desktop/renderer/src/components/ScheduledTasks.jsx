@@ -369,6 +369,10 @@ export default function ScheduledTasks() {
                   )}
                 </div>
                 <div className="text-xs text-text2 mt-1 line-clamp-2">{task.prompt.slice(0, 100)}</div>
+                {/* 熔断留痕：自动暂停必须给理由，否则用户只看到一个「已暂停」，会以为是自己关的 */}
+                {!task.enabled && task.auto_pause_reason && (
+                  <div className="text-xs text-danger mt-1 line-clamp-2">{t('scheduled.autoPaused', { reason: task.auto_pause_reason })}</div>
+                )}
                 <div className="text-xs text-text2 mt-1 flex items-center gap-1">
                   <IconClock size={12} /> {humanSchedule(task.schedule)}
                   <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
