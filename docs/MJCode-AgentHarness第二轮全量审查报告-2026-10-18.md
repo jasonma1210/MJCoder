@@ -39,7 +39,8 @@
 | **P2-10** 桥面别名盲区 | ✅ 已修 | 支持文件内「整桥别名」（`const mj = window.mjcode` → `mj.agentRun`）；引用 133→**143**（10 个核心链路引用被看见）；新增"别名扫描失效即红"自检 | 门禁自检 + 4/4 通过 |
 | **P2-11** 4 条无守卫写通道 | ✅ 已修 | `memory:promote` / `collab:persist` / `worktree:promote` / `worktree:sync`（后两者同时补 `= {}`，此前传 undefined 直接 TypeError） | `ipc-write-guard` 复跑通过 |
 | **P2-5** MCP 并发竞态 | ✅ 已修 | ①`recoverSession` 互斥：并发 404 只重建一次（此前 N 次握手互相覆盖 `sessionId`）；②`server.ready` 就绪信号：缓存命中但握手在途时等待，不再返回误导性的 `toolCount:0` | 新套件 `mcp-session-recovery` 5 条 + **变异验证**（删互斥 → reset=3 且 2 条红） |
-| **P2-12** 浮层行为测试 | ⚠️ 部分（结构门禁） | 项目无 jsdom（只有 SSR），键盘行为无法动态测 → 新增 `modal-keyboard-guard` **10 条**静态钉住 P1-3 的代码前提（子层独立 Esc 分支 / capture 监听 / aria-modal / 开箱 focus / `closeOnEsc={!cfgConnector}` / `foreignDialogOwnsFocus`）。**真机待验项已在门禁输出中显式标注** | **变异验证**（精确删除 Esc 分支内 `stopPropagation` → 9/10 红） |
+| **P2-7 的 UI 消费者**（第一轮遗留，本质是"修了却对用户不可见"） | ✅ 已修 | ①设置页加「执行后告知」Switch（读写 `approvalSettings.approval_notice`，走既有 `localSetPreference` 同步链）；②`FeedbackHost` 订阅既有 `tasks:event`，按 `approval_notice` 过滤后 toast，不可补偿时追加 `reversibleNote` 且停留 8s；③中英各 7 个 key。**与 `mcp_status` 死信同型：生产方存在 + 消费方为零 ⇒ 测试全绿、功能对用户不存在** | 新套件 `approval-notice-wiring` **14 条**，锁「生产 → 消费 → 开关 → 持久化同步 → 双语 key」整条链 + **变异验证**（去掉 toast 调用 → 红） |
+| P2-12（浮层行为测试） | ⚠️ 部分（结构门禁） | 项目无 jsdom（只有 SSR），键盘行为无法动态测 → 新增 `modal-keyboard-guard` **10 条**静态钉住 P1-3 的代码前提（子层独立 Esc 分支 / capture 监听 / aria-modal / 开箱 focus / `closeOnEsc={!cfgConnector}` / `foreignDialogOwnsFocus`）。**真机待验项已在门禁输出中显式标注** | **变异验证**（精确删除 Esc 分支内 `stopPropagation` → 9/10 红） |
 | **P2-4** compact 丢弃已计费响应 | 🚫 **判定不修**（尝试已回退） | 改为"压缩后复用本轮响应"后，`rewrite-ledger` 实测压缩次数 **5→6**：压缩刚腾出的空间被本次响应立刻填回，反而触发更多压缩（每次摘要同样是 LLM 调用）；更关键的是**压缩已把早期历史换成摘要，而该响应基于旧历史生成**，复用它会让"回答依据"与后续 convo 不一致。结论：`continue` 是更安全的选择 | — |
 | P3 全部 | ⬜ 待办 | 见 §五 | — |
 
@@ -48,7 +49,7 @@
 > 已在 `extractCommand` **提取时**脱敏（Bearer / `sk-` / `ghp_` / `xox*` / `AKIA` / `password=` 六类）。
 > 这条印证了 §八 的教训：**"记录面"的隐私问题只有写测试时才会被看见**，纯读代码很难发现。
 
-**门禁（修复后）**：`162/162` 套件通过（158 原有 + 4 新增）、`typecheck` 0、`lint` 0 error/155 warning、`i18n` 裸中文 0。
+**门禁（修复后）**：`164/164` 套件通过（158 原有 + 6 新增）、`typecheck` 0、`lint` 0 error/155 warning、`i18n` 裸中文 0。
 
 > 一处方法论记录：`approval-notice` 首版第①条用默认 `on-request` 档测"偏好关闭"，而 `write_file` 在该档本就会弹卡返回 null —— **去掉 `if (!enabled)` 后测试仍然全绿**（变异无效格）。改用 `auto-safe` 隔离该分支后才真正具备判别力。**"测试通过了"不等于"测试能失败"**，这是本轮第二次在自家测试上踩到这个坑（第一次是 P1-2 的变异验证）。
 
