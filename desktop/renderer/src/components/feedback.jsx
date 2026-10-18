@@ -57,6 +57,35 @@ export default function FeedbackHost() {
     return () => { confirmListener = null; toastListener = null; };
   }, []);
 
+  // P2-7（第二轮审查）：消费主进程的「执行后告知」通知。
+  // 事件走既有 `tasks:event` 广播（approvalSettings 把 emitTaskEvent 注入成 sink），不新开通道。
+  // 为什么挂在这里：本项目所有提示的出口都在本文件（confirm / toast），崩溃提示也在此；
+  // 另起一套会出现两种提示样式，用户还要记两处。
+  // 只订阅一次：文案在事件到达时才解析，语言切换后新通知用新语言（已在屏上的 toast 保持原样）。
+  useEffect(() => {
+    const mj = typeof window !== 'undefined' ? window.mjcode : undefined;
+    if (typeof mj?.onTasksEvent !== 'function') return undefined;
+    let off;
+    try {
+      off = mj.onTasksEvent((evt) => {
+        if (!evt || evt.type !== 'approval_notice') return;
+        const result = evt.ok ? tr('settings.approvalNoticeOk') : tr('settings.approvalNoticeFail');
+        const base = Number.isFinite(evt.ms)
+          ? tr('settings.approvalNoticeExecuted', { tool: evt.tool, level: evt.level || '-', result, ms: evt.ms })
+          : tr('settings.approvalNoticeExecutedNoMs', { tool: evt.tool, level: evt.level || '-', result });
+        // 不可补偿必须明说 —— 这条通知的全部价值就在这里（不是「顺手告诉你一声」）
+        const message = evt.reversible === false && evt.reversibleNote
+          ? `${base} | ${tr('settings.approvalNoticeIrreversible', { note: evt.reversibleNote })}`
+          : base;
+        toast({ message, duration: evt.reversible === false ? 8000 : 5000 });
+      });
+    } catch (e) {
+      console.warn('[feedback] approval_notice subscribe failed:', e);
+    }
+    return () => { try { off?.(); } catch { /* 卸载失败无副作用 */ } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // C2（2026-10-17）：领取「上次渲染进程崩溃」的通知（主进程取完即清）。
   // 放在提示系统里而不是 App：崩溃提示本质就是一条 toast，职责更贴；
   // 且 App.jsx 已贴到 800 行门禁，不宜再塞逻辑。

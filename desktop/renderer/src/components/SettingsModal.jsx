@@ -256,6 +256,20 @@ export default function SettingsModal({
                   }} />
               ))}
             </Section>
+            {/* P2-7（第二轮审查：「修了却对用户不可见」的那一项）：
+                主进程早已在放行动作完成后广播 `approval_notice`，但渲染层零消费方、
+                设置页也没有开关 —— 机制全对、用户完全看不到。这里补上开关；
+                提示的渲染挂在 feedback.jsx 的 FeedbackHost（项目统一提示出口）。 */}
+            <Section title={t('settings.approvalNotice')}>
+              <div className="flex items-start justify-between gap-3 py-2">
+                <p className="text-xs text-text2 leading-relaxed flex-1">{t('settings.approvalNoticeDesc')}</p>
+                <Switch
+                  checked={approvalSettings?.approval_notice === true}
+                  onChange={(v) => onApprovalSettingsChange?.({ ...approvalSettings, approval_notice: v })}
+                  label={t('settings.approvalNotice')}
+                />
+              </div>
+            </Section>
             <p className="text-text2 text-xs">{t('settings.approvalSnapshotNote')}</p>
             <ApprovalRulesSection />
             <Section title={t('settings.taskDecompose')}>
