@@ -38,7 +38,8 @@
 | **P2-8** V 层零直接单测 | ✅ 已补 | 新套件 `verifier-rules` **30 条**：R1–R6 全分支 + 三层抑制 + 三道闸门 + 元数据纪律 | **变异验证**（删 R4 的 shell 分支 → 红；还原 → 30/30） |
 | **P2-10** 桥面别名盲区 | ✅ 已修 | 支持文件内「整桥别名」（`const mj = window.mjcode` → `mj.agentRun`）；引用 133→**143**（10 个核心链路引用被看见）；新增"别名扫描失效即红"自检 | 门禁自检 + 4/4 通过 |
 | **P2-11** 4 条无守卫写通道 | ✅ 已修 | `memory:promote` / `collab:persist` / `worktree:promote` / `worktree:sync`（后两者同时补 `= {}`，此前传 undefined 直接 TypeError） | `ipc-write-guard` 复跑通过 |
-| P2-4（compact 丢弃已计费响应）/ P2-5（MCP 并发互斥）/ P2-12（浮层行为测试） | ⬜ 待办 | 见 §四 | — |
+| **P2-5** MCP 并发竞态 | ✅ 已修 | ①`recoverSession` 互斥：并发 404 只重建一次（此前 N 次握手互相覆盖 `sessionId`）；②`server.ready` 就绪信号：缓存命中但握手在途时等待，不再返回误导性的 `toolCount:0` | 新套件 `mcp-session-recovery` 5 条 + **变异验证**（删互斥 → reset=3 且 2 条红） |
+| P2-4（compact 丢弃已计费响应）/ P2-12（浮层行为测试） | ⬜ 待办 | 见 §四 | — |
 | P3 全部 | ⬜ 待办 | 见 §五 | — |
 
 > **附带发现（由新单测抓到，属 §五 P3-3 的实证）**：`ledger.command` 明文保留凭证
