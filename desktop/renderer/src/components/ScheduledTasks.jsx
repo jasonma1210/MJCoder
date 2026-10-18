@@ -205,6 +205,7 @@ export default function ScheduledTasks() {
         title: t('scheduled.allowExternalLabel'),
         message: t('scheduled.allowExternalConfirm', { name: form.name.trim() }),
         danger: true,
+        confirmLabel: t('scheduled.allowExternalOk'),
       });
       if (!ok) return;
     }
@@ -249,6 +250,7 @@ export default function ScheduledTasks() {
         title: t('scheduled.allowExternalLabel'),
         message: t('scheduled.allowExternalConfirm', { name: String(task.name || '') }),
         danger: true,
+        confirmLabel: t('scheduled.allowExternalOk'),
       });
       if (!ok) return;
     }

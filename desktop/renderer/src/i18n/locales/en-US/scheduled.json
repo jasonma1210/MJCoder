@@ -35,6 +35,7 @@
   "allowExternalLabel": "Allow external actions",
   "allowExternalHint": "Off by default. When off, commits/pushes/MCP writes/PR comments are blocked and collected into a pending-actions list for your review instead of running unattended.",
   "allowExternalConfirm": "\"{name}\" will run commits, pushes, MCP writes and other external actions unattended, without waiting for you. Turn it on?",
+  "allowExternalOk": "Turn on",
   "externalAllowed": "External: allowed",
   "externalBlocked": "External: blocked",
   "pendingTitle": "Pending actions ({n})",

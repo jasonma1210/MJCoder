@@ -187,7 +187,10 @@ export default function FeedbackHost() {
                 disabled={dialog.count != null && Number(countInput) !== dialog.count}
                 className={`text-xs px-3 py-1.5 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger-solid text-on-accent hover:brightness-110' : 'bg-accent-solid text-on-accent hover:brightness-110'}`}
               >
-                {dialog.confirmLabel || (dialog.danger ? tr('feedback.confirmDanger') : tr('feedback.confirm'))}
+                {/* danger 只表达**视觉强度**（红色 + 警告图标），不表达「删除」语义。
+                    此前默认文案是「确认删除」，于是「允许对外动作」这类确认框也写着"确认删除"
+                    （用户实测截图）。现在默认用中性「确认」，动作语义必须由调用方给 confirmLabel。 */}
+                {dialog.confirmLabel || tr('feedback.confirm')}
               </button>
             </div>
           </div>

@@ -3,6 +3,6 @@
   "countConfirmPlaceholder": "Enter {count} to confirm",
   "cancel": "Cancel",
   "confirm": "Confirm",
-  "confirmDanger": "Confirm delete",
+  "delete": "Delete",
   "closeToast": "Dismiss notification"
 }

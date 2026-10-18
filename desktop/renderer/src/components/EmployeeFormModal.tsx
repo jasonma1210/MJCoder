@@ -178,6 +178,7 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
       title: t('settings.employeeDeleteTitle'),
       message: t('settings.employeeDeleteMsg', { name: name.trim() || editingId }),
       danger: true,
+      confirmLabel: t('feedback.delete'),
     });
     if (!ok) return;
     setBusy(true);

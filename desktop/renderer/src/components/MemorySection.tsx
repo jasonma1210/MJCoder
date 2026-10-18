@@ -130,6 +130,7 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
       title: t('settings.memoryDeleteTitle'),
       message: t('settings.memoryDeleteMsg'),
       danger: true,
+      confirmLabel: t('feedback.delete'),
     });
     if (!ok) return;
     try {

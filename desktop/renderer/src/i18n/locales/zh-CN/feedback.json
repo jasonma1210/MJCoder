@@ -3,6 +3,6 @@
   "countConfirmPlaceholder": "输入 {count} 以确认",
   "cancel": "取消",
   "confirm": "确认",
-  "confirmDanger": "确认删除",
+  "delete": "删除",
   "closeToast": "关闭提示"
 }

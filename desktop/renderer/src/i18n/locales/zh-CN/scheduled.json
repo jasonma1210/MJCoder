@@ -35,6 +35,7 @@
   "allowExternalLabel": "允许对外动作",
   "allowExternalHint": "默认关闭。关闭时提交/推送/MCP 写/PR 评论等会被拦下，攒成「待确认动作清单」等你确认，不会在无人值守时生效。",
   "allowExternalConfirm": "「{name}」将在无人值守时直接执行提交/推送/MCP 写等对外动作，不再等待你确认。确定开启吗？",
+  "allowExternalOk": "确认开启",
   "externalAllowed": "对外：放行",
   "externalBlocked": "对外：拦截",
   "pendingTitle": "待确认动作（{n} 项）",
