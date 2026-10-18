@@ -33,10 +33,20 @@
 | **P2-1** resumeContext 零守卫 | ✅ 已修 | 过 `wrapUntrusted`（与 rolePreset/技能/AGENTS.md/记忆同纪律） | 现有 agent-core 套件复跑通过 |
 | **P2-7** R4 误报 | ✅ 已修 | 提交证据面扩展为「`git_commit` 工具 **或** shell 里成功的 `git commit`」 | 现有 independent-verification 复跑通过 |
 | **P2-9** approvalNotice 零测试 | ✅ 已补 | 新套件 14 条：四条不发 + 可补偿性自洽 + sink 抛错不冒泡 | **变异验证**（去掉 `enabled` 判断 → ① 红）；并修正了首版一条**哑断言** |
-| P1-3 之外的 P2-3/4/5/6/8/10/11/12 | ⬜ 待办 | 见 §四 | — |
+| **P2-3** load_skill 提示与注册矛盾 | ✅ 已修 | 把 `!customTools` 收进 `skillDisclosureMode` 推导，提示段与注册段同源 | `skill-disclosure` 复跑通过 |
+| **P2-6** 契约字段未显式登记 | ✅ 已修 | `verification{level,onBlock,stopHookActive}` / `skillDisclosure` 枚举 / `modelOverrides` / `rolePreset.skillNames` 显式登记，非法值边界即拒 | `ipc-contract` 复跑通过 |
+| **P2-8** V 层零直接单测 | ✅ 已补 | 新套件 `verifier-rules` **30 条**：R1–R6 全分支 + 三层抑制 + 三道闸门 + 元数据纪律 | **变异验证**（删 R4 的 shell 分支 → 红；还原 → 30/30） |
+| **P2-10** 桥面别名盲区 | ✅ 已修 | 支持文件内「整桥别名」（`const mj = window.mjcode` → `mj.agentRun`）；引用 133→**143**（10 个核心链路引用被看见）；新增"别名扫描失效即红"自检 | 门禁自检 + 4/4 通过 |
+| **P2-11** 4 条无守卫写通道 | ✅ 已修 | `memory:promote` / `collab:persist` / `worktree:promote` / `worktree:sync`（后两者同时补 `= {}`，此前传 undefined 直接 TypeError） | `ipc-write-guard` 复跑通过 |
+| P2-4（compact 丢弃已计费响应）/ P2-5（MCP 并发互斥）/ P2-12（浮层行为测试） | ⬜ 待办 | 见 §四 | — |
 | P3 全部 | ⬜ 待办 | 见 §五 | — |
 
-**门禁（修复后）**：`160/160` 套件通过（158 原有 + 2 新增）、`typecheck` 0、`lint` 0 error/155 warning、`i18n` 裸中文 0。
+> **附带发现（由新单测抓到，属 §五 P3-3 的实证）**：`ledger.command` 明文保留凭证
+> ——`curl -H "Authorization: Bearer sk-…"` 会随 `verify_ledger` 事件落盘 `traces/*.jsonl`。
+> 已在 `extractCommand` **提取时**脱敏（Bearer / `sk-` / `ghp_` / `xox*` / `AKIA` / `password=` 六类）。
+> 这条印证了 §八 的教训：**"记录面"的隐私问题只有写测试时才会被看见**，纯读代码很难发现。
+
+**门禁（修复后）**：`161/161` 套件通过（158 原有 + 3 新增）、`typecheck` 0、`lint` 0 error/155 warning、`i18n` 裸中文 0。
 
 > 一处方法论记录：`approval-notice` 首版第①条用默认 `on-request` 档测"偏好关闭"，而 `write_file` 在该档本就会弹卡返回 null —— **去掉 `if (!enabled)` 后测试仍然全绿**（变异无效格）。改用 `auto-safe` 隔离该分支后才真正具备判别力。**"测试通过了"不等于"测试能失败"**，这是本轮第二次在自家测试上踩到这个坑（第一次是 P1-2 的变异验证）。
 
