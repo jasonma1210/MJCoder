@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
 import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSettings, IconArchive } from './icons';
+import { activeNavOf } from '../lib/navState';
 import logo from '../assets/logo.png';
 import { useI18n } from '../i18n';
 
@@ -11,9 +12,16 @@ export default function Sidebar({
   threads, activeThread, onSelect, onNew, onDelete, onRenameThread, onAssignThread, onOpenArchive,
   onOpenScheduled, onOpenEcosystem, onOpenProjectPicker, onOpenSettings,
   projects, activeProject, onSelectProject, onRemoveProject, onRenameProject,
-  onNewThread, filter,
+  onNewThread, filter, view,
 }) {
   const { t } = useI18n();
+  // 一级导航选中态：互斥且穷尽（判定逻辑与其背景见 lib/navState.ts）
+  const activeNav = activeNavOf({
+    showScheduled: !!view?.showScheduled,
+    showDashboard: !!view?.showDashboard,
+    showEcosystem: !!view?.showEcosystem,
+    hasActiveThread: !!activeThread,
+  });
   // 版本号从主进程 app.getVersion() 动态获取（此前硬编码 v1.0.0，发版后永远显示旧版本）
   const [version, setVersion] = useState('');
   useEffect(() => {
@@ -31,11 +39,13 @@ export default function Sidebar({
         <div className="text-xs text-text2 mt-1">{version ? `v${version} ${t('sidebar.beta')}` : ''} · {t('sidebar.tagline')}</div>
       </div>
 
-      {/* 主操作（对标 Codex：New chat / Scheduled / Plugins） */}
+      {/* 主操作（对标 Codex：New chat / Scheduled / Plugins）
+          选中态由 App 计算 activeNav 后传入（互斥）；此前只有 New chat 传 active，
+          且判据是 !activeThread —— 在定时任务页里没有打开会话，于是该亮的不亮。 */}
       <div className="px-2 space-y-0.5">
-        <NavItem icon={<IconEdit size={16} />} label={t('sidebar.newChat')} onClick={onNew} active={!activeThread} />
-        <NavItem icon={<IconClock size={16} />} label={t('sidebar.scheduled')} onClick={onOpenScheduled} />
-        <NavItem icon={<IconPuzzle size={16} />} label={t('sidebar.ecosystem')} onClick={onOpenEcosystem} />
+        <NavItem icon={<IconEdit size={16} />} label={t('sidebar.newChat')} onClick={onNew} active={activeNav === 'new'} />
+        <NavItem icon={<IconClock size={16} />} label={t('sidebar.scheduled')} onClick={onOpenScheduled} active={activeNav === 'scheduled'} />
+        <NavItem icon={<IconPuzzle size={16} />} label={t('sidebar.ecosystem')} onClick={onOpenEcosystem} active={activeNav === 'ecosystem'} />
       </div>
 
       {/* 会话（项目 → 会话 二级结构） */}
@@ -73,10 +83,14 @@ export default function Sidebar({
   );
 }
 
+// 一级导航项。选中态用 select-bg / select-fg 这对**专用令牌**（theme.css 里本来就为
+// 「列表当前选中项」准备了它们，此前零引用）：bg-hover 与 hover 同色，选中和划过长得一样，
+// 等于"没选中"。aria-current="page" 同时给出语义与可测锚点。
 function NavItem({ icon, label, onClick, active }) {
   return (
     <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm truncate ${active ? 'bg-hover text-text font-medium' : 'hover:bg-hover text-text2'}`}>
+      aria-current={active ? 'page' : undefined}
+      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm truncate ${active ? 'bg-select-bg text-select-fg font-medium' : 'hover:bg-hover text-text2'}`}>
       <span className="shrink-0">{icon}</span> {label}
     </button>
   );

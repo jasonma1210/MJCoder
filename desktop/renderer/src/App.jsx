@@ -492,9 +492,6 @@ export default function App() {
     }
   }
 
-  // Bug1：取消「发消息自动创建日期文件夹」的兜底——未选项目时直接发送，
-  // 项目创建/选择完全由用户在项目弹窗中主动完成（输入项目名或选择本地目录）
-
   // 本机数据层就绪探测（离线模式下项目落本机持久化；在线时保持 localStorage 快照）
   function localStoreReady() {
     return typeof window !== 'undefined' && typeof window.mjcode?.localProjects === 'function';
@@ -593,6 +590,7 @@ export default function App() {
       <Sidebar
         threads={threads}
         activeThread={activeThread}
+        view={{ showScheduled, showDashboard, showEcosystem }}
         onSelect={selectThread}
         onNew={() => { setActiveThread(null); resetView(); }}
         onNewThread={newThreadInProject}
