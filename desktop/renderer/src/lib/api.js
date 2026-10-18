@@ -204,6 +204,14 @@ export const api = {
     if (window.mjcode?.scheduledList) return (await window.mjcode.scheduledList()).tasks;
     return request('/scheduled-tasks');
   },
+  // 带存储状态的列表：recoverable 非空 = 主存储被写空但备份里还有任务（需要用户点头才恢复）
+  scheduledStore: async () => {
+    if (window.mjcode?.scheduledList) return window.mjcode.scheduledList();
+    return { tasks: await request('/scheduled-tasks'), runs: [], recoverable: null };
+  },
+  restoreScheduledBackup: () => (window.mjcode?.scheduledRestoreBackup
+    ? window.mjcode.scheduledRestoreBackup()
+    : Promise.resolve({ ok: false, error: 'unsupported' })),
   createScheduledTask: (data) => (window.mjcode?.scheduledSave
     ? window.mjcode.scheduledSave({ enabled: true, ...data })
     : request('/scheduled-tasks', { method: 'POST', body: JSON.stringify(data) })),

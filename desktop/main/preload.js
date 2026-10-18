@@ -211,6 +211,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   scheduledRuns: (payload) => ipcRenderer.invoke('scheduled:runs', payload),
   // 待确认动作的一键执行（幂等：同一 actionId 只能执行一次）
   scheduledReplayAction: (payload) => ipcRenderer.invoke('scheduled:replayAction', payload),
+  // 存储被异常清空后从 .bak 一键恢复（事故兜底，见 main/scheduler.js 的 persist 守卫）
+  scheduledRestoreBackup: () => ipcRenderer.invoke('scheduled:restoreBackup'),
   scheduledSetModel: (payload) => ipcRenderer.invoke('scheduled:setModel', payload),
   onScheduledChanged: (cb) => {
     const handler = (_, d) => cb(d);

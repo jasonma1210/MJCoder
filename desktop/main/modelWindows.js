@@ -119,13 +119,13 @@ function normalizeModelId(modelId) {
 }
 
 /**
- * 解析上下文窗口。三态返回，供 UI（P1-12）区分「查表命中」与「按默认估算」。
+ * 解析上下文窗口。四态返回，供 UI（P1-12）区分「精确命中 / 同族推断 / 按默认估算」。
  * @param {object} opts
  * @param {string|number} [opts.providerId]  provider id（数字或厂商名）
  * @param {string} [opts.baseUrl]            provider base_url（主机特征优先用于判定 kind）
  * @param {string} [opts.modelId]            模型 id
  * @param {number} [opts.probedNumCtx]       Ollama 探测到的 num_ctx（唯一可信来源）
- * @returns {{window: number, confirmed: boolean, source: 'table'|'default'|'ollama-probe'}}
+ * @returns {{window: number, confirmed: boolean, source: 'table'|'family'|'default'|'ollama-probe'}}
  */
 function resolveWindow({ providerId, baseUrl, modelId, probedNumCtx } = {}) {
   const kind = providerKindOf({ providerId, baseUrl });
@@ -145,7 +145,12 @@ function resolveWindow({ providerId, baseUrl, modelId, probedNumCtx } = {}) {
     for (const fam of MODEL_FAMILIES) {
       if (fam.kind !== kind) continue;
       if (fam.prefixes.some((p) => id.startsWith(p))) {
-        return { window: fam.window, confirmed: true, source: 'table' };
+        // 「同族」不等于「已确认」：前缀匹配会把**没见过的版本号**一起吞进来。
+        // 实证（2026-10-18，主理人自建供应商）：`deepseek-v4-flash` / `deepseek-v4-pro` 命中
+        // deepseek 族规则被标成 131072 且 confirmed:true，而实际窗口 ≥512k——UI 于是理直气壮地
+        // 显示「128k」，并据此劝退本该跑得动的长任务。族规则只是**推断**，必须标 family + 未确认，
+        // 由 UI 显示成估算值（带 ~）并引导用户去声明真实窗口。
+        return { window: fam.window, confirmed: false, source: 'family' };
       }
     }
   }

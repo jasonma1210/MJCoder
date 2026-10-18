@@ -390,7 +390,15 @@ ipcMain.handle('app:crash-notice', () => crashGuard.takeNotices());
 ipcMain.handle('app:stream-timeouts', () => streamSettings.getStreamSettingsView());
 
 // 单实例锁：第二个实例启动时聚焦已有窗口
-if (!app.requestSingleInstanceLock()) {
+// ⚠️ hasMainLock 是**退出落盘的总开关**（2026-10-18 数据丢失事故修复）：
+// 抢锁失败的进程从未执行 whenReady，内存里的 localStore/taskStore/scheduler store 全是
+// 「未加载」的空态。此时任何退出落盘都会把用户数据覆盖成空库。
+// 事故链：第二实例启动 → 抢锁失败 → app.quit() → 顶层注册的 will-quit 照样执行 →
+// scheduler.persist() 用 { tasks: [], runs: [] } 覆盖 scheduled-tasks.json
+// → 下次启动读到的是**合法 JSON 空库**，连「损坏」告警都不会有 → 用户看到定时任务全部消失。
+// 故：抢锁失败者不参与任何退出落盘（will-quit 首行直接 return）。
+const hasMainLock = app.requestSingleInstanceLock();
+if (!hasMainLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -455,6 +463,8 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 // P0-1：退出前强制落盘合并窗口内未写盘的内存变更（消息/状态）
 // P1-1：同时清理 MCP 子进程，避免孤儿进程占用端口导致下次启动握手失败
 app.on('will-quit', () => {
+  // 抢锁失败的实例只负责退出，绝不碰磁盘（详见 hasMainLock 处的注释）
+  if (!hasMainLock) return;
   try { localStore?.flushSync(); } catch (e) { console.warn('[local] 退出刷盘失败:', e.message); }
   try { taskStore?.db?.flush?.(); } catch (e) { console.warn('[tasks] 退出刷盘失败:', e.message); }
   try { scheduler?.persist?.(); } catch (e) { console.warn('[scheduled] 退出刷盘失败:', e.message); }

@@ -102,5 +102,14 @@
   "dayWed": "Wednesday",
   "dayThu": "Thursday",
   "dayFri": "Friday",
-  "daySat": "Saturday"
+  "daySat": "Saturday",
+  "modelFollowShort": "Follow chat",
+  "modelChanged": "Run model switched to {model}",
+  "modelChangeFailed": "Failed to switch model: {msg}",
+  "recoverTitle": "Task storage was wiped — the backup still holds {n} task(s)",
+  "recoverHint": "The last abnormal exit wrote an empty store. You can restore from the backup (please verify the tasks afterwards).",
+  "recoverAction": "Restore",
+  "recoverDone": "Restored {n} task(s) from the backup",
+  "recoverFailed": "Restore failed: {msg}",
+  "modelWindowUndeclared": "This model has no declared context window, so {win} is only an estimate (values marked with ~ are estimates). Confirm it in \"Models → Context window\" so batching and compaction use the real size."
 }

@@ -126,9 +126,25 @@ const TS_FILE = path.join(DESKTOP, 'renderer/src/lib/modelWindows.ts');
     assert.deepEqual(diffs, []);
   });
 
-  check('矩阵覆盖了三态（table / default / ollama-probe 都出现过）', () => {
+  // 四态：精确命中 / 同族推断 / 默认估算 / Ollama 探测。
+  // family 是 2026-10-18 新增的一态——族规则（前缀匹配）会把没见过的版本号一起吞掉，
+  // 不能算「已确认」（实测 deepseek-v4-* 被压成 128k，而真实窗口 ≥512k）。
+  check('矩阵覆盖了四态（table / family / default / ollama-probe 都出现过）', () => {
     const sources = new Set(MATRIX.map((c) => MAIN.resolveWindow(c).source));
-    assert.deepEqual([...sources].sort(), ['default', 'ollama-probe', 'table']);
+    assert.deepEqual([...sources].sort(), ['default', 'family', 'ollama-probe', 'table']);
+  });
+
+  check('同族推断不得冒充已确认（family ⇒ confirmed:false）', () => {
+    for (const c of MATRIX) {
+      const r = MAIN.resolveWindow(c);
+      if (r.source === 'family') assert.equal(r.confirmed, false, JSON.stringify(c));
+    }
+    // 反向：精确命中必须仍是 confirmed:true（别把整张表都降级成估算）
+    const exact = MAIN.resolveWindow({ providerId: 'deepseek', modelId: 'deepseek-chat' });
+    assert.deepEqual(exact, { window: 131072, confirmed: true, source: 'table' });
+    // 族规则命中的未登记版本：给窗口但标未确认
+    const fam = MAIN.resolveWindow({ providerId: 'deepseek', modelId: 'deepseek-v4-flash' });
+    assert.deepEqual(fam, { window: 131072, confirmed: false, source: 'family' });
   });
 
   console.log(`\nmodel-windows-parity: ${pass}/${total} 通过（表内 ${Object.keys(MAIN.MODEL_WINDOWS).length} 条精确项 / ${MAIN.MODEL_FAMILIES.length} 条族规则）`);

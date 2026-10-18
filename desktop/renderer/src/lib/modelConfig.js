@@ -27,6 +27,8 @@ export function getContextOptions() {
     { value: 65536, label: '64K' },
     { value: 131072, label: '128K' },
     { value: 262144, label: '256K' },
+    // 512K：长上下文模型（128K 换 512K 的中间档）此前缺失，用户只能选 1M 或被迫低估
+    { value: 524288, label: '512K' },
     { value: 1048576, label: '1M' },
   ];
 }

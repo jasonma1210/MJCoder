@@ -15,7 +15,7 @@
 const path = require('path');
 const fs = require('fs');
 const { app, ipcMain } = require('electron');
-const { writeFileDurable } = require('./data/durableWrite');
+const scheduledStore = require('./scheduledStore');
 const scheduledOutput = require('./scheduledOutput');
 const guard = require('./ipc/payloadGuard');
 // 熔断判据是纯函数（连续失败 → 自动暂停），单测覆盖，见 test/scheduled-verify.test.mjs
@@ -45,45 +45,61 @@ let taskTimeoutMs = DEFAULT_TASK_TIMEOUT_MS;
 const running = new Set();   // 执行中的 taskId
 
 // ── 持久化 ──
-// P0-持久化（2026-10-16）修复两处：
-//   ① persist() 此前是裸 writeFileSync（无 tmp+rename、无 fsync）。崩溃时序不正会让
-//      文件半写，下次启动 JSON.parse 失败 → 用户全部定时任务无声消失。
-//   ② loadStore() 此前把「文件损坏」与「首次启动」当同一回事，catch 里一律
-//      store = { tasks: [], runs: [] } 且不留任何痕迹——用户永远不知道自己丢了定时任务。
-//      现区分 ENOENT（正常首次）与解析失败（损坏），损坏时保留副本 + 明示。
+// 读写决策与损坏自救已抽到 main/scheduledStore.js（数据韧性），本文件只保留调度语义。
+// 历史（2026-10-16）此处修过两处：裸 writeFileSync 会半写、loadStore 把「损坏」当「首次启动」
+// 静默清空——现分别是 durableWrite 与 scheduledStore.read() 的 reason 分支。
+//
+// 2026-10-18 真机事故（用户报「我创建的定时任务不显示了」）的关键守卫在下面 persist() 里：
+// ② 未加载完成即写盘 = 用空 store 覆盖用户数据（抢锁失败的第二进程触发）
+// 另外两条由 scheduledStore 承担：③ 损坏时先试 .bak ④ 空主文件时给可恢复快照（不自动还原）
+let storeLoaded = false;   // 是否已从磁盘判定过存储状态（未判定前禁止写盘）
+let recoverable = null;    // 可恢复快照提示：{ tasks, runs, from }
+
 function loadStore() {
-  const file = STORE_FILE();
-  if (!fs.existsSync(file)) {
-    store = { tasks: [], runs: [] }; // 正常首次启动，无历史
-    return;
-  }
-  try {
-    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!j || !Array.isArray(j.tasks)) {
-      throw new Error('结构非法：缺少 tasks 数组');
-    }
-    store = { tasks: j.tasks, runs: Array.isArray(j.runs) ? j.runs : [] };
-  } catch (e) {
-    // 损坏：保留副本供人工抢救（这是唯一能找回用户数据的东西），并显著告警
-    const kept = `${file}.corrupt-${Date.now()}`;
-    try { fs.copyFileSync(file, kept); } catch { /* 保留失败不阻断，但下面会说明 */ }
-    console.error(`[scheduled] 定时任务文件损坏：${e.message}；已保留副本 ${kept}，本次启动定时任务为空`);
-    store = { tasks: [], runs: [] };
+  const r = scheduledStore.read(STORE_FILE());
+  store = r.store;
+  recoverable = r.recoverable;
+  storeLoaded = true; // 已判定过磁盘状态（即使文件不存在），此后允许写盘
+  if (r.reason === 'corrupt-restored') {
+    console.error(`[scheduled] 主存储损坏，已从 .bak 恢复 ${r.recoverable.tasks} 个任务`);
+    persist(); // 立刻回写，避免下次启动再走一遍恢复
+  } else if (r.reason === 'corrupt-unrecoverable') {
+    console.error(`[scheduled] 定时任务文件损坏且无可用备份；已保留副本 ${r.corruptCopy}，本次启动定时任务为空`);
+  } else if (r.reason === 'empty-main') {
+    console.warn(`[scheduled] 主存储为空但备份含 ${r.recoverable.tasks} 个任务：等待用户确认恢复`);
   }
 }
 
 function persist() {
-  const file = STORE_FILE();
-  try {
-    // 留一份 .bak 作为上一完好版本，崩溃写坏后可回退
-    if (fs.existsSync(file)) {
-      try { fs.copyFileSync(file, `${file}.bak`); } catch { /* 备份失败不阻断主写入 */ }
-    }
-    const res = writeFileDurable(file, JSON.stringify(store, null, 2));
-    if (!res.ok) console.error('[scheduled] 持久化失败:', res.error);
-  } catch (e) {
-    console.error('[scheduled] 持久化异常:', e.message);
+  // fail-closed：没加载完就写盘 = 用内存里的空 store 覆盖用户全部任务。
+  // 事故链（2026-10-18，真机复现）：第二实例启动 → requestSingleInstanceLock 失败 →
+  // app.quit() → 顶层注册的 will-quit 照样执行 → scheduler.persist() 把模块初始化值
+  // { tasks: [], runs: [] } 写盘。persist 又先把旧文件复制成 .bak，所以磁盘上呈现为
+  // 「主文件 31 字节空 store + .bak 里数据完好」，且下次启动读到的是**合法 JSON**，
+  // 连损坏告警都不会有 —— 用户看到的就是「我创建的任务全没了」。
+  // localStore.flushSync() 因为有 _dirty 守卫才没被同样清空（local-data.json 幸存）。
+  if (!storeLoaded) {
+    console.error('[scheduled] 拒绝写盘：存储尚未加载（否则会清空用户任务）');
+    return { ok: false, error: 'store_not_loaded' };
   }
+  return scheduledStore.write(STORE_FILE(), store);
+}
+
+// 存储状态（供 UI 判断要不要显示「可恢复」横幅）
+function storeState() {
+  return { loaded: storeLoaded, recoverable };
+}
+
+// 从 .bak 恢复（用户点了横幅上的「恢复」才走这条路；覆盖前留一份当前文件便于反悔）
+function restoreBackup() {
+  const r = scheduledStore.restoreFromBackup(STORE_FILE());
+  if (!r.ok) return r;
+  store = r.store;
+  delete store.cleared_at; // 恢复出来的内容不是「用户主动清空」的结果
+  recoverable = null;
+  persist();
+  notify();
+  return { ok: true, tasks: r.tasks, runs: r.runs };
 }
 
 // ── cron 匹配（与渲染层 validateCron 同语义；周字段 0=周日）──
@@ -567,13 +583,19 @@ function createTask({ name, prompt, schedule, enabled, valid_until: validUntilRa
     created_at: new Date().toISOString(),
   };
   store.tasks.unshift(t);
+  // 新建即意味着「用户并没有清空任务」：清掉主动清空标记与可恢复提示，避免 UI 一直挂着横幅
+  delete store.cleared_at;
+  recoverable = null;
   persist();
   notify();
   return { ok: true, task: t };
 }
 
 function registerIpc() {
-  ipcMain.handle('scheduled:list', async () => ({ ok: true, tasks: store.tasks, runs: store.runs }));
+  // recoverable：主文件为空但备份里还有任务时给 UI 的提示（用户一键恢复，见 scheduled:restoreBackup）
+  ipcMain.handle('scheduled:list', async () => ({ ok: true, tasks: store.tasks, runs: store.runs, recoverable }));
+  // 从 .bak 一键恢复（事故兜底：写入被异常清空后用户不必手工改文件）
+  ipcMain.handle('scheduled:restoreBackup', async () => restoreBackup());
   ipcMain.handle('scheduled:save', async (_, p = {}) => {
     // X14：调度任务会被无人值守执行，名称/提示词/表达式都必须在边界校验。
     // 保持既有信封契约（调用方读 r.ok），故把校验异常转成 {ok:false}
@@ -643,6 +665,10 @@ function registerIpc() {
     store.tasks = store.tasks.filter((t) => t.id !== id);
     store.runs = store.runs.filter((r) => r.task_id !== id);
     running.delete(id);
+    // 删掉最后一条 = 用户主动清空。打标后下次启动不会把 .bak 里的旧任务当成「可恢复」来打扰用户
+    // （.bak 存的是删前状态，误判会变成「删除被自动撤销」）
+    if (store.tasks.length === 0) store.cleared_at = new Date().toISOString();
+    else delete store.cleared_at;
     persist();
     notify();
     return { ok: true };
@@ -725,6 +751,8 @@ function registerIpc() {
 module.exports = {
   startScheduler, stopScheduler, registerIpc, getModel, setModel,
   cronValid, cronMatches, runTask, persist,
+  // 2026-10-18：存储守卫与自救（未加载禁止写盘 / 从 .bak 恢复 / 可恢复提示）
+  loadStore, storeState, restoreBackup,
   // P0-8a：补跑扫描与区间回放导出（测试可注入固定 now 做确定性断言）
   scanMissedTasks, collectMatchesBetween,
   // 2026-10-17:假成功识别（纯函数，单测直调）

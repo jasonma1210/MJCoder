@@ -122,14 +122,22 @@ export default function ScheduledTasks() {
             const mid = m.model_id || m.modelId;
             if (!mid) continue;
             // 窗口：模型自己声明的优先，否则按 (provider, modelId) 查表（与主进程同一张表）
-            const win = Number(m.context_window) > 0
-              ? Number(m.context_window)
-              : resolveWindow({ providerId: p.id, baseUrl: p.base_url, modelId: mid }).window;
+            // 注意「查表兜底 ≠ 已知」：表外模型一律 32k 兜底，直接写 32k 等于对用户撒谎
+            // （主理人实测自己的模型最低 512k）。所以未确认的窗口一律加 `~` 并在下方提示去确认。
+            const rw = Number(m.context_window) > 0
+              ? { window: Number(m.context_window), confirmed: true, source: 'user' }
+              : resolveWindow({ providerId: p.id, baseUrl: p.base_url, modelId: mid });
+            const win = rw.window;
+            const k = win >= 1024 ? `${Math.round(win / 1024)}k` : String(win);
+            const winLabel = rw.confirmed ? k : `~${k}`;
             opts.push({
               value: `${p.id}::${mid}`,
               // 下拉里直接标窗口：选模型时最该看的就是它（「100 条新闻」在 32k 模型上必然跑不完）
-              label: `${p.name || p.id} · ${m.display_name || mid} (${win >= 1024 ? `${Math.round(win / 1024)}k` : win})`,
+              label: `${p.name || p.id} · ${m.display_name || mid} (${winLabel})`,
+              // 卡片上空间窄：去掉 provider 名，只留模型 + 窗口
+              short: `${m.display_name || mid} (${winLabel})`,
               providerId: p.id, isGlobal: !!p.isGlobal, baseUrl: p.base_url || '', model: mid, window: win,
+              windowConfirmed: rw.confirmed,
             });
           }
         }
@@ -144,6 +152,8 @@ export default function ScheduledTasks() {
   const [busyId, setBusyId] = useState(null);
   const [expandedRuns, setExpandedRuns] = useState(null); // { taskId, list } — B1：绑定 taskId，避免历史展开污染所有卡片
   const [runResult, setRunResult] = useState(null); // { taskId, ok, text }
+  // 主存储被写空、但 .bak 里还有任务时的提示（2026-10-18 数据丢失事故：不能让用户自己去翻文件）
+  const [recoverable, setRecoverable] = useState(null);
   // P0-8c：开机自启（主进程 app.setLoginItemSettings，偏好落 localStore）。
   // 桥接 IPC（app:autoLaunchGet/Set + preload）未就绪时 autoLaunchSupported=false，
   // 开关整体隐藏——不做「看起来能切、实际不生效」的假开关（设置项必须真的被消费）。
@@ -152,7 +162,10 @@ export default function ScheduledTasks() {
 
   async function load() {
     try {
-      setTasks(await api.scheduledTasks());
+      // 走 scheduledStore 拿完整信封：除了任务，还要 recoverable（主存储被写空但备份有货）
+      const r = await api.scheduledStore();
+      setTasks(Array.isArray(r?.tasks) ? r.tasks : []);
+      setRecoverable(r?.recoverable || null);
     } catch (err) {
       console.warn('[scheduled] failed to load task list:', err);
       setError(t('scheduled.loadFailed'));
@@ -204,7 +217,9 @@ export default function ScheduledTasks() {
     const m = String(form.prompt || '').match(/(\d{2,4})\s*(\u6761|\u4e2a|\u7bc7|\u9879|\u4efd)/);
     return m ? Number(m[1]) : 0;
   })();
-  const smallWindowForBulk = !!pickedModel && bulkCount >= 20 && pickedModel.window < 64 * 1024;
+  // 只在「窗口已确认」时才按窗口劝退：拿 32k 兜底值去质疑 512k 的模型，是在骗用户
+  const smallWindowForBulk = !!pickedModel && pickedModel.windowConfirmed && bulkCount >= 20 && pickedModel.window < 64 * 1024;
+  const undeclaredWindow = !!pickedModel && !pickedModel.windowConfirmed;
 
   async function createTask() {
     if (!form.name.trim() || !form.prompt.trim()) {
@@ -257,6 +272,40 @@ export default function ScheduledTasks() {
   async function toggle(id, enabled) {
     await api.updateScheduledTask(id, { enabled: !enabled });
     load();
+  }
+
+  // 已有任务改模型：部分更新语义（只发 model，其它字段一律不动），下一轮执行即生效。
+  // 选「跟随会话」发 model: null —— 主进程用 hasOwnProperty 判定，null 是有效值（恢复跟随），
+  // 不是「没传」。
+  async function changeTaskModel(task, value) {
+    const o = modelOptions.find((x) => x.value === value);
+    const r = await api.updateScheduledTask(task.id, {
+      model: o ? { providerId: o.providerId, isGlobal: o.isGlobal, baseUrl: o.baseUrl, model: o.model } : null,
+    });
+    if (r && r.ok === false) {
+      setError(t('scheduled.modelChangeFailed', { msg: r.error || '' }));
+      return;
+    }
+    setError('');
+    setNotice(t('scheduled.modelChanged', { model: o ? o.short : t('scheduled.modelFollowShort') }));
+    load();
+  }
+
+  // 从 .bak 恢复被写空的任务（事故兜底；主进程覆盖前会另存当前文件，可反悔）
+  async function restoreBackup() {
+    setError('');
+    try {
+      const r = await api.restoreScheduledBackup();
+      if (r && r.ok === false) {
+        setError(t('scheduled.recoverFailed', { msg: r.error || '' }));
+        return;
+      }
+      setRecoverable(null);
+      setNotice(t('scheduled.recoverDone', { n: r?.tasks || 0 }));
+      load();
+    } catch (err) {
+      setError(t('scheduled.recoverFailed', { msg: err.message }));
+    }
   }
 
   // 对外动作放行：把「无人值守」变成「能在没人看着时写外部系统」，开它必须二次确认。
@@ -381,6 +430,20 @@ export default function ScheduledTasks() {
       {error && <div className="mb-4"><InlineAlert type="error" onDismiss={() => setError('')}>{error}</InlineAlert></div>}
       {notice && <div className="mb-4"><InlineAlert type="info" onDismiss={() => setNotice('')}>{notice}</InlineAlert></div>}
 
+      {/* 存储被写空的兜底提示：不给提示的话，用户只能看到一片空白并以为任务永久消失了 */}
+      {recoverable && (
+        <div className="flex items-start justify-between gap-3 bg-surface border border-danger rounded-xl px-4 py-3 mb-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-danger">{t('scheduled.recoverTitle', { n: recoverable.tasks })}</div>
+            <div className="text-xs text-text2 mt-1">{t('scheduled.recoverHint')}</div>
+          </div>
+          <button onClick={restoreBackup}
+            className="h-8 shrink-0 inline-flex items-center justify-center px-3 rounded-lg border border-danger text-danger text-xs hover:bg-hover">
+            {t('scheduled.recoverAction')}
+          </button>
+        </div>
+      )}
+
       {/* P0-8c：开机自动运行（定时任务错过即永久丢失的根因之一是应用没开；自启 + 启动补跑扫描共同闭环） */}
       {autoLaunchSupported && (
         <div className="flex items-center justify-between bg-surface border border-border rounded-xl px-4 py-3 mb-4">
@@ -422,6 +485,13 @@ export default function ScheduledTasks() {
               <p className="text-xs text-danger mb-3 -mt-2">
                 {t('scheduled.modelTooSmall', {
                   n: bulkCount,
+                  win: pickedModel.window >= 1024 ? `${Math.round(pickedModel.window / 1024)}k` : pickedModel.window,
+                })}
+              </p>
+            )}
+            {undeclaredWindow && (
+              <p className="text-xs text-text2 mb-3 -mt-2">
+                {t('scheduled.modelWindowUndeclared', {
                   win: pickedModel.window >= 1024 ? `${Math.round(pickedModel.window / 1024)}k` : pickedModel.window,
                 })}
               </p>
@@ -535,7 +605,7 @@ export default function ScheduledTasks() {
                 {!task.enabled && task.auto_pause_reason && (
                   <div className="text-xs text-danger mt-1 line-clamp-2">{t('scheduled.autoPaused', { reason: task.auto_pause_reason })}</div>
                 )}
-                <div className="text-xs text-text2 mt-1 flex items-center gap-1">
+                <div className="text-xs text-text2 mt-1 flex flex-wrap items-center gap-1">
                   <IconClock size={12} />
                   {task.trigger_type === 'event'
                     ? t('scheduled.eventTrigger', { source: task.event_source || '?', event: task.event_name || '?' })
@@ -543,11 +613,25 @@ export default function ScheduledTasks() {
                   {task.trigger_type !== 'event' && (
                     <span className="font-mono opacity-60">{t('scheduled.cronParens', { cron: task.schedule })}</span>
                   )}
-                  {/* 任务级模型（未指定 = 跟随会话） */}
-                  {task.model?.model && (
-                    <span className="ml-2">{t('scheduled.modelTag', { model: task.model.model })}</span>
-                  )}
                   {task.last_run_at && <span className="ml-2">{t('scheduled.lastRun', { time: new Date(task.last_run_at).toLocaleString('zh-CN') })}</span>}
+                </div>
+                {/* 任务级模型：已建任务也能改（此前只有新建表单能选，改一次得删了重建）
+                    选中即保存，下一轮执行按新模型跑 */}
+                <div className="text-xs text-text2 mt-1.5 flex items-center gap-1.5">
+                  <span className="shrink-0">{t('scheduled.modelLabel')}</span>
+                  <select
+                    aria-label={t('scheduled.modelLabel')}
+                    title={t('scheduled.modelHint')}
+                    value={task?.model?.providerId && task?.model?.model ? `${task.model.providerId}::${task.model.model}` : ''}
+                    onChange={(e) => changeTaskModel(task, e.target.value)}
+                    className="min-w-0 max-w-[260px] h-6 bg-input border border-border rounded-md px-1 text-xs outline-none focus:border-accent">
+                    <option value="">{t('scheduled.modelFollowShort')}</option>
+                    {modelOptions.map((o) => <option key={o.value} value={o.value}>{o.short}</option>)}
+                    {/* provider 已被删/改名时，任务里的快照不在选项里：补一条占位，否则 select 会显示成第一项（撒谎） */}
+                    {!!task?.model?.model && !modelOptions.some((o) => o.value === `${task.model.providerId}::${task.model.model}`) && (
+                      <option value={`${task.model.providerId}::${task.model.model}`}>{task.model.model}</option>
+                    )}
+                  </select>
                 </div>
                 {/* 结果只渲染一处：刚跑完用 runResult（带成功/失败配色），否则回落到 last_result。
                     此前两个条件独立成立，同一次运行的结果会在卡片里叠成两个框（用户实测）。 */}

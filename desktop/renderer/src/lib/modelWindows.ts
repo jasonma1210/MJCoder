@@ -106,7 +106,7 @@ export function normalizeModelId(modelId?: string | number | null): string {
 export interface ResolvedWindow {
   window: number;
   confirmed: boolean;
-  source: 'table' | 'default' | 'ollama-probe';
+  source: 'table' | 'family' | 'default' | 'ollama-probe';
 }
 
 /** 解析上下文窗口（三态返回，供 P1-12 的「未确认」警示使用） */
@@ -133,7 +133,10 @@ export function resolveWindow(opts: {
     for (const fam of MODEL_FAMILIES) {
       if (fam.kind !== kind) continue;
       if (fam.prefixes.some((p) => id.startsWith(p))) {
-        return { window: fam.window, confirmed: true, source: 'table' };
+        // 与 main/modelWindows.js 逐字对齐（parity 测试逐项比对）：同族规则只是**推断**，
+        // 会把没见过的版本号一起吞进来（deepseek-v4-* 实际 ≥512k，被族规则压成 128k）。
+        // 故标 family + confirmed:false，让 UI 显示成估算值并引导用户声明真实窗口。
+        return { window: fam.window, confirmed: false, source: 'family' };
       }
     }
   }
