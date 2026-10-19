@@ -40,7 +40,7 @@ import('../agent-core/index.js').then((m) => {
     assert.deepStrictEqual(item.properties.status.enum, ['pending', 'in_progress', 'completed']);
   });
 
-  check('工具总数随能力演进：16 → 21 → 26 → 32 → 39 → 40 → 41 → 46（期 3 原生工具）', () => {
+  check('工具总数随能力演进：16 → 21 → 26 → 32 → 39 → 40 → 41 → 46 → 47 → 51（G-doc）', () => {
     // 16 原有 + web_search/web_fetch/todo_write + git_add/git_branch = 21
     // + pr_list/pr_view/pr_diff/pr_review/pr_comment = 26（PR 审查闭环）
     // + browser_navigate/click/fill/select/screenshot/extract = 32（T4-1 Browser Use）
@@ -48,7 +48,9 @@ import('../agent-core/index.js').then((m) => {
     // + code_exec = 40（T4-7 Code Mode）
     // + scheduled_create = 41（2026-10-17：模型此前零定时任务入口，只能让用户手动建）
     // + clipboard/notify/http_request/sqlite/sandbox_code_run = 46（期 3：原生内置工具）
-    assert.strictEqual(BASE_TOOLS.length, 46, `实际 ${BASE_TOOLS.length} 个工具`);
+    // + deep_research = 47（G-deep-research：原生深度研究流水线，引擎内建）
+    // + doc_create/xlsx_create/pptx_create/pdf_generate = 51（G-doc：文档生成原生工具）
+    assert.strictEqual(BASE_TOOLS.length, 51, `实际 ${BASE_TOOLS.length} 个工具`);
   });
 
   // ── P1-5：BASE_TOOLS 与 handler 映射 / 审批分级不得断链 ──
@@ -65,8 +67,8 @@ import('../agent-core/index.js').then((m) => {
 
   check('P1-5 每个需主进程的工具都有 handler 映射（防有实现无入口）', () => {
     // 引擎内置工具（不依赖主进程 handler）：todo_write 是纯状态工具；
-    // spawn_subagent 由引擎内部递归 runAgent 实现，同样不需要 handler。
-    const ENGINE_BUILTIN = new Set(['todo_write', 'spawn_subagent']);
+    // spawn_subagent 由引擎内部递归 runAgent 实现；deep_research 由引擎编排内部子调用（web/fetch/write）。
+    const ENGINE_BUILTIN = new Set(['todo_write', 'spawn_subagent', 'deep_research']);
     for (const t of BASE_TOOLS) {
       const n = t.function.name;
       if (ENGINE_BUILTIN.has(n)) continue;

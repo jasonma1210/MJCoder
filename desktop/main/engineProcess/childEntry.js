@@ -3,7 +3,7 @@
 // agent-core 是 ESM，经动态 import 加载（Node 12+ CJS→ESM 互操作，真机 fork 子进程已验证路径）。
 //
 // 依赖方向反转（本里程碑核心）：
-//   工具实现（chat/shell/审批/MCP 等 26 通道）全部留在主进程——模型凭证、审批卡、窗口推送不出主进程；
+//   工具实现（chat/shell/审批/MCP 等 50 通道，见 registry.js 的 TOOL_CHANNELS）全部留在主进程——模型凭证、审批卡、窗口推送不出主进程；
 //   子进程只跑引擎循环，toolHandlers 是本文件生成的 RPC 代理，调用即 {t:'toolReq'} 回主进程执行。
 //   取证依据：agent-core resolveChannel 返回 (args) => toolHandlers[name](args)，丢弃第二参 ctx，
 //   signal 由主进程 handler 闭包各自供给——因此 RPC 边界只需序列化 args 一个参数。

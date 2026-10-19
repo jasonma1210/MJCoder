@@ -80,6 +80,19 @@ function getUserApprovalNotice() {
 }
 
 /**
+ * G-CUA：用户是否主动开启「界面自动化（Computer Use）」（正交布尔，缺省 **false**）。
+ *
+ * 为什么 opt-in：computer_use 会真实操作用户桌面上的原生应用（点击/输入/按键），
+ * 属最高危能力——默认必须关闭，只有用户在设置里显式打开后模型才看得到该工具
+ * （引擎侧 `computerUseEnabled` 未置位则 computer_use 不进 tools 数组，V02 守卫兜底）。
+ * 只认严格布尔 true，与 approval_notice 同款口径（拒绝类型漂移放大成权限问题）。
+ */
+function getComputerUseEnabled() {
+  const v = readPersisted();
+  return v && v.computer_use_enabled === true;
+}
+
+/**
  * 取「请求档 与 用户设置档」中更严者。无人值守路径的入参钳制统一走这里，
  * 避免各处再各自实现一遍顺序表（approvalPolicy.js 是唯一事实源）。
  * @param {string|undefined} requested 调用方/模型传入的档位（可能被注入成更松的档）
@@ -97,6 +110,8 @@ module.exports = {
   getUserSandboxPolicy,
   // P2-7：执行后告知（正交布尔偏好）
   getUserApprovalNotice,
+  // G-CUA：界面自动化 opt-in（缺省 false）
+  getComputerUseEnabled,
   clampWithSettings,
   DEFAULT_APPROVAL,
   DEFAULT_SANDBOX,

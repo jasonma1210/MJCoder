@@ -80,5 +80,14 @@
   "sqlite": "SQLite database",
   "sandboxCodeRun": "Sandbox execution",
   "codeEmpty": "(empty code)",
-  "codeImage": "Generated image"
+  "codeImage": "Generated image",
+  "deepResearch": "Deep research",
+  "docCreate": "Generate Word document",
+  "xlsxCreate": "Generate Excel sheet",
+  "pptxCreate": "Generate PPT deck",
+  "pdfGenerate": "Generate PDF document",
+  "computerUse": "Computer Use (UI automation)",
+  "researchEvidence": "{n} evidence items",
+  "researchDeepRead": "{n} sources read in depth",
+  "researchFailures": "{n} subquestions failed to search"
 }

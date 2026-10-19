@@ -76,6 +76,16 @@ const REVERSIBILITY = {
   sqlite: { reversible: false, note: '数据库改动已落盘；DROP/DELETE 类语句直接销毁内容，本机无历史可回退' },
   notify: { reversible: true, note: '仅弹出本地系统通知，无持久副作用' },
   sandbox_code_run: { reversible: true, note: '沙盒内纯计算（默认无文件/无网络），无外部副作用' },
+  // G-doc：文档生成写的是**本机文件** → 可补偿（可重新生成 / 删除）。
+  // 与 write_file 同纪律：若目标文件已存在，原内容会被新文档替换，note 里如实说明。
+  doc_create: { reversible: true, note: '文档已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
+  xlsx_create: { reversible: true, note: '表格已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
+  pptx_create: { reversible: true, note: '演示文稿已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
+  pdf_generate: { reversible: true, note: 'PDF 已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
+  // G-CUA：模型发起的桌面自动化顶层调用——会真实操作用户桌面上的原生应用，
+  // 一次 computer_use 内部可执行多步点击/输入（可能已触发支付/删除/发送），
+  // 本机无法回滚 → 不可补偿（与 cua_action 同纪律）。
+  computer_use: { reversible: false, note: '桌面自动化直接操作用户真实应用，可能已产生支付/删除/发送等不可回滚的副作用' },
 };
 
 /**
@@ -185,7 +195,12 @@ function notifyExecuted({
 // 这两类决策对它们无效（实现侧不调用 applyApprovalDecision），给了就是产品对用户撒谎。
 //   · unconfined_exec：非沙箱执行是单次逃生口，不可沉淀为长期规则；
 //   · scheduled_create：创建定时任务 = 持久化 + 未来无人值守执行，一次点击不该授权任意多次。
-const NON_REMEMBERABLE = new Set(['unconfined_exec', 'scheduled_create']);
+//   · G-CUA computer_use：桌面自动化的顶层调用（授权模型操作真实应用界面）——
+//     一次点击授权的是「一整段 GUI 操作」，且其内部逐次动作另有独立确认，不可沉淀为长期规则；
+//   · G-CUA cua_action：逐次界面动作——CUA 的敏感动作设计上恒逐次确认（决策不落规则库），
+//     若 UI 仍给「本会话/始终允许」按钮，用户点了却对后续动作无效 → 即为产品撒谎，
+//     故与顶层调用一并标记为不可记忆（ApprovalCard 只显示「允许一次 / 拒绝」）。
+const NON_REMEMBERABLE = new Set(['unconfined_exec', 'scheduled_create', 'computer_use', 'cua_action']);
 const isRememberable = (tool) => !NON_REMEMBERABLE.has(tool);
 
 // 工具 → 默认分级
@@ -238,6 +253,15 @@ const TOOL_LEVEL = {
   // 整个设计目的就是把「安全地跑一段代码」与 code_exec（全能力、L3）区分开。
   // 若与 code_exec 同为 L3，这层区分在审批语义上会被抹平（auto-safe/无人值守下两者都会弹卡）。
   sandbox_code_run: 'L2',
+  // G-doc：文档生成四工具产出的是**本机文件**，分级对齐「文件写类」→ L2
+  // （auto-safe 档下自动放行，on-request/always 逐次确认；写路径白名单外的目标另由
+  //  main/docTools.js 的写闸强制弹一次且不落地规则，与本表的分级正交）。
+  doc_create: 'L2', xlsx_create: 'L2', pptx_create: 'L2', pdf_generate: 'L2',
+  // G-CUA：模型侧桌面自动化顶层调用（computer_use）——启动一整段 GUI 任务、可执行任意多步
+  // 点击/输入/按键（含支付/删除/发送类真实副作用），判 L1：任何审批档都逐次弹卡。
+  // 与 unconfined_exec 同纪律：L1 硬地板不可经规则豁免，且（见 NON_REMEMBERABLE）不落规则库；
+  // 其内部的逐次动作另由 cua_action 的 L1/L2 分级独立把关。
+  computer_use: 'L1',
 };
 
 // 只读工具：任何档位都不询问
@@ -371,6 +395,9 @@ function approvalTarget(tool, args = {}) {
   // P1-2：CUA 界面动作——规则粒度为动作上下文（CUA 决策本就不落规则库，此处仅为
   // needsApproval 的豁免检查提供一致的目标形态）
   if (tool === 'cua_action') return [args.text, args.key, args.label, args.target].filter(Boolean).join(' ').slice(0, 200);
+  // G-CUA：顶层桌面自动化调用——规则粒度=目标应用 + 目标描述（本工具 L1 不可豁免，
+  // 此处仅为 needsApproval 的豁免检查提供一致的目标形态，与 cua_action 同款纪律）。
+  if (tool === 'computer_use') return `${String(args.app_name || args.appName || '')} ${String(args.objective || '')}`.trim().slice(0, 200);
   if (tool.startsWith('mcp__')) return tool;
   // 2026-10-17：破坏性 git 操作按「受影响文件列表」做规则粒度——
   // 用户对 a.js 允许「本会话同类」后，b.js 仍会再问一次（不做全工具一次放行）。
@@ -400,6 +427,21 @@ function browserSensitive(text) {
   return BROWSER_SENSITIVE_RE.test(String(text || ''))
     ? '\n\n⚠ 该操作可能触发支付/登录/发送类真实副作用，请确认页面与目标元素无误后再批准。'
     : '';
+}
+
+// G-doc：文档生成审批卡的内容概览——取前若干块的文本，让用户在点批准前看到「这份文件大概是什么」，
+// 而不是只给一个路径（只给路径时用户无法判断内容是否是自己要的，只能盲批）。
+function docPreview(blocks, max = 6) {
+  const out = [];
+  for (const b of Array.isArray(blocks) ? blocks : []) {
+    if (!b || typeof b !== 'object') continue;
+    const items = Array.isArray(b.items) ? b.items.map((x) => String(x)).join(' / ') : '';
+    const heads = Array.isArray(b.headers) ? b.headers.map((x) => String(x)).join(' | ') : '';
+    const t = String(b.text || '').trim() || items || heads;
+    if (t) out.push(`· [${String(b.type || 'paragraph')}] ${t.slice(0, 80)}`);
+    if (out.length >= max) break;
+  }
+  return out.length ? `${out.join('\n')}\n` : '';
 }
 
 // 审批摘要（供弹窗展示）
@@ -572,6 +614,35 @@ function approvalSummary(tool, args = {}) {
           + '需要文件/网络/持久状态时请改用 code_exec（会另行走逐次确认）。',
       };
     }
+    // ── G-doc：文档生成审批卡（写明输出路径 + 内容体量概览，避免用户盲批）──
+    case 'doc_create':
+      return {
+        level: 'L2', title: '生成 Word 文档',
+        detail: `输出：${String(args.path || '')}\n标题：${String(args.title || '（无）')}\n`
+          + `内容块：${Array.isArray(args.blocks) ? args.blocks.length : 0} 个\n\n${docPreview(args.blocks)}`,
+      };
+    case 'xlsx_create':
+      return {
+        level: 'L2', title: '生成 Excel 表格',
+        detail: `输出：${String(args.path || '')}\n工作表：${Array.isArray(args.sheets) ? args.sheets.length : 0} 个\n\n`
+          + (Array.isArray(args.sheets) ? args.sheets.slice(0, 6).map((s, i) => {
+            const heads = Array.isArray(s?.header) ? s.header.map((h) => String(h)).join(' | ') : '';
+            return `· [${String(s?.name || `Sheet${i + 1}`)}] 表头：${heads.slice(0, 80) || '（无）'} / ${Array.isArray(s?.rows) ? s.rows.length : 0} 行`;
+          }).join('\n') : ''),
+      };
+    case 'pptx_create':
+      return {
+        level: 'L2', title: '生成 PPT 演示文稿',
+        detail: `输出：${String(args.path || '')}\n主标题：${String(args.title || '（无）')}\n`
+          + `内容页：${Array.isArray(args.slides) ? args.slides.length : 0} 页\n\n`
+          + (Array.isArray(args.slides) ? args.slides.slice(0, 6).map((s) => `· ${String(s?.title || '（无标题）').slice(0, 60)}`).join('\n') : ''),
+      };
+    case 'pdf_generate':
+      return {
+        level: 'L2', title: '生成 PDF 文档',
+        detail: `输出：${String(args.path || '')}\n纸张：${String(args.pageSize || 'A4')}${args.landscape ? '（横向）' : ''}\n`
+          + `HTML 正文：${String(args.html || '').length} 字符（用应用自带 Chromium 排版渲染）`,
+      };
     // ── V03：受限沙箱不可用时的单次非沙箱执行审批卡 ──
     case 'unconfined_exec':
       return {
@@ -581,6 +652,24 @@ function approvalSummary(tool, args = {}) {
           + '\n\n⚠ 当前环境无法提供 OS 级沙箱隔离。批准后该命令将以应用完整权限直接执行（无文件/网络边界）。'
           + '本批准仅对这一次命令有效，不会沉淀为「始终允许」规则。',
       };
+    // ── G-CUA：模型侧桌面自动化顶层调用审批卡（computer_use）──
+    // 与 cua_action 同结构；文案必须讲清「这是真实操作你的桌面应用」，否则用户会当成只读预览。
+    case 'computer_use': {
+      const app = String(args.app_name || args.appName || '').slice(0, 120);
+      const allowed = Array.isArray(args.allowed_apps) && args.allowed_apps.length
+        ? args.allowed_apps.map((x) => String(x)).join(' / ').slice(0, 200)
+        : app;
+      const maxSteps = Math.min(15, Math.max(1, Number(args.max_steps) || 15));
+      return {
+        level: 'L1',
+        title: '启动界面自动化（Computer Use）',
+        detail: `目标应用：${app || '(未指定)'}\n操作目标：${String(args.objective || '').slice(0, 300)}\n`
+          + `可操作应用：${allowed || '(默认仅目标应用)'}\n最大步数：${maxSteps}\n\n`
+          + '⚠ 模型将通过辅助功能树真实操作你的桌面应用：点击按钮、输入文本、按键、滚动，'
+          + '可能触发支付/删除/发送等无法回滚的真实副作用。'
+          + '批准仅对本次调用有效（不落「始终允许」规则）；其中的敏感动作仍会逐步再次征求确认。',
+      };
+    }
     // ── P1-2：CUA 界面动作审批卡（与 computerUse 的 cuApprovalSummary 同结构；
     // CUA 当前走自有确认通道，此分支供统一通道接线后直接复用）──
     case 'cua_action': {

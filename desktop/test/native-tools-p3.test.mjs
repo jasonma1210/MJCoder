@@ -31,7 +31,7 @@ function check(name, ok, detail = '') {
   const byName = Object.fromEntries(BASE_TOOLS.map((t) => [t.function.name, t.function]));
   const missing = NATIVE.filter((n) => !byName[n]);
   check('BASE_TOOLS 含 5 个原生工具', missing.length === 0, missing.length ? `缺=${missing}` : '');
-  check('BASE_TOOLS.length === 46（期 3 新增 5 个）', BASE_TOOLS.length === 46, `got=${BASE_TOOLS.length}`);
+  check('BASE_TOOLS.length === 51（期 3 新增 5 个 + G-deep-research 1 个 + G-doc 4 个）', BASE_TOOLS.length === 51, `got=${BASE_TOOLS.length}`);
   check('clipboard schema required=[action]、action 枚举 read/write',
     JSON.stringify(byName.clipboard?.parameters?.required) === '["action"]'
     && JSON.stringify(byName.clipboard?.parameters?.properties?.action?.enum) === '["read","write"]');
@@ -49,7 +49,9 @@ function check(name, ok, detail = '') {
     && /http_request:\s*'httpRequest'/.test(src) && /sqlite:\s*'sqlite'/.test(src)
     && /sandbox_code_run:\s*'sandboxCodeRun'/.test(src));
   check('APPROVAL_TOOLS 纳入 5 工具（透传 approvalMode/conversationId 进主进程审批闸）',
-    /'clipboard', 'notify', 'http_request', 'sqlite', 'sandbox_code_run'\]\)/.test(src));
+    // 断言「集合内含这 5 个名字」而不是匹配整行字面量——新增工具时整行会换行重排，
+    // 字面量断言会假失败（G-doc 加入时就撞上过），按名字逐个断言更稳。
+    NATIVE.every((n) => new RegExp(`'${n}'`).test(src)));
   check('TOOL_TIMEOUT_OVERRIDES 含 http_request=45000 / sandbox_code_run=90000',
     /http_request:\s*45000/.test(src) && /sandbox_code_run:\s*90000/.test(src));
 }

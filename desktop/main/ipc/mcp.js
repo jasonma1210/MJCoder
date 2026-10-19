@@ -317,7 +317,9 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
 async function reconnectSaved(name, { reason = 'manual' } = {}) {
   // 幂等：已连接就直接回当前状态，避免重复 spawn 出第二个子进程
   const existing = mcp.getMcpServer(name);
-  if (existing) return { ok: true, toolCount: (existing.tools || []).length, already: true };
+  // v1（意图动态加载）：已连接时也回带 tools——agentRunner 的意图预热需要工具清单来构造
+  // mcp__* function 定义；只回 toolCount 会让上位把「已连接」误判成「无工具可用」。
+  if (existing) return { ok: true, toolCount: (existing.tools || []).length, tools: existing.tools || [], already: true };
   const saved = loadMcpConfig().find((s) => s && s.name === name);
   if (!saved) {
     // fail-closed：没有保存过的配置就如实报错，不要拿空 command 去 spawn
@@ -675,4 +677,11 @@ function initMcpIpc(d) {
   register();
 }
 
-module.exports = { initMcpIpc, connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, getGovernance, mcpServers };
+// v1（2026-10-19）：意图驱动的 MCP 动态加载需要三个只读/连接入口 ——
+//   reconnectSaved：按名连接用户已保存的连接器（agentRunner 预热用，与手动/自动重连同源）；
+//   loadMcpConfig：读已保存连接器清单（不含 env 的下发由 mcp:getConfig 负责，此处给主进程内部用）；
+//   getToolCache.getManifest：读某连接器的缓存工具清单（用户自定义命名时按工具签名匹配的关键输入）。
+module.exports = {
+  initMcpIpc, connectMcpServer, callMcpTool, killAllMcpServers, reconnectMcpServers, getGovernance, mcpServers,
+  reconnectSaved, loadMcpConfig, getToolCache,
+};

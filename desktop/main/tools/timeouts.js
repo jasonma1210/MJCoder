@@ -39,6 +39,14 @@ const GIT_IMPL_TIMEOUT_MS = 30000;
 /** git 轻量只读（8s）：status / rev-parse 这类本地瞬时命令 */
 const GIT_QUICK_TIMEOUT_MS = 8000;
 
+// ── G-doc 文档生成（实现侧 / 看门狗成对）──
+// 四个文档工具里 PDF 最慢（Chromium 渲染 + 落临时文件），doc/xlsx/pptx 通常秒级。
+// 实现侧按最慢者取 45s，看门狗给 60s（满足「实现侧 < 看门狗」，且上层能拿到真实原因）。
+/** 文档生成实现侧（45s）：main/docTools.js 的 PDF 渲染超时 */
+const DOC_GEN_IMPL_TIMEOUT_MS = 45000;
+/** 文档生成引擎看门狗（60s）：严格大于实现侧，留 15s 余量给「实现层报错 + 结果回收」 */
+const DOC_GEN_WATCHDOG_TIMEOUT_MS = 60000;
+
 // ── 编排（orchestrator）两级墙钟（P3 收口）──
 // 此前两个 30min 分居 dag.js:50 与 invoke.js:8，互不知情：
 //   · TASK_*   = 「一个子任务最多跑多久」（dag 解析时钳制）
@@ -61,6 +69,8 @@ module.exports = {
   FIND_IMPL_TIMEOUT_MS,
   GIT_IMPL_TIMEOUT_MS,
   GIT_QUICK_TIMEOUT_MS,
+  DOC_GEN_IMPL_TIMEOUT_MS,
+  DOC_GEN_WATCHDOG_TIMEOUT_MS,
   ORCHESTRATE_TASK_MIN_MS,
   ORCHESTRATE_TASK_DEFAULT_MS,
   ORCHESTRATE_TASK_MAX_MS,

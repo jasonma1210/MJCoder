@@ -4,7 +4,7 @@
 // 说明：测试宿主是纯 Node（无 utilityProcess），经 initEngineHost({spawnChild}) 注入 fork——
 // transport.js 的双形态适配让同一 childEntry 在两种宿主下协议语义一致，这正是被测点。
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fork } from 'node:child_process';
@@ -161,10 +161,25 @@ await check('多会话并行：两个引擎子进程互不干扰', async () => {
 });
 
 // ── 6. registry 与 childEntry/host 协议一致性 + 主进程接线静态断言 ──
-await check('协议登记表完整（26 工具通道 / onSuspend 请求-响应）', () => {
-  assert.equal(registry.TOOL_CHANNELS.length, 26);
+await check('协议登记表完整（51 工具通道 / onSuspend 请求-响应）', () => {
+  assert.equal(registry.TOOL_CHANNELS.length, 51);
   assert.ok(registry.TOOL_CHANNELS.includes('chat') && registry.TOOL_CHANNELS.includes('shell'));
   assert.deepEqual(registry.REQUEST_CBS, ['onSuspend']);
+});
+
+// 回归闸（G-doc 真机根因）：TOOL_CHANNEL 必须覆盖 agent-core 的 TOOL_HANDLER_NAMES 全部通道名——
+// 子进程 toolHandlers 仅由本名单构建，漏名即 resolveChannel 返回 null →「未知工具」。
+// 用「从 SSOT 反推」而非硬编码清单：以后新增任何模型工具，漏登记会被此闸当场拦下。
+// 例外：todoWrite 由引擎显式 case 内置处理（纯状态），不经 RPC，故不在名单内。
+await check('TOOL_CHANNELS 覆盖 TOOL_HANDLER_NAMES 全部通道（防漏登记）', async () => {
+  const core = await import(pathToFileURL(path.join(DESKTOP, 'agent-core', 'index.js')).href);
+  const expected = Object.values(core.TOOL_HANDLER_NAMES).filter((n) => n !== 'todoWrite');
+  const missing = expected.filter((n) => !registry.TOOL_CHANNELS.includes(n));
+  assert.deepEqual(missing, [], `TOOL_CHANNELS 漏登记通道：${missing.join(', ')}`);
+  // G-doc 四工具必须在列（本轮用户真机报「未知工具: pdf_generate / pptx_create」的直接根因）
+  for (const n of ['docCreate', 'xlsxCreate', 'pptxCreate', 'pdfGenerate']) {
+    assert.ok(registry.TOOL_CHANNELS.includes(n), `TOOL_CHANNELS 缺 ${n}`);
+  }
 });
 
 await check('主进程接线：main.js 注入 engineHost / agentRunner 双路径与 engineExited 断点', () => {

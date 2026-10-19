@@ -17,6 +17,9 @@ const bigPayload = require('./bigPayload');
 const verifyRun = require('./verifyRun');
 // P1-1：V 层触发策略（纯函数）——决定「这一轮值不值得多花一次 L3 模型调用」
 const verifyPolicy = require('./verifyPolicy');
+// v1（2026-10-19）：意图驱动的 MCP 动态加载（原生优先）——离线规则词典判定本轮诉求能力，
+// 仅对「原生未覆盖」的能力按需连接用户已保存的连接器，把其工具并入本轮 mcpTools。
+const intentMcp = require('./intentMcpPrewarm');
 
 // T0-2：IPC 边界契约（单一事实来源 shared-ipc/contract.mjs）。
 // Electron 主进程是 CJS 且 Node 20 无法同步 require ESM，沿用 loadAgentCore 的动态 import 模式：
@@ -44,6 +47,8 @@ let lastBudgetState = null;
 // 导致用户选「全部询问」时子任务仍自动放行（产品对用户设置撒谎）。
 // 现抽到 approvalPolicy.js 作为唯一事实源，本文件与 workerPool.js 共用，杜绝再次分叉。
 const { stricterApproval, stricterSandbox } = require('./approvalPolicy');
+// G-CUA：无人值守/交互路径的「界面自动化 opt-in」来源——与审批档/沙箱同源（用户设置）。
+const approvalSettings = require('./approvalSettings');
 
 // 用户最近一次选择的审批档。Worker 子任务经 deps.getApprovalMode() 读它来继承用户设置。
 // 不做持久化：这是「本会话的当前选择」，重启后回到默认档是正确行为。
@@ -74,6 +79,79 @@ function lastUserText(messages) {
 // runId -> { controller, sender }
 const runs = new Map();
 let runSeq = 0;
+
+// v1（2026-10-19）：意图驱动 MCP 预热的单服务连接上限。用户诉求通常在句首/键位附近，
+// 这里取本轮**最后一条 user 消息**前 2000 字符做离线判定（比记忆摘要的 300 字符宽，足以覆盖格式词）。
+const INTENT_TEXT_LIMIT = 2000;
+// 单个连接器的连接等待上限（冷启动要拉包/起进程，但绝不能让本轮启动被 MCP 拖住）。
+const PREWARM_CONNECT_TIMEOUT_MS = 6000;
+
+function latestUserText(messages, limit = INTENT_TEXT_LIMIT) {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m && m.role === 'user') {
+      const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+      return c.replace(/\s+/g, ' ').trim().slice(0, limit);
+    }
+  }
+  return '';
+}
+
+/** 带超时的 promise 包装：到点即回落（底层连接继续在后台收敛，后续调用仍可经 connect-on-demand 命中）。 */
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: `意图预热连接超时（${ms}ms）` }), ms)),
+  ]);
+}
+
+// v1：意图驱动的 MCP 动态加载（原生优先）。返回「本轮需要额外并入 mcpTools 的工具定义」。
+// 设计要点：
+//   · 原生优先——意图命中的能力若已被原生工具覆盖，直接跳过 MCP（同 run 两种实现永不同框，防冲突）；
+//   · 只连用户**已保存**的连接器（本模块不新建任何 MCP 服务）；已在本轮 mcpTools 中的服务不重复连；
+//   · fail-open——任一连接失败/超时都只告警，绝不影响本轮运行（工具缺失可经 connect-on-demand 后续补上）；
+//   · 有界并发 + 单服务超时，保证本轮启动不被 MCP 冷启动拖住。
+async function intentPrewarmToolDefs(payload) {
+  const md = deps && deps.mcpDynamic;
+  if (!md || typeof md.reconnectSaved !== 'function' || typeof md.loadConfig !== 'function') return [];
+  const text = latestUserText(payload && payload.messages);
+  if (!text) return [];
+  const savedConfigs = md.loadConfig() || [];
+  if (!savedConfigs.length) return [];
+  const manifests = {};
+  for (const cfg of savedConfigs) {
+    const name = cfg && cfg.name;
+    if (!name || typeof md.getManifest !== 'function') continue;
+    const mf = md.getManifest(name);
+    if (mf && Array.isArray(mf.tools)) manifests[name] = mf.tools;
+  }
+  const plan = intentMcp.planPrewarm(text, savedConfigs, manifests);
+  if (!plan.servers.length) return [];
+  // 已在本轮 mcpTools 中的服务（渲染层已重建）无需重复连接——只补「有意图但未连接」的落差。
+  const already = new Set((payload.mcpTools || [])
+    .map((t) => String((t && t.function && t.function.name) || '').split('__')[1])
+    .filter(Boolean));
+  const targets = plan.servers.filter((n) => !already.has(n));
+  if (!targets.length) return [];
+  const results = await Promise.all(targets.map((name) => withTimeout(
+    Promise.resolve(md.reconnectSaved(name)).catch((e) => ({ ok: false, error: e && e.message ? e.message : String(e) })),
+    PREWARM_CONNECT_TIMEOUT_MS,
+  )));
+  const defs = [];
+  targets.forEach((name, i) => {
+    const r = results[i];
+    if (r && r.ok && Array.isArray(r.tools) && r.tools.length) {
+      defs.push(...intentMcp.toToolDefs(name, r.tools));
+    } else {
+      console.warn(`[agentRun] 意图预热 MCP 连接失败（fail-open，本轮继续） ${name}: ${(r && r.error) || 'unknown'}`);
+    }
+  });
+  if (defs.length) {
+    console.log(`[agentRun] 意图驱动 MCP 预热：capabilities=[${plan.capabilities.join(',')}] 已连接=[${targets.join(',')}] 工具数=${defs.length}`);
+  }
+  return defs;
+}
 
 function makeEmitter(sender, runId) {
   return (type, data) => {
@@ -222,12 +300,17 @@ function startAgentRun(payload, sender) {
     };
     // P0-1 收纳判据：本轮是否真有工具执行（纯闲聊不写记忆）。onToolCall 逐条累加。
     let toolCallCount = 0;
+    // v1（2026-10-19）：意图驱动的 MCP 动态加载——在组装 engineParams **之前**、有界等待完成。
+    // 位置有意选在此处：此处已能拿到本轮会话文本（payload.messages）与主进程 mcp 能力，
+    // 且尚未把 mcpTools 交给引擎；失败 fail-open 返回空数组，绝不阻塞本轮启动。
+    const dynamicMcpTools = await intentPrewarmToolDefs(payload);
     // T3-7：引擎可序列化参数与回调群抽为共享对象——in-process 与子进程两条路径同源，
     // 杜绝「改一处漏一处」的路径漂移（子进程路径经 RPC 传 params，回调在主进程侧执行）。
     const engineParams = {
       messages: payload.messages,
       model: payload.model,
-      mcpTools: payload.mcpTools || [],
+      // 渲染层本已重建的 mcpTools 在前，意图预热补入的在后；按 function.name 去重（base 优先）。
+      mcpTools: intentMcp.mergeToolDefs(payload.mcpTools || [], dynamicMcpTools),
       enabledSkills: payload.enabledSkills || [],
       skills: payload.skills || [],
       // P1-6 / P1-11：渲染层已下发，但此前被本白名单整体丢弃 → 主进程真机路径两项都不生效
@@ -250,6 +333,10 @@ function startAgentRun(payload, sender) {
       // 2026-10-19：任务收尾描述粒度——渲染层设置经 payload 下发，白名单必须放行，
       // 否则「单测直接调 runAgent 全绿、真机全废」（本文件历史教训，见上方注释）。
       responseStyle: payload.responseStyle || undefined,
+      // G-CUA：桌面自动化 opt-in——仅 macOS 且用户已在设置中开启「界面自动化」时，
+      // 引擎才会把 computer_use 放进 tools 数组（V02 白名单守卫兜底）。此前本白名单
+      // 会整体丢弃未登记参数 ⇒ 单测直调 runAgent 全绿、真机全废，故必须显式放行。
+      computerUseEnabled: process.platform === 'darwin' && approvalSettings.getComputerUseEnabled(),
     };
     if (payload.rolePreset) {
       engineParams.approvalMode = stricterApproval(engineParams.approvalMode, payload.rolePreset.approvalMode);
@@ -274,6 +361,8 @@ function startAgentRun(payload, sender) {
         cwd: payload.cwd,
         // R6：发起会话 id——对话内 orchestrate_task 建组时绑定会话（组按会话归属显示）
         conversationId: payload.conversationId || '',
+        // G-CUA：当前会话模型（引擎侧嵌套形）——computer_use handler 据此解析凭证调 CUA 循环
+        model: payload.model,
       });
       // P1-5：用户自定义生命周期 hooks 包在**真实 handler 之外、ALS 之内**——
       // 顺序有意如此：hook 里的 spawn/审批仍落在 runId 的取消域（abort 时一并收敛），

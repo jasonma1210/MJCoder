@@ -42,6 +42,12 @@ export function toolNameCN(name: string): string {
     clipboard: 'toolTrace.clipboard', notify: 'toolTrace.notify',
     http_request: 'toolTrace.httpRequest', sqlite: 'toolTrace.sqlite',
     sandbox_code_run: 'toolTrace.sandboxCodeRun',
+    deep_research: 'toolTrace.deepResearch',
+    // G-doc：文档生成原生工具
+    doc_create: 'toolTrace.docCreate', xlsx_create: 'toolTrace.xlsxCreate',
+    pptx_create: 'toolTrace.pptxCreate', pdf_generate: 'toolTrace.pdfGenerate',
+    // G-CUA：桌面自动化
+    computer_use: 'toolTrace.computerUse',
   };
   return map[name] ? tGlobal(map[name]) : name;
 }
@@ -237,6 +243,11 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
     case 'chrome_extract': return <PathChip text={s('selector')} />;
     // T4-7 Code Mode：摘要显示代码首行（多行代码在详情区看全文）
     case 'code_exec': return <PathChip text={s('code').split('\n')[0].slice(0, 80) || t('toolTrace.codeEmpty')} />;
+    // G-deep-research：摘要显示研究主题（子问题/证据数在详情区展开看）
+    case 'deep_research': return <span className="truncate">{s('topic')}</span>;
+    // G-doc：文档生成——摘要显示输出路径（内容体量在详情区/审批卡看）
+    case 'doc_create': case 'xlsx_create': case 'pptx_create': case 'pdf_generate':
+      return <PathChip text={s('path')} />;
     default: {
       // mcp__server__tool / 未知工具：给出首个字符串参数或参数个数
       const keys = Object.keys(a);
@@ -249,9 +260,10 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
 function toolIcon(name: string, failed: boolean) {
   const cls = failed ? 'text-danger shrink-0' : 'text-accent shrink-0';
   if (name === 'shell' || name === 'code_exec' || name === 'sandbox_code_run' || name.startsWith('mcp__')) return <IconTerminal size={13} className={cls} />;
-  if (name === 'read_file' || name === 'write_file' || name === 'list_dir' || name === 'sqlite') return <IconFile size={13} className={cls} />;
+  if (name === 'read_file' || name === 'write_file' || name === 'list_dir' || name === 'sqlite'
+    || name === 'doc_create' || name === 'xlsx_create' || name === 'pptx_create' || name === 'pdf_generate') return <IconFile size={13} className={cls} />;
   if (name === 'edit_file' || name === 'apply_patch') return <IconFileDiff size={13} className={cls} />;
-  if (name === 'grep' || name === 'glob' || name === 'web_search') return <IconSearch size={13} className={cls} />;
+  if (name === 'grep' || name === 'glob' || name === 'web_search' || name === 'deep_research') return <IconSearch size={13} className={cls} />;
   if (name === 'web_fetch' || name === 'http_request' || name.startsWith('browser_') || name.startsWith('chrome_')) return <IconGlobe size={13} className={cls} />;
   if (name.startsWith('git_')) return <IconEdit size={13} className={cls} />;
   if (name === 'spawn_subagent') return <IconBot size={13} className={cls} />;
@@ -426,6 +438,26 @@ function DetailBody({ name, a, res }: { name: string; a: Obj; res: Obj | null })
         </>
       );
     }
+    // G-deep-research：报告路径 + 证据/精读/失败计数 + 研究子问题
+    case 'deep_research': {
+      const subs = Array.isArray(res?.subquestions) ? res.subquestions : [];
+      const failures = Number(res?.search_failures) || 0;
+      return (
+        <>
+          {asStr(res?.path) && <div className="mt-1"><PathChip text={asStr(res?.path)} /></div>}
+          <div className="mt-1 text-xs text-text2">
+            {t('toolTrace.researchEvidence', { n: Number(res?.evidence_count) || 0 })}
+            {' · '}{t('toolTrace.researchDeepRead', { n: Number(res?.deep_read_count) || 0 })}
+            {failures > 0 ? ` · ${t('toolTrace.researchFailures', { n: failures })}` : ''}
+          </div>
+          {subs.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {subs.slice(0, 6).map((q, i) => <PathChip key={i} text={asStr(q)} />)}
+            </div>
+          )}
+        </>
+      );
+    }
     default: return null; // 其余工具：详情即 FullArgs + error
   }
 }
@@ -450,7 +482,8 @@ export default function ToolTrace({ name, args, result }: ToolTraceProps) {
     || ['edit_file', 'apply_patch', 'write_file', 'read_file', 'shell', 'git_status', 'git_diff', 'git_log',
       'git_add', 'git_branch', 'list_dir', 'glob', 'grep', 'web_search', 'web_fetch', 'spawn_subagent',
       'browser_navigate', 'browser_click', 'browser_fill', 'browser_select', 'browser_screenshot', 'browser_extract',
-      'chrome_navigate', 'chrome_click', 'chrome_fill', 'chrome_screenshot', 'chrome_extract', 'chrome_tabs', 'chrome_status', 'code_exec'].includes(name);
+      'chrome_navigate', 'chrome_click', 'chrome_fill', 'chrome_screenshot', 'chrome_extract', 'chrome_tabs', 'chrome_status', 'code_exec',
+      'deep_research'].includes(name);
   return (
     <div className="bg-surface border border-border rounded-lg text-xs">
       <button

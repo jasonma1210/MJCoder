@@ -1255,12 +1255,15 @@ class ComputerUseLoop {
 
   // 敏感动作逐次确认：决策不落规则库，每次都弹窗
   // summaryOverride：视觉兜底等场景传入预构建摘要（AX 侧沿用 cuApprovalSummary）
+  // G-CUA：额外把 action/node 透给审批出口——模型侧调用走**标准审批中心**时，
+  // 出口是 requestApproval(tool='cua_action', args)（需要 action/node 构造 args）；
+  // 设置页自有通道的 requestCuaApproval(summary) 忽略多余实参，行为零变化。
   async requestConfirm(action, node, overrideDetail, summaryOverride) {
     const summary = summaryOverride || cuApprovalSummary(action, node);
     if (overrideDetail) summary.detail = overrideDetail;
     let decision = 'deny';
     try {
-      decision = await this.approval.requestApproval(summary);
+      decision = await this.approval.requestApproval(summary, action, node);
     } catch (e) {
       decision = 'deny';
     }

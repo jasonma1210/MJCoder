@@ -494,6 +494,8 @@ app.on('will-quit', () => {
   try { require('./chromeRelay/server').close(); } catch (e) { console.warn('[chromeRelay] 退出清理异常:', e.message); }
   // 期 3：关闭原生工具持有的 SQLite 连接（flush 落盘）
   try { nativeTools.disposeNativeTools(); } catch (e) { console.warn('[nativeTools] 退出清理异常:', e.message); }
+  // G-doc：销毁残留的 PDF 隐藏渲染窗口（避免退出时残留无主窗口）
+  try { docTools.disposeDocTools(); } catch (e) { console.warn('[docTools] 退出清理异常:', e.message); }
 });
 // SIGTERM/SIGINT/SIGHUP 优雅退出：pkill/终端关闭/Ctrl+C 也会走 will-quit 落盘（事故教训：强杀导致任务静默中断且丢状态）
 for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
@@ -575,6 +577,17 @@ codeTools.initCodeTools({
 // 能力降级开关（文件只读/读写、沙盒网络开闭）经 getGovernance 注入（与期 2 治理偏好同源）。
 const nativeTools = require('./nativeTools');
 nativeTools.initNativeTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  getGovernance: () => mcpIpc.getGovernance(),
+  userDataDir: app.getPath('userData'),
+});
+
+// G-doc：文档生成原生工具层（doc_create / xlsx_create / pptx_create / pdf_generate）——
+// Word/Excel/PPT 用纯 JS 库本地生成，PDF 用应用自带 Chromium 排版；离线可用、输入即产出。
+// 与 nativeTools 同范式：审批闸复用 approval.js 单一事实来源，写路径策略复用 writeGuard.js。
+const docTools = require('./docTools');
+docTools.initDocTools({
   requestApproval, applyApprovalDecision,
   getAlwaysRules: () => alwaysRules, conversationRules,
   getGovernance: () => mcpIpc.getGovernance(),
@@ -970,11 +983,22 @@ agentRunner.initAgentRunner({
   l3Target: scheduledL3Target,
   // P1-5：用户自定义生命周期 hooks——交互会话的工具调用同样过 preToolUse/postToolUse
   toolHooks,
+  // v1（2026-10-19）：意图驱动的 MCP 动态加载依赖——离线意图判定后按需连接用户**已保存**的连接器
+  // 并取其工具定义（原生优先由 agentRunner 侧的 intentMcpPrewarm 纯函数决定）。
+  // 三者都取自 mcp ipc 域：凭证/落盘全程留在主进程，agentRunner 只做纯编排与工具定义合并。
+  mcpDynamic: {
+    reconnectSaved: (name) => mcpIpc.reconnectSaved(name, { reason: 'intent-prewarm' }),
+    loadConfig: () => mcpIpc.loadMcpConfig(),
+    getManifest: (name) => {
+      const m = mcpIpc.getToolCache().getManifest(name);
+      return m && Array.isArray(m.tools) ? m : null;
+    },
+  },
   // 每次运行独立工具处理器：chat 用流式实现（externalSignal=运行 controller，级联中止在途 fetch），
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
   // V01：createToolHandlers 接收本 run 的宿主治理值（agentRunner 已按角色钳制），
   // 工具处理器内一律使用宿主值，不读模型参数里的治理字段。
-  createToolHandlers: ({ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId }) => ({
+  createToolHandlers: ({ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId, model }) => ({
     ...scheduledToolHandlers(),
     // runId 作为 streamTag：Agent 运行的流式输出带标签，渲染层按活跃会话过滤（切会话/后台运行不串显）
     chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal, runId),
@@ -1032,6 +1056,20 @@ agentRunner.initAgentRunner({
     httpRequest: nativeTools.toolHttpRequest,
     sqlite: nativeTools.toolSqlite,
     sandboxCodeRun: nativeTools.toolSandboxCodeRun,
+    // G-doc：文档生成四工具（本地离线生成 docx/xlsx/pptx/pdf）。同样仅主会话注入——
+    // Worker/定时任务没有审批通道语义，写文件必须有人在场确认。
+    docCreate: docTools.toolDocCreate,
+    xlsxCreate: docTools.toolXlsxCreate,
+    pptxCreate: docTools.toolPptxCreate,
+    pdfGenerate: docTools.toolPdfGenerate,
+    // G-CUA：模型侧桌面自动化（computer_use）——把既有 CUA 循环接到模型工具面。
+    // 仅主会话注入（Worker/定时任务无审批通道语义，且模型必须在场确认）；引擎仅当
+    // 用户开启「界面自动化」且为 macOS 时才把该工具放进 tools 数组，此处是执行侧接线。
+    computerUse: (args) => toolComputerUse(args, {
+      model, signal, runId,
+      approvalMode: runApprovalMode || 'on-request',
+      conversationId: conversationId || '',
+    }),
   }),
 });
 ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRunWhenReady(payload || {}, event.sender));
@@ -1348,6 +1386,115 @@ async function cuaChat(root, apiKey, model, messages) {
   }
   const json = await res.json();
   return json.choices?.[0]?.message?.content || '';
+}
+
+// ═══════════════════════════════════════════
+//  G-CUA：模型可调用的 computer_use 工具
+//  把既有的 CUA 循环接到「模型的工具调用面」上——此前 CUA 只能由设置页的录制/回放面板触发，
+//  模型（Agent 对话）无法直接调用（差距审查：有实现、有设置页入口，缺模型可调用入口）。
+//
+//  与 cua:run 的三点关键差异：
+//   ① 本函数是**阻塞式**的（await loop.run() 后把结果回填给模型），不是 fire-and-forget；
+//   ② 顶层授权 + 逐次动作确认都走**标准审批中心**（tool:approval-request → 全局 ApprovalCard），
+//      因为模型发起的调用发生在对话里，用户在对话界面必须能看到卡片；
+//      cua:approval-request 的 UI 只在设置页录制面板里，对话中不可见 → 走自有通道会「卡死无卡」；
+//   ③ 门控：仅 macOS + 用户已在设置中开启「界面自动化」时，引擎才会把该工具放进 tools 数组
+//      （见 agent-core 的 computerUseEnabled + V02 白名单守卫）；此处再做平台/权限/凭证兜底。
+async function toolComputerUse(args = {}, ctx = {}) {
+  const objective = String(args.objective || '').trim();
+  const appName = String(args.app_name || args.appName || '').trim();
+  if (!objective || !appName) return { ok: false, error: 'objective 与 app_name 必填' };
+  if (process.platform !== 'darwin') return { ok: false, error: '界面自动化仅支持 macOS' };
+  // 同一时刻只允许一个 CUA 循环（与 cua:run / cua:replay 共用同一把锁）——模型与设置页不并发操作桌面
+  if (activeCuaLoop || activeReplayLoop) return { ok: false, error: '已有进行中的界面自动化任务，请先停止' };
+  // 顶层授权：L1 逐次确认（任何审批档都弹卡），决策不落规则库（NON_REMEMBERABLE）。
+  // 由本 handler 自行把关——引擎的 APPROVAL_TOOLS 仅注入治理字段，不代为弹卡。
+  // fail-closed：仅 'once'（允许一次）放行；'deny'/超时/其他一律视为拒绝。
+  const topDecision = await requestApproval('computer_use', {
+    objective,
+    app_name: appName,
+    max_steps: args.max_steps,
+    allowed_apps: args.allowed_apps,
+  });
+  if (topDecision !== 'once') return { ok: false, error: '用户未批准界面自动化调用（已按 fail-closed 拒绝）' };
+  // 原生执行会话（每 run 一个子进程，惰性 spawn，finally dispose）——与 cua:run 同纪律
+  const cuaSession = cuaProcess.isAvailable() ? cuaProcess.createSession() : null;
+  const cuaExec = (name, ...a) => (cuaSession ? cuaSession.call(name, ...a) : cua[name](...a));
+  const dispose = () => { try { cuaSession?.dispose(); } catch (e) { console.warn('[cua] 会话释放失败:', e.message); } };
+  if (!(await cuaExec('isAccessibilityGranted'))) {
+    dispose();
+    return { ok: false, error: 'NEED_ACCESSIBILITY: 未授予辅助功能权限，请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用' };
+  }
+  // 凭证解析：与 model:chat 同款（本地优先）。ctx.model 为引擎侧嵌套形（provider/model 分离）
+  const m = ctx.model || {};
+  const providerId = m.provider?.id;
+  const isGlobal = !!m.provider?.isGlobal;
+  const modelId = m.model?.model_id || m.model || '';
+  const secret = resolveSecret(providerId, isGlobal);
+  if (!secret || !secret.api_key) { dispose(); return { ok: false, error: 'KEY_MISSING: 模型凭证未加载，请在本机模型设置中重新填写 API Key' }; }
+  const root = (m.provider?.base_url || secret.base_url || '').replace(/\/+$/, '');
+  if (!root) { dispose(); return { ok: false, error: 'BASE_URL_MISSING: 模型服务地址为空' }; }
+  if (!modelId) { dispose(); return { ok: false, error: 'MODEL_MISSING: 当前会话未指定模型' }; }
+
+  const maxSteps = Math.min(15, Math.max(1, Number(args.max_steps) || 15));
+  const allowedApps = Array.isArray(args.allowed_apps) && args.allowed_apps.length
+    ? args.allowed_apps.map((x) => String(x))
+    : [appName];
+  const loop = new cua.ComputerUseLoop({
+    objective,
+    appName,
+    maxSteps,
+    model: modelId,
+    // 审批档入参钳制：取「本 run 档 与 用户设置档」中更严者（与本项目 no-unattended-weaker 纪律一致）
+    approvalMode: agentRunner.stricterApproval(ctx.approvalMode || 'on-request', approvalSettings.getUserApprovalMode()),
+    allowedApps,
+    toolHandlers: {
+      // chat 留主进程（凭证不出界）；原生执行面全部经子进程会话（T3-6）
+      chat: (messages) => cuaChat(root, secret.api_key, modelId, messages),
+      collectAx: (name) => cuaExec('collectAxTree', name || appName),
+      perform: (action, node) => cuaExec('performAction', action, node, { appName: appName || node?.name || '' }),
+      isLocked: () => cuaExec('isScreenLocked'),
+      captureScreen: () => cuaExec('captureScreen'), // M6 视觉兜底（AX 覆盖不足时）
+    },
+    approval: {
+      // 逐次动作确认 → **标准审批中心**（tool:approval-request → 全局 ApprovalCard 在对话中可见）。
+      // 决策不调 applyApprovalDecision ⇒ 敏感动作逐次确认、不落「始终允许」规则（与设计一致）。
+      requestApproval: (summary, action, node) => requestApproval('cua_action', {
+        action: action?.action || '',
+        text: action?.text,
+        key: action?.key,
+        label: action?.label,
+        target: node?.name || node?.value || action?.target || '',
+      }),
+      // 全部动作脱敏审计上报（审批结果随行）
+      audit: (step, actionText, result) => audit('cua', appName, `step${step}: ${actionText} -> ${result}`, result === 'denied' ? 'denied' : 'approved'),
+    },
+    hud: cua.createHudWindow(BrowserWindow),
+    onEvent: (evt) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('cua:event', evt);
+    },
+  });
+  activeCuaLoop = loop;
+  // 运行中止（用户点停止/切会话）→ 立即中断循环（与 cua:run 的 cua:stop 同源）
+  if (ctx.signal) ctx.signal.addEventListener('abort', () => loop.stop(), { once: true });
+
+  let res;
+  try {
+    res = await loop.run();
+  } catch (err) {
+    return { ok: false, error: `界面自动化执行失败：${err.message}${err.cuaDegraded ? '（能力降级）' : ''}` };
+  } finally {
+    activeCuaLoop = null;
+    cua.destroyHud();
+    dispose();
+  }
+  if (res && res.completed) {
+    return { ok: true, completed: true, steps: res.step, summary: `界面自动化已完成目标「${objective}」（应用：${appName}，共 ${res.step} 步）` };
+  }
+  if (res && res.maxStepsReached) {
+    return { ok: false, completed: false, maxStepsReached: true, error: `已达最大步数上限（${res.step} 步），目标未确认完成` };
+  }
+  return { ok: false, stopped: true, error: '界面自动化任务被用户停止/拒绝，未完成' };
 }
 
 ipcMain.handle('cua:status', async () => {

@@ -453,7 +453,7 @@ export default function SettingsModal({
             连接器/技能统一走侧栏「生态中心」（其目录 + 自定义连接器已覆盖同类需求）。 */}
 
         {/* 浏览器与链接：链接打开策略（真正生效）+ 计算机使用（CUA）能力边界 */}
-        {tab === 'browser' && <BrowserTab flags={flags} />}
+        {tab === 'browser' && <BrowserTab flags={flags} approvalSettings={approvalSettings} onApprovalSettingsChange={onApprovalSettingsChange} />}
 
         {/* Git 与 GitHub：环境只读探测 + 集成状态 + 审批边界说明 */}
         {tab === 'git' && <GitTab projectPath={projectPath} />}
@@ -468,7 +468,7 @@ export default function SettingsModal({
 
 // 浏览器与链接（真机反馈：此页此前只有导航项、点进去是空白）
 // 内容 = 「链接怎么打开」+「能不能操作界面」两件事的真实开关与能力边界
-function BrowserTab({ flags }) {
+function BrowserTab({ flags, approvalSettings, onApprovalSettingsChange }) {
   const { t } = useI18n();
   const [linkMode, setLinkMode] = useState(getLinkOpenMode);
   const [cua, setCua] = useState(null);
@@ -510,6 +510,22 @@ function BrowserTab({ flags }) {
               )}
             </div>
             {cua.message && <p className="text-text2 text-xs mt-1">{cua.message}</p>}
+            {/* G-CUA：允许 Agent（模型）在会话中调用界面自动化——opt-in，默认关闭。
+                开启后引擎才把 computer_use 放进模型的工具清单；关闭时模型完全看不到该能力。
+                与「录制/回放」面板无关：那个是设置页手动的确定性回放，本开关是模型自主调用。 */}
+            {cua.granted && cua.available !== false && (
+              <div className="flex items-start justify-between gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm">{t('settings.computerUseEnable')}</div>
+                  <p className="text-xs text-text2 mt-1 leading-relaxed">{t('settings.computerUseEnableDesc')}</p>
+                </div>
+                <Switch
+                  checked={approvalSettings?.computer_use_enabled === true}
+                  onChange={(v) => onApprovalSettingsChange?.({ ...approvalSettings, computer_use_enabled: v })}
+                  label={t('settings.computerUseEnable')}
+                />
+              </div>
+            )}
             <p className="text-text2 text-xs mt-2">
               {t('settings.computerUseNote')}
             </p>

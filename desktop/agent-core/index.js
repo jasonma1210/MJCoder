@@ -260,6 +260,27 @@ export const BASE_TOOLS = [
       limit: { type: 'number', description: '最多取多少字符（默认 15000）' },
     }, required: ['url'] },
   }},
+  // G-deep-research：原生深度研究流水线（引擎内建，对标 Codex deep-research）。
+  // 与 web_search/web_fetch 的分工：那两个是「单次检索/单次抓取」的原子工具，本工具是一次性
+  // 完成「规划子问题 → 并行检索 → 去重构证据链 → 精读关键原文 → 模型综合 → 报告落盘」的整条流水线。
+  { type: 'function', function: {
+    name: 'deep_research',
+    description: '对指定主题做一次深度研究，产出一份带真实引用来源的研究报告（写入工作区 research/ 目录）。'
+      + '当用户要求「调研 / 深度研究 / 对比分析某主题 / 出一份研究报告」时优先用它，'
+      + '而不是自己反复调 web_search 拼结论。执行流程：自动把主题拆成 3-5 个子问题 → 逐个联网检索 → '
+      + '汇总为去重编号的证据链（标注官方/媒体/社区/论文）→ 对关键来源精读原文 → 综合成结构化报告。'
+      + '返回报告文件路径、检索子问题、证据条数、精读篇数与检索失败数，以及一段执行摘要；'
+      + '拿到结果后请核对结论能否溯源到证据，并在回复中告知用户文件路径。'
+      + '注意：本工具耗时较长（含多次检索与模型调用）；若只需查一条具体事实，直接用 web_search 更快。',
+    parameters: { type: 'object', properties: {
+      topic: { type: 'string', description: '研究主题（越具体越好，可含范围/地域/时间限定或对比对象）' },
+      subquestions: {
+        type: 'array', items: { type: 'string' },
+        description: '可选：直接给定研究子问题。不传时由本工具自动规划（3-5 个互不重叠的子问题）',
+      },
+      max_sources: { type: 'number', description: '证据条目上限，默认 24，最大 24；主题很广时可调小以节省时间' },
+    }, required: ['topic'] },
+  }},
   // ── T4-1：Browser Use（Playwright 独立子进程，全部经 L3 审批闸）──
   { type: 'function', function: {
     name: 'browser_navigate',
@@ -474,6 +495,93 @@ export const BASE_TOOLS = [
       timeout: { type: 'number', description: '执行超时毫秒（默认 10000，上限 60000）' },
     }, required: ['code'] },
   }},
+  // ── G-doc（2026-10-19）：文档生成原生工具（本地离线生成 Word/Excel/PPT/PDF，默认自启）──
+  // 定位：覆盖「日报 / 周报 / 预算表 / 报表 / PPT 汇报」这类结构化交付物场景——
+  // 模型把用户输入整理成结构化内容后一步产出**真实可打开的文件**，而不是只给一段 Markdown 文本。
+  // 分级/摘要/可补偿性在 main/approval.js 单一事实来源（写文件 → L2）；写路径策略在 main/writeGuard.js。
+  { type: 'function', function: {
+    name: 'doc_create',
+    description: '生成 Word 文档（.docx，原生离线生成）。用于日报/周报/方案/需求文档/预算说明等需要交付'
+      + '.docx 文件的场景。内容用 blocks 数组表达，每个块按 type 分派：'
+      + 'heading（标题，level 1-3）、paragraph（正文段，可 bold）、bullet（无序列表）、numbered（有序列表）、'
+      + 'table（表格，给 headers + rows）、quote（引用）、code（代码块，等宽字体）、pagebreak（分页）。'
+      + '写文件会弹一次审批确认；输出路径可写相对项目目录的路径或绝对路径。',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '输出 .docx 文件路径（相对路径以项目目录为基准）' },
+      title: { type: 'string', description: '文档主标题（作为标题样式渲染在最前）' },
+      subtitle: { type: 'string', description: '副标题（可选，居中显示）' },
+      blocks: {
+        type: 'array', description: '内容块列表（按顺序渲染）',
+        items: { type: 'object', properties: {
+          type: { type: 'string', enum: ['heading', 'paragraph', 'bullet', 'numbered', 'table', 'quote', 'code', 'pagebreak'], description: '块类型' },
+          text: { type: 'string', description: 'heading/paragraph/quote/code 的文本' },
+          level: { type: 'number', description: 'heading 级别（1-3，默认 1）' },
+          bold: { type: 'boolean', description: 'paragraph 是否加粗' },
+          items: { type: 'array', description: 'bullet/numbered 的条目文本数组', items: { type: 'string' } },
+          headers: { type: 'array', description: 'table 表头单元格', items: { type: 'string' } },
+          rows: { type: 'array', description: 'table 数据行（二维数组，每行单元格数对齐表头）', items: { type: 'array', items: {} } },
+        } },
+      },
+    }, required: ['path'] },
+  }},
+  { type: 'function', function: {
+    name: 'xlsx_create',
+    description: '生成 Excel 表格（.xlsx，原生离线生成）。用于预算表、统计报表、数据清单、费用明细等场景。'
+      + 'sheets 为工作表数组，每个表可给 header（表头，自动加粗并冻结首行）、rows（二维数据数组，数字保持数值类型）、'
+      + 'widths（列宽）或 autoWidth（按内容自动估算列宽）。写文件会弹一次审批确认。',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '输出 .xlsx 文件路径（相对路径以项目目录为基准）' },
+      sheets: {
+        type: 'array', description: '工作表列表（至少一个）',
+        items: { type: 'object', properties: {
+          name: { type: 'string', description: '工作表名（默认 Sheet1/2…）' },
+          header: { type: 'array', description: '表头单元格文本（加粗 + 冻结首行）', items: { type: 'string' } },
+          rows: { type: 'array', description: '数据行（二维数组；数字保持数值类型以便公式/统计）', items: { type: 'array', items: {} } },
+          widths: { type: 'array', description: '列宽（按列顺序，单位字符数）', items: { type: 'number' } },
+          numFmt: { type: 'string', description: '数字格式（如 "#,##0.00" 或 "0.00%"，作用于该表所有数值单元格）' },
+          autoWidth: { type: 'boolean', description: '未给 widths 时是否按内容自动估算列宽（默认 true）' },
+        } },
+      },
+    }, required: ['path', 'sheets'] },
+  }},
+  { type: 'function', function: {
+    name: 'pptx_create',
+    description: '生成 PPT 演示文稿（.pptx，原生离线生成，16:9）。用于汇报、方案宣讲、项目介绍等场景。'
+      + '给 title 时自动生成一页封面；slides 为内容页数组（title 页标题、bullets 要点列表、body 正文、notes 演讲者备注）。'
+      + '写文件会弹一次审批确认。',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '输出 .pptx 文件路径（相对路径以项目目录为基准）' },
+      title: { type: 'string', description: '演示文稿主标题（会生成封面页）' },
+      subtitle: { type: 'string', description: '封面副标题' },
+      author: { type: 'string', description: '作者（写入文档属性）' },
+      slides: {
+        type: 'array', description: '内容页列表',
+        items: { type: 'object', properties: {
+          title: { type: 'string', description: '页标题' },
+          bullets: { type: 'array', description: '要点条目（自动带项目符号）', items: { type: 'string' } },
+          body: { type: 'string', description: '整段正文（与 bullets 二选一或并用）' },
+          notes: { type: 'string', description: '演讲者备注' },
+        } },
+      },
+    }, required: ['path'] },
+  }},
+  { type: 'function', function: {
+    name: 'pdf_generate',
+    description: '把 HTML 渲染成 PDF 文件（原生能力，用应用自带 Chromium 排版，完整支持 CSS 与系统中文字体）。'
+      + '用于报表、日报、账单、发票、导出为 PDF 的交付物。传 html 时给片段或整页 HTML 均可'
+      + '（片段会自动套用内置中性排版模板：表格/标题/代码有基础样式）。'
+      + '默认不执行页面内 JavaScript（allowScript=true 可开启，用于需要前端图表库的报表）。'
+      + '写文件会弹一次审批确认。',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '输出 .pdf 文件路径（相对路径以项目目录为基准）' },
+      html: { type: 'string', description: '要渲染的 HTML（片段或完整 <html> 页面）' },
+      pageSize: { type: 'string', description: '纸张尺寸（A4/A3/Letter/Legal/Tabloid，默认 A4）' },
+      landscape: { type: 'boolean', description: '是否横向（默认 false）' },
+      printBackground: { type: 'boolean', description: '是否打印背景色/背景图（默认 true）' },
+      allowScript: { type: 'boolean', description: '是否允许页面内 JavaScript（默认 false）' },
+      margins: { type: 'object', description: '页边距（英寸，形如 {top,bottom,left,right}）' },
+    }, required: ['path', 'html'] },
+  }},
 ];
 
 const SKILL_PROMPTS = {
@@ -481,15 +589,17 @@ const SKILL_PROMPTS = {
   gen_docs: `\n\n## 文档生成技能\n生成文档时：\n1. 说明功能用途\n2. 列出主要接口/函数\n3. 给出使用示例\n4. 标注参数和返回值`,
   gen_tests: `\n\n## 测试生成技能\n生成测试时：\n1. 覆盖正常路径\n2. 覆盖边界情况\n3. 覆盖错误处理\n4. 使用 arrange-act-assert 模式`,
   git_commit: `\n\n## Git 提交技能\n生成提交信息时：\n1. 使用祈使句\n2. 首行不超过 50 字\n3. 详细说明变更原因\n4. 遵循 Conventional Commits 格式`,
-  // T4-4：Deep Research 多阶段研究工作流（澄清→计划→广度→深度→调和）
-  // 基于 orchestrate_task 并行检索（子任务树 T1-3/T1-4 全程可见）+ 报告落盘进预览 tab
+  // G-deep-research：Deep Research 工作流。原实现让模型自己用 orchestrate_task 拼多阶段，
+  // 结果不可预期且容易漏掉引用编号；现改为**优先调用引擎内建的 deep_research 原生工具**——
+  // 它一次性完成「规划子问题 → 并行检索 → 去重编号证据链 → 精读关键原文 → 模型综合 → 报告落盘」，
+  // orchestrate_task 降级为「覆盖不足时的补检手段」。
   deep_research: `\n\n## 深度研究技能（Deep Research 工作流）
-用户要求「调研 / 深度研究 / 对比分析某主题」时，严格按以下五个阶段推进，每阶段用 todo_write 维护进度清单：
+用户要求「调研 / 深度研究 / 对比分析某主题」时，优先调用原生 deep_research 工具（传 topic，可选 subquestions/max_sources），它会返回报告文件路径与研究摘要。按以下五个阶段推进，每阶段用 todo_write 维护进度清单：
 1. **澄清**：复述你对课题范围、受众、验收标准的理解；关键口径缺失（如时间范围、地域、对比对象）时先向用户提问并停下等待回复，禁止带着模糊口径直接开跑。
-2. **计划**：把课题拆成 3-6 个互不依赖的检索子问题（覆盖定义/现状/数据/反方观点/趋势），用 todo_write 列出研究计划，并规划报告结构。
-3. **广度**：调用 orchestrate_task，goal 中写明每个子问题需要检索什么、返回格式（要点列表 + 每条结论附来源 URL 与来源类型：官方/媒体/社区/论文）。整组并行执行，子任务树对用户实时可见。
-4. **深度**：从广度结果中挑出 2-4 个最关键（或互相矛盾）的结论，用 web_fetch 精读原文、必要时交叉检索验证；区分事实与观点，标注数据时间有效性。
-5. **调和与产出**：合并子任务结论，冲突信息并列呈现并注明各自来源；把最终报告写入工作区 research/<课题slug>-report.md，结构为：执行摘要 → 关键发现（每条带出处）→ 数据与证据 → 分歧与不确定性 → 结论与建议 → 引用列表（编号、标题、URL、访问日期）。完成后在回复中给出文件路径与一段执行摘要，供用户在预览面板查看。
+2. **计划**：把课题拆成 3-6 个互不依赖的检索子问题（覆盖定义/现状/数据/反方观点/趋势）；已想清时把它们作为 subquestions 参数传给 deep_research 以跳过其内部自动规划，并用 todo_write 列出研究计划。
+3. **广度**：调用 deep_research 完成并行检索——它自带来源类型判定（官方/媒体/社区/论文）与去重编号，比手写多次 web_search 更可靠；若某维度证据薄弱，再用 web_search/web_fetch 补检。
+4. **深度**：从证据中挑出最关键（或互相矛盾）的结论精读原文核对；需要开放式多 Agent 探索时，才改用 orchestrate_task，goal 中写明每个子问题要检索什么、返回格式（要点列表 + 每条结论附来源 URL 与来源类型）。
+5. **调和与产出**：核对 deep_research 生成的报告（research/<课题slug>-report.md）中每条结论能否溯源到证据，冲突信息并列呈现并注明各自来源；报告结构为：执行摘要 → 关键发现（每条带出处）→ 数据与证据 → 分歧与不确定性 → 结论与建议 → 引用列表（编号、标题、URL、访问日期）。完成后在回复中给出文件路径与一段执行摘要，供用户在预览面板查看。
 纪律：每个结论必须可溯源，禁止编造引用；检索失败如实说明并降级（换关键词/换来源），不允许用先验知识冒充检索结果。`,
   // T4-5：LaTeX 编译与工具链诊断（简单项目首选 Tectonic，完整项目走系统 TeX Live；PDF 产物进预览 tab）
   latex_compile: `\n\n## LaTeX 编译技能
@@ -527,6 +637,10 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
 - 原生系统能力（本地内置，不经 MCP）：clipboard（读写系统剪贴板，写需确认）、
   notify（发桌面通知）、http_request（全方法 HTTP，GET/HEAD 只读、其余方法需确认）、
   sqlite（本地 SQLite 读写，写语句需确认）、sandbox_code_run（强沙盒纯计算，默认无文件/无网络）
+- 文档生成（本地离线，一次性产出真实文件；写文件会弹一次审批确认）：
+  doc_create（生成 Word .docx）、xlsx_create（生成 Excel .xlsx）、pptx_create（生成 PPT .pptx）、
+  pdf_generate（把 HTML 渲染成 PDF）。日报/周报/预算表/统计报表/汇报 PPT 这类「要交付一份文件」的
+  需求优先用它们产出文件（并告知用户文件路径），而不是只在回复里给 Markdown 文本
 - 启动子代理处理子任务（spawn_subagent）
 - 多 Agent 并行编排（orchestrate_task）：当用户要求多角色/多任务并行，或目标可拆为互不依赖的
   子任务时，主动调用它把目标转交编排系统并行执行；返回的聚合结果由你向用户转述，
@@ -553,6 +667,14 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
    每完成一项就更新一次状态。用户在界面上能看到这份清单，别让他对长任务全程黑箱等待
 10. 项目外知识必须联网查：遇到不熟悉的库/框架 API、陌生报错、框架最新变更等
     项目之外的知识，先 web_search / web_fetch 查证再回答，不要凭可能过时的记忆作答`;
+
+// G-CUA（2026-10-19）：桌面自动化能力说明——**仅在宿主开启（computerUseEnabled）时**并入 base。
+// 未开启时不并入：告诉模型一个「看不到也调不了」的工具只会诱导它反复尝试（白名单守卫会拒绝），
+// 既浪费轮次又让用户困惑。
+const CUA_PROMPT_SECTION = '\n\n- 桌面界面自动化（computer_use，macOS）：通过辅助功能树操作原生应用的 GUI'
+  + '（点击按钮/输入文本/按键/滚动），用于命令行与文件操作都无法完成的界面任务（例如操作某个 App 的窗口）。'
+  + '必须明确给出目标应用名；涉及支付、删除、发送、验证码等敏感操作时会强制逐次请求用户确认，被拒即停止。'
+  + '仅在用户明确要求「操作/点击某个 App 界面」时使用，不要用它替代已有的文件/命令工具';
 
 // 2026-10-19（设置 → 通用 → AI 描述粒度）：任务收尾文案的产出规范，三档。
 // 背景（用户反馈）：任务跑完后只剩「运行结束」一行，没有任何核心结论——用户不知道完成了什么、
@@ -593,6 +715,8 @@ const CWD_TOOLS = new Set([
   'orchestrate_task',
   // PR 审查闭环：gh 依赖 cwd 解析仓库归属
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment',
+  // G-doc：文档生成输出路径按「当前项目目录」解析（相对路径基准），且写路径白名单根也取该 cwd
+  'doc_create', 'xlsx_create', 'pptx_create', 'pdf_generate',
 ]);
 
 // 子代理可用工具：只读探索集（不做任何修改）
@@ -646,6 +770,25 @@ export const LOAD_SKILL_TOOL = { type: 'function', function: {
   parameters: { type: 'object', properties: {
     name: { type: 'string', description: '技能名（取自技能清单）' },
   }, required: ['name'] },
+} };
+
+// G-CUA（2026-10-19）：模型可调用的 macOS 桌面自动化入口（opt-in 强门控）。
+// 与 LOAD_SKILL_TOOL 同款**条件追加**——仅当宿主显式开启（computerUseEnabled=true）时
+// 才通告给模型；不进 BASE_TOOLS 静态清单（其条数被 test/web-todo-tools.test.js 钉死，不得新增）。
+// 默认关闭：用户未在设置里主动开启时，模型既看不到本工具，也无法谎报调用
+// （V02 运行期白名单守卫 fail-closed：不在通告集合内的调用一律拒绝，不进 handler）。
+export const COMPUTER_USE_TOOL = { type: 'function', function: {
+  name: 'computer_use',
+  description: '操作 macOS 桌面上的原生应用界面（通过辅助功能树）：点击按钮、输入文本、按键、滚动，'
+    + '用于完成无法用命令行/文件操作完成的 GUI 任务（例如操作某个 App 的界面）。'
+    + '仅 macOS 可用，且需用户在设置中主动开启「界面自动化」。必须明确给出目标应用名；'
+    + '涉及支付、删除、发送、验证码等敏感操作时，系统会强制逐次请求用户确认，被拒则立即停止。',
+  parameters: { type: 'object', properties: {
+    objective: { type: 'string', description: '要在目标应用里完成的目标（自然语言，尽量具体）' },
+    app_name: { type: 'string', description: '目标应用名称（如 "Safari"、"Finder"），界面自动化的作用对象' },
+    max_steps: { type: 'number', description: '最大动作步数（默认 15，上限 15）' },
+    allowed_apps: { type: 'array', items: { type: 'string' }, description: '允许操作的应用白名单（可选，缺省仅 app_name）' },
+  }, required: ['objective', 'app_name'] },
 } };
 
 // 从 SKILL.md 正文里取 description：优先 frontmatter 的 description，其次首个非标题正文行。
@@ -841,7 +984,11 @@ const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch
   'code_exec',
   // 期 3：原生内置工具走审批中心（分级在 approval.js：clipboard 写 L2 / http_request 非 GET L3 /
   // sqlite 写语句 L3 / sandbox_code_run L2 / notify 不进审批面），需透传 approvalMode/conversationId
-  'clipboard', 'notify', 'http_request', 'sqlite', 'sandbox_code_run']);
+  'clipboard', 'notify', 'http_request', 'sqlite', 'sandbox_code_run',
+  // G-doc：文档生成四工具（写文件 → L2），需透传 approvalMode/conversationId 进主进程审批闸
+  'doc_create', 'pptx_create', 'xlsx_create', 'pdf_generate',
+  // G-CUA：模型侧桌面自动化（L1 恒逐次确认），需透传 approvalMode/conversationId 进主进程审批中心
+  'computer_use']);
 
 // V01：宿主治理保留字段——这些字段决定审批/沙箱/执行根/会话归属，
 // 只能由宿主（runAgent 参数）注入，模型工具参数里出现即剥离（见工具执行循环）。
@@ -895,6 +1042,14 @@ const TOOL_HANDLER_NAMES = {
   http_request: 'httpRequest',
   sqlite: 'sqlite',
   sandbox_code_run: 'sandboxCodeRun',
+  // G-doc：文档生成原生工具通道
+  doc_create: 'docCreate',
+  xlsx_create: 'xlsxCreate',
+  pptx_create: 'pptxCreate',
+  pdf_generate: 'pdfGenerate',
+  // G-CUA：桌面自动化（opt-in，主进程 createToolHandlers 注入；同时须在 engineProcess/registry.js
+  // 的 TOOL_CHANNELS 登记，否则子进程路径会报「未知工具」）
+  computer_use: 'computerUse',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -1218,6 +1373,15 @@ import {
   buildLedgerEntry, MAX_LEDGER_ENTRIES, MAX_LEDGER_KEEP_HEAD,
 } from './verifier.js';
 
+// G-deep-research（2026-10-19）：原生「多轮检索 → 证据链 → 报告」流水线的纯函数层。
+// 与 verifier.js 同属「零依赖、可被渲染层打包」的确定性模块——报告装配与证据编号全在其中，
+// 引擎侧只做编排（规划/检索/精读/综合的调用编排），失败如实降级不编造。
+import {
+  slugifyTopic, parseSubquestions, parseSynthesis, buildEvidenceLedger, assembleResearchReport,
+  RESEARCH_MAX_SUBQUESTIONS, RESEARCH_MAX_EVIDENCE, RESEARCH_MAX_DEEP_READ,
+  RESEARCH_PLAN_SYSTEM, RESEARCH_SYNTHESIS_SYSTEM,
+} from './deepResearch.js';
+
 // 四类入口统一走同一处置：命中 high 规则 → 不注入（或降权标注）；未命中 → 结构性隔离后注入。
 // 结构性隔离是纵深防御：检测规则有限，标注边界可降低块内「指令」被服从的概率。
 function guardUntrusted(content, { source, label, maxChars }) {
@@ -1502,6 +1666,133 @@ export async function chatWithRetry(chatFn, params, signal, opts = {}) {
   }
 }
 
+// ── G-deep-research（2026-10-19）：引擎内建的原生深度研究流水线 ──
+// 为什么内建在引擎侧而非宿主 handler：规划与综合两步都需要**模型调用**，而模型客户端上下文
+// （provider/baseUrl/model）只在引擎里；子调用 web_search/web_fetch/write_file 又都已通过
+// RPC 通道接到宿主，因此引擎编排 + 复用既有通道即可，宿主零新增接线、零死代码。
+// 与 spawn_subagent / orchestrate_task 的区别：那条路径是开放式多 Agent 探索（结果不可预期）；
+// 本流水线是**确定性契约**——固定阶段、固定报告结构、真实引用编号，失败如实降级不编造。
+// 返回 { ok:true, path, subquestions, evidence_count, deep_read_count, search_failures, preview }；
+// 前置通道缺失 / 落盘失败返回 { ok:false, error }（绝不谎报成功）。
+export async function runDeepResearch({
+  args = {}, toolHandlers, model, modelOverrides, signal, cwd, approvalMode, conversationId,
+} = {}) {
+  const topic = String(args?.topic || '').trim();
+  if (!topic) return { ok: false, error: 'deep_research_topic_missing: 缺少必填参数 topic' };
+
+  const chatFn = resolveChannel(toolHandlers, 'chat');
+  const searchFn = resolveChannel(toolHandlers, 'webSearch');
+  const writeFn = resolveChannel(toolHandlers, 'writeFile');
+  const fetchFn = resolveChannel(toolHandlers, 'webFetch'); // 可缺失：缺了只是不做精读（诚实降级）
+  const missing = [];
+  if (!chatFn) missing.push('chat');
+  if (!searchFn) missing.push('webSearch');
+  if (!writeFn) missing.push('writeFile');
+  if (missing.length) {
+    return { ok: false, error: `deep_research_unavailable: 缺少工具通道（${missing.join(', ')}）——请确认宿主已接线对应 handler` };
+  }
+
+  const maxSources = Math.max(1, Math.min(Number(args?.max_sources) || RESEARCH_MAX_EVIDENCE, RESEARCH_MAX_EVIDENCE));
+  // 规划用便宜模型槽（decompose，缺省回落主模型）；综合用主模型（质量优先）
+  const planModel = resolveTaskModel(model, modelOverrides, 'decompose');
+  const chatPayload = (ref, system, user) => ({
+    providerId: ref.provider.id,
+    isGlobal: !!ref.provider.isGlobal,
+    baseUrl: ref.provider.base_url,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    model: ref.model.model_id,
+    reasoningEffort: ref.model.reasoning_effort || '',
+  });
+  const aborted = () => !!signal?.aborted;
+
+  // ① 规划：显式子问题优先（模型/用户已给定），否则一次纯文本规划调用；规划失败降级为单主题检索
+  //    ——绝不因规划失败而整体失败（「先检索再规划」也比「什么都不做」有价值）。
+  const explicit = Array.isArray(args?.subquestions) ? args.subquestions.map((s) => String(s)).join('\n') : '';
+  let subquestions = parseSubquestions(explicit, RESEARCH_MAX_SUBQUESTIONS);
+  if (!subquestions.length) {
+    try {
+      const planRes = await chatWithRetry(
+        chatFn, chatPayload(planModel, RESEARCH_PLAN_SYSTEM, `研究主题：${topic}`), signal, { baseMs: 500 },
+      );
+      subquestions = parseSubquestions(planRes?.content || '', RESEARCH_MAX_SUBQUESTIONS);
+    } catch (err) {
+      console.warn('[agent] deep_research 规划调用失败，降级为单主题检索:', err?.message);
+    }
+  }
+  if (!subquestions.length) subquestions = [topic];
+  if (aborted()) return { ok: false, error: 'deep_research_aborted: 任务已中止' };
+
+  // ② 广度：每个子问题一次检索（有界并发 3，避免打爆 provider 并发限制）；失败留痕不阻塞其余
+  const searches = await mapWithLimit(subquestions, 3, async (q) => {
+    try {
+      const r = await searchFn({ query: q, max_results: 6 }, { signal });
+      if (r && r.ok === false) return { subquestion: q, results: [], error: String(r.error || '检索失败') };
+      return { subquestion: q, results: Array.isArray(r?.results) ? r.results : [] };
+    } catch (err) {
+      return { subquestion: q, results: [], error: String(err?.message || err) };
+    }
+  });
+
+  // ③ 证据链：去重后编号（编号即报告引用号），并记录失败子问题
+  const ledger = buildEvidenceLedger(searches, { max: maxSources });
+
+  // ④ 深度：对前 N 条有 URL 的证据精读原文（有界并发 2）；精读失败不影响报告主体
+  const excerpts = {};
+  if (fetchFn && !aborted()) {
+    const targets = ledger.entries.filter((e) => e.url).slice(0, RESEARCH_MAX_DEEP_READ);
+    await mapWithLimit(targets, 2, async (en) => {
+      try {
+        const r = await fetchFn({ url: en.url, limit: 4000 }, { signal });
+        if (r && r.ok !== false && typeof r.content === 'string' && r.content.trim()) {
+          excerpts[en.id] = r.content;
+        }
+      } catch { /* 单篇精读失败不阻塞：报告仍列出该来源与摘要 */ }
+    });
+  }
+
+  // ⑤ 综合：把编号证据交模型，要求可溯源的结构化输出；失败则报告如实标注「未产出」
+  let synthesis = {};
+  if (!aborted()) {
+    const digest = ledger.entries
+      .map((en) => `[${en.id}] ${en.title} — ${en.url}（${en.sourceType}）\n${en.snippet}`)
+      .join('\n').slice(0, 12000);
+    try {
+      const synRes = await chatWithRetry(
+        chatFn,
+        chatPayload(model, RESEARCH_SYNTHESIS_SYSTEM, `研究主题：${topic}\n\n编号证据条目：\n${digest || '（本次未取得任何检索结果）'}`),
+        signal, { baseMs: 500 },
+      );
+      synthesis = parseSynthesis(synRes?.content || '');
+    } catch (err) {
+      console.warn('[agent] deep_research 综合调用失败，报告将如实标注未产出:', err?.message);
+    }
+  }
+  if (aborted()) return { ok: false, error: 'deep_research_aborted: 任务已中止' };
+
+  // ⑥ 落盘：确定性结构装配 → 写入工作区 research/<slug>-report.md（相对 cwd，走宿主写工具审批闸）
+  const generatedAt = new Date().toISOString().slice(0, 10);
+  const report = assembleResearchReport({ topic, subquestions, ledger, synthesis, excerpts, generatedAt });
+  const relPath = `research/${slugifyTopic(topic)}-report.md`;
+  let writeRes;
+  try {
+    writeRes = await writeFn({ path: relPath, content: report, cwd, approvalMode, conversationId });
+  } catch (err) {
+    return { ok: false, error: `deep_research_save_failed: ${err?.message || err}` };
+  }
+  if (!writeRes || writeRes.ok === false) {
+    return { ok: false, error: `deep_research_save_failed: ${writeRes?.error || '报告写入失败'}` };
+  }
+  return {
+    ok: true,
+    path: writeRes.path || relPath,
+    subquestions,
+    evidence_count: ledger.entries.length,
+    deep_read_count: Object.keys(excerpts).length,
+    search_failures: ledger.failures.length,
+    preview: report.slice(0, 1200),
+  };
+}
+
 // ── T0-4：wall-clock 看门狗（2026-10-15，M0/P0）──
 // 背景：主循环有轮次/token/abort 三重退出闸，但**没有单轮耗时上限**——
 // 模型连接半开（TCP 不断但不回数据）或工具子进程僵死时，await 永远挂起，
@@ -1532,6 +1823,19 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   // sandbox_code_run 子进程 vm 上限 60s + 宿主 70s 兜底 kill → 看门狗必须大于宿主兜底
   http_request: 45000,
   sandbox_code_run: 90000,
+  // G-doc：文档生成——实现侧上限 45s（PDF 的 Chromium 渲染最慢），看门狗统一 60s
+  //（数值与 main/tools/timeouts.js 的 DOC_GEN_* 对账，由 test/native-doc-tools 断言）
+  doc_create: 60000,
+  xlsx_create: 60000,
+  pptx_create: 60000,
+  pdf_generate: 60000,
+  // G-deep-research：一次 runDeepResearch = 最多 5 次检索(60s) + 6 篇精读(60s) + 2 次模型调用，
+  // 编排内部用 mapWithLimit 有界并发（3/2），自然上限约 4-5min；看门狗给 10min 做最后防线。
+  deep_research: 600000,
+  // G-CUA：一次 computer_use = 最多 maxSteps(默认/上限 15) 步，每步 1 次模型调用（实现侧 120s）
+  // + AX 采集 + 键鼠执行 + 可能的逐次用户确认（等待无上限，由 CUA 审批通道 120s 超时兜底）。
+  // 看门狗给 15min 做最后防线（长于任何单步，短于用户可感知的「卡死」）。
+  computer_use: 900000,
 };
 
 export function withTimeout(promise, ms, label) {
@@ -1770,6 +2074,10 @@ export async function runAgent({
   // 2026-10-19：任务收尾描述粒度（'concise' | 'default' | 'detailed'，缺省 default）。
   // 未知值一律回落 default（见下方 styleKey 归一化），不放大也不缩小用户预期。
   responseStyle = DEFAULT_RESPONSE_STYLE,
+  // G-CUA（2026-10-19）：桌面自动化工具是否通告给模型。缺省 false（opt-in，强门控）。
+  // 由宿主判定（macOS + 用户在设置中主动开启 + 主会话路径）后显式传入；
+  // 为 false 时 computer_use 不进 tools 数组，模型既看不到也无法调用（V02 守卫兜底）。
+  computerUseEnabled = false,
   // P1-4：稳定前缀区段序开关（A/B 回滚用；见 PROMPT_SECTIONS）
   enablePrefixOrder = true,
 } = {}) {
@@ -1816,7 +2124,7 @@ export async function runAgent({
     // 保证通道级追加（定时任务/Worker 产出契约）仍是 system 尾部不变量
     //（见 test/append-system-prompt.test.mjs）。styleSection 为每 run 定值，用户不改设置时
     // 字节稳定；BASE_PROMPT 本身仍是完整前缀，prompt cache 不受影响。
-    base: `${customSystemPrompt || BASE_PROMPT}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
+    base: `${customSystemPrompt || BASE_PROMPT}${computerUseEnabled && !customSystemPrompt ? CUA_PROMPT_SECTION : ''}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
     role: '',    // S2 每 run 定：数字员工角色设定
     tools: '',   // S2 每 run 定：工具表说明（工具 schema 本身经 allTools 下发，这里留位以备补充说明）
     skills: '',  // S2/S3：启用技能提示 + 技能索引（summary）或技能正文（full）
@@ -2005,9 +2313,16 @@ export async function runAgent({
   // P1-6：summary 模式下额外通告 load_skill（只在宿主提供了 loadSkill 通道时；
   // BASE_TOOLS 条数被 test/web-todo-tools.test.js 钉死为 41，不得往里加，故在此动态追加）
   const baseToolList = customTools || BASE_TOOLS;
-  const effectiveBaseTools = skillDisclosureMode === 'summary' && !customTools
-    ? [...baseToolList, LOAD_SKILL_TOOL]
-    : baseToolList;
+  // 条件追加（一律不进 BASE_TOOLS 静态清单，其条数被 test/web-todo-tools.test.js 钉死）：
+  //   · summary 技能披露模式 → 补 load_skill（正文按需加载）；
+  //   · opt-in 桌面自动化（macOS + 用户主动开启）→ 补 computer_use。
+  let effectiveBaseTools = baseToolList;
+  if (skillDisclosureMode === 'summary' && !customTools) {
+    effectiveBaseTools = [...effectiveBaseTools, LOAD_SKILL_TOOL];
+  }
+  if (computerUseEnabled && !customTools) {
+    effectiveBaseTools = [...effectiveBaseTools, COMPUTER_USE_TOOL];
+  }
   let allTools = [...effectiveBaseTools, ...mcpTools];
   // T4-3：角色模板工具子集——toolNames 为具体工具名白名单，对内置工具取交集。
   // P1-10：**MCP 工具此前无条件附加，角色隔离被整体绕过**（只读角色仍可调任意写外部系统的 MCP 工具）。
@@ -2852,6 +3167,16 @@ export async function runAgent({
             toolResult = g.suspicious
               ? { ok: false, error: `技能「${wantName}」正文命中疑似提示注入特征，已拒绝加载`, findings: g.findings.map((f) => f.id) }
               : { ok: true, name: wantName, content: g.text };
+            break;
+          }
+          case 'deep_research': {
+            // G-deep-research：引擎内建的原生深度研究流水线（规划→检索→证据链→精读→综合→落盘）。
+            // 治理字段（cwd/approvalMode/conversationId）由引擎显式透传给内部的 web/fetch/write 子调用
+            // ——deep_research 本身不在 CWD_TOOLS/APPROVAL_TOOLS 里（它不直接触盘/触网，只做编排）。
+            toolResult = await runDeepResearch({
+              args: toolArgs, toolHandlers, model, modelOverrides,
+              signal, cwd, approvalMode, conversationId,
+            });
             break;
           }
           default: {

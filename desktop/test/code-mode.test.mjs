@@ -273,7 +273,7 @@ await check('ToolTrace：卡片渲染四扩展点 + i18n 双语键', () => {
   const src = fs.readFileSync(path.join(DESKTOP, 'renderer', 'src', 'components', 'tools', 'ToolTrace.tsx'), 'utf8');
   assert.match(src, /code_exec: 'toolTrace\.codeExec'/);
   assert.match(src, /case 'code_exec'/);
-  assert.match(src, /'code_exec'\]\.includes\(name\)/);
+  assert.match(src, /'code_exec',\s*'deep_research'\]\.includes\(name\)/);
   for (const loc of ['zh-CN', 'en-US']) {
     const dict = JSON.parse(fs.readFileSync(path.join(DESKTOP, 'renderer', 'src', 'i18n', 'locales', loc, 'toolTrace.json'), 'utf8'));
     assert.ok(dict.codeExec && dict.codeEmpty && dict.codeImage, `${loc} 缺 code* 键`);
