@@ -138,32 +138,16 @@ function planPrewarm(text, savedConfigs, manifests) {
   };
 }
 
-/** 服务端工具清单 → OpenAI function 定义（与渲染层 mcpTools.js 的 toToolDefs 同形）。 */
-function toToolDefs(server, tools) {
-  const s = String(server || '');
-  return (Array.isArray(tools) ? tools : [])
-    .filter((t) => t && t.name)
-    .map((t) => ({
-      type: 'function',
-      function: {
-        name: `mcp__${s}__${t.name}`,
-        description: t.description || t.name,
-        parameters: t.inputSchema || { type: 'object', properties: {} },
-      },
-    }));
-}
-
-/** 合并工具定义：按 function.name 去重，base（本轮已有）优先，避免同一工具出现两份。 */
-function mergeToolDefs(base = [], additions = []) {
-  const seen = new Set();
-  const out = [];
-  for (const t of [...(Array.isArray(base) ? base : []), ...(Array.isArray(additions) ? additions : [])]) {
-    const n = t && t.function && t.function.name;
-    if (!n || seen.has(n)) continue;
-    seen.add(n);
-    out.push(t);
-  }
-  return out;
+// ── 单一事实来源：MCP 工具定义的构造 / 排序 / 去重（第六轮 N5）──
+// 此前本文件自带一份 `toToolDefs`/`mergeToolDefs`（注释自承「与渲染层 mcpTools.js 同形」），
+// 与渲染层实现靠人工同步，存在「一侧改了规范化策略、另一侧静默产出不同形状」的隐患。
+// 现统一收敛到 shared/mcpToolDefs.mjs：主进程（CJS）经动态 import 异步加载（本模块为纯函数、
+// 无 electron 依赖，宿主无关），渲染层（ESM）静态引用同一文件。
+// 返回 Promise<模块命名空间>；promise 首次调用后缓存，重复调用零成本。
+let _mcpToolDefsMod = null;
+function loadMcpToolDefs() {
+  if (!_mcpToolDefsMod) _mcpToolDefsMod = import('../shared/mcpToolDefs.mjs');
+  return _mcpToolDefsMod;
 }
 
 module.exports = {
@@ -174,6 +158,5 @@ module.exports = {
   matchesCapability,
   selectServersToPrewarm,
   planPrewarm,
-  toToolDefs,
-  mergeToolDefs,
+  loadMcpToolDefs,
 };

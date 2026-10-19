@@ -1060,13 +1060,67 @@ export function estimateTokens(text) {
   return Math.ceil(cjk + rest / 4);
 }
 
+// ── 多模态数组 content 的适配（第六轮 N6）──
+// 背景：图像以 OpenAI 兼容 image_url 数据部件（data URL + base64）进入 user 消息的数组 content。
+//   此前全仓无处理：`estimateMessagesTokens` 与压缩 transcript 都对数组 content 直接
+//   `JSON.stringify`，于是**把 base64 当成普通字符计数**——一张几百 KB 的图会被算成十几万 token
+//   （估算严重失真），且压缩摘要调用会把整段 base64 再传一次（重复消耗上下文与费用）。
+// 处理：图片部件一律降为固定 token 成本、文本化为占位符；base64 绝不进入摘要/子代理等二次调用。
+
+// 单张图片部件的估算成本：OpenAI 兼容端点的图块计费量级（远小于 base64 字符数，避免虚高触发压缩）。
+export const IMAGE_PART_TOKEN_COST = 1024;
+// 图片部件在「纯文本化」时的占位符（摘要/子代理上下文用）。
+export const IMAGE_PLACEHOLDER = '[图片]';
+
+/** 是否为图片数据部件（OpenAI 兼容 image_url 形态）。 */
+export function isImagePart(part) {
+  return !!(part && part.type === 'image_url' && part.image_url);
+}
+
+/**
+ * 把消息 content（字符串或部件数组）转成**纯文本**可读形式：图片部件降为占位符，
+ * 其余部件取 text 字段（未知部件保守 JSON 化）。**绝不包含 base64**。
+ */
+export function contentToPlainText(content, imagePlaceholder = IMAGE_PLACEHOLDER) {
+  if (typeof content === 'string') return content;
+  if (content == null) return '';
+  if (!Array.isArray(content)) {
+    return typeof content === 'object' ? JSON.stringify(content) : String(content);
+  }
+  const parts = [];
+  for (const p of content) {
+    if (!p) continue;
+    if (isImagePart(p)) { parts.push(imagePlaceholder); continue; }
+    if (typeof p === 'string') { parts.push(p); continue; }
+    if (typeof p.text === 'string') { parts.push(p.text); continue; }
+    parts.push(typeof p === 'object' ? JSON.stringify(p) : String(p));
+  }
+  return parts.join('\n');
+}
+
+/** 估算单个 content（字符串 / 部件数组）的 token：图片部件用固定成本，文本按字符估算。 */
+export function estimateContentTokens(content) {
+  if (typeof content === 'string') return estimateTokens(content);
+  if (content == null) return 0;
+  if (!Array.isArray(content)) return estimateTokens(JSON.stringify(content));
+  let n = 0;
+  for (const p of content) {
+    if (!p) continue;
+    if (isImagePart(p)) { n += IMAGE_PART_TOKEN_COST; continue; }
+    if (typeof p === 'string') { n += estimateTokens(p); continue; }
+    if (typeof p.text === 'string') { n += estimateTokens(p.text); continue; }
+    n += estimateTokens(typeof p === 'object' ? JSON.stringify(p) : String(p));
+  }
+  return n;
+}
+
 // 估算必须计入 tool_calls 的 name+arguments：write_file/apply_patch 的正文全在
 // arguments 里（实测同一历史 content 口径 70,894 / 真实 prompt_tokens 217,238，
 // 低估 3.06 倍 → 压缩阈值永不触发，长任务按全价反复重传同一批文件内容）。
 export function estimateMessagesTokens(msgs) {
   return msgs.reduce((sum, m) => {
-    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
-    let n = estimateTokens(text);
+    // 数组 content 走 estimateContentTokens：图片部件按固定成本，不再把 base64 字符当 token。
+    let n = estimateContentTokens(m.content);
     for (const tc of (Array.isArray(m.tool_calls) ? m.tool_calls : [])) {
       const a = tc?.function?.arguments;
       n += estimateTokens(`${tc?.function?.name || ''}${typeof a === 'string' ? a : JSON.stringify(a || '')}`);
@@ -1213,7 +1267,9 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
   // 从而可以安全地用它替换全部旧摘要，而不是无限追加。
   const priorText = priorSummaries.map((m) => String(m.content || '')).join('\n').slice(-6000);
   const transcript = (priorText ? `【此前摘要】\n${priorText}\n\n` : '') + toCompact
-    .map((m) => `${m.role}: ${(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')).slice(0, 600)}`)
+    // N6：数组 content（含图片 base64）经 contentToPlainText 纯文本化——图片降为占位符，
+    // 绝不把 base64 再塞进摘要调用（否则长会话压缩会重复传输整段图片数据）。
+    .map((m) => `${m.role}: ${contentToPlainText(m.content).slice(0, 600)}`)
     .join('\n')
     .slice(0, 24000);
 
@@ -2969,7 +3025,8 @@ export async function runAgent({
             const parentContextRaw = convo
               .filter((m) => m.role !== 'system')
               .slice(-6)
-              .map((m) => `${m.role}: ${(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')).slice(0, 800)}`)
+              // N6：同样纯文本化——图片部件降为占位符，避免 base64 进入子代理上下文。
+              .map((m) => `${m.role}: ${contentToPlainText(m.content).slice(0, 800)}`)
               .join('\n');
             // P3（第二轮审查）：父上下文里含**工具结果原文**，与 rolePreset / 技能清单 /
             // AGENTS.md / 记忆 / 断点摘要同属不可信面。它是六个注入入口中此前唯一没过守卫的

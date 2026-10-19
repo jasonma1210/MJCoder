@@ -15,9 +15,15 @@ const BASELINE = {
   rawIpc: 0,       // 渲染层禁止 require('electron') / 直接摸 ipcRenderer（须走 preload 桥）
   // G7：裸 <button> 收敛为 ui/Button 原语（ratchet 只降不升）。
   // 口径：扫描 renderer/src，**排除 components/ui/**（原语自身必须渲染裸 <button>）。
-  // 豁免类别（不因本条门禁回退，但保留计数）：纯文字链接式按钮（无 bg-*/border/rounded 的
-  // 文本 + hover 变色，如「展开/收起」「Toast 动作」，不匹配任何原语形态，见 README G7 说明）。
-  rawButton: 260,  // 2026-10-19 实测基线（首轮 ApprovalCard 4 + feedback 2；二轮 CodeView 2 + LocalMcpSection 1；三轮 RecordReplayPanel 4；四轮 xs 桶 AgentDock 5 + DiffReviewPanel 3）；每轮收敛后同步下调，禁止调高
+  // 豁免类别（不因本条门禁回退，但保留计数）：
+  //   · 纯文字链接式按钮（无 bg-*/border/rounded 的文本 + hover 变色，如「展开/收起」「Toast 动作」）；
+  //   · 图标按钮（正方形 icon-only，原语 h-6/h-7/h-8 + px-* 会让宽度失真）；
+  //   · 分段/标签 pill（动态选中态 `border-accent bg-accent-bg` vs `border-border` 随 active 翻转）；
+  //   · 列表行按钮（整行可点、hover 铺满，非 inline-flex 形态）；
+  //   · 指标不匹配的表单按钮（px-3 py-2 text-sm / rounded-lg 或 rounded-xl，与 md 的 h-8 + text-xs 不符）。
+  // 待决策项（暂不转换，避免引入可感知差异）：ScheduledTasks 恢复按钮（px-3 vs md 的 px-4、hover:bg-hover
+  // vs danger-ghost 的 hover:bg-danger-bg）、WorktreeBar 移除按钮（rounded-lg vs xs 的 rounded、py-1 vs h-6）。
+  rawButton: 258,  // 2026-10-19 实测基线（首轮 ApprovalCard 4 + feedback 2；二轮 CodeView 2 + LocalMcpSection 1；三轮 RecordReplayPanel 4；四轮 xs 桶 AgentDock 5 + DiffReviewPanel 3；五轮 accent-ghost AgentDock 2）；每轮收敛后同步下调，禁止调高
 };
 
 let pass = 0;

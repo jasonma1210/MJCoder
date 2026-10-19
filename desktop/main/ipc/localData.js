@@ -12,6 +12,8 @@ const modelsFile = require('../modelsFile');
 const guard = require('./payloadGuard');
 // 三层记忆 M3：作用域常量（分层召回的唯一事实来源，避免宿主重写层级清单）
 const { SCOPES } = require('../memory');
+// N9：治理命中率观测只读出口（进程内单例，无需注入）
+const { governanceStats } = require('../governanceStats');
 
 let deps = null;
 
@@ -510,6 +512,9 @@ function register() {
   });
   // P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
   ipcMain.handle('memory:stats', async () => (deps.getMemoryManager() ? { ok: true, stats: deps.getMemoryManager().stats() } : { ok: false }));
+  // N9：治理开关命中率只读出口（hook / 意图预热 / 技能按需加载）——纯内存计数，重启清零。
+  // 让「开关到底有没有生效」可被程序化读取，而不是只躺在 console 日志里无人消费。
+  ipcMain.handle('governance:stats', async () => ({ ok: true, stats: governanceStats.snapshot() }));
   ipcMain.handle('memory:bgTasks', async (_, opts) => (deps.getMemoryScheduler() ? { ok: true, tasks: deps.getMemoryScheduler().listTasks(opts) } : { ok: false }));
   // P0-2c/P1-17：记忆管理 IPC（设置页「记忆与后台作业」分区消费）——
   // invalidate 早已在 memory/index.js 实现但无 IPC 出口；promote 对应「人工确认长期留存」。

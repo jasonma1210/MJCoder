@@ -335,22 +335,21 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
               </span>
               <span className="text-xs truncate flex-1" title={g.goal}>{g.goal || g.groupId}</span>
               {g.status === 'paused' && (
-                <button
+                // G7：成对收敛为 ui/Button（accent-ghost/xs）——原 class 与 xs 档指标一致（h-6≈py-1*2+16、px-2、rounded、text-xs）
+                <Button variant="accent-ghost" size="xs" className="shrink-0"
                   onClick={() => onExecute(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
                   title={t('agentDock.continueGroupTitle')}
                 >
                   {t('agentDock.continueGroup')}
-                </button>
+                </Button>
               )}
               {g.status === 'ready' && (
-                <button
+                <Button variant="accent-ghost" size="xs" className="shrink-0"
                   onClick={() => onExecute(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-accent text-accent text-xs hover:bg-accent-bg"
                   title={t('agentDock.runGroupTitle')}
                 >
                   {t('agentDock.runGroup')}
-                </button>
+                </Button>
               )}
               {g.status === 'running' && (
                 <Button variant="danger-ghost" size="xs" className="shrink-0"

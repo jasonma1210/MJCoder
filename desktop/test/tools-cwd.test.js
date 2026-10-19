@@ -126,10 +126,19 @@ fs.writeFileSync(path.join(REPO, 'new.txt'), 'hello\n');
       console.log('[10] 嵌套沙箱环境：探测失败→V03 兜底，结果不假称已隔离 ✓');
     }
 
-    // 11. 显式 full-access 才直跑（opt-in，fail-safe 不误伤显式授权）
-    const explicit = await h('tool:shell')({}, { command: 'echo hi', cwd: REPO, sandboxPolicy: 'full-access' });
-    if (explicit.sandboxed) { console.error('FAIL: 显式 full-access 不应被沙箱包裹'); process.exit(1); }
-    console.log('[11] 显式 full-access 直跑（仅 opt-in）✓');
+    // 11.（N11 修正）直连 IPC 无法把载荷提权到「不隔离」档：P0-5 治理把 full-access 钳制为
+    //   workspace-write（契约见 main/tools/execGovernance.js；对应门禁 test/exec-governance.test.mjs）。
+    //   本行经 h('tool:shell') 走的是 IPC 通道（已套 ipcGovernance），故断言的是「钳制后仍受隔离约束」，
+    //   而非「显式 full-access 直跑」——后者是对该安全契约的误读，且在 Seatbelt 可用的平台上**必现红灯**
+    //   （此前的常态红灯即由此而来）。断言与环境无关。
+    const escalated = await h('tool:shell')({}, { command: 'echo hi', cwd: REPO, sandboxPolicy: 'full-access' });
+    if (belt.ok) {
+      if (escalated.sandboxed !== true) { console.error('FAIL: 直连 IPC 的 full-access 应被钳制为 workspace-write 后沙箱执行（不得提权直跑）', JSON.stringify(escalated)); process.exit(1); }
+      console.log('[11] 直连 IPC full-access 被钳制为 workspace-write（无法提权直跑）✓');
+    } else {
+      if (escalated.sandboxed === true) { console.error('FAIL: Seatbelt 不可用却宣称 sandboxed:true（假称隔离）', JSON.stringify(escalated)); process.exit(1); }
+      console.log('[11] 嵌套沙箱环境：钳制后走 V03 兜底，不假称隔离 ✓');
+    }
 
     // 12. 无 cwd（PM-L1 / TC-QA-003）：默认 read-only —— 写入必须被拒绝
     // N3：仅 Seatbelt 真实可用时断言沙箱拒写；嵌套环境走兜底（单次审批后非沙箱执行），不做沙箱拒写断言

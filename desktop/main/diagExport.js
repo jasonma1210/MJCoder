@@ -6,6 +6,7 @@
 //   logs/        主进程 console tee（最近 3 个）
 //   config/      脱敏配置：providers（白名单字段）、preferences、projects、
 //                models.json（白名单字段）、mcp-servers.json（去 env 与 headers）
+//   governance/  治理命中率快照（N9：hook / 意图预热 / 技能按需加载，纯计数）
 //   meta.json    版本/平台/架构/导出时间（userData 路径以 HOME 相对表达，脱敏）
 // 凭证纪律：**任何 API Key / 加密密文 / env 变量 / Authorization 头都不进包**。
 // 测试 test/diag-export.test.mjs 用假密钥值 grep 全包，命中即红。
@@ -13,6 +14,8 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 const { writeZip } = require('./zipStore');
+// N9：治理命中率会随诊断包一起导出（governance/stats.json），供开发者复盘「开关真机上有没有生效」。
+const { governanceStats } = require('./governanceStats');
 
 // 需要整体剔除的敏感字段名（大小写不敏感匹配）——用于 local-data / mcp-servers 等结构化配置
 const SENSITIVE_KEYS = new Set(['api_key', 'apikey', 'keyencrypted', 'api_key_encrypted', 'token', 'password', 'secret', 'env', 'headers', 'authorization']);
@@ -145,6 +148,10 @@ function collectEntries(userData) {
   // mcp-servers.json：env 与 headers 整体剔除（可含密钥/Authorization）
   const mcpRaw = readJsonSafe(path.join(userData, 'mcp-servers.json'));
   if (mcpRaw != null) push('config/mcp-servers.json', JSON.stringify(redact(mcpRaw), null, 2));
+
+  // N9：治理命中率快照（hook / 意图预热 / 技能按需加载）——纯数字计数，无凭证风险；
+  // 它是「开关是否真在生效」唯一可随包复盘的现场证据（内存计数不作为事实源，仅观测）。
+  push('governance/stats.json', JSON.stringify(governanceStats.snapshot(), null, 2));
 
   return entries;
 }

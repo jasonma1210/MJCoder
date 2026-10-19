@@ -13,12 +13,14 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+// N5：工具定义构造/排序/去重已收敛到 shared/ 单一实现（主进程与渲染层同源），测试直接驱动该实现。
+import { toToolDefs, mergeToolDefs, sortedToolDefs } from '../shared/mcpToolDefs.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(import.meta.dirname, '..');
 const {
   detectCapabilities, nonNativeCapabilities, selectServersToPrewarm,
-  planPrewarm, toToolDefs, mergeToolDefs,
+  planPrewarm,
 } = require(path.join(ROOT, 'main/intentMcpPrewarm.js'));
 
 let pass = 0;
@@ -98,6 +100,26 @@ function check(name, ok, detail = '') {
   check('mergeToolDefs：无 function.name 的条目被丢弃', mergeToolDefs([{ type: 'function' }], []).length === 0);
 }
 
+// ── A7. G9：披露确定性排序——相同配置下披露序列字节稳定（与入参顺序无关）──
+{
+  const a = sortedToolDefs([
+    { server: 'zeta', tools: [{ name: 'b' }, { name: 'a' }] },
+    { server: 'alpha', tools: [{ name: 'z' }] },
+  ]);
+  const b = sortedToolDefs([
+    { server: 'alpha', tools: [{ name: 'z' }] },
+    { server: 'zeta', tools: [{ name: 'a' }, { name: 'b' }] },
+  ]);
+  check('G9：不同入参顺序 → 相同披露序列（字节稳定）', JSON.stringify(a) === JSON.stringify(b));
+  check('G9：先按服务名、再按工具名排序', a.map((d) => d.function.name).join(',')
+    === 'mcp__alpha__z,mcp__zeta__a,mcp__zeta__b', a.map((d) => d.function.name).join(','));
+  check('G9：排序不改动入参（纯函数）', (() => {
+    const src = [{ server: 'z', tools: [{ name: 'b' }, { name: 'a' }] }];
+    sortedToolDefs(src);
+    return src[0].tools[0].name === 'b' && src[0].tools[1].name === 'a';
+  })());
+}
+
 // ── B. 源码接线门禁 ──
 {
   const runner = fs.readFileSync(path.join(ROOT, 'main/agentRunner.js'), 'utf8');
@@ -105,8 +127,20 @@ function check(name, ok, detail = '') {
   const iAwait = runner.indexOf('await intentPrewarmToolDefs(payload)');
   const iParams = runner.indexOf('const engineParams = {');
   check('预热发生在组装 engineParams 之前', iAwait > 0 && iParams > 0 && iAwait < iParams, `await@${iAwait} params@${iParams}`);
-  check('mcpTools 经 mergeToolDefs 合并', runner.includes('intentMcp.mergeToolDefs(payload.mcpTools || [], dynamicMcpTools)'));
+  check('mcpTools 经 mergeToolDefs 合并', runner.includes('mergeToolDefs(payload.mcpTools || [], dynamicMcpTools)'));
   check('预热失败 fail-open（不抛错阻塞 run）', runner.includes('意图预热 MCP 连接失败（fail-open'));
+  // N5：两侧引用同一实现（shared/mcpToolDefs.mjs），杜绝「双实现靠人工同步」。
+  check('agentRunner 经 loadMcpToolDefs 取 shared 实现', runner.includes('intentMcp.loadMcpToolDefs()'));
+  check('agentRunner 预热用 sortedToolDefs 产出（G9 确定性排序）', runner.includes('sortedToolDefs(entries)'));
+
+  const prewarm = fs.readFileSync(path.join(ROOT, 'main/intentMcpPrewarm.js'), 'utf8');
+  check('N5：intentMcpPrewarm 不再自带 toToolDefs/mergeToolDefs（已收敛到 shared）',
+    !/function toToolDefs/.test(prewarm) && !/function mergeToolDefs/.test(prewarm)
+    && prewarm.includes("import('../shared/mcpToolDefs.mjs')"));
+
+  const rendererTools = fs.readFileSync(path.join(ROOT, 'renderer/src/lib/mcpTools.js'), 'utf8');
+  check('N5：渲染层 mcpTools.js 引用同一 shared 实现（无本地副本）',
+    rendererTools.includes('shared/mcpToolDefs.mjs') && !/function toToolDefs/.test(rendererTools));
 
   const main = fs.readFileSync(path.join(ROOT, 'main/main.js'), 'utf8');
   check('main.js 注入 mcpDynamic 依赖', main.includes('mcpDynamic: {') && main.includes('reconnectSaved: (name) => mcpIpc.reconnectSaved'));

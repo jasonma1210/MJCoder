@@ -15,7 +15,7 @@
 // sm/md 的最终工具类集合与改造前**完全一致**（仅字符串顺序不同），故为零回归。
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-ghost';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-ghost' | 'accent-ghost';
 export type ButtonSize = 'xs' | 'sm' | 'md';
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
@@ -26,6 +26,9 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
   // G7 (a)：描边危险色（可撤销的轻危险操作）——红边红字 + 危险底色 hover，覆盖仓库
   // 「破坏性描边按钮」这一现实形态（AgentDock / WorktreeBar / LocalMcpSection 等）。
   'danger-ghost': 'border border-danger text-danger hover:bg-danger-bg bg-transparent',
+  // G7 (a-2)：描边主色（正向前进的轻操作）——主色边 + 主色字 + 主色浅底 hover，与 danger-ghost
+  // 同形（对称取 accent token），覆盖「继续/运行分组」这类非实心的强调按钮。
+  'accent-ghost': 'border border-accent text-accent hover:bg-accent-bg bg-transparent',
 };
 
 // xs = 行内小按钮（h-6 / px-2 / rounded / gap-1）；sm = 列表行内小按钮（h-7 / px-3 / rounded-lg / gap-2）；

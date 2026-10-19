@@ -32,6 +32,8 @@
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { writeFileDurableWithMode } = require('./data/durableWrite');
+// N9：治理命中率观测——hook 触发/拦截/未运行 计数落点（详见 governanceStats.js 顶部说明）。
+const { governanceStats } = require('./governanceStats');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 60000;
@@ -146,8 +148,9 @@ const clipReason = (s) => String(s || '').trim().slice(0, MAX_REASON_CHARS);
  * @param {string} opts.filePath    hooks.json 路径（userData 下）
  * @param {(o:object)=>Promise<object>} [opts.execHook] 执行器（测试可注入）
  * @param {(msg:string)=>void} [opts.log]
+ * @param {object} [opts.stats]     N9 观测计数器（测试可注入独立实例，默认进程内单例）
  */
-function createToolHookRunner({ filePath, execHook = defaultExecHook, log = (m) => console.warn('[hooks]', m) } = {}) {
+function createToolHookRunner({ filePath, execHook = defaultExecHook, log = (m) => console.warn('[hooks]', m), stats = governanceStats } = {}) {
   const say = (m) => { try { log(m); } catch { /* 日志失败不影响运行 */ } };
   let hooks = loadFromDisk();
 
@@ -185,11 +188,11 @@ function createToolHookRunner({ filePath, execHook = defaultExecHook, log = (m) 
     if (d.failed) {
       // 超时/起不来 = hook 不可用 → 放行（fail-open），但必须留痕（用户要能发现自己的 hook 没生效）
       say(`preToolUse hook「${hook.name}」未运行（${d.timedOut ? '超时' : d.error || '未知'}），已放行`);
-      return { deny: false };
+      return { deny: false, unavailable: true }; // N9：计入 pre.unavailable（治理开关「配了却没生效」的关键信号）
     }
     if (d.code === 127 || d.code === 126) {
       say(`preToolUse hook「${hook.name}」命令不可执行（code=${d.code}），已放行`);
-      return { deny: false };
+      return { deny: false, unavailable: true }; // N9
     }
     const parsed = parseDecision(d.stdout);
     if (parsed && parsed.decision === 'deny') {
@@ -207,10 +210,15 @@ function createToolHookRunner({ filePath, execHook = defaultExecHook, log = (m) 
       const d = await execHook({
         command: hook.command, timeoutMs: hook.timeoutMs, input: JSON.stringify({ event: 'postToolUse', ...payload }),
       });
-      if (d && d.failed) say(`postToolUse hook「${hook.name}」未运行（${d.timedOut ? '超时' : d.error || '未知'}）`);
-      else if (d && d.code !== 0) say(`postToolUse hook「${hook.name}」退出码 ${d.code}（仅观察，不影响工具结果）`);
+      if (d && d.failed) {
+        say(`postToolUse hook「${hook.name}」未运行（${d.timedOut ? '超时' : d.error || '未知'}）`);
+        return { unavailable: true }; // N9：计入 post.unavailable
+      }
+      if (d && d.code !== 0) say(`postToolUse hook「${hook.name}」退出码 ${d.code}（仅观察，不影响工具结果）`);
+      return { unavailable: false };
     } catch (e) {
       say(`postToolUse hook「${hook.name}」执行异常：${e && e.message}`);
+      return { unavailable: true }; // N9：post 执行异常同样计入「配了却没生效」
     }
   }
 
@@ -233,18 +241,25 @@ function createToolHookRunner({ filePath, execHook = defaultExecHook, log = (m) 
         const base = { tool, channel, args: args === undefined ? null : args, cwd: ctx.cwd, conversationId: ctx.conversationId };
         const hits = preHooks.filter((h) => hookMatches(h.match, tool, channel));
         for (const h of hits) {
+          stats.incr('hooks', 'pre.runs'); // N9 观测：pre 钩子触发次数
           const v = await runPre(h, base);
           if (v.deny) {
+            stats.incr('hooks', 'pre.denied'); // N9：被拦截
             say(`工具 ${tool} 被用户 hook「${h.name}」拦截：${v.reason}`);
             return {
               ok: false, blockedByHook: true, hook: h.name,
               error: `执行前校验未通过（用户自定义 hook「${h.name}」）：${v.reason || '未提供原因'}`,
             };
           }
+          if (v.unavailable) stats.incr('hooks', 'pre.unavailable'); // N9：配了却没生效（放行但留痕）
         }
         const result = await fn(args, runCtx);
         const post = postHooks.filter((h) => hookMatches(h.match, tool, channel));
-        for (const h of post) await runPost(h, { ...base, result });
+        for (const h of post) {
+          stats.incr('hooks', 'post.runs'); // N9：post 钩子触发次数
+          const pr = await runPost(h, { ...base, result });
+          if (pr && pr.unavailable) stats.incr('hooks', 'post.unavailable'); // N9
+        }
         return result; // post 钩子绝不改写结果
       };
     }

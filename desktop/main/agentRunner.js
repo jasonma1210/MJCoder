@@ -20,6 +20,8 @@ const verifyPolicy = require('./verifyPolicy');
 // v1（2026-10-19）：意图驱动的 MCP 动态加载（原生优先）——离线规则词典判定本轮诉求能力，
 // 仅对「原生未覆盖」的能力按需连接用户已保存的连接器，把其工具并入本轮 mcpTools。
 const intentMcp = require('./intentMcpPrewarm');
+// N9：治理命中率观测——意图预热的 runs/targets/connected/toolsAdded/misses 计数落点。
+const { governanceStats } = require('./governanceStats');
 
 // T0-2：IPC 边界契约（单一事实来源 shared-ipc/contract.mjs）。
 // Electron 主进程是 CJS 且 Node 20 无法同步 require ESM，沿用 loadAgentCore 的动态 import 模式：
@@ -127,27 +129,41 @@ async function intentPrewarmToolDefs(payload) {
     if (mf && Array.isArray(mf.tools)) manifests[name] = mf.tools;
   }
   const plan = intentMcp.planPrewarm(text, savedConfigs, manifests);
-  if (!plan.servers.length) return [];
+  // N9 观测：区分「本轮根本没命中意图」与「命中了但全被原生工具覆盖」——二者都返回 []，
+  // 但含义完全不同（前者是正常闲聊，后者恰好证明原生优先规则在生效）。
+  if (!plan.capabilities.length) { governanceStats.incr('intentPrewarm', 'noIntent'); return []; }
+  if (!plan.servers.length) { governanceStats.incr('intentPrewarm', 'nativeCovered'); return []; }
+  governanceStats.incr('intentPrewarm', 'runs');
+  governanceStats.incr('intentPrewarm', 'capabilities', plan.capabilities.length);
   // 已在本轮 mcpTools 中的服务（渲染层已重建）无需重复连接——只补「有意图但未连接」的落差。
   const already = new Set((payload.mcpTools || [])
     .map((t) => String((t && t.function && t.function.name) || '').split('__')[1])
     .filter(Boolean));
   const targets = plan.servers.filter((n) => !already.has(n));
-  if (!targets.length) return [];
+  // 命中的连接器已全部在场 → 本轮无需新连（与「没有匹配的连接器」不同，单独计数）。
+  if (!targets.length) { governanceStats.incr('intentPrewarm', 'satisfied'); return []; }
+  governanceStats.incr('intentPrewarm', 'targets', targets.length);
   const results = await Promise.all(targets.map((name) => withTimeout(
     Promise.resolve(md.reconnectSaved(name)).catch((e) => ({ ok: false, error: e && e.message ? e.message : String(e) })),
     PREWARM_CONNECT_TIMEOUT_MS,
   )));
-  const defs = [];
+  // N5：工具定义构造统一取自 shared/mcpToolDefs.mjs（与渲染层同一实现）。
+  const { sortedToolDefs } = await intentMcp.loadMcpToolDefs();
+  const entries = [];
   targets.forEach((name, i) => {
     const r = results[i];
     if (r && r.ok && Array.isArray(r.tools) && r.tools.length) {
-      defs.push(...intentMcp.toToolDefs(name, r.tools));
+      entries.push({ server: name, tools: r.tools });
     } else {
+      governanceStats.incr('intentPrewarm', 'misses'); // N9：连接失败（fail-open 但要让观测看得见）
       console.warn(`[agentRun] 意图预热 MCP 连接失败（fail-open，本轮继续） ${name}: ${(r && r.error) || 'unknown'}`);
     }
   });
+  // G9：按「服务名 → 工具名」稳定排序后再展开为定义，保证相同配置下披露序列字节稳定（前缀缓存友好）。
+  const defs = sortedToolDefs(entries);
+  governanceStats.incr('intentPrewarm', 'connected', entries.length); // N9：真连上的服务数
   if (defs.length) {
+    governanceStats.incr('intentPrewarm', 'toolsAdded', defs.length); // N9：实际并入本轮的工具定义数
     console.log(`[agentRun] 意图驱动 MCP 预热：capabilities=[${plan.capabilities.join(',')}] 已连接=[${targets.join(',')}] 工具数=${defs.length}`);
   }
   return defs;
@@ -308,6 +324,8 @@ function startAgentRun(payload, sender) {
     // v1（2026-10-19）：意图驱动的 MCP 动态加载——在组装 engineParams **之前**、有界等待完成。
     // 位置有意选在此处：此处已能拿到本轮会话文本（payload.messages）与主进程 mcp 能力，
     // 且尚未把 mcpTools 交给引擎；失败 fail-open 返回空数组，绝不阻塞本轮启动。
+    // N5：合并工具定义（按 function.name 去重、base 优先）同样取自 shared 单一实现。
+    const { mergeToolDefs } = await intentMcp.loadMcpToolDefs();
     const dynamicMcpTools = await intentPrewarmToolDefs(payload);
     // T3-7：引擎可序列化参数与回调群抽为共享对象——in-process 与子进程两条路径同源，
     // 杜绝「改一处漏一处」的路径漂移（子进程路径经 RPC 传 params，回调在主进程侧执行）。
@@ -315,7 +333,7 @@ function startAgentRun(payload, sender) {
       messages: payload.messages,
       model: payload.model,
       // 渲染层本已重建的 mcpTools 在前，意图预热补入的在后；按 function.name 去重（base 优先）。
-      mcpTools: intentMcp.mergeToolDefs(payload.mcpTools || [], dynamicMcpTools),
+      mcpTools: mergeToolDefs(payload.mcpTools || [], dynamicMcpTools),
       enabledSkills: payload.enabledSkills || [],
       skills: payload.skills || [],
       // P1-6 / P1-11：渲染层已下发，但此前被本白名单整体丢弃 → 主进程真机路径两项都不生效

@@ -8,7 +8,7 @@
 //   保留磁盘文件（非破坏可逆）。顶部「本地技能」区管理内置/文件技能开关。
 //   数字员工：卡片「招募」——经 ecosystem:employeeRuntime 取回角色模板
 //   （系统提示+工具子集+审批档+沙箱），由 App 开新会话并注入为该会话 agent。
-// 数据经主进程 ecosystem:* IPC 读取本地 ecosystem 资产；TODO(backend)：切换为后端接口。
+// 数据经主进程 ecosystem:* IPC 读取本地 ecosystem 资产（本地资产即事实来源，无后端依赖）。
 import { useState, useEffect, useRef } from 'react';
 import { IconAlert, IconEdit, IconGlobe, IconPlus, IconPuzzle, IconRefresh, IconSearch, IconUser, IconX, IconPlug } from './icons';
 import {

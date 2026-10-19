@@ -267,6 +267,8 @@ contextBridge.exposeInMainWorld('mjcode', {
   tasksAbortTask: (groupId, taskId) => ipcRenderer.invoke('tasks:abortTask', { groupId, taskId }),
   tasksAbortGroup: (groupId) => ipcRenderer.invoke('tasks:abortGroup', { groupId }),
   memoryStats: () => ipcRenderer.invoke('memory:stats'),
+  // N9：治理命中率只读出口（hook / 意图预热 / 技能按需加载）
+  governanceStats: () => ipcRenderer.invoke('governance:stats'),
   memoryBgTasks: (opts) => ipcRenderer.invoke('memory:bgTasks', opts),
   // P0-2：记忆管理（列表 / 单条作废 / global_knowledge 转长期留存）——MemorySection 消费
   memoryList: (opts) => ipcRenderer.invoke('memory:list', opts),

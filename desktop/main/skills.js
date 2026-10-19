@@ -2,6 +2,8 @@
 // 纯函数部分（解析）不依赖 electron，便于单测；目录由调用方注入
 const fs = require('fs');
 const path = require('path');
+// N9：技能按需加载命中率观测（requested/loaded/missed）——纯内存计数器，无 electron 依赖。
+const { governanceStats } = require('./governanceStats');
 
 // 解析 YAML frontmatter（--- 包裹的 name/description 等键值对）
 function parseFrontmatter(content) {
@@ -66,6 +68,11 @@ function loadSkillContents(skillsDir, names) {
     const content = dir ? getSkill(skillsDir, dir) : null;
     if (content) out.push({ name: n, content });
   }
+  // N9：按需加载命中率——requested 是「声称要挂载的技能数」，loaded 是「真读到内容的数」，
+  // 二者之差即 missed（配了却没生效：名不对/目录缺失）。缺 skill 本身 fail-open 跳过，但要让观测看得见。
+  governanceStats.incr('skills', 'requested', wanted.length);
+  governanceStats.incr('skills', 'loaded', out.length);
+  governanceStats.incr('skills', 'missed', wanted.length - out.length);
   return out;
 }
 
