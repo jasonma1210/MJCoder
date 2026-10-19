@@ -31,7 +31,7 @@ function check(name, ok, detail = '') {
   const byName = Object.fromEntries(BASE_TOOLS.map((t) => [t.function.name, t.function]));
   const missing = NATIVE.filter((n) => !byName[n]);
   check('BASE_TOOLS 含 5 个原生工具', missing.length === 0, missing.length ? `缺=${missing}` : '');
-  check('BASE_TOOLS.length === 51（期 3 新增 5 个 + G-deep-research 1 个 + G-doc 4 个）', BASE_TOOLS.length === 51, `got=${BASE_TOOLS.length}`);
+  check('BASE_TOOLS.length === 52（期 3 新增 5 个 + G-deep-research 1 个 + G-doc 4 个 + G-latex 1 个）', BASE_TOOLS.length === 52, `got=${BASE_TOOLS.length}`);
   check('clipboard schema required=[action]、action 枚举 read/write',
     JSON.stringify(byName.clipboard?.parameters?.required) === '["action"]'
     && JSON.stringify(byName.clipboard?.parameters?.properties?.action?.enum) === '["read","write"]');

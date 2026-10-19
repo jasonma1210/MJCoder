@@ -47,6 +47,15 @@ const DOC_GEN_IMPL_TIMEOUT_MS = 45000;
 /** 文档生成引擎看门狗（60s）：严格大于实现侧，留 15s 余量给「实现层报错 + 结果回收」 */
 const DOC_GEN_WATCHDOG_TIMEOUT_MS = 60000;
 
+// ── G-latex LaTeX 编译（实现侧 / 看门狗成对）──
+// LaTeX 编译是**多趟**排版（参考文献/目录要重复跑），比文档生成慢一个量级：
+// 单文件论文通常十几秒，含 bibtex + 多图的完整项目可到几分钟。实现侧给 5min 覆盖绝大多数项目，
+// 看门狗 6min 严格大于实现侧（保证超时原因由实现侧的「已强杀 + 提示」先报出，而不是引擎兜底闸）。
+/** LaTeX 编译实现侧（300s）：main/latexTools.js 的子进程强杀上限 */
+const LATEX_IMPL_TIMEOUT_MS = 300000;
+/** LaTeX 编译引擎看门狗（360s）：严格大于实现侧 */
+const LATEX_WATCHDOG_TIMEOUT_MS = 360000;
+
 // ── 编排（orchestrator）两级墙钟（P3 收口）──
 // 此前两个 30min 分居 dag.js:50 与 invoke.js:8，互不知情：
 //   · TASK_*   = 「一个子任务最多跑多久」（dag 解析时钳制）
@@ -71,6 +80,8 @@ module.exports = {
   GIT_QUICK_TIMEOUT_MS,
   DOC_GEN_IMPL_TIMEOUT_MS,
   DOC_GEN_WATCHDOG_TIMEOUT_MS,
+  LATEX_IMPL_TIMEOUT_MS,
+  LATEX_WATCHDOG_TIMEOUT_MS,
   ORCHESTRATE_TASK_MIN_MS,
   ORCHESTRATE_TASK_DEFAULT_MS,
   ORCHESTRATE_TASK_MAX_MS,

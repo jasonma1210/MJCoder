@@ -56,6 +56,7 @@ const NON_TOOL_CHANNELS = ['chat', 'mcpCallTool'];
 const MUST_ADVERTISE = ['shell', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'list_dir', 'grep',
   'glob', 'git_status', 'git_diff', 'git_log', 'git_commit', 'browser_navigate', 'chrome_status', 'clipboard',
   'notify', 'http_request', 'sqlite', 'sandbox_code_run', 'doc_create', 'xlsx_create', 'pptx_create', 'pdf_generate',
+  'latex_compile',
   'spawn_subagent', 'orchestrate_task', 'search_plugins', 'install_plugin', 'web_fetch', 'todo_write'];
 
 const diff = (expected, actualSet) => expected.filter((n) => !actualSet.has(n));

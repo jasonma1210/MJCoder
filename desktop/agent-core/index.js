@@ -582,6 +582,22 @@ export const BASE_TOOLS = [
       margins: { type: 'object', description: '页边距（英寸，形如 {top,bottom,left,right}）' },
     }, required: ['path', 'html'] },
   }},
+  // G-latex：LaTeX 编译原生工具（探测本机 TeX 工具链 + 编译 .tex → PDF + 结构化报错）。
+  // 不写 required：probeOnly（工具链体检）不需要 path，若强制 path 会让诊断用法被迫传路径。
+  { type: 'function', function: {
+    name: 'latex_compile',
+    description: '编译 LaTeX 源码为 PDF（原生能力，自动探测本机 TeX 工具链并选择合适引擎）。'
+      + '传 path 指向主 .tex 入口文件（相对路径以项目目录为基准），成功后在同目录生成同名 PDF，'
+      + '返回 PDF 路径、所用引擎与耗时。可用 engine 显式指定引擎（tectonic/latexmk/xelatex/pdflatex/lualatex）；'
+      + '缺省按文档语言与可用引擎自动选择（中文文档优先 xelatex，否则优先 tectonic）。'
+      + '传 probeOnly=true 时只做工具链体检（不编译、不写文件、不弹审批），返回可用引擎与版本、缺失项与安装建议。'
+      + '编译失败返回结构化错误（首条 LaTeX 报错 + 行号 + 日志尾部），据此修改源码后重试。写 PDF 会弹一次审批确认。',
+    parameters: { type: 'object', properties: {
+      path: { type: 'string', description: '主 .tex 入口文件路径（相对路径以项目目录为基准）；probeOnly 模式下可省略' },
+      engine: { type: 'string', description: '显式指定编译引擎（tectonic/latexmk/xelatex/pdflatex/lualatex）；缺省自动选择' },
+      probeOnly: { type: 'boolean', description: '仅体检工具链：探测可用引擎与版本、缺失项与安装建议，不编译不写文件' },
+    } },
+  }},
 ];
 
 const SKILL_PROMPTS = {
@@ -601,22 +617,22 @@ const SKILL_PROMPTS = {
 4. **深度**：从证据中挑出最关键（或互相矛盾）的结论精读原文核对；需要开放式多 Agent 探索时，才改用 orchestrate_task，goal 中写明每个子问题要检索什么、返回格式（要点列表 + 每条结论附来源 URL 与来源类型）。
 5. **调和与产出**：核对 deep_research 生成的报告（research/<课题slug>-report.md）中每条结论能否溯源到证据，冲突信息并列呈现并注明各自来源；报告结构为：执行摘要 → 关键发现（每条带出处）→ 数据与证据 → 分歧与不确定性 → 结论与建议 → 引用列表（编号、标题、URL、访问日期）。完成后在回复中给出文件路径与一段执行摘要，供用户在预览面板查看。
 纪律：每个结论必须可溯源，禁止编造引用；检索失败如实说明并降级（换关键词/换来源），不允许用先验知识冒充检索结果。`,
-  // T4-5：LaTeX 编译与工具链诊断（简单项目首选 Tectonic，完整项目走系统 TeX Live；PDF 产物进预览 tab）
+  // T4-5 / G-latex：LaTeX 编译与工具链诊断（优先调用原生 latex_compile 工具；
+  // 简单项目首选 Tectonic，完整项目走系统 TeX Live；PDF 产物进预览 tab）
   latex_compile: `\n\n## LaTeX 编译技能
-用户要求「编译 LaTeX / 出论文 PDF / 构建 tex 项目」时，按以下步骤推进：
-1. **定位入口**：在项目里找主 .tex 文件（含 \\documentclass 声明的那个）；存在多个入口时先向用户确认编译哪一个。
-2. **探测工具链**：先跑「command -v tectonic」——Tectonic 是简单项目的首选引擎（单命令编译、按需自动下载依赖包）；若缺失再跑「command -v latexmk xelatex pdflatex」探测系统 TeX Live（适合含参考文献、多图、跨文件的完整项目）。
-3. **执行编译**：Tectonic 项目跑「tectonic 入口.tex」；TeX Live 项目跑「latexmk -pdf 入口.tex」，中文文档（含 ctex/xeCJK）改用「latexmk -xelatex」。编译耗时较长，用足够的超时执行；报错时读日志定位到具体行，修改 .tex 源码后重试，不要原样反复重跑。
-4. **产物确认**：检查退出码与 PDF 文件确实生成（与入口同目录同名），把路径告知用户并说明可在右侧预览面板直接查看。
-5. **工具链缺失时**：不要静默放弃——如实说明缺什么，给出可行动安装命令（Tectonic：brew install tectonic 或 cargo install tectonic；完整 TeX Live：从 tug.org/mactex 安装 MacTeX），并建议用户启用 LaTeX 工具链诊断技能做全面体检。
-纪律：禁止没看到编译成功输出和 PDF 存在就宣称完成；日志里的「! LaTeX Error」等真实错误必须向用户转述关键一条。`,
+用户要求「编译 LaTeX / 出论文 PDF / 构建 tex 项目」时，优先调用原生 latex_compile 工具（传 path 指向主 .tex 入口文件），它会自动探测本机 TeX 工具链、选择合适引擎并把 PDF 写到入口同目录，返回 PDF 路径、所用引擎与耗时。按以下要点推进：
+1. **定位入口**：在项目里找主 .tex 文件（含 \\documentclass 声明的那个）；存在多个入口时先向用户确认编译哪一个，再作为 path 传入。
+2. **引擎选择**：缺省自动选择即可（中文文档优先 xelatex，否则优先 tectonic）；确有需要时用 engine 显式指定（tectonic/latexmk/xelatex/pdflatex/lualatex）。工具内部已处理工具链缺失探测，无需你自己先跑 command -v。
+3. **报错处理**：工具失败时返回结构化错误（首条 LaTeX 报错 + 行号 + 日志尾部）——读它定位到具体行，修改 .tex 源码后重试，不要原样反复重跑。
+4. **产物确认**：工具已校验退出码与 PDF 确实生成；把返回的 pdfPath 告知用户并说明可在右侧预览面板直接查看。
+5. **工具链缺失时**：工具返回的 hint 已给出可行动安装命令（Tectonic：brew install tectonic 或 cargo install tectonic；完整 TeX Live：从 tug.org/mactex 安装 MacTeX）；如实转述，不要静默放弃。
+纪律：禁止没看到工具返回编译成功和 PDF 路径就宣称完成；结构化错误里的「! LaTeX Error」等真实错误必须向用户转述关键一条。`,
   latex_doctor: `\n\n## LaTeX 工具链诊断技能
-用户问「LaTeX 为什么编译不了 / 本机 TeX 环境怎么样」时：
-1. **逐项探测**并记录真实输出：「command -v tectonic latexmk pdflatex xelatex lualatex」；有 TeX Live 再跑「kpsewhich --version」；有 Tectonic 再跑「tectonic --version」。
-2. **如实汇报**：哪些引擎可用、版本号多少、缺哪些；中文写作场景顺带检查 CJK 支持（「kpsewhich ctex.sty」）。
-3. **给出可行动建议**（按场景分流）：只编译简单单文件项目 → 装 Tectonic（brew install tectonic 或 cargo install tectonic，轻量免维护）；完整论文项目（参考文献、多文件、插图）→ 安装 MacTeX 发行版（tug.org/mactex）。提醒用户装完后新开终端让 PATH 生效。
-4. **可选实测**：用户有具体项目时，用探测到的可用引擎对入口文件做一次最小化编译尝试，把日志里第一条真实错误原样贴出并解释含义。
-纪律：只汇报实际执行过的命令与真实输出，禁止凭先验知识猜测本机装了什么、版本多少。`,
+用户问「LaTeX 为什么编译不了 / 本机 TeX 环境怎么样」时，调用原生 latex_compile 工具并传 probeOnly=true 做体检（只探测不编译、不写文件）——它会逐项探测本机可用引擎与版本、缺失项、CJK 支持与安装建议，返回结构化体检结果。
+1. **如实汇报**：哪些引擎可用、版本号多少、缺哪些；中文写作场景顺带关注返回结果里的 CJK/ctex 支持信息。
+2. **给出可行动建议**（按场景分流）：只编译简单单文件项目 → 装 Tectonic（brew install tectonic 或 cargo install tectonic，轻量免维护）；完整论文项目（参考文献、多文件、插图）→ 安装 MacTeX 发行版（tug.org/mactex）。提醒用户装完后新开终端让 PATH 生效。
+3. **可选实测**：用户有具体项目时，用体检到的可用引擎对入口文件跑一次真实编译（传 path），把返回的第一条真实错误原样贴出并解释含义。
+纪律：只汇报工具实际探测到的结果，禁止凭先验知识猜测本机装了什么、版本多少。`,
 };
 
 export const BUILTIN_SKILL_IDS = Object.keys(SKILL_PROMPTS);
@@ -641,6 +657,11 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
   doc_create（生成 Word .docx）、xlsx_create（生成 Excel .xlsx）、pptx_create（生成 PPT .pptx）、
   pdf_generate（把 HTML 渲染成 PDF）。日报/周报/预算表/统计报表/汇报 PPT 这类「要交付一份文件」的
   需求优先用它们产出文件（并告知用户文件路径），而不是只在回复里给 Markdown 文本
+- 图表可视化：需要画流程图/时序图/状态图/类图/甘特图/饼图时，在回复里直接给出 mermaid 围栏代码块
+  （首行写 mermaid 作为语言标识），应用会把 Mermaid 源文本即时渲染成图；不要用 ASCII 手绘或纯文字
+  描述替代图示。语法必须合法，否则会显示为渲染失败提示
+- LaTeX 编译（本地原生，自动探测 TeX 工具链）：latex_compile 编译 .tex 为 PDF（传 path 指向主入口），
+  中文文档自动走 xelatex；传 probeOnly=true 可只做工具链体检。写 PDF 会弹一次审批确认
 - 启动子代理处理子任务（spawn_subagent）
 - 多 Agent 并行编排（orchestrate_task）：当用户要求多角色/多任务并行，或目标可拆为互不依赖的
   子任务时，主动调用它把目标转交编排系统并行执行；返回的聚合结果由你向用户转述，
@@ -717,6 +738,8 @@ const CWD_TOOLS = new Set([
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment',
   // G-doc：文档生成输出路径按「当前项目目录」解析（相对路径基准），且写路径白名单根也取该 cwd
   'doc_create', 'xlsx_create', 'pptx_create', 'pdf_generate',
+  // G-latex：编译入口与 PDF 输出路径按「当前项目目录」解析（相对路径基准）
+  'latex_compile',
 ]);
 
 // 子代理可用工具：只读探索集（不做任何修改）
@@ -987,6 +1010,9 @@ const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch
   'clipboard', 'notify', 'http_request', 'sqlite', 'sandbox_code_run',
   // G-doc：文档生成四工具（写文件 → L2），需透传 approvalMode/conversationId 进主进程审批闸
   'doc_create', 'pptx_create', 'xlsx_create', 'pdf_generate',
+  // G-latex：LaTeX 编译（写 PDF → L2；probeOnly 体检模式不进审批面，由 approval.toolLevel 特判），
+  // 需透传 approvalMode/conversationId 进主进程审批闸
+  'latex_compile',
   // G-CUA：模型侧桌面自动化（L1 恒逐次确认），需透传 approvalMode/conversationId 进主进程审批中心
   'computer_use']);
 
@@ -1050,6 +1076,8 @@ const TOOL_HANDLER_NAMES = {
   // G-CUA：桌面自动化（opt-in，主进程 createToolHandlers 注入；同时须在 engineProcess/registry.js
   // 的 TOOL_CHANNELS 登记，否则子进程路径会报「未知工具」）
   computer_use: 'computerUse',
+  // G-latex：LaTeX 编译原生工具通道
+  latex_compile: 'latexCompile',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -1892,6 +1920,9 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   // + AX 采集 + 键鼠执行 + 可能的逐次用户确认（等待无上限，由 CUA 审批通道 120s 超时兜底）。
   // 看门狗给 15min 做最后防线（长于任何单步，短于用户可感知的「卡死」）。
   computer_use: 900000,
+  // G-latex：一次 latex_compile = 单次引擎编译（含 latexmk 多轮 pass），实现侧 5min
+  // → 看门狗 6min（数值与 main/tools/timeouts.js 的 LATEX_* 对账，由 test 断言）
+  latex_compile: 360000,
 };
 
 export function withTimeout(promise, ms, label) {

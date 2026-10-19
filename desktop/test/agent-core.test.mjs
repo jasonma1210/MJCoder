@@ -276,10 +276,11 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
   const sysLatex = String(chatCalls[0]?.messages?.[0]?.content || '');
   check('latex 技能启用后 system 含编译与诊断两段提示',
     sysLatex.includes('LaTeX 编译技能') && sysLatex.includes('LaTeX 工具链诊断技能'));
-  check('latex 提示含 Tectonic/TeX Live 探测与安装指引',
-    sysLatex.includes('command -v tectonic') && sysLatex.includes('latexmk') && sysLatex.includes('MacTeX'));
+  check('latex 提示改为优先调用原生 latex_compile 工具，并保留 Tectonic/MacTeX 安装指引',
+    sysLatex.includes('latex_compile') && sysLatex.includes('Tectonic') && sysLatex.includes('MacTeX'));
+  check('latex 诊断提示走 probeOnly 体检', sysLatex.includes('probeOnly'));
   check('latex 提示保留 \\documentclass 反斜杠（模板字符串转义正确）', sysLatex.includes('\\documentclass'));
-  check('latex 提示要求产物确认后才宣称完成', sysLatex.includes('禁止没看到编译成功输出和 PDF 存在就宣称完成'));
+  check('latex 提示要求产物确认后才宣称完成', sysLatex.includes('禁止没看到') && sysLatex.includes('编译成功'));
 
   // ── 测试 9：CLI 冒烟 ──
   const cliPath = path.resolve(import.meta.dirname, '../agent-core/cli.js');

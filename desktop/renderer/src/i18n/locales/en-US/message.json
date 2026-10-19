@@ -35,5 +35,7 @@
   "addToChat": "Add to chat",
   "copyPath": "Copy path",
   "pathCopied": "Path copied",
-  "outputFiles": "Output files ({n})"
+  "outputFiles": "Output files ({n})",
+  "diagramRendering": "Rendering diagram…",
+  "diagramRenderFailed": "Diagram render failed (invalid Mermaid syntax)"
 }

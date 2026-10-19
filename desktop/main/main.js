@@ -598,6 +598,17 @@ docTools.initDocTools({
   userDataDir: app.getPath('userData'),
 });
 
+// G-latex：LaTeX 编译原生工具层（latex_compile，含 probeOnly 工具链体检）——
+// 探测本机 tectonic / TeX Live（latexmk/xelatex/pdflatex/lualatex）并选合适引擎编译 .tex → PDF；
+// 离线可用、结构化报错。审批闸复用 tools/artifactWriteGate.js 单一事实来源（与 docTools 同源）。
+const latexTools = require('./latexTools');
+latexTools.initLatexTools({
+  requestApproval, applyApprovalDecision,
+  getAlwaysRules: () => alwaysRules, conversationRules,
+  getGovernance: () => mcpIpc.getGovernance(),
+  userDataDir: app.getPath('userData'),
+});
+
 
 // T2-1：技能与插件市场域已拆出 main/ipc/plugins.js（只搬移不改行为）——
 // SKILL.md 技能体系 / 插件市场（git 安装+权限双闸+签名 fail-closed）/ 网络插件发现与对话内安装。
@@ -1066,6 +1077,9 @@ agentRunner.initAgentRunner({
     xlsxCreate: docTools.toolXlsxCreate,
     pptxCreate: docTools.toolPptxCreate,
     pdfGenerate: docTools.toolPdfGenerate,
+    // G-latex：LaTeX 编译（写 PDF 弹审批；probeOnly 体检模式不写文件故不进审批面）。
+    // 同样仅主会话注入——Worker/定时任务没有审批通道语义，编译产物落盘必须有人在场确认。
+    latexCompile: latexTools.toolLatexCompile,
     // G-CUA：模型侧桌面自动化（computer_use）——把既有 CUA 循环接到模型工具面。
     // 仅主会话注入（Worker/定时任务无审批通道语义，且模型必须在场确认）；引擎仅当
     // 用户开启「界面自动化」且为 macOS 时才把该工具放进 tools 数组，此处是执行侧接线。

@@ -63,8 +63,8 @@ function initDeps({ gov = { profile: 'normal', fsMode: 'read-write', sandboxNetw
   const byName = Object.fromEntries(BASE_TOOLS.map((t) => [t.function.name, t.function]));
   const missing = DOC.filter((n) => !byName[n]);
   check('BASE_TOOLS 含 4 个文档生成工具', missing.length === 0, missing.length ? `缺=${missing}` : '');
-  check('BASE_TOOLS.length === 51（期 3 的 5 个 + G-deep-research 1 个 + G-doc 4 个）',
-    BASE_TOOLS.length === 51, `got=${BASE_TOOLS.length}`);
+  check('BASE_TOOLS.length === 52（期 3 的 5 个 + G-deep-research 1 个 + G-doc 4 个 + G-latex 1 个）',
+    BASE_TOOLS.length === 52, `got=${BASE_TOOLS.length}`);
   check('doc_create schema required=[path]、块类型枚举含 heading/paragraph/table',
     JSON.stringify(byName.doc_create?.parameters?.required) === '["path"]'
     && (byName.doc_create?.parameters?.properties?.blocks?.items?.properties?.type?.enum || []).includes('heading')

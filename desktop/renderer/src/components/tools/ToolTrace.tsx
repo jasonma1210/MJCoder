@@ -48,6 +48,8 @@ export function toolNameCN(name: string): string {
     pptx_create: 'toolTrace.pptxCreate', pdf_generate: 'toolTrace.pdfGenerate',
     // G-CUA：桌面自动化
     computer_use: 'toolTrace.computerUse',
+    // G-latex：LaTeX 编译
+    latex_compile: 'toolTrace.latexCompile',
   };
   return map[name] ? tGlobal(map[name]) : name;
 }
@@ -248,6 +250,11 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
     // G-doc：文档生成——摘要显示输出路径（内容体量在详情区/审批卡看）
     case 'doc_create': case 'xlsx_create': case 'pptx_create': case 'pdf_generate':
       return <PathChip text={s('path')} />;
+    // G-latex：编译摘要显示入口文件；体检模式（probeOnly）显示提示文案
+    case 'latex_compile':
+      return a.probeOnly === true
+        ? <span className="text-text2 truncate">{t('toolTrace.latexProbe')}</span>
+        : <PathChip text={s('path')} />;
     default: {
       // mcp__server__tool / 未知工具：给出首个字符串参数或参数个数
       const keys = Object.keys(a);
@@ -261,7 +268,8 @@ function toolIcon(name: string, failed: boolean) {
   const cls = failed ? 'text-danger shrink-0' : 'text-accent shrink-0';
   if (name === 'shell' || name === 'code_exec' || name === 'sandbox_code_run' || name.startsWith('mcp__')) return <IconTerminal size={13} className={cls} />;
   if (name === 'read_file' || name === 'write_file' || name === 'list_dir' || name === 'sqlite'
-    || name === 'doc_create' || name === 'xlsx_create' || name === 'pptx_create' || name === 'pdf_generate') return <IconFile size={13} className={cls} />;
+    || name === 'doc_create' || name === 'xlsx_create' || name === 'pptx_create' || name === 'pdf_generate'
+    || name === 'latex_compile') return <IconFile size={13} className={cls} />;
   if (name === 'edit_file' || name === 'apply_patch') return <IconFileDiff size={13} className={cls} />;
   if (name === 'grep' || name === 'glob' || name === 'web_search' || name === 'deep_research') return <IconSearch size={13} className={cls} />;
   if (name === 'web_fetch' || name === 'http_request' || name.startsWith('browser_') || name.startsWith('chrome_')) return <IconGlobe size={13} className={cls} />;

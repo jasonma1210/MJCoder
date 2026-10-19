@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MermaidDiagram } from './MermaidDiagram';
 import { toast } from './feedback';
 import { useI18n } from '../i18n'; // T3-2：i18n
 import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconFile, IconGitBranch, IconPlus, IconSpinner } from './icons';
@@ -420,8 +421,18 @@ function FileRefChip({ text, onOpenFile }: { text: string; onOpenFile?: (p: stri
 /** markdown 渲染器的自定义节点：只改「行内代码」与「本地链接」，其余保持默认语义 */
 function markdownComponents(onOpenFile?: (p: string) => void) {
   return {
+    // G-visualize：```mermaid 围栏块由 code 渲染器出图，外层 <pre> 必须一并旁路，
+    // 否则图表会被套进等宽预格式块（背景、滚动、等宽字体都不对）
+    pre: ({ children, ...rest }: { children?: ReactNode }) => {
+      const first: any = Array.isArray(children) ? children[0] : children;
+      if (/language-mermaid/i.test(String(first?.props?.className || ''))) return <>{children}</>;
+      return <pre {...rest}>{children}</pre>;
+    },
     // 代码块（带 language-* className）与多行代码不处理，仅处理行内代码
     code: ({ className, children, ...rest }: { className?: string; children?: ReactNode }) => {
+      const cls = String(className || '');
+      // G-visualize：```mermaid → 渲染成图（其余 language-* 代码块保持原样）
+      if (/language-mermaid/i.test(cls)) return <MermaidDiagram code={String(children ?? '')} />;
       const raw = String(children ?? '').replace(/\n$/, '');
       if (className || raw.includes('\n')) {
         return (

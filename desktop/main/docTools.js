@@ -25,8 +25,8 @@ const os = require('os');
 const fs = require('fs');
 const fsp = fs.promises;
 const { audit } = require('./audit/auditLog');
-const approval = require('./approval');
-const writeGuard = require('./writeGuard');
+// 本机产物写闸：单一事实来源（G-latex 的 latex_compile 与本模块四工具共用）
+const { gateArtifactWrite } = require('./tools/artifactWriteGate');
 // 超时数值单一事实来源（与引擎 TOOL_TIMEOUT_OVERRIDES 对账，见 main/tools/timeouts.js 头注释）
 const { DOC_GEN_IMPL_TIMEOUT_MS } = require('./tools/timeouts');
 
@@ -73,63 +73,11 @@ function resolveOutPath(raw, cwd, ext) {
 }
 
 /**
- * 写闸（与 exec.runWriteTool 同一套策略，判据全部来自 writeGuard）：
- *   · 只读文件能力档 → 直接拒绝（fail-closed，不提供单次放行）；
- *   · 受保护路径（.git / .mjcode）→ 无审批放行口，直接拒绝；
- *   · 白名单外（非 cwd/userData/tmp）→ 强制弹一次审批，且批准不沉淀规则（防一次批准变永久绕过）；
- *   · 白名单内 → 走审批中心标准判定（doc 四工具均登记为 L2）。
- *
- * @returns {{ok:false, error:string, denied?:boolean, blocked?:boolean}|{ok:true, asked:boolean}}
+ * 写闸：本机产物落盘统一纪律，实现已抽到 main/tools/artifactWriteGate.js（单一事实来源）。
+ * 这里只做一次转投，保持本模块调用点的可读性（工具键 + 参数 + 绝对路径）。
  */
-async function gateWrite(toolKey, args, absPath) {
-  const { approvalMode = 'on-request', conversationId, requireApproval = true } = args || {};
-  const cwd = String(args?.cwd || '').trim() || process.cwd();
-
-  // ① 只读文件能力档（判定单一事实来源：writeGuard.isReadonlyFs，与 exec.js 写工具闸口共用）
-  if (deps.getGovernance && writeGuard.isReadonlyFs(deps.getGovernance())) {
-    audit(toolKey, absPath, '只读文件能力档拒绝写入', 'blocked');
-    return { ok: false, blocked: true, readOnly: true, error: '当前为「只读文件能力」档，已拒绝生成文档（可在「本机服务 → 能力降级」切换为读写）。' };
-  }
-
-  // ② 受保护路径：即使位于项目目录内也禁止写入，且不接受审批放行
-  const protectedPaths = writeGuard.protectedPathsFor(cwd);
-  const hit = writeGuard.firstProtectedTarget([absPath], protectedPaths, cwd);
-  if (hit) {
-    audit(toolKey, absPath, `受保护路径写入被拦截：${hit}`, 'blocked');
-    return { ok: false, blocked: true, protectedPath: true, error: `输出目标位于受保护路径内：${hit}。该路径受保护以防止篡改 git hooks / 应用配置，不接受审批放行。` };
-  }
-
-  // ③ 白名单根判定
-  const roots = writeGuard.allowedWriteRoots({ cwd, userDataDir: deps.userDataDir });
-  const outside = writeGuard.firstOutsideTarget([absPath], roots, cwd);
-  if (outside) {
-    if (!requireApproval || approvalMode === 'never') {
-      audit(toolKey, absPath, `白名单外写入被拦截：${outside}`, 'blocked');
-      return { ok: false, blocked: true, outsideWhitelist: true, error: `输出目标超出允许范围（仅限项目目录 / 应用数据 / 系统临时目录）：${outside}` };
-    }
-    const decision = await deps.requestApproval(toolKey, { ...args, path: absPath });
-    if (decision === 'deny') {
-      audit(toolKey, absPath, `白名单外写入被拒绝：${outside}`, 'denied');
-      return { ok: false, denied: true, error: '用户拒绝执行' };
-    }
-    // 白名单外的批准仅本次有效（不调用 applyApprovalDecision，规则不落地）
-    return { ok: true, asked: true };
-  }
-
-  // ④ 白名单内 → 审批中心标准判定
-  const verdict = approval.needsApproval({
-    tool: toolKey, args: { ...args, path: absPath }, approvalMode, conversationId,
-    alwaysRules: deps.getAlwaysRules(), conversationRules: deps.conversationRules,
-  });
-  if (verdict.need) {
-    const decision = await deps.requestApproval(toolKey, { ...args, path: absPath });
-    if (decision === 'deny') {
-      audit(toolKey, absPath, '用户拒绝', 'denied');
-      return { ok: false, denied: true, error: '用户拒绝执行' };
-    }
-    deps.applyApprovalDecision(decision, toolKey, { ...args, path: absPath }, conversationId);
-  }
-  return { ok: true, asked: !!verdict.need };
+function gateWrite(toolKey, args, absPath) {
+  return gateArtifactWrite(deps, toolKey, args, absPath);
 }
 
 // 库按需加载（缺失时给出明确错误，而不是模块加载期崩溃）

@@ -50,7 +50,8 @@ import('../agent-core/index.js').then((m) => {
     // + clipboard/notify/http_request/sqlite/sandbox_code_run = 46（期 3：原生内置工具）
     // + deep_research = 47（G-deep-research：原生深度研究流水线，引擎内建）
     // + doc_create/xlsx_create/pptx_create/pdf_generate = 51（G-doc：文档生成原生工具）
-    assert.strictEqual(BASE_TOOLS.length, 51, `实际 ${BASE_TOOLS.length} 个工具`);
+    // + latex_compile = 52（G-latex：LaTeX 编译原生工具）
+    assert.strictEqual(BASE_TOOLS.length, 52, `实际 ${BASE_TOOLS.length} 个工具`);
   });
 
   // ── P1-5：BASE_TOOLS 与 handler 映射 / 审批分级不得断链 ──

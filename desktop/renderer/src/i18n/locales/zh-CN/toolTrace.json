@@ -87,6 +87,8 @@
   "pptxCreate": "生成 PPT 演示文稿",
   "pdfGenerate": "生成 PDF 文档",
   "computerUse": "界面自动化（Computer Use）",
+  "latexCompile": "编译 LaTeX",
+  "latexProbe": "LaTeX 工具链体检",
   "researchEvidence": "证据条目 {n} 条",
   "researchDeepRead": "精读原文 {n} 篇",
   "researchFailures": "检索失败 {n} 个子问题"

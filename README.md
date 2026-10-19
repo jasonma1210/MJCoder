@@ -2542,3 +2542,88 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **N9 目视验证建议**：冷启动后经设置页/诊断包确认 `governance/stats.json` 中 hook / 意图预热 / 技能三类计数随真实调用增长。
 - **第四批（生态：G-latex / G-visualize / G-sites / G3·G4）**：用户标注「按产品优先级取舍」，需与用户确认取舍后再动。
 - 推荐下一步：与用户确认第四批取舍清单，或推进其余批次。
+
+## 会话总结：第六轮第四批任务落地 · 2026-10-19（对话内可视化 + LaTeX 编译原生工具）
+
+### 会话背景
+承上一轮《MJCode-AgentHarness 第六轮全量审查报告》第三批/第五批落地，用户下达指令：「继续 … → 第四批（生态，按产品优先级取舍）」。第四批为**生态差异化能力补齐**，含 4 个子项：G-visualize（对话内可视化）、G-latex（LaTeX 编译）、G-sites（站点构建/预览/可选部署）、G3·G4（配置分层 / 主体维 RBAC）。本轮先做**可行性核验**，再按「产品优先级 + 成本收益」取舍落地：**G-visualize + G-latex 全量落地**，**G-sites 暂缓并记录设计要点**，**G3·G4 记为「已具备、暂不扩展」**。用户硬约束「暂时不考虑云端实现」贯穿全程（G-sites 只做本地，禁止部署）。
+
+### 会话的主要目的
+1. **G-visualize**：让对话内 ```mermaid 围栏块渲染为图表（离线、主题自适应、失败可降级），对标主流 Agent 的「对话内可视化」体验。
+2. **G-latex**：把 LaTeX 编译从「提示词操作手册」升级为**原生工具** `latex_compile`（自动探测 TeX 工具链 + 选引擎 + 编译 + 结构化报错 + 体检模式），完整走「新增原生工具 8 环节接线」。
+3. **G-sites 取舍决策**：核验现有预览底座能力后，判断「整站本地预览」的增量成本，做出「暂缓并记录设计要点」的决策。
+4. **G3·G4 定性**：确认配置分层与 RBAC 的既有实现边界，避免把「有别名实现」误判为缺失。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 | 验证 |
+|---|---|---|---|
+| G-visualize | 对话内 mermaid 渲染 | 新增 `MermaidDiagram.tsx`（`renderSeq` 防竞态、`MutationObserver` 跟随 `data-theme` 重渲染、`securityLevel:'strict'`、失败降级为「图表渲染失败（Mermaid 语法有误）」卡片）；`MessageStream.tsx` 的 `markdownComponents` 增加 `pre` 旁路 + `code` 分支识别 `language-mermaid`；i18n 双语包新增 `diagramRendering`/`diagramRenderFailed`；`BASE_PROMPT` 新增图表可视化条目 | typecheck ✓ / 全量门禁 ✓ |
+| G-latex | `latex_compile` 原生工具 | 新增 `main/latexTools.js`（探测 5 引擎 + kpsewhich + ctex.sty、中文优先 xelatex、`probeOnly` 体检、`parseLatexLog` 结构化报错、`runCapture` 不经 shell 的 spawn + SIGKILL 超时）；引擎侧 6 处接线（`BASE_TOOLS`/`SKILL_PROMPTS` 改写/`CWD_TOOLS`/`APPROVAL_TOOLS`/`TOOL_HANDLER_NAMES`/`TOOL_TIMEOUT_OVERRIDES`/`BASE_PROMPT`）；主进程 3 处接线（`TOOL_CHANNELS`/handler 注册/审批分级）；UI `toolNameCN` + i18n 双包 | native-latex-tools 31/31 ✓（1 项环境自适应跳过） |
+| SSOT | 写路径闸共享化 | 把 `docTools` 私有 `gateWrite` 抽为 `main/tools/artifactWriteGate.js`（`gateArtifactWrite`），`docTools` 与 `latexTools` 共用同一实现 | native-doc-tools ✓ / native-latex-tools ✓ |
+| G-sites | 决策：暂缓并记录设计要点 | 核验 `previewTool.js`（仅单文件图片/pdf/音视频/文本，无站点服务器底座）后，判定「整站本地预览」需新增常驻服务/自定义协议 + 站点根映射 + 预览面板接线，成本与暴露面高、边际价值低（本地构建已由 shell 覆盖、本地查看已由预览面板覆盖） | 决策记录 ✓ |
+| G3·G4 | 定性：「已具备、暂不扩展」 | `main/mcpPrewarm.js` PROFILES + `main/rbac.js` + `main/approvalPolicy.js` 已有分层与审批策略；单用户桌面无多主体场景 | 决策记录 ✓ |
+
+### 会话中主要使用的技术栈
+- **引擎侧**：`desktop/agent-core/index.js`（headless 引擎，ESM）——`BASE_TOOLS` schema / `SKILL_PROMPTS` / `CWD_TOOLS` / `APPROVAL_TOOLS` / `TOOL_HANDLER_NAMES` / `TOOL_TIMEOUT_OVERRIDES` / `BASE_PROMPT`。
+- **主进程侧**：`desktop/main/`（CJS）——`latexTools.js`（原生工具实现）、`tools/artifactWriteGate.js`（写闸 SSOT）、`tools/timeouts.js`（超时常量）、`engineProcess/registry.js`（`TOOL_CHANNELS`）、`main.js`（handler 注册）、`approval.js`（审批分级）。
+- **渲染层**：React + TS（`components/MermaidDiagram.tsx`、`components/MessageStream.tsx`、`components/tools/ToolTrace.tsx`）+ **mermaid ^12.2.0**（纯前端 ESM，Vite 离线打包）。
+- **LaTeX 工具链**：tectonic / latexmk / xelatex / pdflatex / lualatex；macOS MacTeX 可执行文件位于 `/Library/TeX/texbin`（`shellEnv()` 的 PATH 不含，需局部追加）。
+- **门禁**：`test/run-all.mjs` 发现式全量跑、`tool-registration-matrix`（8 环节双向差集断言）、`lint` 棘轮（`--max-warnings=161`）、`ui-conventions`、`untracked-deps`。
+
+### 关键决策和解决方案
+1. **G-visualize 只做「对话内渲染」、不做「落盘导出」**：独立导出需要 vendored 2~3MB mermaid 资源 + 重复渲染管线，成本高、边际价值低；渲染只走「围栏块 → SVG」单一路径，`securityLevel:'strict'` 收敛 XSS 面。
+2. **流式渲染不接 mermaid**：reasoning / streamingText 阶段不渲染 mermaid，避免半截围栏（未闭合代码块）反复触发渲染失败噪声。
+3. **G-latex 收敛为单个原生工具（含 `probeOnly` 体检模式）**：原报告的 `latex_doctor` 场景由 `probeOnly=true` 覆盖，避免工具面膨胀；`latex_compile` schema **刻意省略 `required`**（体检模式不需要 path）。
+4. **G-latex 的 SKILL_PROMPTS 由「操作手册」改写为「优先调用原生工具」**：原技能文本教模型「先 `command -v tectonic`」，现改为「优先调用 `latex_compile`，体检走 `probeOnly=true`」，把探测逻辑从模型手工操作下沉到工具内部。
+5. **写闸抽为 SSOT**：`docTools` 私有 `gateWrite` 与 `latexTools` 需求同形，抽出 `main/tools/artifactWriteGate.js` 消除双份副本漂移风险（历史事故多源于副本漂移）。
+6. **`latexTools` 的 path 解析先判目录再补扩展名**：初版「先补 `.tex` 再 stat」会把目录路径补成不存在的 `${dir}.tex`，报出误导性 `notFound` 并让 `isDirectory()` 分支成为死代码；修正为「先 stat 原始路径判目录 → 不存在且缺扩展名才补 `.tex` → 再 stat」。
+7. **超时三层不变式**：LaTeX 实现侧 300000ms < 看门狗 360000ms，且与引擎 `TOOL_TIMEOUT_OVERRIDES`（360000）对账，由测试断言强制。
+8. **G-sites 暂缓决策**：核验后确认「整站本地预览」的底座（常驻服务或自定义 `mjsite://` 协议 + 站点根映射 + 预览面板接线）成本与风险（端口/生命周期/暴露面）高，而真正的缺口（本地构建、本地查看）已被 shell 与预览面板覆盖；据「先验证前提可行性再决定投入」原则暂缓，仅记录精简设计要点（自定义协议优先于常驻端口服务，避免端口占用与生命周期管理）。
+9. **G3·G4 不扩展**：经存在性核验，配置分层（Profile 预设）与审批策略（RBAC 等价物）已有实现，单用户桌面无多主体诉求，记为「已具备、暂不扩展」。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Glob` 定位源码与门禁基线；`Edit` / `Write` 落盘改动与新增测试；`Shell` 跑门禁（`typecheck` / `lint` / 全量 `npm test` / 生产构建）与 git 操作（`status`/`add`/`commit`/`push`）；`AskUserQuestion` 确认 G-sites 取舍。
+
+### 修改了哪些文件
+
+**新增文件（Added）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/renderer/src/components/MermaidDiagram.tsx` | mermaid 对话内渲染组件：`renderSeq` 防竞态、`MutationObserver` 跟随 `data-theme` 重渲染、`securityLevel:'strict'`、失败降级卡片 | G-visualize 核心交付 |
+| `desktop/main/latexTools.js` | `latex_compile` 原生工具实现：探测 5 引擎 + kpsewhich + ctex.sty、中文优先 xelatex、`probeOnly` 体检、`parseLatexLog` 结构化报错、`runCapture` 超时控制 | G-latex 核心交付 |
+| `desktop/main/tools/artifactWriteGate.js` | 写路径闸 `gateArtifactWrite` 单一事实来源（只读档 / 受保护路径 / 白名单外强审批 / 白名单内标准判定四段） | 消除 `docTools` 与 `latexTools` 双份写闸副本 |
+| `desktop/test/native-latex-tools.test.mjs` | LaTeX 工具五层门禁（schema/接线、审批分级、超时不变式、日志解析/体检/错误分支/条件真实编译、主进程接线 + UI + i18n），31 项 | G-latex 门禁 |
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/agent-core/index.js` | `BASE_TOOLS` 新增 `latex_compile` schema（省略 required）；`SKILL_PROMPTS` latex 两条改写为优先原生工具；`CWD_TOOLS` / `APPROVAL_TOOLS` / `TOOL_HANDLER_NAMES` / `TOOL_TIMEOUT_OVERRIDES` 各加 `latex_compile`；`BASE_PROMPT` 新增 LaTeX 与图表可视化条目 | G-latex 8 环节接线 + G-visualize 提示 |
+| `desktop/main/docTools.js` | 删除私有 `gateWrite` 的 approval/writeGuard require，改走 `tools/artifactWriteGate` 薄转投 | SSOT 收敛 |
+| `desktop/main/tools/timeouts.js` | 新增并导出 `LATEX_IMPL_TIMEOUT_MS=300000` / `LATEX_WATCHDOG_TIMEOUT_MS=360000` | 超时不变式 |
+| `desktop/main/engineProcess/registry.js` | `TOOL_CHANNELS` 加 `'latexCompile'`（51 → 52） | 8 环节接线 |
+| `desktop/main/main.js` | 新增 `latexTools.initLatexTools(...)`；`createToolHandlers` 加 `latexCompile: latexTools.toolLatexCompile` | 8 环节接线 |
+| `desktop/main/approval.js` | `REVERSIBILITY` / `TOOL_LEVEL` 加 `latex_compile`；`toolLevel()` 增加 `probeOnly===true → null` 特判；`approvalSummary` 增加编译审批卡文案 | 审批分级 |
+| `desktop/renderer/package.json` / `package-lock.json` | 新增依赖 `mermaid: ^12.2.0` | G-visualize 渲染依赖 |
+| `desktop/renderer/src/components/MessageStream.tsx` | `markdownComponents` 增加 `pre` 旁路 + `code` 分支识别 `language-mermaid` → 渲染 `<MermaidDiagram>` | G-visualize 挂载点 |
+| `desktop/renderer/src/components/tools/ToolTrace.tsx` | `toolNameCN` 加 `latex_compile`；摘要 case（probeOnly → 体检标签，否则 PathChip）；`toolIcon` 归入 `IconFile` 组 | 8 环节接线（UI 轨迹） |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/message.json` | 新增 `diagramRendering` / `diagramRenderFailed` | G-visualize i18n |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/toolTrace.json` | 新增 `latexCompile` / `latexProbe` | G-latex i18n |
+| `desktop/test/{web-todo-tools,native-tools-p3,native-doc-tools,skill-disclosure,engine-process}.test.mjs/.js` | 门禁基线计数 51 → 52 同步 | 新增工具后基线维护 |
+| `desktop/test/tool-registration-matrix.test.mjs` | `MUST_ADVERTISE` 数组加 `'latex_compile'` | 8 环节接线门禁 |
+| `desktop/test/agent-core.test.mjs` | latex 技能提示断言改为「优先原生工具 + probeOnly + 保留 \documentclass + 产物确认」 | 对齐 SKILL_PROMPTS 改写 |
+| `README.md` | 累积追加本节会话总结 | 用户固定规则 |
+
+### 验证结果
+- `npm run typecheck`：**通过**（exit 0，空输出）。
+- `npm run lint`：**0 error**，161 条历史 warning（与棘轮基线一致，未反弹）。
+- 专项门禁：`native-latex-tools` **31/31**（本机无 TeX 引擎，1 项真实编译按环境自适应跳过）。
+- 全量 `npm test`：**总计 220 · 通过 220 · 失败 0**（较上轮 219 项 +1，即本轮新增 `native-latex-tools` 套件）。
+- 生产构建：`npm run build`（渲染层 Vite 打包，含 mermaid 代码分包）。
+
+### 尚存问题与推荐下一步
+- **本机未安装任何 LaTeX 引擎**（`command -v tectonic latexmk pdflatex xelatex lualatex kpsewhich` 全部失败），故 `native-latex-tools` 的真实编译分支按环境条件跳过；建议在装有 MacTeX / TeX Live 的机器上补跑真机编译验收（中文文档走 xelatex 的端到端）。
+- **G-sites 待用户后续 promote**：已记录精简设计要点（自定义 `mjsite://` 协议优先于常驻端口服务，避免端口占用与生命周期管理）；若后续需要「整站本地预览」，按此要点实施。
+- **G-visualize 目视验证建议**：在真实 Electron 应用内确认「模型输出 ```mermaid 围栏 → 渲染为图 → 切换主题跟随重渲染 → 语法错误降级卡片」的端到端验收。
+- 推荐下一步：按用户节奏推进下一里程碑或其余批次；G-sites 若提上日程，按已记录的设计要点实施。

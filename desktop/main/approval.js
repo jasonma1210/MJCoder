@@ -82,6 +82,9 @@ const REVERSIBILITY = {
   xlsx_create: { reversible: true, note: '表格已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
   pptx_create: { reversible: true, note: '演示文稿已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
   pdf_generate: { reversible: true, note: 'PDF 已写入磁盘，可重新生成或删除（目标已存在时原内容会被替换）' },
+  // G-latex：LaTeX 编译写出的是**本机 PDF 文件** → 可补偿（可重新编译或删除）；
+  // probeOnly 体检模式不写文件，本就不进审批面（见 toolLevel 特判）。
+  latex_compile: { reversible: true, note: 'PDF 已写入磁盘，可重新编译或删除（目标已存在时原内容会被替换）' },
   // G-CUA：模型发起的桌面自动化顶层调用——会真实操作用户桌面上的原生应用，
   // 一次 computer_use 内部可执行多步点击/输入（可能已触发支付/删除/发送），
   // 本机无法回滚 → 不可补偿（与 cua_action 同纪律）。
@@ -257,6 +260,9 @@ const TOOL_LEVEL = {
   // （auto-safe 档下自动放行，on-request/always 逐次确认；写路径白名单外的目标另由
   //  main/docTools.js 的写闸强制弹一次且不落地规则，与本表的分级正交）。
   doc_create: 'L2', xlsx_create: 'L2', pptx_create: 'L2', pdf_generate: 'L2',
+  // G-latex：LaTeX 编译产出的是**本机 PDF 文件**，分级对齐「文件写类」→ L2。
+  // probeOnly 体检模式不写文件、无副作用，由 toolLevel 特判为不进审批面（null）。
+  latex_compile: 'L2',
   // G-CUA：模型侧桌面自动化顶层调用（computer_use）——启动一整段 GUI 任务、可执行任意多步
   // 点击/输入/按键（含支付/删除/发送类真实副作用），判 L1：任何审批档都逐次弹卡。
   // 与 unconfined_exec 同纪律：L1 硬地板不可经规则豁免，且（见 NON_REMEMBERABLE）不落规则库；
@@ -338,6 +344,9 @@ function toolLevel(tool, args = {}) {
     const ctx = [args.text, args.key, args.label, args.target].filter(Boolean).join(' ');
     return cuaStrongConfirm(ctx).strong ? 'L1' : 'L2';
   }
+  // G-latex：latex_compile 的 probeOnly（工具链体检）只探测不写文件、无副作用 → 不进审批面；
+  // 实际编译写 PDF 判 L2（见 TOOL_LEVEL）。
+  if (tool === 'latex_compile') return args.probeOnly === true ? null : 'L2';
   if (tool.startsWith('mcp__')) return 'L3';
   return TOOL_LEVEL[tool] || 'L2';
 }
@@ -642,6 +651,13 @@ function approvalSummary(tool, args = {}) {
         level: 'L2', title: '生成 PDF 文档',
         detail: `输出：${String(args.path || '')}\n纸张：${String(args.pageSize || 'A4')}${args.landscape ? '（横向）' : ''}\n`
           + `HTML 正文：${String(args.html || '').length} 字符（用应用自带 Chromium 排版渲染）`,
+      };
+    // ── G-latex：LaTeX 编译审批卡（写明入口文件 + 输出 PDF + 所用引擎，避免用户盲批）──
+    case 'latex_compile':
+      return {
+        level: 'L2', title: '编译 LaTeX 为 PDF',
+        detail: `入口文件：${String(args.path || '')}\n输出：同目录同名 .pdf\n`
+          + `编译引擎：${String(args.engine || '自动选择（中文文档优先 xelatex，否则优先 tectonic）')}`,
       };
     // ── V03：受限沙箱不可用时的单次非沙箱执行审批卡 ──
     case 'unconfined_exec':
