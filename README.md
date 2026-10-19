@@ -2620,9 +2620,11 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - `npm run lint`：**0 error**，161 条历史 warning（与棘轮基线一致，未反弹）。
 - 专项门禁：`native-latex-tools` **31/31**（本机无 TeX 引擎，1 项真实编译按环境自适应跳过）。
 - 全量 `npm test`：**总计 220 · 通过 220 · 失败 0**（较上轮 219 项 +1，即本轮新增 `native-latex-tools` 套件）。
-- 生产构建：`npm run build`（渲染层 Vite 打包，含 mermaid 代码分包）。
+- 生产构建：渲染层 Vite 打包**成功**（`desktop/renderer/dist/assets/` 中生成 mermaid 图形分包 `architectureDiagram` / `blockDiagram` / `c4Diagram` / `classDiagram` 等，确认 mermaid 离线打包与代码分包生效）；`npm run build` 尾部 electron-builder 的 GitHub 发布步骤因本机无 `GH_TOKEN` 报错，属**既有环境问题**（与本次改动无关）。
+- git：提交 `826903f`（26 文件，+2166/-178，含 4 个新增文件）。**推送受阻**：`git push origin main` 报 `SSL connection timeout`（无法访问 github.com），属当前网络环境问题（非代码问题），远程推送待网络恢复后重试。
 
 ### 尚存问题与推荐下一步
+- **推送待重试**：提交已安全落本地 `826903f`，网络恢复后执行 `git -c http.version=HTTP/1.1 push origin main` 即可。
 - **本机未安装任何 LaTeX 引擎**（`command -v tectonic latexmk pdflatex xelatex lualatex kpsewhich` 全部失败），故 `native-latex-tools` 的真实编译分支按环境条件跳过；建议在装有 MacTeX / TeX Live 的机器上补跑真机编译验收（中文文档走 xelatex 的端到端）。
 - **G-sites 待用户后续 promote**：已记录精简设计要点（自定义 `mjsite://` 协议优先于常驻端口服务，避免端口占用与生命周期管理）；若后续需要「整站本地预览」，按此要点实施。
 - **G-visualize 目视验证建议**：在真实 Electron 应用内确认「模型输出 ```mermaid 围栏 → 渲染为图 → 切换主题跟随重渲染 → 语法错误降级卡片」的端到端验收。
