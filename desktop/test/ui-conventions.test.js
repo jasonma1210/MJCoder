@@ -17,7 +17,7 @@ const BASELINE = {
   // 口径：扫描 renderer/src，**排除 components/ui/**（原语自身必须渲染裸 <button>）。
   // 豁免类别（不因本条门禁回退，但保留计数）：纯文字链接式按钮（无 bg-*/border/rounded 的
   // 文本 + hover 变色，如「展开/收起」「Toast 动作」，不匹配任何原语形态，见 README G7 说明）。
-  rawButton: 272,  // 2026-10-19 实测基线（首轮 ApprovalCard 4 + feedback 2；第二轮 CodeView 2 + LocalMcpSection 1）；每轮收敛后同步下调，禁止调高
+  rawButton: 268,  // 2026-10-19 实测基线（首轮 ApprovalCard 4 + feedback 2；第二轮 CodeView 2 + LocalMcpSection 1；第三轮 RecordReplayPanel 4，新增 xs 尺寸档后小按钮可零差异收敛）；每轮收敛后同步下调，禁止调高
 };
 
 let pass = 0;

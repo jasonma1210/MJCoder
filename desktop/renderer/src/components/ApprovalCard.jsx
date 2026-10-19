@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { useI18n } from '../i18n'; // T3-2：i18n
-import { IconAlert, IconFile, IconPlug, IconTerminal } from './icons';
+import { IconFile, IconPlug, IconTerminal } from './icons';
 import Button from './ui/Button';
 
 // 顶层常量只存标题 key（求值推迟到渲染时经 t()，切换语言即时更新）

@@ -10,6 +10,9 @@
 const { createRequire: createReq } = await import('node:module');
 const require = createReq(import.meta.url);
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 let pass = 0;
 let total = 0;
@@ -27,8 +30,14 @@ const electronPath = require.resolve('electron');
 const stub = new Module(electronPath, null);
 stub.filename = electronPath;
 stub.loaded = true;
+// 2026-10-19 修：原将 userData 写死为 '/tmp/mjcode-task-model'，导致**跨次运行累积**
+// （实测堆积 316 个任务）。任务一多，startScheduler 的"错期补跑"轮次就会与手动 runTask
+// 交错，seen.at(-1) 断言被会话模型（model-b）污染而随机翻转（非 hermetic）。
+// 改为每次运行新建独立临时目录，跑完清理，保证用例可重复、与机器历史状态无关。
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-task-model-'));
+const cleanup = () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* 清理失败不影响判定 */ } };
 stub.exports = {
-  app: { getPath: () => '/tmp/mjcode-task-model', whenReady: () => Promise.resolve(), on: noop },
+  app: { getPath: () => TMP, whenReady: () => Promise.resolve(), on: noop },
   ipcMain: { handle: (ch, fn) => handlers.set(ch, fn), once: noop, on: noop },
 };
 require.cache[electronPath] = stub;
@@ -142,6 +151,7 @@ const B = { providerId: 'p-b', isGlobal: true, baseUrl: 'https://b.example', mod
 
   // startScheduler 会起 20s 轮询，不关掉进程永不退出（run-all 会按 180s 超时判崩溃）
   scheduler.stopScheduler();
+  cleanup();
   console.log(`\nscheduled-task-model: ${pass}/${total} 通过`);
   process.exit(pass === total ? 0 : 1);
 })();

@@ -1315,8 +1315,68 @@ requiring third-party attribution declares it within the asset itself.
   这是解锁 `danger-ghost` 子类①小按钮、`CreateProjectForm` 大号表单按钮、以及行内小按钮桶（`px-2 py-1`）的**前置**；
   在 (b) 决策前，其余 danger-outline 保持原样（避免尺寸/圆角不一致）。每批仍按门禁+lint+typecheck+build 验证并下调基线。
 
+## 2026-10-19 G7 (b)：原语尺寸分档 + 新增 `xs` 档，解锁行内小按钮零差异收敛
 
-
-
+- **会话的背景**：第二轮结束时用户拍板「按这个方案推进 (b)」。(b) 指的是**扩展共享原语 `ui/Button`**，
+  解锁「当前无法零差异收敛」的按钮形态，且硬性约束是**不破坏现有观感**（用户规则：界面修改不得导致不一致/不美观）。
+  前一轮已用证据证明：基础类里的 `gap-2 / rounded-lg` **无法被消费方 `className` 可靠覆盖**
+  （Tailwind 同名工具类冲突由样式表顺序决定，非类名书写顺序），故 `px-2 py-1 rounded gap-1` 的行内小按钮
+  与 `px-5 py-3 rounded-xl text-sm` 的大表单按钮都无法零差异收敛。
+- **会话的主要目的**：用最小改动消除该结构性阻塞，并把「仓库真实存在的小行内按钮形态」纳入原语。
+- **完成的主要任务**：
+  1. **尺寸分档重构**：把 `gap-2 / rounded-lg` 从原语**基础类**下沉到**尺寸档**，
+     `SIZE_CLASS` 改为 `xs:'h-6 px-2 text-xs rounded gap-1'`、`sm:'h-7 px-3 text-xs rounded-lg gap-2'`、
+     `md:'h-8 px-4 text-xs rounded-lg gap-2'`；`ButtonSize` 由 `'sm'|'md'` 扩为 `'xs'|'sm'|'md'`。
+     **`sm`/`md` 的最终工具类集合与改造前逐字相同（仅字符串书写顺序变化）→ 零回归。**
+  2. **验证真实用量**：把 `RecordReplayPanel.tsx` 的小按钮簇（逐次确认卡片 2 枚 + 录制列表行 2 枚）转 `size="xs"`。
+  3. 门禁基线 `rawButton` 由 272 → **268**（ratchet 收紧）。
+  4. **附带修复**：复跑全量测试暴露既有缺陷 `test/scheduled-task-model.test.mjs` **非 hermetic**
+     （userData 写死 `/tmp/mjcode-task-model`，跨次运行累积至 316 个任务，触发「错期补跑」轮次与手动
+     `runTask` 交错，污染 `seen.at(-1)` 断言）。改为**每次运行独立临时目录**并跑完清理。
+- **会话中主要使用的技术栈**：React（JSX/TSX）、Tailwind v3 语义 token、Node 零依赖静态门禁、
+  Node `fs.mkdtempSync` 临时目录隔离、Vite 构建、ESLint + tsc。
+- **关键决策与证据**：
+  - **为何必须分档而非覆盖 `className`**：Tailwind 冲突按样式表顺序裁决。把 `gap/rounded` 放进尺寸档，
+    才能让 `xs` 与 `sm/md` 各自持有唯一确定的圆角与间隙，实现真正的零差异收敛。
+  - **为何新增 `xs` 而破例「只两档」**：仓库实测存在一批 `px-2 py-1 rounded gap-1`（text-xs）的行内小按钮
+    （AgentDock / WorktreeBar / RecordReplayPanel / DiffReviewPanel 等）。原语注释原写「不发明第三档」，
+    但**现实形态先于原则**——不给这档，这些按钮就只能长期裸写重复样式。已在注释中写明该理由。
+  - **`xs` 高度取 `h-6`（24px）的依据**：`py-1`(4×2) + `text-xs` 行高(16) = 24px，与无边框小按钮**逐字吻合**。
+- **修改了哪些文件**：
+  - `desktop/renderer/src/components/ui/Button.tsx`（基础类去 `gap-2/rounded-lg`；`SIZE_CLASS` 三档；`ButtonSize` 增 `xs`；注释改写）
+  - `desktop/renderer/src/components/RecordReplayPanel.tsx`（引 `ui/Button`；4 枚小按钮 → `size="xs"`）
+  - `desktop/renderer/src/components/ApprovalCard.jsx`（删除未使用导入 `IconAlert`）
+  - `desktop/test/ui-conventions.test.js`（`rawButton` 基线 272 → 268，注释同步）
+  - `desktop/test/scheduled-task-model.test.mjs`（临时目录 hermetic 化）
+  - `README.md`（本节）
+- **文件修改的详细内容与原因**：
+  - `Button.tsx`：`gap/rounded` 下沉到尺寸档 + 新增 `xs` —— 原因：解除「基础类不可覆盖」的结构性阻塞，
+    并覆盖仓库真实的小行内按钮形态；`sm/md` 输出等价，零回归面。
+  - `RecordReplayPanel.tsx`：确认卡片与录制列表行的成对按钮转 `primary/secondary + xs` ——
+    原因：**示范 `xs` 档的真实用法**，成组转换避免样式混排（用户偏好）。
+  - `ApprovalCard.jsx`：移除未使用 `IconAlert` —— 原因：上轮转换留下的未使用导入（lint warning），
+    按「不留未使用代码」原则清掉。
+  - `ui-conventions.test.js`：基线 268 —— 原因：ratchet 只降不升，固化本轮收敛量。
+  - `scheduled-task-model.test.mjs`：临时目录隔离 + 清理 —— 原因：修既有非 hermetic 缺陷，消除随机假失败。
+- **验证结果（真实输出）**：
+  - `node test/ui-conventions.test.js` → **13/13 通过**（`rawButton 268/268`，自检全绿）。
+  - `npm run lint` → **0 error**（159 存量 warning）；`npm run typecheck` → **exit 0**。
+  - `npm run build --prefix renderer` → **✓ built in 1.54s**。
+  - `npm test` → **204/205**；唯一失败 `test/tools-cwd.test.js`（`显式 full-access 不应被沙箱包裹`）为**既有环境问题**。
+    修复前该套件另有一处 `scheduled-task-model` 假失败，改造后 **18/18 通过**。
+- **诚实边界**：
+  - `xs` 为固定 `h-6`；原按钮**无边框**时高度逐字吻合、转后不变，但原按钮**带 1px 边框**者（约 26px）转后为 24px，
+    存在约 2px 高度差（不可感知）。`primary/secondary` 变体自带 `border`（primary/ghost 为 `border-transparent`），
+    带边框的 primary 转后宽度 +2px（亦不可感知）。
+  - `RecordReplayPanel` 第 3 枚「删除」按钮（`border border-border text-danger`，中性边框+红字）**无精确对应变体**，
+    保留裸按钮，**未强转**（强转需改边框色/加 hover 底色，会破坏观感）。
+  - 未在 Electron 真机复核像素级观感（以静态门禁 + 构建为主）。
+- **下一步（建议）**：
+  1. 用 `xs` 档补齐「尺寸分裂」桶：`AgentDock` 子类①小按钮（3 处）、`WorktreeBar`、`DiffReviewPanel` 等，
+     每批成组转换并同步下调基线。
+  2. **`lg` 档决策仍未做**：`CreateProjectForm` / Onboarding 的 `px-5 py-3 rounded-xl text-sm` 大表单按钮
+     仍需一个 `lg` 档才能零差异收敛；建议下一轮先就 `lg` 拍板。
+  3. 子类②（`border-border + text-danger`，如 `ArchiveModal` purge）与「中性边框+红字」形态，需单独决策是否新增
+     变体或正式豁免。
 
 

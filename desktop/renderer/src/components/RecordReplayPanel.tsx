@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '../i18n';
+import Button from './ui/Button';
 
 // T4-6：Mac 操作录制与回放面板（设置 → 浏览器与链接 → 计算机使用区）
 // 录制 = 让 Agent（模型驱动）跑通一次任务并录成确定性脚本；
@@ -225,12 +226,12 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
           <p className="text-sm text-warn">{approval.title}</p>
           <p className="text-xs text-text2 whitespace-pre-line">{approval.detail}</p>
           <div className="flex gap-2 pt-1">
-            <button className="px-2 py-1 text-xs bg-accent-solid text-on-accent rounded" onClick={() => resolveApproval('once')}>
+            <Button size="xs" variant="primary" onClick={() => resolveApproval('once')}>
               {t('settings.cuaApproveOnce')}
-            </button>
-            <button className="px-2 py-1 text-xs border border-border rounded" onClick={() => resolveApproval('deny')}>
+            </Button>
+            <Button size="xs" variant="secondary" onClick={() => resolveApproval('deny')}>
               {t('settings.cuaDeny')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -256,21 +257,23 @@ export default function RecordReplayPanel({ granted }: { granted: boolean }) {
                 {rec.appName} · {rec.stepCount} {t('settings.cuaEvtSteps')} · {new Date(rec.createdAt || 0).toLocaleString()}
               </p>
             </div>
-            <button
-              className="px-2 py-1 text-xs bg-accent-solid text-on-accent rounded disabled:opacity-50"
+            <Button
+              size="xs"
+              variant="primary"
               disabled={!!running}
               onClick={() => startReplay(rec, 'on-request')}
             >
               {t('settings.cuaReplay')}
-            </button>
-            <button
-              className="px-2 py-1 text-xs border border-border rounded disabled:opacity-50"
+            </Button>
+            <Button
+              size="xs"
+              variant="secondary"
               disabled={!!running}
               title={t('settings.cuaReplayAlwaysTitle')}
               onClick={() => startReplay(rec, 'always')}
             >
               {t('settings.cuaReplayAlways')}
-            </button>
+            </Button>
             <button className="px-2 py-1 text-xs border border-border rounded text-danger" disabled={!!running} onClick={() => removeRecording(rec.id)}>
               {t('settings.cuaDelete')}
             </button>
