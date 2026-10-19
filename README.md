@@ -2456,3 +2456,89 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **N1 运行时目视验证尚未完成**：能力开关与预置目录仅以静态门禁 + 代码审查为依据，需在真实 Electron 应用内目视确认「标某模型支持图像 → 拖入截图 → 模型基于图像内容作答」的端到端验收。
 - **G2+N8 冷启动日志验证建议**：按验收要求在冷启动日志确认 whitelist/manual 服务不自动重连、首次调用才连接。
 - 推荐下一步：进入报告 §6 后续批次（如 N5/N6/N9/N10/N11 等），或按用户节奏推进下一里程碑。
+
+## 会话总结：第六轮第三批/第五批任务落地 · 2026-10-19（上下文可复现性 + 治理可观测性 + 工程收尾）
+
+### 会话背景
+承上一轮《MJCode-AgentHarness 第六轮全量审查报告》的第一批/第二批落地，用户下达指令：「继续 第三批（G9/N5 → N6）← 上下文与可复现性 → 第五批（G7 / N9 / N10 / N11）→ 第四批（生态，按产品优先级取舍）」。本轮按该顺序实施**第三批（上下文与可复现性）**与**第五批（工程与体验收尾）**全部任务；第四批因标注「按产品优先级取舍」，待与用户确认后另起。
+
+### 会话的主要目的
+1. **第三批（上下文与可复现性）**：G9（MCP 工具披露确定性排序）、N5（`toToolDefs` 双实现收敛）、N6（多模态 content 压缩/摘要链路适配）。
+2. **第五批（工程与体验收尾）**：N9（hook / 意图预热 / 技能按需加载可观测命中率落点）、N10（EcosystemModal TODO 注释清理）、N11（`tools-cwd` 常态红灯修复）、G7（裸 `<button>` 继续分批收敛）。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 | 验证 |
+|---|---|---|---|
+| G9 | MCP 工具披露确定性排序 | `shared/mcpToolDefs.mjs` 新增 `sortServerEntries` / `sortedToolDefs`，按「服务名 → 工具名」稳定排序，消除同轮工具面漂移 | intent-mcp-prewarm 35/35 ✓ |
+| N5 | `toToolDefs` 双实现收敛 | 删除渲染层 `renderer/src/lib/mcpTools.js` 与主进程 `main/intentMcpPrewarm.js` 各自的本地实现，统一走 `shared/mcpToolDefs.mjs` 单一事实来源 | intent-mcp-prewarm 35/35 ✓ |
+| N6 | 多模态 content 压缩/摘要适配 | 引擎新增 `IMAGE_PART_TOKEN_COST=1024` / `isImagePart` / `contentToPlainText` / `estimateContentTokens`；摘要前将图片部件剥离为 `[图片]` 占位，token 估算按固定成本而非 base64 字符 | multimodal-compaction 14/14 ✓ |
+| N9 | 治理命中率观测落点 | 新增 `main/governanceStats.js` 进程内计数；`toolHooks` / `skills` / `agentRunner` 三处落点，经 `governance:stats` IPC + diagExport `governance/stats.json` 双通道消费 | governance-stats 23/23 ✓ |
+| N10 | EcosystemModal TODO 清理 | 删除 backend TODO 注释，改为「本地资产即事实来源，无后端依赖」 | 静态审查 ✓ |
+| N11 | `tools-cwd` 常态红灯修复 | 第 11 条断言改为「直连 IPC 的 full-access 被钳制为 workspace-write 后沙箱执行」，对齐 P0-5 治理契约 | 全量 219/219 ✓ |
+| G7 | 裸 `<button>` 第五轮收敛 | `Button` 新增 `accent-ghost` 变体；收敛 AgentDock 2 处描边主色按钮（`paused`/`ready`）；rawButton 基线 260→258 | ui-conventions 13/13 ✓ |
+
+### 会话中主要使用的技术栈
+- **跨宿主共享层**：`desktop/shared/mcpToolDefs.mjs`（ESM 纯函数，主进程 CJS 与渲染层 Vite 双宿主共用）。
+- **引擎侧**：`desktop/agent-core/index.js`（headless 引擎，ESM）——多模态 content 归一与 token 估算。
+- **主进程侧**：`desktop/main/`（CJS）——`governanceStats.js` 观测计数、`toolHooks.js` / `skills.js` / `agentRunner.js` 落点、`ipc/localData.js` 新 IPC、`diagExport.js` 诊断包消费。
+- **渲染层**：React + TS（`components/ui/Button.tsx` 新增 `accent-ghost` 变体、`components/AgentDock.jsx` 收敛）。
+- **门禁**：`test/run-all.mjs` 发现式全量跑、`ui-conventions` rawButton 棘轮、`lint-ratchet`、`untracked-deps`（干净 clone 可构建）。
+
+### 关键决策和解决方案
+1. **G9 排序落在「共享层」而非各调用点**：把稳定排序实现在 `shared/mcpToolDefs.mjs` 的 `sortedToolDefs` 出口，主进程意图预热与渲染层恢复工具清单都经同一出口取数——既消除披露顺序漂移（前缀缓存友好），又顺手为 N5 的收敛提供了统一落点。
+2. **N5 收敛的边界是「纯函数」而非「宿主能力」**：`toToolDefs` 只做「服务条目 → 工具定义数组」的纯映射，不含任何宿主依赖（IPC / fs / 渲染状态），因此可以安全上移共享层；渲染层与主进程各自的取数路径（`restoreMcpTools` / `loadMcpToolDefs`）保留，只把映射逻辑收敛。
+3. **N6 的 token 估算与摘要剥离解耦**：图片 base64 被逐字计 token 是双错（严重高估 + 摘要模型收到二进制噪声）。方案分两步——`estimateContentTokens` 对图片部件按固定成本 `IMAGE_PART_TOKEN_COST=1024` 计；`contentToPlainText` 在 transcript / 压缩摘要装配前把图片部件降级为 `[图片]` 占位。二者都收敛在引擎内单一函数，`estimateMessagesTokens`、`compactHistory`、子代理父上下文三处接入。
+4. **N9「计数 = 观测面，非事实源」的边界**：`governanceStats` 是纯内存 Map 计数，不落盘、不进 SQLite，避免制造第二事实源；消费方双通道（实时 `governance:stats` IPC + 离线 `diagExport` 快照），防止「加了计数却无人读」。用 `createGovernanceStats()` 工厂 + 进程内单例兼顾可测性与全局共享。
+5. **N9 语义细分避免「一律空数组」的歧义**：意图预热拆出 `noIntent`（无意图）/ `nativeCovered`（意图全被原生覆盖，恰证「原生优先」在生效）/ `satisfied`（命中的连接器已全部在场）三种「返回空数组但含义不同」的状态，使命中率数据可解释而非只看到「没加工具」。
+6. **N11 按治理契约而非环境绕过修复**：`tools-cwd` 的失败源于断言误读 P0-5 治理契约（直连 IPC 的 `full-access` 会被钳制为 `workspace-write` 后沙箱执行），修正断言使其描述真实契约，而非 disable 测试或放宽沙箱——消除常态红灯且不掩盖真实行为。
+7. **G7 严格零差异优先，宁缺勿滥**：逐一比对后确认绝大多数裸 `<button>`（图标按钮、纯文字链接、分段 pill、列表行按钮、`px-3 py-2 text-sm`/`rounded-lg` 表单按钮）与 `ui/Button` 的变体/尺寸档指标不符，转换会引入可感知差异。据用户规则仅收敛**完全匹配**的 accent-outline 按钮（AgentDock 2 处），其余标记为**待决策项**写入门禁注释，避免为降数字而破坏界面一致性。
+8. **门禁注释承载「豁免类别 + 待决策项」**：在 `ui-conventions.test.js` 的 ratchet 注释中显式列出五类豁免与两个待决策项，使后续读者明确「为何这些按钮不计入零差异收敛」，防止同一处反复评估。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Glob` 定位源码与门禁基线；`Edit` / `Write` 落盘改动与新增测试；`Shell` 跑门禁（`typecheck` / `lint` / 全量 `npm test` / 专项 `ui-conventions` / `untracked-deps`）与 git 操作（`status`/`add`/`commit`/`push`）。
+
+### 修改了哪些文件
+
+**新增文件（Added）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/main/governanceStats.js` | 进程内治理命中率计数单一事实来源（`createGovernanceStats()` 工厂 + `governanceStats` 单例），纯内存不落盘 | N9：hook / 意图预热 / 技能按需加载此前只有 console.log，无可观测落点 |
+| `desktop/shared/mcpToolDefs.mjs` | MCP 工具定义跨宿主共享层：`toToolDefs` / `sortServerEntries` / `sortedToolDefs` / `mergeToolDefs` | G9 + N5：稳定排序 + 消除双实现漂移 |
+| `desktop/test/governance-stats.test.mjs` | 计数原语 / hook 落点 / 技能落点 / 接线反模式四组断言（23 项） | N9 门禁 |
+| `desktop/test/multimodal-compaction.test.mjs` | 多模态 token 估算 + 摘要剥离回归（14 项） | N6 门禁 |
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/agent-core/index.js` | 新增 `IMAGE_PART_TOKEN_COST` / `IMAGE_PLACEHOLDER` / `isImagePart` / `contentToPlainText` / `estimateContentTokens`；`estimateMessagesTokens`、`compactHistory` transcript、子代理父上下文三处接入 | N6 |
+| `desktop/main/intentMcpPrewarm.js` | 删除本地 `toToolDefs`，导出 `loadMcpToolDefs()` 走共享层 `sortedToolDefs` | N5 + G9 |
+| `desktop/renderer/src/lib/mcpTools.js` | 删除本地 `toToolDefs`，`restoreMcpTools` 走共享层 | N5 |
+| `desktop/main/toolHooks.js` | `createToolHookRunner` 新增 `stats` 选项；`runPre`/`runPost` fail-open 分支返回 `unavailable` 标记；`wrap` 包装 handler 内计数 pre/post 的 runs / denied / unavailable | N9 |
+| `desktop/main/skills.js` | `loadSkillContents` 尾部计数 requested / loaded / missed | N9 |
+| `desktop/main/agentRunner.js` | `intentPrewarmToolDefs` 计数 runs / capabilities / noIntent / nativeCovered / satisfied / targets / connected / toolsAdded / misses | N9 + G9/N5 |
+| `desktop/main/ipc/localData.js` | 新增 `ipcMain.handle('governance:stats')` | N9 |
+| `desktop/main/preload.js` | 新增 `governanceStats: () => ipcRenderer.invoke('governance:stats')` 桥 | N9 |
+| `desktop/main/diagExport.js` | 头部注释新增 `governance/` 条目；导出 `governance/stats.json` | N9 |
+| `desktop/renderer/src/components/ui/Button.tsx` | `ButtonVariant` 新增 `'accent-ghost'`；`VARIANT_CLASS` 新增 `'border border-accent text-accent hover:bg-accent-bg bg-transparent'` | G7 |
+| `desktop/renderer/src/components/AgentDock.jsx` | `paused`/`ready` 两处描边主色裸 `<button>` 成对收敛为 `<Button variant="accent-ghost" size="xs">` | G7 |
+| `desktop/renderer/src/components/EcosystemModal.jsx` | backend TODO 注释改为「本地资产即事实来源，无后端依赖」 | N10 |
+| `desktop/test/tools-cwd.test.js` | 第 11 条断言按 P0-5 治理契约修正 | N11 |
+| `desktop/test/ui-conventions.test.js` | 补充豁免类别 + 待决策项注释；rawButton 基线 260 → 258 | G7 ratchet |
+| `desktop/test/intent-mcp-prewarm.test.mjs` | 对齐共享层收敛后的断言 | N5 |
+| `README.md` | 累积追加本节会话总结 | 用户固定规则 |
+
+### 验证结果
+- `npm run typecheck`：**通过**（exit 0，空输出）。
+- `npm run lint`：**0 error**，161 条历史 warning（与棘轮基线一致，未反弹）。
+- 专项门禁：`governance-stats` **23/23**、`multimodal-compaction` **14/14**、`ui-conventions` **13/13**（rawButton 实测 **258**，基线已同步下调）、`untracked-deps` **6/6**。
+- 全量 `npm test`：**总计 219 · 通过 219 · 失败 0**（较上轮 217 项 +2，即本轮新增 2 个测试套件）。
+- git：提交 `0896bc9`（19 文件，+630/-73）。**推送受阻**：`git push origin main` 报 `HTTP2 framing layer` / 连接超时，属当前网络无法访问 github.com 的环境问题（非代码问题），远程推送待网络恢复后重试。
+
+### 尚存问题与推荐下一步
+- **推送待重试**：提交已安全落本地 `0896bc9`，网络恢复后执行 `git push origin main` 即可（必要时 `git -c http.version=HTTP/1.1 push`）。
+- **G7 待决策项**：`ScheduledTasks` 恢复按钮（`px-3` vs md 的 `px-4`、`hover:bg-hover` vs danger-ghost 的 `hover:bg-danger-bg`）、`WorktreeBar` 移除按钮（`rounded-lg` vs xs 的 `rounded`、`py-1` vs `h-6`）指标不匹配，已写入门禁注释；若要继续收敛，需先与用户确认「扩展原语档位」或「接受轻微差异」的取舍。
+- **N9 目视验证建议**：冷启动后经设置页/诊断包确认 `governance/stats.json` 中 hook / 意图预热 / 技能三类计数随真实调用增长。
+- **第四批（生态：G-latex / G-visualize / G-sites / G3·G4）**：用户标注「按产品优先级取舍」，需与用户确认取舍后再动。
+- 推荐下一步：与用户确认第四批取舍清单，或推进其余批次。
