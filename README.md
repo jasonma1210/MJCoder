@@ -905,4 +905,25 @@ requiring third-party attribution declares it within the asset itself.
 - **验证结果（真实输出）**：`git push` → `4f40c1f..023abf0  main -> main`；
   `git rev-list --left-right --count origin/main...HEAD` = `0  0`（完全同步）。
 
+## 2026-10-19 无关素材加入 .gitignore 忽略
+
+- **会话的背景**：上一轮提交后，工作区仍残留两个未跟踪项 `panda-character.miora` 与
+  `panda-character_assets/`，此前仅判定「与项目无关、不提交」，未做忽略处理。
+- **会话的主要目的**：向用户确认这两个无关素材的处置方式，并按确认结果执行。
+- **完成的主要任务**：用户选择「加入 .gitignore 忽略」，据此在 `.gitignore` 追加排除规则，
+  阻止这两个文件污染仓库（保留在本机、不做删除）。
+- **关键决策和解决方案**：遵循本文件既有「只阻止误入库、不做删除」纪律，新增一段带背景
+  注释的忽略区块（`panda-character.miora`、`panda-character_assets/`），与 `.backup-*/`
+  等历史无关资产处理方式保持一致。
+- **会话中主要使用的工具**：Read、Edit、Shell（`git status` / `git check-ignore -v` 复核）。
+- **修改了哪些文件**：`.gitignore`（新增忽略规则）、README.md（本节总结）。
+- **文件修改的详细内容**：
+  - 文件名：`.gitignore`
+    - 修改的内容：末尾追加「与项目无关的个人资产（2026-10-19）」注释区块与两行规则
+      `panda-character.miora`、`panda-character_assets/`。
+    - 修改的原因：这两个文件属 Miora 应用的本地角色文件与 AI 生成 PNG 素材，与 MJCoder 无关，
+      忽略以防误入库。
+- **验证结果（真实输出）**：`git check-ignore -v` 命中 `.gitignore:131` 与 `.gitignore:132`，
+  两个文件均已进入忽略状态；`git status` 仅剩 `.gitignore` 的 modified。
+
 

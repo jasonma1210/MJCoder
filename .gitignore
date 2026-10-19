@@ -120,3 +120,13 @@ outputs/
 .roomodes
 .specstory/
 .aider*
+
+# ─────────────────────────────────────────────────────────────
+# 与项目无关的个人资产（2026-10-19，推送前甄别）
+# 纪律：只阻止误入库，**不做删除**。
+#   panda-character.miora       Miora 应用的本地角色文件（415B）
+#   panda-character_assets/     Miora text_to_image 生成的 PNG 素材（约 1.19MB）
+# 经核验与 MJCoder 无关，属用户本机其他应用的生成物。
+# ─────────────────────────────────────────────────────────────
+panda-character.miora
+panda-character_assets/
