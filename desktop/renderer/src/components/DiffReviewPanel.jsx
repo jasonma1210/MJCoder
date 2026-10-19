@@ -415,19 +415,16 @@ export default function DiffReviewPanel({ projectPath, agentFiles = [], threadId
                       {scope === 'staged' ? (
                         // 已暂存视图只提供「取消暂存」：在这里做「放弃修改」语义含糊
                         // （既可能指丢弃工作区，也可能指把索引回退），交给未暂存视图处理。
-                        <button onClick={(e) => { e.stopPropagation(); unstageFile(f); }} disabled={busy}
-                          title={t('diff.unstageFileTitle')}
-                          className="text-xs px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-50">
+                        <Button variant="secondary" size="xs" onClick={(e) => { e.stopPropagation(); unstageFile(f); }} disabled={busy}
+                          title={t('diff.unstageFileTitle')}>
                           {t('diff.unstage')}
-                        </button>
+                        </Button>
                       ) : (
                         <>
-                          <button onClick={(e) => { e.stopPropagation(); reject(f); }} disabled={busy} title={t('diff.discardFileTitle')}
-                            className="text-xs px-2 py-1 rounded border border-border hover:bg-hover disabled:opacity-50">{t('diff.discard')}</button>
-                          <button onClick={(e) => { e.stopPropagation(); accept(f); }} disabled={busy} title={t('diff.stageFileTitle')}
-                            className="text-xs px-2 py-1 rounded bg-accent-solid text-on-accent hover:brightness-110 disabled:opacity-50 flex items-center gap-1">
+                          <Button variant="secondary" size="xs" onClick={(e) => { e.stopPropagation(); reject(f); }} disabled={busy} title={t('diff.discardFileTitle')}>{t('diff.discard')}</Button>
+                          <Button variant="primary" size="xs" onClick={(e) => { e.stopPropagation(); accept(f); }} disabled={busy} title={t('diff.stageFileTitle')}>
                             <IconCheck size={12} /> {t('diff.accept')}
-                          </button>
+                          </Button>
                         </>
                       )}
                     </span>

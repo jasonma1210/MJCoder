@@ -1379,4 +1379,43 @@ requiring third-party attribution declares it within the asset itself.
   3. 子类②（`border-border + text-danger`，如 `ArchiveModal` purge）与「中性边框+红字」形态，需单独决策是否新增
      变体或正式豁免。
 
+## 2026-10-19 G7 第四轮：`xs` 档清「行内小按钮」桶（AgentDock 5 + DiffReviewPanel 3）
+
+- **会话的背景**：第三轮已就绪 `xs` 档（`h-6 px-2 text-xs rounded gap-1`），用户拍板「继续 G7，先用 xs 档清行内小按钮桶」。
+- **会话的主要目的**：把与 `xs` 档**逐字吻合或仅差一处可统一规则**的裸小按钮收敛为原语，继续压低 rawButton 基线，全程不破坏观感。
+- **完成的主要任务**：共转换 **8 处**，基线 268 → **260**。
+  1. **AgentDock.jsx 5 处**：停止全部（stopAll）、取消分组（cancelGroup）、强制关闭（forceClose）3 处
+     `border-danger text-danger hover:bg-danger-bg` → `danger-ghost/xs`（逐字吻合）；
+     重试任务（retryTask）、忽略（dismiss）2 处 `border-border text-text2 hover:bg-hover` → `secondary/xs`。
+  2. **DiffReviewPanel.jsx 3 处**：取消暂存（unstage）、放弃（discard）→ `secondary/xs`；暂存（accept）→ `primary/xs`。
+- **会话中主要使用的技术栈**：React（JSX）、Tailwind v3 语义 token、Node 零依赖静态门禁、Vite 构建、ESLint + tsc。
+- **关键决策与证据（本轮刻意不转的清单）**：
+  - **不转 = 零差异纪律优先**。以下形态与 `xs` 档存在不可忽略差异，**全部保留裸按钮**：
+    - `WorktreeBar` 3 处与 DiffReviewPanel scope 切换：**`rounded-lg`**（xs 档是 `rounded`，强转改圆角 8px→4px，可感知）；
+    - AgentDock 删除（deleteGroup）、DiffReviewPanel 行内 comment 按钮（`text-caption` 字号档）、
+      `px-3 py-1`（xs 是 px-2）等：**尺寸/字号档不同**，强转必变形；
+    - AgentDock accent 描边（`border-accent text-accent hover:bg-accent-bg`）与 warn 描边（`border-warn text-warn hover:bg-warn-bg`）：
+      **原语无此变体**，留待变体决策；
+    - AgentDock `hover:text-danger`（危险化 hover）与 DiffReviewPanel `border-accent/40`：语义特殊，不套标准变体。
+  - **secondary 收敛的统一规则**：原按钮无 `hover:text-text`（hover 时文字不变深），转 secondary 后补齐该标准行为——
+    与全仓库其他 secondary 按钮一致，属「统一规则」而非「逐处特判」，符合界面一致性偏好。
+  - **primary 转换的微小盒模型差**：primary 自带 `border border-transparent`，原 accept 按钮无边框，
+    转后总宽 +2px（border-box 下高度不变），不可感知。
+- **修改了哪些文件**：
+  - `desktop/renderer/src/components/AgentDock.jsx`（引 `ui/Button`；5 处小按钮收敛）
+  - `desktop/renderer/src/components/DiffReviewPanel.jsx`（3 处小按钮收敛）
+  - `desktop/test/ui-conventions.test.js`（`rawButton` 基线 268 → 260，注释同步）
+  - `README.md`（本节）
+- **验证结果（真实输出）**：
+  - `node test/ui-conventions.test.js` → **13/13 通过**（`rawButton 260/260`，自检全绿）。
+  - `npm run lint` → **0 error**（158 存量 warning）；`npm run typecheck` → **exit 0**。
+  - `npm run build --prefix renderer` → **✓ built in 1.51s**。
+  - `npm test` → **204/205**；唯一失败 `test/tools-cwd.test.js` 为**既有环境问题**。
+- **诚实边界**：未在 Electron 真机复核像素级观感；AgentDock 面板展开后的视觉（xs 按钮行内排布）仅静态验证。
+- **下一步（建议）**：
+  1. **`lg` 档拍板**（CreateProjectForm / Onboarding 大表单按钮）与 **warn/accent 描边变体决策**（AgentDock 426 warn 重试、338/347 accent 暂停恢复）是两个待决策点，拍板后可再清一批；
+  2. `rounded-lg` 小按钮桶（WorktreeBar、DiffReviewPanel scope 切换、DiffReviewPanel PR 出口 `px-3 py-2 rounded-lg`）需决策：要么引入 `rounded-lg` 的尺寸变体，要么正式豁免；
+  3. 其余 260 处大头是豁免类别（纯文字链接/图标按钮），建议下轮先做一次**正式豁免标注**（在门禁注释登记类别清单），把「真剩余可收敛量」从总基线里剥离出来。
+
+
 

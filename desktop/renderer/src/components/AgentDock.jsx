@@ -4,6 +4,7 @@ import { useI18n, tGlobal } from '../i18n';
 // A5：重试前置「副作用核对」的二次确认对话框
 import { confirm } from './feedback';
 import Bar from './ui/Bar';
+import Button from './ui/Button';
 
 // Agent 运行胶囊（WorkBuddy 式）：输入框上方左侧显示每个在役数字员工；
 // 点胶囊展开面板——查看每个 Agent 的实时执行流程（工具调用流），可强制关闭。
@@ -310,12 +311,11 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
         <div className="text-sm font-medium flex items-center gap-2"><IconBot size={15} /> {t('agentDock.runningAgents', { n: agents.length })}</div>
         <div className="flex items-center gap-2">
           {agents.length > 0 && (
-            <button onClick={() => onAbortAll(groupIds)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
+            <Button variant="danger-ghost" size="xs" onClick={() => onAbortAll(groupIds)}
               title={t('agentDock.stopAllTitle')}
             >
               <IconAlert size={11} /> {t('agentDock.stopAll')}
-            </button>
+            </Button>
           )}
           <button onClick={onClose} className="text-text2 hover:text-text p-1"><IconX size={13} /></button>
         </div>
@@ -353,13 +353,12 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                 </button>
               )}
               {g.status === 'running' && (
-                <button
+                <Button variant="danger-ghost" size="xs" className="shrink-0"
                   onClick={() => onCancelGroup(g.groupId)}
-                  className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
                   title={t('agentDock.cancelGroupTitle')}
                 >
                   {t('agentDock.cancelGroup')}
-                </button>
+                </Button>
               )}
               {g.status !== 'running' && (
                 <button
@@ -378,13 +377,12 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                   <div key={ft.taskId} className="flex items-center gap-2 text-xs">
                     <IconAlert size={11} className="text-danger shrink-0" />
                     <span className="text-danger truncate flex-1" title={ft.title}>{ft.title || ft.taskId}</span>
-                    <button
+                    <Button variant="secondary" size="xs" className="shrink-0"
                       onClick={() => onRetryTask(g.groupId, ft.taskId, ft.title)}
-                      className="shrink-0 inline-flex items-center px-2 py-1 rounded border border-border text-text2 text-xs hover:bg-hover"
                       title={t('agentDock.retryTaskTitle')}
                     >
                       {t('agentDock.retryTask')}
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
@@ -430,22 +428,20 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                   >
                     {t('agentDock.retryTask')}
                   </button>
-                  <button
+                  <Button variant="secondary" size="xs" className="shrink-0"
                     onClick={() => onDismiss(a.key)}
-                    className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-text2 text-xs hover:bg-hover"
                     title={t('agentDock.dismiss')}
                   >
                     <IconX size={11} /> {t('agentDock.dismiss')}
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button variant="danger-ghost" size="xs" className="shrink-0"
                   onClick={() => onAbort(a)}
-                  className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-danger text-danger text-xs hover:bg-danger-bg"
                   title={t('agentDock.abortTitle')}
                 >
                   <IconX size={11} /> {t('agentDock.forceClose')}
-                </button>
+                </Button>
               )}
             </div>
             {/* R0 契约适配：needsReview 终态必须可见——合并失败/成果待人工审查 + 主进程下发的 error 文本 */}
