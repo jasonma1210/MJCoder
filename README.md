@@ -1109,5 +1109,57 @@ requiring third-party attribution declares it within the asset itself.
     G5 以此结案：不新增 `/v1/messages` 通道、不下发原生 `thinking`；思考强度继续走 OpenAI 兼容
     `reasoning_effort`。后续如需原生 thinking，再单独立项评估。
 
+## 2026-10-19 v0.6.1-beta 发布：G1 多模态输入 + AI 描述粒度 + 打包与 GitHub Release
+
+- **会话的背景**：在 G1（图片真进主通道）与 AI 描述粒度三档两项能力落地后，工作区累积了一批未提交改动
+  （G1、描述粒度、第五轮审查报告文档）。用户要求再次更新 GitHub、把打包版本升到 `0.6.1-beta` 并发布
+  Release 版本。
+- **会话的主要目的**：① 三处 `package.json` 版本升至 `0.6.1-beta`；② 提交并推送工作区改动到 GitHub；
+  ③ electron-builder 打包 mac 产物；④ 创建 GitHub Release 并上传产物。
+- **完成的主要任务**：
+  1. 版本提升：`desktop/`、`desktop/renderer/`、`server/` 三处 `package.json` → `0.6.1-beta`；
+  2. 发布基线门禁：`npm run typecheck`（exit 0）、`npm run lint`（0 error / 159 既有 warning）、
+     vite `renderer` 构建通过；
+  3. 打包：`npm run build --prefix renderer` + `npx electron-builder --mac --publish never`，产出
+     `MJCode-0.6.1-beta-mac-arm64.dmg`（120,669,776 bytes）、`.zip`（115,093,568 bytes）、
+     两个 `.blockmap` 与更新清单 `latest-mac.yml`（version `0.6.1-beta`）；构建过程取得代码签名
+     （identity `9C7A16E2…`），跳过公证（`notarize` 选项未生成）；
+  4. 提交：单次 `chore(release): 0.6.1-beta` 提交（15 文件，878+/6-），将 G1、描述粒度、审查报告文档与
+     版本提升一并入库；`git push origin main` 成功（`8d23b4f..df56c00`，网络已恢复直连）；
+  5. 发布：`gh release create v0.6.1-beta` 创建 **正式 Release（非预发布）** 并上传 5 个产物。
+- **会话中主要使用的技术栈**：electron-builder（dmg/zip/blockmap/`latest-mac.yml`，APFS dmg、ad-hoc/分发签名）、
+  Vite 构建、GitHub CLI（`gh release create`）、git 常规推送。
+- **关键决策和解决方案**：
+  - **走常规 git 推送而非 API workaround**：本轮探测 `github.com` 与 `api.github.com` 均返回 200，
+    故直接 `git push`，无需复刻上一轮的网络阻断期 Git Data API 方案；
+  - **`--publish never` 而非 `dist:mac`**：`build.publish` 指向 GitHub，直接 `dist:mac` 会在上传阶段因
+    缺 `GH_TOKEN` 失败（上一轮已踩）；改由 `--publish never` 产出完整更新清单后，再用 `gh` 手动创建 Release；
+  - **发布类型取「正式 Release」**：用户明示「发布 release 版本」，故 `gh release create` 不加
+    `--prerelease`（与上一轮 v0.6.0-beta 的预发布不同）；如需回退为预发布可一键切换该标志；
+  - **`.playwright-mcp/` 不入库**：该目录为 Playwright MCP 的临时 console/page dump（本地产物），
+    本次显式按文件名 `git add`，未纳入提交；`release/`、`dist/` 已被 `.gitignore` 覆盖。
+- **会话中主要使用的工具**：Shell（构建/打包/git/gh）、Edit（三处版本号）、Grep/Read（定位版本字段与发布流程）、TodoWrite。
+- **修改了哪些文件**：
+  - `desktop/package.json`、`desktop/renderer/package.json`、`server/package.json`（版本 → 0.6.1-beta）
+  - `README.md`（本节总结）
+  - （随本次发布提交入库的既有改动）`desktop/agent-core/index.js`、`desktop/main/agentRunner.js`、
+    `desktop/main/tools/previewTool.js`、`desktop/renderer/src/components/SettingsModal.jsx`、
+    `desktop/renderer/src/hooks/useAgentRun.ts`、`desktop/renderer/src/i18n/locales/{zh-CN,en-US}/settings.json`、
+    `desktop/renderer/src/lib/visionInput.ts`（新）、`desktop/test/response-style-wiring.test.mjs`（新）、
+    `desktop/test/vision-input-wiring.test.mjs`（新）、`docs/MJCode-AgentHarness第五轮全量审查报告-2026-10-19.md`（新）
+- **文件修改的详细内容**：
+  - 文件名：三处 `package.json`
+    - 修改的内容：`"version": "0.6.0-beta"` → `"0.6.1-beta"`。
+    - 修改的原因：发版；electron-builder 产物命名与 `app.getVersion()` 均取自 desktop 版本。
+- **验证结果（真实输出）**：
+  - `npm run typecheck` → exit 0；`npm run lint` → **0 error**（159 存量 warning）；`vite build` → 613 modules 通过；
+  - 打包产物：dmg 120,669,776 bytes + zip 115,093,568 bytes + blockmap ×2 + `latest-mac.yml`（version 0.6.1-beta）；
+  - 推送：`git push` → `8d23b4f..df56c00  main -> main`；
+  - Release：`v0.6.1-beta`（`prerelease: false`）创建成功，5 个资产上传完成
+    （dmg / dmg.blockmap / zip / zip.blockmap / latest-mac.yml），URL：
+    https://github.com/jasonma1210/MJCoder/releases/tag/v0.6.1-beta
+- **诚实边界**：未在真机安装 dmg 复核运行；未做应用内自动更新的端到端验证（`latest-mac.yml` 已随 Release 上传）；
+  Release 资产下载可用性以 GitHub 页面为准。
+
 
 
