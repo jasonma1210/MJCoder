@@ -8,6 +8,8 @@ import { toast } from '../components/feedback';
 import { runRegistry, runIndex, makeRunState } from '../lib/runRegistry';
 import { abortGroupsForThread } from '../lib/stopThreadWork';
 import { arrayBufferToBase64, buildExpertPrompt, agentFilesOf } from '../lib/chatHelpers';
+// G1：附件图片 → vision 内容部件（纯函数，独立模块——护住本文件 800 行 God File 门禁）
+import { buildVisionParts } from '../lib/visionInput';
 import { tGlobal } from '../i18n';
 // A4：恢复决策（状态驱动）——纯函数，跨宿主共享（shared/resumeIntent.mjs），有单测覆盖
 import { resumeDecision } from '../../../shared/resumeIntent.mjs';
@@ -354,7 +356,14 @@ export default function useAgentRun(d) {
 
     // 以 ref 读最新历史：queue 接力 / steer 补发经由旧闭包调用时，
     // 闭包 messages 缺上一轮 assistant 回复，模型看不到自己刚说过什么
-    const history = [...messagesRef.current, userMsg];
+    // G1（多模态输入）：本轮附件里的图片读成 vision 部件拼进**运行用**的 user 消息——
+    // 只作用于本次 run 的上下文；落库与界面展示仍是文本 `@path`（DB content 恒为字符串）。
+    // 无图片 / 模型不支持图像时保持原纯文本形态，行为零变化（装配见 lib/visionInput）。
+    const imageParts = await buildVisionParts(attachments, selectedModel);
+    const runUserMsg = imageParts.length
+      ? { role: 'user', content: [{ type: 'text', text: content }, ...imageParts] }
+      : userMsg;
+    const history = [...messagesRef.current, runUserMsg];
     // A4：数字员工注入 system prompt（仅本轮生效，不写入消息历史）；会话级技能并入启用列表
     const expertPrompt = sessionExtras?.expert ? buildExpertPrompt(sessionExtras.expert) : null;
     const runHistory = expertPrompt ? [{ role: 'system', content: expertPrompt }, ...history] : history;
@@ -588,6 +597,9 @@ export default function useAgentRun(d) {
         // 规划模式强制沙箱降级为只读（双保险：工具已移除 + 沙箱禁写）
         sandboxPolicy: planMode || noProject ? 'read-only' : (thread?.sandbox_policy || approvalSettings?.sandbox_policy || 'workspace-write'),
         approvalMode: thread?.approval_mode || approvalSettings?.approval_mode || 'on-request',
+        // 2026-10-19：任务收尾描述粒度（设置 → 通用 → AI 描述粒度）。缺省 default 档；
+        // 该设置与审批档同存 mj_approval_settings，随设置对象一并透传，引擎据此选择收尾指令段。
+        responseStyle: approvalSettings?.response_style || undefined,
         // T4-3：角色模板运行时预设（生态中心「用此角色开会话」写入 expert.runtime）——
         // 主进程据此过滤工具子集并取「角色与用户设置更严格的」审批档/沙箱
         rolePreset: sessionExtras?.expert?.runtime || undefined,

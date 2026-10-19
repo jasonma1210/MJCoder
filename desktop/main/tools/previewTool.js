@@ -20,6 +20,33 @@ const PREVIEW_MAX_BYTES = 24 * 1024 * 1024; // 24MB：图片/PDF/音视频应用
 const PREVIEW_INLINE_MAX = 256 * 1024;
 const MEDIA_KINDS = /^(image|audio|video)\//;
 
+// G1（多模态输入）：视觉输入白名单——模型只能吃栅格图，且必须内联为 data URL
+// （mjpreview:// 流式 URL 无法作为 image_url 传给供应商）。svg 排除：它是文本/脚本载体，
+// 既非有效视觉输入，也带 XSS 面（一旦被当图片解码渲染即注入）。
+const MODEL_IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.avif': 'image/avif', '.heic': 'image/heic',
+};
+// 12MB：主流视觉模型单图上限区间（OpenAI 20MB / Gemini 20MB / Claude 5MB 取交集偏保守）；
+// base64 会膨胀 ~33%，再大过 IPC 与供应商都可能被拒。
+const MODEL_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
+
+// G1：为模型读取图片——固定返回 data URL（不走 previewUrl 分流），并对格式/体积设闸。
+async function readForModel(target, ext, st) {
+  const mime = MODEL_IMAGE_MIME[ext];
+  if (!mime) {
+    return { ok: false, path: target, error: `不支持的视觉输入格式：${ext || '(无扩展名)'}（仅支持 png/jpg/jpeg/gif/webp/bmp/avif/heic）` };
+  }
+  if (st.size > MODEL_IMAGE_MAX_BYTES) {
+    return {
+      ok: false, path: target, tooLarge: true, size: st.size,
+      error: `图片 ${(st.size / 1048576).toFixed(1)}MB，超出视觉输入上限 ${MODEL_IMAGE_MAX_BYTES / 1048576}MB，请压缩或裁剪后重试`,
+    };
+  }
+  const buf = await fsp.readFile(target);
+  return { ok: true, path: target, kind: 'image', size: st.size, mime, dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+}
+
 function previewKindOfMime(mime) {
   if (mime === 'application/pdf') return 'pdf';
   if (MEDIA_KINDS.test(mime)) return mime.split('/')[0]; // image | audio | video
@@ -27,12 +54,14 @@ function previewKindOfMime(mime) {
 }
 
 // file:preview handler 实现（文本类只回元信息，正文由 tool:readFile 分页取）
-async function handleFilePreview({ path: p, cwd } = {}) {
+// forModel=true 时切换为「视觉输入」语义：图片固定内联 base64 data URL（见 readForModel）。
+async function handleFilePreview({ path: p, cwd, forModel } = {}) {
   const target = resolveToolPath(p, cwd);
   try {
     const st = await fsp.stat(target);
     if (st.isDirectory()) return { ok: false, path: target, error: '这是目录，请用「打开文件夹」在系统中浏览' };
     const ext = path.extname(target).toLowerCase();
+    if (forModel) return await readForModel(target, ext, st);
     const mime = PREVIEW_BINARY_MIME[ext];
     if (!mime) {
       // 未知扩展名：按文本处理（渲染层读到非法编码会自行降级为「不支持预览」）

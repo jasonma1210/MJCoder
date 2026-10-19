@@ -926,4 +926,188 @@ requiring third-party attribution declares it within the asset itself.
 - **验证结果（真实输出）**：`git check-ignore -v` 命中 `.gitignore:131` 与 `.gitignore:132`，
   两个文件均已进入忽略状态；`git status` 仅剩 `.gitignore` 的 modified。
 
+## 2026-10-19 Agent Harness 第五轮全量审查（缺口语义复核 + 未来计划）
+
+- **会话的背景**：第四轮全量审查（2026-10-18）曾把「记忆写闭环、压缩摘要归档」列为唯一确定性功能缺口。
+  本轮以「Agent Harness 专家团」视角再次全量审查，**坚持先读当前代码再下结论**，不复用旧报告判定。
+- **会话的主要目的**：全面了解项目当前进度与内容；复核第四轮缺口是否已闭合；找出作为**非云端桌面 Agent**
+  仍缺失的能力与流程问题；输出一份带未来计划的审查报告。
+- **完成的主要任务**：
+  1. 全景摸底：`desktop/`（main 约 96 模块 + agent-core 194KB 引擎 + renderer 约 50 组件）、`ecosystem/`、
+     `server/`、`test/` 210 套件；当前提交 `8d23b4f`、版本 `v0.6.0-beta`。
+  2. **复核第四轮 12 项缺口 → 11 项已闭合**：P0-1 记忆写闭环、P0-2 压缩摘要归档、P1-1 L3 接线（默认档 l3 + 风险门）、
+     P1-2 Worker V 层、P1-3 MCP 自动重连（退避 + UI 第五态 crashed）、P1-4 Windows OS 级沙箱接线、
+     P1-5 用户自定义 hooks、P1-6 会话 fork、P2-4 MCP 协议升 2025-11-25、P2-5 模型分档 UI；
+     仅 P1-7（UI 原语）与 P2-1（布局 token）仍部分未做。
+  3. 识别仍在缺口 10 项：G1 多模态视觉输入未接入主对话通道（附件仅 `@path` 引用）、G2 MCP 懒启动/三层分级默认未生效、
+     G3 配置分层/企业管理层缺位（待核实）、G4 主体维 RBAC 缺位（待核实）、G5 原生 extended thinking 未发送、
+     G6 MCP sampling/elicitation 按设计未实现、G7 UI 原语（182 处裸 button）、G8 布局 token、G9 披露顺序不稳定、G10 技能总量预算、G11 评估闭环未接运行时。
+  4. 对标 Codex Desktop 8 内置能力：browser/chrome/computer-use/record-and-replay 已对齐；
+     deep-research 被技能降级替代；latex/sites/visualize 缺。
+  5. 梳理 6 项端到端流程问题（V1 图片流程断裂、V2 高权限 MCP 默认暴露、V3 披露顺序、V4 技能总量、V5 UI 一致性、V6 配置治理）。
+  6. 输出五批次未来计划（止血闭环 → 平台对等 → 上下文/可复现 → 生态差异化 → 工程质量）。
+- **会话中主要使用的技术栈**：Electron 主进程 + React 渲染层 + headless agent-core 引擎；MCP 2025-11-25 协议；
+  git 取证（grep 计数 / file:line 锚定）；并行子代理（Explore）做子系统深审。
+- **关键决策和解决方案**：确立「**旧报告的『仍缺』不可直接沿用，必须用当前代码复核**」为审查铁律——
+  本轮据此把第四轮 11 项缺口改判为「已闭合」，避免重复劳动。缺口分级按「功能性 / 平台协议 / 体验工程」三类，
+  并按性价比排出五批次实施顺序。
+- **会话中主要使用的工具**：Read、Grep、Glob、Shell（`git log` / `wc` / `grep -rIn` 计数）、Agent（并行 Explore 深审）、Write。
+- **修改了哪些文件**：
+  - 新增：`docs/MJCode-AgentHarness第五轮全量审查报告-2026-10-19.md`（本轮审查报告）
+  - 修改：`README.md`（本节总结）
+- **文件修改的详细内容**：
+  - 文件名：`docs/MJCode-AgentHarness第五轮全量审查报告-2026-10-19.md`
+    - 修改的内容：新建 7 大章节——一句话结论 / 基线锚定 / 第四轮缺口逐条复核表 / 当前 10 项缺口 / Codex 8 内置能力覆盖度 / 6 项端到端流程问题 / 五批次未来计划 + 诚实边界。
+    - 修改的原因：用户要求以 Agent Harness 专家团队视角再次全量审查并输出未来计划 md。
+  - 文件名：`README.md`
+    - 修改的内容：追加本会话总结（累积增加）。
+    - 修改的原因：项目规则要求每次会话结束追加总结到 README。
+- **验证结果（真实输出）**：
+  - MCP 协议版本复核：`main/mcpProtocol.js:20` → `const PROTOCOL_VERSION = '2025-11-25';`（含 `MIN=2024-11-05` 降级链）
+  - L3 接线复核：`main/agentRunner.js:165` → `defaultLevel: 'l3'`，`:166` → `l3Chat: l3.l3Chat || null`；门禁 `test/p1-vlayer-wiring.test.mjs`
+  - 懒启动默认值复核：`main/mcpPrewarm.js:82` `isLazyMode` 读 `MJCODE_MCP_LAZY`，缺省关闭（行为不变）
+  - UI 裸 button 计数：`grep -c "<button"` → **182 处 / 29 文件**
+  - 源码 TODO/FIXME 计数：**1 处**（main + agent-core + renderer/src）
+  - 测试套件：`ls test | wc -l` → **210**
+
+## 2026-10-19 AI 描述粒度三档配置（任务收尾总结）
+
+- **会话的背景**：用户发现「任务执行完成后没有任何结束描述/总结/核心结论」——不知道完成了什么、
+  改了哪些文件（可打开查看）、还有哪些问题、下一步做什么，界面上只剩一行「● 运行结束 耗时 … tokens」。
+- **会话的主要目的**：按用户要求在**设置中新增「AI 描述粒度」三档配置**（精简 / 默认 / 详细），
+  让 AI 在任务完成时按档输出结构化收尾；**默认档即默认值**。
+  - 精简 = 一句话结论（完成了什么 + 下一步），不细化过程；默认 = 结构化收尾（类 WorkBuddy 输出）；
+    详细 = 啥都说（逐文件 + 验证 + 风险 + 修复建议 + 后续流程）。
+- **完成的主要任务**：端到端打通「设置 UI → localStorage/偏好 → IPC → agentRunner.engineParams →
+  agent-core 系统提示装配 → 模型收尾文案」全链路，并新增接线门禁套件。
+- **会话中主要使用的技术栈**：Electron 主进程（CJS `agentRunner`）+ React 渲染层（`SettingsModal.jsx` /
+  `useAgentRun.ts`）+ headless `agent-core` 引擎（ESM）+ i18n（zh-CN/en-US）+ node:test 门禁。
+- **关键决策和解决方案**：
+  1. **纯提示词工程，不做生成后改写**——档位只改 system 里「任务收尾」产出规范的详略，
+     绝不对模型输出做程序化后处理（脆弱且会掩盖模型真实产出）。
+  2. **复用既有设置链路**——`response_style` 与审批档同存 `mj_approval_settings` 对象，
+     随 App.jsx 既有 `useEffect` 一并持久化并同步主进程偏好，零新增 IPC/桥方法。
+  3. **段并入 base**——收尾规范拼进 `base` 段且排在 `appendSystemPrompt` **之前**，
+     保住 `test/append-system-prompt.test.mjs` 的「通道级追加居 system 尾部」不变量
+     （初版用独立 `style` 段会破坏该门禁，已改并入 base）。
+  4. **未知档回落 default**（白名单校验），不放大也不缩小用户预期。
+- **会话中主要使用的工具**：AdvisorTool（战略指导）、Read、Grep、Glob、Edit、Write、Shell（`node test/*` / `tsc` / `eslint` / `git stash`）。
+- **修改了哪些文件**：
+  - `desktop/agent-core/index.js`（引擎：新增 `RESPONSE_STYLE_SECTIONS` 三档 + `responseStyle` 入参 + 并入 base）
+  - `desktop/main/agentRunner.js`（`engineParams` 白名单放行 `responseStyle`）
+  - `desktop/renderer/src/hooks/useAgentRun.ts`（运行载荷携带 `responseStyle`）
+  - `desktop/renderer/src/components/SettingsModal.jsx`（通用页新增「AI 描述粒度」三档区块）
+  - `desktop/renderer/src/i18n/locales/zh-CN/settings.json`、`en-US/settings.json`（8 个 key 双语）
+  - `desktop/test/response-style-wiring.test.mjs`（新增接线门禁）
+  - `README.md`（本节总结）
+- **文件修改的详细内容**：
+  - 文件名：`desktop/agent-core/index.js`
+    - 修改的内容：新增模块级常量 `RESPONSE_STYLE_SECTIONS`（concise/default/detailed 三档收尾规范文案）
+      与 `DEFAULT_RESPONSE_STYLE='default'`；`runAgent` 入参新增 `responseStyle`（白名单校验归一化）；
+      `base` 段装配改为 `BASE_PROMPT` + `\n\n` + `styleSection` + 通道追加。
+    - 修改的原因：把「任务完成必须有结构化收尾」写进 system，并让档位控制详略。
+  - 文件名：`desktop/main/agentRunner.js`
+    - 修改的内容：`engineParams` 新增 `responseStyle: payload.responseStyle || undefined`。
+    - 修改的原因：本白名单是渲染层设置抵达引擎的必经之路，漏放则该设置「单测全绿、真机全废」（历史教训）。
+  - 文件名：`desktop/renderer/src/hooks/useAgentRun.ts`
+    - 修改的内容：运行载荷新增 `responseStyle: approvalSettings?.response_style || undefined`。
+    - 修改的原因：把设置随运行载荷下发至主进程。
+  - 文件名：`desktop/renderer/src/components/SettingsModal.jsx`
+    - 修改的内容：新增 `RESPONSE_STYLES` 三档常量与 `responseStyle` 派生值；通用页「语言」之后新增
+      「AI 描述粒度」`Section`（遍历三档 `OptionRow`，选择即写回 `approvalSettings.response_style`）。
+    - 修改的原因：提供用户可选的设置入口（用户要求「在设置中加上」）。
+  - 文件名：`desktop/renderer/src/i18n/locales/zh-CN|en-US/settings.json`
+    - 修改的内容：按字母序插入 `responseStyle*` 共 8 个 key 的中英文案。
+    - 修改的原因：设置页标签与说明必须走 i18n（项目规则）。
+  - 文件名：`desktop/test/response-style-wiring.test.mjs`
+    - 修改的内容：新增门禁——锁「设置页三档 + 写 response_style」「引擎三档 + 并入 base」
+      「agentRunner 白名单放行」「useAgentRun 载荷携带」「i18n 双语齐备」，并以真实 `runAgent`
+      断言三档分别注入对应收尾指令、未知值回落 default。
+    - 修改的原因：防止任一环被后续改动静默丢弃（本仓库历史反复出现的缺陷形态）。
+- **验证结果（真实输出）**：
+  - `node test/response-style-wiring.test.mjs` → **22/22 通过**
+  - `node test/append-system-prompt.test.mjs` → **4/4 通过**（初版独立 style 段曾使该套件降为 3/4，改并入 base 后恢复）
+  - `node test/prefix-stability.test.mjs` → **11/11 通过**（收尾段在稳定前缀内，字节稳定）
+  - `node test/agent-core.test.mjs` → **98/98 通过**；`node test/i18n.test.mjs` → **6/6 通过**
+  - `npx eslint <改动文件>` → **0 errors**（仅存量 warning）；`npm run typecheck --prefix renderer` → **exit 0**
+  - 全量套件 `node test/run-all.mjs` → **202/204**；2 项失败（`scheduled-task-model`、`tools-cwd`）
+    经 `git stash push/pop` 复现验证为**改动前既有失败**（沙箱/环境相关），与本次改动无关。
+- **诚实边界**：本次未在 Electron 真机端到端复跑「改设置 → 跑任务 → 看收尾文案」的观感；
+  无人值守通道（定时/Worker）仍走 default 档（未接 `getUserResponseStyle`），如需一致可后续补齐。
+
+
+## 2026-10-19 G1 多模态输入接入主对话通道（图片真进运行上下文）
+
+- **会话背景**：第五轮全量审查（`docs/MJCode-AgentHarness第五轮全量审查报告-2026-10-19.md`）指出
+  G1 缺口——附件图片此前只以 `@path` 文本形式随消息发送，视觉模型实际看不到图。本会话落地 G1 修复，
+  并顺带对上一窗口遗留的全量套件失败做归因收尾。
+- **会话的主要目的**：让拖入/选中的图片真正进入主对话通道的**运行上下文**（视觉部件），
+  同时不破坏「持久化消息 content 恒为字符串」的既有约束。
+- **完成的主要任务**：
+  1. 新增 `forModel` 图片读取语义（主进程侧直接产出内联 base64 data URL），门控仅对声明
+     `caps.supportsImages` 的模型开放；
+  2. 抽出纯函数模块装配视觉部件，绕开 `useAgentRun.ts` 的 800 行 God File 门禁；
+  3. 运行用 user 消息改为「文本 + image_url 部件」数组形态，持久化/界面仍走文本 `userMsg`；
+  4. 新增接线门禁 `test/vision-input-wiring.test.mjs`（含引擎数组 content 出站透传断言）；
+  5. 归因并修复上一窗口遗留的两个全量套件失败（见「关键决策」）。
+- **会话中主要使用的技术栈**：Electron（主进程 `file:preview` IPC + 渲染层 hooks）、
+  OpenAI 兼容多模态 `content` 数组部件（`{type:'text'}` / `{type:'image_url'}`）、TypeScript 纯函数模块、
+  Node 测试（ESM `node:test` 风格静态接线断言）。
+- **关键决策和解决方案**：
+  1. **不新增 IPC**：`exec.js` 处于 799/800 行软档（`max-lines.test.js` 基线「只减不增」），
+     故复用既有 `file:preview` 通道，新增 `forModel` 入参并在旧预览分流**之前**早退，
+     `exec.js` 零改动。
+  2. **视觉部件不落库**：用户消息落库 content 必须是字符串（`localData.js` 的 `guard.assertStrings`），
+     故数组部件只进 `history`（运行上下文），`api.sendMessage` 与 `setMessages` 仍用原文本。
+  3. **svg 排除 / 12MB 上限**：视觉白名单仅 png/jpg/jpeg/gif/webp/bmp/avif/heic（svg 为文本/脚本载体，
+     非视觉输入且有 XSS 面）；超上限返回结构化错误而非静默截断。
+  4. **门禁归因**：上一窗口全量套件报 4 失败，经单独复跑定位——
+     `untracked-deps` 与 `i18n` 两项**均为本次 G1 新增文件引入**（新模块未 `git add`、
+     `console.warn` 文案为中文），非既有环境问题；已修复（英文日志 + `git add`）。
+     `scheduled-task-model` 本轮自行通过（前次为波动），仅余 `tools-cwd`（沙箱/环境既有失败）。
+- **会话中主要使用的工具**：Read、Grep、Glob、Edit、Write、Shell（`node test/*` / `npm run lint` / `npm run typecheck` / `git add`）。
+- **修改了哪些文件**：
+  - `desktop/renderer/src/lib/visionInput.ts`（**新增**：视觉部件装配纯函数）
+  - `desktop/renderer/src/hooks/useAgentRun.ts`（`import` + 运行 user 消息装配）
+  - `desktop/main/tools/previewTool.js`（新增 `forModel` 读图通道）
+  - `desktop/test/vision-input-wiring.test.mjs`（**新增**：G1 接线门禁）
+  - `README.md`（本节总结）
+- **文件修改的详细内容**：
+  - 文件名：`desktop/main/tools/previewTool.js`
+    - 修改的内容：新增 `MODEL_IMAGE_MIME`（8 种视觉格式白名单）、`MODEL_IMAGE_MAX_BYTES = 12MB`、
+      `readForModel(target, ext, st)`；`handleFilePreview` 增加 `forModel` 入参，命中即在旧预览分流之前早退。
+    - 修改的原因：为视觉模型提供可直接内联的 base64 data URL，且不触碰行数受限的 `exec.js`。
+  - 文件名：`desktop/renderer/src/lib/visionInput.ts`（新增）
+    - 修改的内容：`buildVisionParts(list, selectedModel)`——仅当 `caps.supportsImages` 为真时，
+      逐张调用 `window.mjcode.previewFile({ forModel: true })` 组装 `image_url` 部件；单张失败逐张降级跳过。
+    - 修改的原因：把读图装配抽离 `useAgentRun.ts`（护住 800 行门禁）并便于单测直调。
+  - 文件名：`desktop/renderer/src/hooks/useAgentRun.ts`
+    - 修改的内容：新增 `import { buildVisionParts }`；`send()` 中按 `imageParts.length` 生成
+      `runUserMsg`（数组 content 或原文本），`history` 使用 `runUserMsg`，持久化仍用 `userMsg`。
+    - 修改的原因：让运行上下文携带图片，同时不改变落库/展示形态。
+  - 文件名：`desktop/test/vision-input-wiring.test.mjs`（新增）
+    - 修改的内容：16 条断言，覆盖 `forModel` 行为（png 出 dataUrl、svg/非图片/目录拒绝、普通预览回归）、
+      源码接线（常量、`forModel` 早退顺序、模块门控、`useAgentRun` import 与 history/userMsg 分离）、
+      引擎透传（数组 content 出站不被打回字符串、`image_url` 原样到达 chat 载荷）。
+    - 修改的原因：把 G1 链路固化为门禁，防止后续改动静默回退。
+- **验证结果（真实输出）**：
+  - `node test/vision-input-wiring.test.mjs` → **16/16 通过**
+  - `node test/i18n.test.mjs` → **6/6 通过**（修复中文日志后）
+  - `node test/untracked-deps.test.mjs` → **6/6 通过**（`git add visionInput.ts` 后）
+  - `npm run lint` → **0 error**（159 存量 warning）；`npm run typecheck` → **exit 0**
+  - 全量套件 `node test/run-all.mjs` → **204/205**；唯一失败 `tools-cwd.test.js`
+    （`显式 full-access 不应被沙箱包裹`）为沙箱/环境既有失败，与本改动无关。
+- **诚实边界**：G1 未在 Electron 真机端到端复跑「拖图提问 → 视觉模型按图作答」；
+  引擎侧数组 content 透传以静态断言 + 单次 `runAgent` 出站载荷验证，未做真实供应商多模态联调。
+- **G5 结论（未实现，待确认）**：全项目模型调用固定 `POST ${root}/chat/completions`
+  （`main/main.js:666`、`main/scheduledChannels.js:47/87`、`agent-core/cli.js:189`、`eval/run-eval.mjs:113`），
+  **不存在原生 Anthropic `/v1/messages` 传输**；`anthropic-api` 仅在 `modelWindows` 中用于上下文窗口查表。
+  因此「原生 `thinking` 未发送」的根因是**没有原生传输通道**：OpenAI 兼容层只认 `reasoning_effort`。
+  真正落地 G5 需新建 Anthropic 原生 `/v1/messages` 传输（含 SSE 事件解析与 tool_use/tool_result 格式转换），
+  属核心传输层的大改，且与「本地为主」的当前取向存在取舍——**待用户确认范围后再决定是否投入**。
+  - **用户裁决（2026-10-19）**：选择**维持 OpenAI 兼容通道，暂不新建原生 Anthropic 传输**。
+    G5 以此结案：不新增 `/v1/messages` 通道、不下发原生 `thinking`；思考强度继续走 OpenAI 兼容
+    `reasoning_effort`。后续如需原生 thinking，再单独立项评估。
+
+
 

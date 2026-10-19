@@ -55,6 +55,15 @@ export const LINK_OPEN_OPTIONS = [
   { id: 'copy', nameKey: 'settings.linkCopy', descKey: 'settings.linkCopyDesc' },
 ];
 
+// AI 描述粒度（2026-10-19）：任务收尾文案的详略档，纯提示词驱动。
+// 落点与审批档同存 mj_approval_settings 对象（随现有设置链路一并持久化 + 同步主进程偏好），
+// 渲染期经 t 解析；缺省 default 档（与 agent-core DEFAULT_RESPONSE_STYLE 对齐）。
+const RESPONSE_STYLES = [
+  { id: 'concise', nameKey: 'settings.responseStyleConcise', descKey: 'settings.responseStyleConciseDesc' },
+  { id: 'default', nameKey: 'settings.responseStyleDefault', descKey: 'settings.responseStyleDefaultDesc' },
+  { id: 'detailed', nameKey: 'settings.responseStyleDetailed', descKey: 'settings.responseStyleDetailedDesc' },
+];
+
 // OS 级沙箱后端 → 标签。用于未就绪时如实告诉用户「本平台本该有哪种隔离」，
 // 而不是笼统地说「你的系统不支持」（三平台后端清单见 main/sandbox.js 的 detectBackend）
 // T3-2：渲染期经 t 解析，避免顶层常量冻结翻译
@@ -90,6 +99,8 @@ export default function SettingsModal({
   const [sandboxStatus, setSandboxStatus] = useState(null);
   // A10：读取时迁移遗留值（auto → auto-safe、always-ask → always）
   const approvalMode = migrateApprovalMode(approvalSettings?.approval_mode);
+  // AI 描述粒度：缺省 default（与引擎侧默认档一致，避免「设置里没选」时无收尾规范）
+  const responseStyle = approvalSettings?.response_style || 'default';
 
   // ── P1-11c：任务-模型分档（compact / decompose / worker）──
   // 主进程三槽位早已就绪（agent-core 读 modelOverrides、workerPool 读 deps.getModelOverrides），
@@ -255,6 +266,16 @@ export default function SettingsModal({
                   <option value="en-US">English</option>{/* i18n-literal */}
                 </select>
               </div>
+            </Section>
+            {/* 2026-10-19：AI 描述粒度——任务收尾文案的详略档。用户反馈「任务跑完只有『运行结束』，
+                没有任何核心结论」，本档位让模型在收尾时按档输出「完成了什么 / 改了哪些文件 / 尚存问题 /
+                下一步」。纯提示词驱动，无生成后改写。 */}
+            <Section title={t('settings.responseStyle')}>
+              <p className="text-xs text-text2 leading-relaxed mb-2">{t('settings.responseStyleDesc')}</p>
+              {RESPONSE_STYLES.map((o) => (
+                <OptionRow key={o.id} name={t(o.nameKey)} desc={t(o.descKey)} selected={responseStyle === o.id}
+                  onSelect={() => onApprovalSettingsChange?.({ ...approvalSettings, response_style: o.id })} />
+              ))}
             </Section>
             <Section title={t('settings.sandboxPolicy')}>
               {SANDBOX_MODES.map((o) => (

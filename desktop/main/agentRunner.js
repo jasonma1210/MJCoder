@@ -247,6 +247,9 @@ function startAgentRun(payload, sender) {
       tokenBudget: payload.tokenBudget || 0,
       // Phase 3-1：断点恢复上下文（渲染层「继续」时从 checkpointStore 取回注入）
       resumeContext: payload.resumeContext || '',
+      // 2026-10-19：任务收尾描述粒度——渲染层设置经 payload 下发，白名单必须放行，
+      // 否则「单测直接调 runAgent 全绿、真机全废」（本文件历史教训，见上方注释）。
+      responseStyle: payload.responseStyle || undefined,
     };
     if (payload.rolePreset) {
       engineParams.approvalMode = stricterApproval(engineParams.approvalMode, payload.rolePreset.approvalMode);

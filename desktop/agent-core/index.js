@@ -554,6 +554,35 @@ const BASE_PROMPT = `你是 MJ Coder，一个专业的 AI 编程助手。你可�
 10. 项目外知识必须联网查：遇到不熟悉的库/框架 API、陌生报错、框架最新变更等
     项目之外的知识，先 web_search / web_fetch 查证再回答，不要凭可能过时的记忆作答`;
 
+// 2026-10-19（设置 → 通用 → AI 描述粒度）：任务收尾文案的产出规范，三档。
+// 背景（用户反馈）：任务跑完后只剩「运行结束」一行，没有任何核心结论——用户不知道完成了什么、
+//   改了哪些文件、下一步该干嘛。这里把「必须给出结构化收尾」写进 system，由模型自行产出。
+// 设计定调（遵审查建议）：**纯提示词工程**，档位只改收尾文案的详略，不改执行行为；
+//   绝不在生成后对模型输出做程序化改写（脆弱、且会掩盖模型真实产出）。
+// 段序落位：紧跟 base（见 PROMPT_SECTIONS），属「每 run 定」段——用户不改设置时字节稳定，不伤前缀缓存。
+const RESPONSE_STYLE_SECTIONS = {
+  concise: `## 任务收尾（精简）
+每轮任务全部完成（或确认无法继续）后，只给一句话结论：完成了什么 + 下一步做什么。
+除非用户明确要求，不要罗列逐条文件改动、过程细节或风险清单。`,
+  default: `## 任务收尾（默认）
+每轮任务全部完成（或确认无法继续）后，用一段结构化中文收尾，至少覆盖：
+1. 完成了什么：本轮实际达成的目标，一句话说清；
+2. 改动内容：新建/修改/删除的文件逐条列出，用反引号标注路径（便于用户点开查看），每条附一句改了什么；
+3. 关键决策：重要的方案取舍及原因（无则省略）；
+4. 尚存问题与后续：已知风险、未完成部分，以及建议的下一步操作。
+收尾要具体、可核对，禁止空话套话；若本轮只是简单问答或查询，可精简为一两句结论，不必强行套用全部小节。`,
+  detailed: `## 任务收尾（详细）
+每轮任务全部完成（或确认无法继续）后，给出完整详尽的收尾报告，覆盖：
+1. 完成了什么：本轮达成的目标与验收结果；
+2. 改动内容：逐一列出新建/修改/删除的文件，用反引号标注路径，并说明每个文件具体改了什么、为什么改；
+3. 关键决策：重要的方案取舍、备选方案及选择原因；
+4. 验证方式与结果：跑过哪些命令/检查，结果如何；
+5. 尚存问题与风险：已知缺陷、边界情况、潜在影响；
+6. 后续修复与建议：问题如何修复、推荐的下一步操作、尚未走完的流程。
+尽量展开背景与依据，让用户不必追问即可完整掌握本轮工作。`,
+};
+const DEFAULT_RESPONSE_STYLE = 'default';
+
 // 需要注入项目 cwd 的工具（LLM 未显式提供时）
 // 读类（read_file/list_dir/grep/glob）与写类（write_file/edit_file）都必须在内：
 // 否则相对路径会按主进程 CWD 解析，导致 ENOENT 或写错位置
@@ -1738,6 +1767,9 @@ export async function runAgent({
   //              缺省回落本次 run 传入的 skills[].content —— 宿主无需额外接线即可启用）
   //   'full'：旧行为（全量正文注入）
   skillDisclosure = 'auto',
+  // 2026-10-19：任务收尾描述粒度（'concise' | 'default' | 'detailed'，缺省 default）。
+  // 未知值一律回落 default（见下方 styleKey 归一化），不放大也不缩小用户预期。
+  responseStyle = DEFAULT_RESPONSE_STYLE,
   // P1-4：稳定前缀区段序开关（A/B 回滚用；见 PROMPT_SECTIONS）
   enablePrefixOrder = true,
 } = {}) {
@@ -1769,13 +1801,22 @@ export async function runAgent({
   // 因此段序按「变化频率递增」固定：恒定段 → 每 run 定段 → 每轮可变段。
   // 仍是**同一条 system 消息**（DeepSeek 系端点只认首部 system，拆成多条会把内容丢掉）。
   const PROMPT_SECTIONS = ['base', 'role', 'tools', 'skills', 'agentsMd', 'memory', 'resume'];
+  // 收尾描述粒度归一化：白名单校验，未知值回落 default（与 DEFAULT_RESPONSE_STYLE 一致）。
+  // 该段并入 base（见下方 base 装配），不单独占 PROMPT_SECTIONS 槽位。
+  const styleKey = Object.prototype.hasOwnProperty.call(RESPONSE_STYLE_SECTIONS, responseStyle)
+    ? responseStyle : DEFAULT_RESPONSE_STYLE;
+  const styleSection = RESPONSE_STYLE_SECTIONS[styleKey];
   const sysSections = {
     // S1 恒定：禁止任何运行时插值（日期/时间戳/随机 id 一律下沉尾部）。
     // appendSystemPrompt 是**通道级追加**（定时任务/Worker 的产出契约），拼在 base 之后而不是替换：
     // customSystemPrompt 是整体替换语义，用它当无人值守通道的系统提示会把 BASE_PROMPT 里
     // 「可用工具 / 默认在当前目录读写 / 路径怎么给」整段丢掉 —— 模型于是不知道自己能写文件。
     // 追加位置在 base 末尾，BASE_PROMPT 本身仍是完整前缀（prompt cache 的前缀匹配不受影响）。
-    base: `${customSystemPrompt || BASE_PROMPT}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
+    // 2026-10-19：收尾描述粒度段并入 base，排在 appendSystemPrompt **之前**——
+    // 保证通道级追加（定时任务/Worker 产出契约）仍是 system 尾部不变量
+    //（见 test/append-system-prompt.test.mjs）。styleSection 为每 run 定值，用户不改设置时
+    // 字节稳定；BASE_PROMPT 本身仍是完整前缀，prompt cache 不受影响。
+    base: `${customSystemPrompt || BASE_PROMPT}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
     role: '',    // S2 每 run 定：数字员工角色设定
     tools: '',   // S2 每 run 定：工具表说明（工具 schema 本身经 allTools 下发，这里留位以备补充说明）
     skills: '',  // S2/S3：启用技能提示 + 技能索引（summary）或技能正文（full）
