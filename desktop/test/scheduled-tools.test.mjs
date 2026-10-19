@@ -194,8 +194,8 @@ check('审批 UI 不提供「记住」选项（否则点了也不生效 = 产品
   assert.equal(approval.isRememberable('write_file'), true, '普通工具不应被误设成不可记忆');
   const card = fs.readFileSync(path.join(ROOT, 'renderer/src/components/ApprovalCard.jsx'), 'utf8');
   assert.match(card, /const rememberable = pending\?\.rememberable !== false/, '审批卡未读取 rememberable');
-  assert.match(card, /\{rememberable && \(\s*<button onClick=\{\(\) => resolve\('conversation'\)\}/, '「本会话允许」未按 rememberable 收口');
-  assert.match(card, /\{rememberable && \(\s*<button onClick=\{\(\) => resolve\('always'\)\}/, '「始终允许」未按 rememberable 收口');
+  assert.match(card, /\{rememberable && \([\s\S]*?resolve\('conversation'\)/, '「本会话允许」未按 rememberable 收口');
+  assert.match(card, /\{rememberable && \([\s\S]*?resolve\('always'\)/, '「始终允许」未按 rememberable 收口');
   const main = fs.readFileSync(path.join(ROOT, 'main', 'main.js'), 'utf8');
   assert.match(main, /rememberable: approval\.isRememberable\(tool\)/, '主进程未下发 rememberable');
 });

@@ -425,10 +425,9 @@ export default function LocalMcpSection({ refreshSignal }: Props) {
                   )}
                 </div>
                 {st === 'crashed' && (
-                  <button onClick={() => reconnect(s.name)} disabled={statusMap[s.name] === 'connecting'}
-                    className="h-7 inline-flex items-center justify-center whitespace-nowrap text-xs px-3 rounded-lg border border-danger text-danger hover:bg-[var(--sem-danger-bg)] disabled:opacity-50 shrink-0">
+                  <Button variant="danger-ghost" size="sm" className="shrink-0" onClick={() => reconnect(s.name)} disabled={statusMap[s.name] === 'connecting'}>
                     {statusMap[s.name] === 'connecting' ? t('settings.mcpReconnecting') : t('settings.mcpReconnect')}
-                  </button>
+                  </Button>
                 )}
                 {st === 'fail' && (
                   <button onClick={() => connect(s)} className="text-xs text-accent hover:underline shrink-0">{t('localMcp.retry')}</button>

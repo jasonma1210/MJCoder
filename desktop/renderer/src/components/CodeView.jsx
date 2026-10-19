@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useI18n } from '../i18n';
+import Button from './ui/Button';
 
 const MAX_PREVIEW_LINES = 1000;
 
@@ -105,12 +106,12 @@ export default function CodeView({ filePath, projectPath, embedded = false }) {
 
         {/* 操作栏 */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-          <button onClick={openInIDE} className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">
+          <Button variant="secondary" size="md" onClick={openInIDE}>
             {t('codeView.openInIde')}
-          </button>
-          <button onClick={copyContent} className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">
+          </Button>
+          <Button variant="secondary" size="md" onClick={copyContent}>
             {copied ? t('codeView.copied') : t('codeView.copyContent')}
-          </button>
+          </Button>
           {ideMsg && <span className="text-xs text-text2">{ideMsg}</span>}
         </div>
 

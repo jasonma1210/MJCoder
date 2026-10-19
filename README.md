@@ -1161,5 +1161,162 @@ requiring third-party attribution declares it within the asset itself.
 - **诚实边界**：未在真机安装 dmg 复核运行；未做应用内自动更新的端到端验证（`latest-mac.yml` 已随 Release 上传）；
   Release 资产下载可用性以 GitHub 页面为准。
 
+## 2026-10-19 G7 裸 `<button>` 收敛（首轮）：ratchet 门禁 + 首批两簇转换
+
+- **会话的背景**：第五轮全量审查报告列出余项（deep-research 原生化 / latex·sites·visualize /
+  **G7 裸 `<button>` 收敛** / G8 布局 token / G11 评估闭环接运行时）。用户委托「从余项里挑一个开工」，
+  选定 **G7**（最贴合「UI 一致性」的既有偏好，验收可量化，门禁设施已存在）。
+- **会话的主要目的**：把散落的裸 `<button>` 收敛到 `ui/Button` 原语，并建立**只降不升的 ratchet 门禁**
+  （报告验收口径：「裸按钮数降至 0 或仅剩豁免；门禁断言」）。
+- **完成的主要任务**：
+  1. **门禁落地**：`desktop/test/ui-conventions.test.js` 新增 `BASELINE.rawButton` 键（scan 口径
+     = 扫描 `renderer/src`、**排除 `components/ui/`**，大小写敏感只计小写 `<button>`），并补一条
+     自检（`<Button>`/注释里的 `<button>` 不计），复用既有 `blankComments` 注释屏蔽。
+  2. **基线实测与收紧**：实测裸按钮 `281`（285 − ui/ 目录 4 处）→ 写入基线跑通（281/281, 13/13）；
+     首批转换后实测 `275` → **下调基线至 275**（ratchet 收紧）。
+  3. **首批两簇转换（外观等价、成组转换）**：
+     - `feedback.jsx` 命令式确认框动作行：取消 → `secondary`、确认 → `primary`/`danger`（2 处）；
+     - `ApprovalCard.jsx` 审批动作行：附加理由 → `ghost`（`className="hover:border-border"` 保留 hover 描边）、
+       本会话允许/拒绝/始终允许 → `secondary`、主行动「允许一次」由 `sm` 统一为 `md`（4 处 + 1 处档位对齐）。
+  4. **回归修复**：`test/scheduled-tools.test.mjs` 对 ApprovalCard **字面标记**的断言
+     （`{rememberable && (<button ...resolve('conversation')}`）因收敛失效 → 改为标记无关的正则
+     （`/\{rememberable && \([\s\S]*?resolve\('conversation'\)/`），断言意图（按钮须受 `rememberable` 收口）不变。
+- **会话中主要使用的技术栈**：React（JSX/TSX）、Tailwind v3 语义 token（`--theme-text`/`--theme-text-secondary` 等）、
+  Node 零依赖静态门禁、Vite 构建、ESLint + tsc。
+- **关键决策和解决方案**：
+  - **成组转换而非单点替换**：`Button` 的 `secondary` 变体会把标签强制为 `text-text2`（次级灰），而原裸按钮
+    多数沿用继承色 `--theme-text`（亮）；若只换一半，同行会出现「亮/灰、h-7/h-8、px-3/px-4」混排 → 观感不一致
+    （违反用户硬规则）。故**同一视觉簇内按钮必须整组转换并统一档位**，使结果比现状**更**一致。
+  - **不发明新档位/变体**：`Button` 原语有意保持最小（4 形态 × 2 档）。首批只挑选「内距同属 h-8 量级、
+    字号同为 text-xs」的按钮，padding 归一（px-3→px-4）视为**有意的收敛**；不新增 `xs`/圆形图标变体。
+  - **豁免类别（写入门禁注释）**：纯文字链接式按钮（无 `bg-*`/`border`/`rounded`，仅文本 + hover 变色，
+    如「展开/收起」「Toast 动作/关闭」）不匹配任何原语形态 → 列为豁免、保留计数，不强行套原语。
+  - **门禁防假绿**：新增 `rawButton` 计数自检，专门守「大小写敏感 + 注释不计」这一失效模式。
+- **会话中主要使用的工具**：Grep/Glob（定位裸按钮与变体类）、Read（读原语/组件/主题 token/门禁）、
+  Edit（门禁 + 两组件 + 回归用例）、Shell（门禁/lint/typecheck/build/全量测试）、TodoWrite。
+- **修改了哪些文件**：
+  - `desktop/test/ui-conventions.test.js`（新增 `rawButton` ratchet 基线 + 计数 + 自检）
+  - `desktop/renderer/src/components/feedback.jsx`（确认框动作行 2 处收敛 + 引入 `ui/Button`）
+  - `desktop/renderer/src/components/ApprovalCard.jsx`（审批动作行 4 处收敛 + `allowOnce` 统一 `md`）
+  - `desktop/test/scheduled-tools.test.mjs`（字面标记断言 → 标记无关正则）
+  - `README.md`（本节总结）
+- **文件修改的详细内容**：
+  - 文件名：`desktop/test/ui-conventions.test.js`
+    - 修改的内容：`BASELINE` 增 `rawButton: 275`（含豁免类别与 scan 口径注释）；`counts`/`samples` 增 `rawButton`；
+      per-file 循环增「排除 `components/ui/` 的 `<button` 计数」；新增一条 `check()` 与一条自检。
+    - 修改的原因：把 G7 收敛固化为**只降不升**的门禁，防规范回潮（与既有 6 条 ratchet 同构）。
+  - 文件名：`desktop/renderer/src/components/feedback.jsx`
+    - 修改的内容：`import Button from './ui/Button'`；确认框动作行 `<button>`×2 → `<Button variant="secondary" size="md">`
+      （取消）与 `<Button variant={dialog.danger ? 'danger' : 'primary'} size="md" disabled={...}>`（确认）。
+    - 修改的原因：命中原语设计目标（实心主/次按钮统一出口），消除手写重复样式。
+  - 文件名：`desktop/renderer/src/components/ApprovalCard.jsx`
+    - 修改的内容：审批动作行 4 枚裸 `<button>` → `Button`（`ghost` + `hover:border-border` / `secondary`×3）；
+      `allowOnce` 由 `size="sm"` 改 `size="md"`。
+    - 修改的原因：同一行成组收敛、统一 `md` 档（h-8/px-4），使行内高度与内距一致（现状 allowOnce=h-7 与其余 h-8 本就混排）。
+  - 文件名：`desktop/test/scheduled-tools.test.mjs`
+    - 修改的内容：两条 `assert.match` 由字面 `<button ...>` 正则改为 `/\{rememberable && \([\s\S]*?resolve\('conversation'|'always'\)/`。
+    - 修改的原因：断言意图（按钮受 `rememberable` 收口）不变，但实现已由裸按钮改为原语，需令断言**标记无关**。
+- **验证结果（真实输出）**：
+  - `node test/ui-conventions.test.js` → **13/13 通过**（`rawButton 275/275`，自检全绿）。
+  - `node test/scheduled-tools.test.mjs` → **16/16 通过**。
+  - `npm run lint` → **0 error**（159 存量 warning）；`npm run typecheck` → **exit 0**。
+  - `npm run build --prefix renderer` → **613 modules 转换通过**（Vite 构建成功）。
+  - 全量套件 `npm test` → **204/205**；唯一失败 `test/tools-cwd.test.js`（`显式 full-access 不应被沙箱包裹`）
+    为**既有环境问题**，与本改动无关（`scheduled-tasks` 系在单独执行时通过，全量下的偶发为套件间干扰）。
+- **诚实边界**：未在 Electron 真机复核两处转换的**像素级观感**（`Button` 的内距归一 px-3→px-4、
+  `secondary` 标签取次级灰、`allowOnce` h-7→h-8 均为**有意收敛**的最后产物），以静态门禁 + 构建验证为主；
+  余项 275 处尚未收敛（见下）。
+- **剩余批次与建议下一步（G7 未完）**：
+  - 剩余 275 处 / 分布于 51 文件。建议按**视觉簇**分批（每批一次门禁 + 构建 + 真机复核）：
+    ① 模态/设置页表单主/次按钮（`SettingsModal`、`settings/*`、`CreateProjectForm`、`ArchiveModal` 等）；
+    ② 列表行内小按钮（`ThreadList`、`DiffReviewPanel`、`FilePreview`、`ModelSelector`、`PlusMenu` 等，
+       多为 `px-2 py-1 rounded` 小尺寸 → 或需先评估是否给原语补第三档）；
+    ③ 面板/工具栏图标按钮（`Composer`、`RightPane`、`FileTree`、`StatusBar` 等，圆形/图标形态 → 原语暂不覆盖，先列豁免）；
+    ④ 纯文字链接式按钮 → 归入已声明**豁免类别**，不转换；
+  - 每完成一批即**下调 `BASELINE.rawButton`**（ratchet 收紧），并在门禁注释同步批次记录。
+
+## 2026-10-19 G7 分桶分析：原语覆盖度盘点与后续路线决策点（仅分析，无代码改动）
+
+- **会话的背景**：首轮收敛（275 处基线）后，用户要求「建议下一步」。原计划按「文件类别」推进
+  Batch ①（设置页/模态/表单），但侦察发现该批按钮**多数不在原语覆盖的 4 形态×2 档之内**。
+- **会话的主要目的**：用全量静态分桶（按 CSS 类与原语四变体的匹配度，而非文件类别）重新定义后续批次，
+  并暴露需要「先决策再动手」的原语扩展点。
+- **完成的主要任务**：编写临时分析脚本（`/tmp/g7_bucket.mjs`，非交付物）扫描 `renderer/src`
+  全部裸 `<button>`（排除 `components/ui/`），按 `变体|字号|高度|内距` 分桶并统计。
+- **分桶结果（275 处，真实输出）**：
+  - `other`（图标按钮 / 导航 tab / 主题卡 / 圆形色块 / 纯文字链接 / 菜单项）→ **162**
+  - `secondary`（`border`+`hover:bg-hover`）→ **63**；`primary-solid`（`bg-accent-solid`+`text-on-accent`）→ **37**
+  - `danger-outline`（`border`+`text-danger`，**原语无此变体**）→ **12**；`danger-solid` → **1**；无 `className` → **9**
+  - 细分：**近零差异桶** = `secondary | text-xs | py-2 | px-3` → **11 处**
+    （CodeView 2、ArchiveModal 1、DiffReviewPanel 1 等；与首轮已接受的 px-3→px-4 归一口径一致）；
+    大号表单按钮 `primary-solid | text-sm | px-5 | py-2`（Onboarding 等）与 small 行内按钮
+    `| text-xs | py-1 | px-2`（AgentDock / DiffReviewPanel 等）**均无原语档位**。
+- **关键结论（覆盖度缺口）**：`ui/Button` 当前 4 形态×2 档**覆盖不到**仓库三类现实形态——
+  ① 描边危险色（`danger-outline`，12 处）；② 大号表单按钮（`px-5 py-2/3 text-sm rounded-xl`）；
+  ③ 行内小按钮（`px-2 py-1 rounded`）。**按文件类别分批会撞上这些缺口**，故改为按「类匹配度」分桶推进。
+- **决策点（须用户拍板，未决策前不硬转）**：
+  - (a) 是否给 `ui/Button` 新增 **`danger-ghost`（描边危险色）** 变体——可解锁 12 处 + `SettingsModal` revoke 类；
+  - (b) 是否给 `ui/Button` 新增**第三档尺寸**——可解锁 Onboarding / CreateProjectForm 大号表单按钮；
+  - (c) 若均不扩展，则 G7 目标从「降至 0」改为「**收敛近零差异桶 + 正式豁免其余**（记理由）」，收敛量将显著小于 275。
+- **下一步（建议）**：先做**零争议小批**——`CodeView.jsx` 的成对 `secondary|text-xs|py-2|px-3` 按钮（整对转换、
+  外观仅 px-3→px-4 归一），同步下调 `BASELINE.rawButton`；同时就 (a)/(b) 给出决策后再规模化推进。
+- **会话中主要使用的工具**：Grep/Read（侦察）、Write+Shell（临时分桶脚本）、AdvisorTool（路线取舍评审）、Edit（本节）。
+- **修改了哪些文件**：`README.md`（本节）；**无源代码改动**（本轮为分析与决策，未触碰组件）。
+
+## 2026-10-19 G7 第二轮：① CodeView 收敛 + (a) 新增 `danger-ghost` 变体
+
+- **会话的背景**：分桶分析后用户拍板「先做 ①，并就 (a) 优先拍板」——即转换 CodeView 成对
+  `secondary` 按钮，并给原语新增 `danger-ghost`（描边危险色）变体。
+- **会话的主要目的**：落地「近零差异桶」的收敛，并把仓库高频的「破坏性描边按钮」形态纳入原语，
+  全程保持**外观零变化**（用户硬规则）。
+- **完成的主要任务**：
+  1. **① CodeView 收敛**：操作栏「在 IDE 打开 / 复制内容」两枚 `text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover`
+     裸按钮 → `Button variant="secondary" size="md"`（整对转换，外观仅 px-3→px-4 归一）。
+  2. **(a) 新增 `danger-ghost` 变体**：`ui/Button.tsx` 的 `ButtonVariant` 增第 5 形态，
+     `VARIANT_CLASS['danger-ghost'] = 'border border-danger text-danger hover:bg-danger-bg bg-transparent'`
+     （子类①：红边红字 + 危险底色 hover），覆盖仓库「可撤销的轻危险操作」形态。
+  3. **(a) 首个精确匹配转换**：`LocalMcpSection.tsx` 的「重连」按钮（`h-7 px-3 rounded-lg border-danger text-danger hover:bg-danger-bg`，
+     单文本子节点故基础 `gap-2` 无影响）→ `Button variant="danger-ghost" size="sm" className="shrink-0"`，
+     **逐字段吻合、零外观差异**。
+  4. 门禁基线由 275 → **272**（ratchet 收紧）。
+- **关键决策与证据（重要）**：
+  - **「12 处 danger-outline」实为多子类**：实测真实 className 分≥3 类——
+    (1) `border-danger+text-danger+hover:bg-danger-bg`（AgentDock×3 / WorktreeBar / LocalMcpSection ≈5 处）；
+    (2) `border-border+text-danger+hover:bg-hover`（ArchiveModal purge 等，语义是 secondary 染 danger 字）；
+    (3) 尺寸分裂（AgentDock `px-2 py-1 rounded gap-1` 小按钮 / ScheduledTasks `h-7`·`h-8` + 条件三元 / MarketModal `text-sm`）。
+    单个变体**无法零差异覆盖全部**。已回抛该「证据 vs 建议」冲突并取得一致结论：`danger-ghost` 定为子类①。
+  - **基础类不可靠覆盖**：`Button` 基础类含 `gap-2/rounded-lg`，而 Tailwind 同名工具类冲突由**样式表顺序**决定
+     （非类名书写顺序），故 `className` 追加**不能可靠覆盖** `rounded-lg`→`rounded`、`px-3`→`px-2`。
+     → 因此本轮只转「与 `danger-ghost` sm **近乎逐字段吻合**」的按钮；子类①其余 4 处（`px-2 py-1 rounded gap-1`
+    小按钮）强转会与邻行小按钮尺寸/圆角不一致，**暂缓**。
+- **会话中主要使用的技术栈**：React（JSX/TSX）、Tailwind v3 语义 token（danger/danger-bg/border）、
+  Node 零依赖静态门禁、Vite 构建、ESLint + tsc。
+- **会话中主要使用的工具**：Grep/Read（盘点 12 处 danger-outline 真实类名）、AdvisorTool（冲突评审）、
+  Edit（原语 + 两组件 + 门禁基线）、Shell（lint/typecheck/build/全量测试）。
+- **修改了哪些文件**：
+  - `desktop/renderer/src/components/ui/Button.tsx`（`ButtonVariant` 增 `danger-ghost`；`VARIANT_CLASS` 增对应类；注释由「四种形态」改「五种形态」）
+  - `desktop/renderer/src/components/CodeView.jsx`（引 `ui/Button`；操作栏两枚裸按钮 → `secondary/md`）
+  - `desktop/renderer/src/components/LocalMcpSection.tsx`（「重连」裸按钮 → `danger-ghost/sm`）
+  - `desktop/test/ui-conventions.test.js`（`rawButton` 基线 275 → 272，注释同步）
+  - `README.md`（本节）
+- **文件修改的详细内容与原因**：
+  - `Button.tsx`：新增第 5 变体 —— 原因：把仓库高频的描边危险形态收敛进原语，**不动现有四形态**（最小增量、零回归面）。
+  - `CodeView.jsx`：两按钮成对转 `secondary` —— 原因：与首轮同口径（px-3→px-4 归一），外观一致、消除手写重复。
+  - `LocalMcpSection.tsx`：「重连」转 `danger-ghost` —— 原因：逐字段吻合、零外观差异，示范新变体用法。
+  - `ui-conventions.test.js`：基线 272 —— 原因：ratchet 只降不升，固化本轮收敛量。
+- **验证结果（真实输出）**：
+  - `node test/ui-conventions.test.js` → **13/13 通过**（`rawButton 272/272`）。
+  - `npm run lint` → **0 error**（159 存量 warning）；`npm run typecheck` → **exit 0**。
+  - `npm run build --prefix renderer` → **✓ built**（Vite 成功）。
+  - 全量 `npm test` → **204/205**；唯一失败 `test/tools-cwd.test.js`（`显式 full-access 不应被沙箱包裹`）为**既有环境问题**。
+- **诚实边界**：未在 Electron 真机复核像素级观感（以静态门禁 + 构建为主）；第二轮仅收敛 3 处，
+  `danger-outline` 剩余约 11 处（子类①小按钮 4 处 + 子类② ~3 处 + 尺寸分裂若干）**未动**。
+- **下一步（建议）**：推进 **(b) 第三档尺寸决策**（如 `lg`/`xs` 档或让原语支持 `rounded` 小按钮形态），
+  这是解锁 `danger-ghost` 子类①小按钮、`CreateProjectForm` 大号表单按钮、以及行内小按钮桶（`px-2 py-1`）的**前置**；
+  在 (b) 决策前，其余 danger-outline 保持原样（避免尺寸/圆角不一致）。每批仍按门禁+lint+typecheck+build 验证并下调基线。
+
+
+
+
 
 

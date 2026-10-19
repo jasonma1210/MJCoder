@@ -186,20 +186,19 @@ export default function ApprovalCard({ onPendingChange }) {
               </div>
             )}
             <div className="flex flex-wrap gap-2 px-4 pb-4">
-              <button onClick={() => setReasonOpen((v) => !v)}
-                className="px-2 py-2 rounded-lg text-xs text-text2 hover:text-text border border-transparent hover:border-border">
+              {/* G7：审批动作按钮行整体收敛为 ui/Button 原语（本行成组转换、统一 md 档，
+                  保证行内高度/内距一致）。附加理由=ghost（保留 hover 描边反馈）；其余=secondary；
+                  主行动「允许一次」=primary（A7：accent 实心、置首位）。 */}
+              <Button variant="ghost" size="md" className="hover:border-border" onClick={() => setReasonOpen((v) => !v)}>
                 {reasonOpen ? t('approval.collapse') : t('approval.attachReason')}
-              </button>
-              <Button variant="primary" size="sm" onClick={() => resolve('once')}>{t('approval.allowOnce')}</Button>
+              </Button>
+              <Button variant="primary" size="md" onClick={() => resolve('once')}>{t('approval.allowOnce')}</Button>
               {rememberable && (
-                <button onClick={() => resolve('conversation')}
-                  className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowConversation')}</button>
+                <Button variant="secondary" size="md" onClick={() => resolve('conversation')}>{t('approval.allowConversation')}</Button>
               )}
-              <button onClick={() => resolve('deny')}
-                className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.deny')}</button>
+              <Button variant="secondary" size="md" onClick={() => resolve('deny')}>{t('approval.deny')}</Button>
               {rememberable && (
-                <button onClick={() => resolve('always')}
-                  className="px-3 py-2 rounded-lg text-xs border border-border hover:bg-hover">{t('approval.allowAlways')}</button>
+                <Button variant="secondary" size="md" onClick={() => resolve('always')}>{t('approval.allowAlways')}</Button>
               )}
               <span className="text-caption text-text2 self-center ml-auto" title={t('approval.hotkeyTitle')}>{t('approval.hotkeyHint')}</span>
             </div>

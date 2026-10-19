@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { IconAlert, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
 import Modal from './ui/Modal';
+import Button from './ui/Button';
 
 // ── 命令式确认框 + Toast（A2 统一规格）──
 // 用法（无需在各组件挂 state/JSX）：
@@ -166,18 +167,20 @@ export default function FeedbackHost() {
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => finish(false)}
-                className="text-xs px-3 py-2 rounded-lg border border-border hover:bg-hover">{tr('feedback.cancel')}</button>
-              <button
+              {/* G7：确认框动作按钮收敛为 ui/Button 原语（取消=secondary，确认=primary/danger）。
+                  同一行两枚按钮成组转换，避免只换一半造成行内高度/内距不一致。 */}
+              <Button variant="secondary" size="md" onClick={() => finish(false)}>{tr('feedback.cancel')}</Button>
+              <Button
+                variant={dialog.danger ? 'danger' : 'primary'}
+                size="md"
                 onClick={() => finish(true)}
                 disabled={dialog.count != null && Number(countInput) !== dialog.count}
-                className={`text-xs px-3 py-2 rounded-lg disabled:opacity-40 ${dialog.danger ? 'bg-danger-solid text-on-accent hover:brightness-110' : 'bg-accent-solid text-on-accent hover:brightness-110'}`}
               >
                 {/* danger 只表达**视觉强度**（红色 + 警告图标），不表达「删除」语义。
                     此前默认文案是「确认删除」，于是「允许对外动作」这类确认框也写着"确认删除"
                     （用户实测截图）。现在默认用中性「确认」，动作语义必须由调用方给 confirmLabel。 */}
                 {dialog.confirmLabel || tr('feedback.confirm')}
-              </button>
+              </Button>
             </div>
           </div>
         </Modal>

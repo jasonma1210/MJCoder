@@ -13,6 +13,11 @@ const BASELINE = {
   hexColor: 0,     // 组件内十六进制色（主题色板等数据已外置 lib/themes.json）
   deadButton: 0,   // 无 onClick 的 button（装饰性死按钮）
   rawIpc: 0,       // 渲染层禁止 require('electron') / 直接摸 ipcRenderer（须走 preload 桥）
+  // G7：裸 <button> 收敛为 ui/Button 原语（ratchet 只降不升）。
+  // 口径：扫描 renderer/src，**排除 components/ui/**（原语自身必须渲染裸 <button>）。
+  // 豁免类别（不因本条门禁回退，但保留计数）：纯文字链接式按钮（无 bg-*/border/rounded 的
+  // 文本 + hover 变色，如「展开/收起」「Toast 动作」，不匹配任何原语形态，见 README G7 说明）。
+  rawButton: 272,  // 2026-10-19 实测基线（首轮 ApprovalCard 4 + feedback 2；第二轮 CodeView 2 + LocalMcpSection 1）；每轮收敛后同步下调，禁止调高
 };
 
 let pass = 0;
@@ -56,8 +61,8 @@ function blankComments(s) {
 
 const files = walk(SRC).filter((f) => !f.includes(`${path.sep}styles${path.sep}`));
 const typedFiles = files.filter((f) => /\.tsx?$/.test(f));
-const counts = { emoji: 0, rawZIndex: 0, paletteColor: 0, hexColor: 0, deadButton: 0, rawIpc: 0 };
-const samples = { emoji: [], rawZIndex: [], paletteColor: [], hexColor: [], deadButton: [], rawIpc: [] };
+const counts = { emoji: 0, rawZIndex: 0, paletteColor: 0, hexColor: 0, deadButton: 0, rawIpc: 0, rawButton: 0 };
+const samples = { emoji: [], rawZIndex: [], paletteColor: [], hexColor: [], deadButton: [], rawIpc: [], rawButton: [] };
 
 for (const file of files) {
   const rel = path.relative(SRC, file);
@@ -88,6 +93,17 @@ for (const file of files) {
     const lineNo = code.slice(0, p).split('\n').length;
     if (!/onClick|onMouseDown|type="submit"/.test(head)) mark('deadButton', lineNo, head.trim().slice(0, 60));
   }
+
+  // G7：裸 <button> 计数（jsx/tsx 标签名大小写敏感：`<Button` 不计入）。
+  // 排除 components/ui/ —— 原语自身（Button.tsx / Modal.tsx / Switch.tsx）本就必须渲染裸 <button>。
+  const isPrimitive = file.includes(`${path.sep}components${path.sep}ui${path.sep}`);
+  if (!isPrimitive) {
+    let bpos = code.indexOf('<button');
+    while (bpos !== -1) {
+      mark('rawButton', code.slice(0, bpos).split('\n').length, code.slice(bpos, bpos + 40).split('\n')[0].trim().slice(0, 50));
+      bpos = code.indexOf('<button', bpos + 1);
+    }
+  }
 }
 
 // ── 自检：屏蔽注释**不得**把真违规一起屏蔽掉（防「恒零」假绿）──
@@ -107,6 +123,13 @@ for (const file of files) {
   check('自检：屏蔽注释保留行号（替换为空格而非删除）',
     blankComments('a\n// x\nb').split('\n').length === 3,
     `行数=${blankComments('a\n// x\nb').split('\n').length}`);
+  // G7 计数自检：大小写敏感（<Button 原语不计）、注释里的 <button> 不计
+  {
+    const blanked = blankComments("a <button>x</button>\n<Button>y</Button>\n// <button> in comment\n");
+    let cnt = 0;
+    for (let p = blanked.indexOf('<button'); p !== -1; p = blanked.indexOf('<button', p + 1)) cnt++;
+    check('自检：rawButton 只计小写裸 <button>（<Button> 与注释不计）', cnt === 1, `计数=${cnt}`);
+  }
 }
 
 check('零 emoji / 零装饰性字形', counts.emoji === BASELINE.emoji, `${counts.emoji}/${BASELINE.emoji} ${samples.emoji.join(' | ')}`);
@@ -115,6 +138,7 @@ check('硬编码调色板色不超过基线', counts.paletteColor <= BASELINE.pa
 check('组件内十六进制色不超过基线', counts.hexColor <= BASELINE.hexColor, `${counts.hexColor}/${BASELINE.hexColor} ${samples.hexColor.join(' | ')}`);
 check('无装饰性死按钮', counts.deadButton <= BASELINE.deadButton, `${counts.deadButton}/${BASELINE.deadButton} ${samples.deadButton.join(' | ')}`);
 check('渲染层无裸 electron/ipcRenderer（须走 preload 桥）', counts.rawIpc <= BASELINE.rawIpc, `${counts.rawIpc}/${BASELINE.rawIpc} ${samples.rawIpc.join(' | ')}`);
+check('裸 <button> 不超过基线（收敛到 ui/Button 原语）', counts.rawButton <= BASELINE.rawButton, `${counts.rawButton}/${BASELINE.rawButton} ${samples.rawButton.join(' | ')}`);
 
 check('扫描到渲染层文件', files.length > 10, `${files.length} 个文件`);
 check('UI 规范扫描纳入 TypeScript/TSX', typedFiles.length > 0, `${typedFiles.length} 个 TS/TSX 文件`);
