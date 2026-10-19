@@ -890,4 +890,19 @@ requiring third-party attribution declares it within the asset itself.
 - **未验证部分（诚实声明）**：改版后的品牌头 UI 未在 Electron 真机做视觉复核；
   dmg 安装包未做安装运行验证；Release 资产的下载可用性以 GitHub 页面为准。
 
+## 2026-10-19 网络恢复后的常规推送验证 + docs 审查报告入库
+
+- **会话的背景**：v0.6.0-beta 经 GitHub API 复刻发布后（github.com:443 曾被阻断），本轮网络恢复，
+  直连探测 `github.com -> 200`。
+- **会话的主要目的**：验证常规 git 推送通道已恢复，并提交工作区剩余的未跟踪文档。
+- **完成的主要任务**：① 提交 `docs/MJCode-AgentHarness第四轮全量审查报告-2026-10-18.md`；
+  ② 执行常规 `git push origin main` 成功，本地与远端保持 0 分叉。
+- **关键决策和解决方案**：工作区残留的 `panda-character.miora` 与 `panda-character_assets/`
+  （116K PNG）经核验为 Miora 应用的角色文件与 AI 生成图，**与 MJCode 项目无关**，
+  故不纳入提交，避免污染仓库。
+- **会话中主要使用的工具**：Shell（git status / file / head 核验未跟踪项性质）、Edit、git。
+- **修改了哪些文件**：README.md（本节总结）；新增入库 `docs/MJCode-AgentHarness第四轮全量审查报告-2026-10-18.md`。
+- **验证结果（真实输出）**：`git push` → `4f40c1f..023abf0  main -> main`；
+  `git rev-list --left-right --count origin/main...HEAD` = `0  0`（完全同步）。
+
 
