@@ -2377,3 +2377,82 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **本轮不提交、不推送**（用户固定规则）；`untracked-deps` 门禁需在提交后复跑确认。
 - 背景：`npm run dev` 后台任务仍在运行（Vite :5173 + Electron），如需可单独停止；仓库根目录残留 `temp_screenshot.png` 已用 `DeleteFile` 清理。
 
+
+
+## 会话总结：第六轮审查第一批/第二批任务落地 · 2026-10-19
+
+### 会话背景
+承上一轮产出的《MJCode-AgentHarness 第六轮全量审查报告》，用户下达指令：「按照文档要求，请具体 agent 开发团针对第一批任务先行完成；同时实现第二批任务」。本轮按报告 §6「建议批次」的既定顺序，实施**第一批（止血）**与**第二批（门禁真实性）**全部任务。
+
+### 会话的主要目的
+1. **第一批（止血）**：N1（模型能力位 UI + 预置能力目录）、G2+N8（MCP tier 分级默认生效）、N7（提交三层记忆改动）。
+2. **第二批（门禁真实性）**：N4（工具登记矩阵聚合断言）、N3（CI 语法门禁全量扫描）、N2（lint 警告棘轮收紧）、G11（eval 接入测试基线）。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 | 验证 |
+|---|---|---|---|
+| N1 | 模型能力位 UI | 设置页模型卡片新增「图像理解 / 工具调用 / 推理强度」三枚能力开关 + 预置能力目录落 `~/.mjcode/models.json` | typecheck ✓ / i18n 7/7 ✓ / ui-conventions 13/13 ✓ |
+| G2+N8 | MCP tier 分级默认生效 | `isLazyMode` 语义翻转（默认开启，仅 `MJCODE_MCP_LAZY=0/false/off` 回落旧行为）；auto-start/whitelist/manual 三层分级默认生效 | mcp-lazy-prewarm 47/47 ✓ |
+| N7 | 提交三层记忆改动 | 三层作用域记忆（L1/L2/L3）+ 本轮全部改动入库并推送 | untracked-deps 6/6 ✓ / 远端与本地 0 分叉 ✓ |
+| N4 | 工具登记矩阵聚合断言 | 新增 `test/tool-registration-matrix.test.mjs`：按单一工具清单（`BASE_TOOLS ∪ TOOL_HANDLER_NAMES` = 52）对 8 环节做差集断言 | 17/17 ✓（含「删一环节即红」自检） |
+| N3 | CI 语法门禁全量扫描 | `.github/workflows/ci.yml` Syntax gate 由 8 个写死文件改为 `find` 全量 `node --check` | 本地 157 文件 bad=0 ✓ |
+| N2 | lint 警告棘轮收紧 | `--max-warnings` 由 9999 收紧至 161（实测基线）；新增 `test/lint-ratchet.test.mjs` 守住棘轮 | 4/4 ✓（0 error，warnings=161） |
+| G11 | eval 接入测试基线 | `test/run-all.mjs` 新增前置门禁 `eval/run-eval.mjs --check` | exit 0 ✓，全量汇总 217 项 |
+
+### 会话中主要使用的技术栈
+- **引擎侧**：`desktop/agent-core/index.js`（headless 引擎，ESM）——`BASE_TOOLS`（51）、`BASE_PROMPT`、`CWD_TOOLS`（24）、`APPROVAL_TOOLS`（32）、`TOOL_HANDLER_NAMES`（50）、`TOOL_TIMEOUT_OVERRIDES`（13）。
+- **主进程侧**：`desktop/main/`（CJS）——`engineProcess/registry.js` 的 `TOOL_CHANNELS`（51）、`mcpPrewarm.js` / `ipc/mcp.js` 的 tier 分级、`memory/` 三层记忆（含新增 `memoryFile.js`）、`modelsFile.js` 能力位事实来源。
+- **渲染层**：React + TS（`components/settings/ModelsTab.tsx`、`components/ui/Button.tsx`）+ i18n 双语言包（zh-CN/en-US）。
+- **门禁**：Node 原生 `node:test`/`assert` 断言、`node --check` 语法门禁、ESLint 棘轮、`run-all.mjs` 发现式全量跑完汇总。
+
+### 关键决策和解决方案
+1. **单一工具清单作为聚合断言的 SSOT**：N4 不用 8 处硬编码清单，而是从 `BASE_TOOLS`（引擎 schema，事实来源 ∪ `TOOL_HANDLER_NAMES`）派生 52 个模型可见工具名，再对 8 环节分别做「期望 ⊆ 实际」与「实际 ⊆ 期望」双向差集；并加「差集工具非空即被检出」自检，防止聚合断言退化为恒绿。
+2. **区分「允许豁免」与「真漏」**：用显式白名单（`RUNTIME_SCHEMA_TOOLS`/`NO_LABEL_TOOLS`/`ENGINE_INTERNAL_TOOLS`/`NON_TOOL_CHANNELS`）承载合理豁免项，任何未登记的新增工具都会被门禁捕获——既不误报豁免项，也不放过真遗漏。
+3. **tier 分级默认生效的语义翻转**：将 `MJCODE_MCP_LAZY` 从「opt-in 开关」改为「opt-out 排障开关」，默认即启用三层分级（冷启动只拉起 auto-start 档；developer profile 另含 git 类），只有显式设 `0/false/off` 才回落「启动全量重连」的旧行为；同步翻转单元断言与源码注释，保持注释与行为一致。
+4. **语法门禁「全量扫描取代白名单」**：原实现只 `node --check` 8 个写死文件，新增文件永不被检查（假绿）。改为 `find` 遍历 `server/src` + `desktop` 全量 `.js/.mjs`；利用 node 按「文件最近的 package.json」判定 ESM/CJS，使 `agent-core`（`type: module`）的 ESM 文件也能被 `--check` 正确解析。
+5. **lint 棘轮的真实基线**：实测 warnings=161（`no-unused-vars` 122 / `require-atomic-updates` 32 / `react-hooks/exhaustive-deps` 5 / 其余 2），errors=0；基线落为常量 `LINT_WARNINGS_BASELINE=161` 并由测试守护（断言 package.json 与常量一致、0 error、warnings ≤ 基线），做到「只降不升」。
+6. **N1 UI 复用既有原语与 i18n 双包**：三枚能力开关用既有 `<Button>` 原语（`size="xs"`，开启态 `secondary`）实现，避免新增裸 `<button>` 冲击 rawButton 基线；英文语言包补齐同位置 key，保证 i18n 门禁双向对齐。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Glob` 定位源码与门禁基线；`Edit` 落盘改动；`Write` 新增测试文件；`Shell` 跑门禁（`typecheck` / `i18n` / `ui-conventions` / `mcp-lazy-prewarm` / `tool-registration-matrix` / `lint-ratchet` / 全量 `npm test` / 全量 `node --check`）与 git 操作（`status`/`diff`/`add`/`commit`/`push`/`rev-list`）；`AskUserQuestion` 确认推送决策。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `.github/workflows/ci.yml` | Syntax gate step 改为全量 `find + node --check`；lint step 注释改为「0 error 硬门禁 + warning 棘轮 161」 | N3 / N2 |
+| `desktop/package.json` | `lint` 脚本 `--max-warnings` 由 9999 改为 161 | N2 |
+| `desktop/main/mcpPrewarm.js` | `isLazyMode` 语义翻转（默认开启，仅显式关闭才回落）+ 头部注释改写 | G2+N8 |
+| `desktop/main/ipc/mcp.js` | `reconnectMcpServers` 注释与日志区分「分级生效 / 显式关闭」两态 | G2+N8 |
+| `desktop/test/mcp-lazy-prewarm.test.mjs` | ② 断言由 opt-in 翻转为 opt-out（默认开启 + 显式关闭枚举） | G2+N8 |
+| `desktop/test/run-all.mjs` | 新增 `GATES`（eval --check 前置门禁）+ 头部注释第 4 条 + 汇总计入门禁 | G11 |
+| `desktop/renderer/src/i18n/locales/zh-CN/settings.json` | 新增 `modelCapsImages/Tools/Reasoning` 及三个 `*Hint` 中文 key | N1 |
+| `desktop/renderer/src/i18n/locales/en-US/settings.json` | 新增同名 6 个英文 key（与中文同位置、按字母序） | N1 |
+| `desktop/main/modelsFile.js`、`ipc/localData.js`、`localStore.js`、`preload.js`、`renderer/src/lib/api.js`、`components/settings/ModelsTab.tsx`、`hooks/useAgentRun.ts`、`components/ChatArea.jsx`、`components/SettingsModal.jsx`、`components/MemorySection.tsx`、`components/icons/index.jsx`、`main/main.js`、`main/agentRunner.js`、`memory/index.js`、`memory/scorer.js`、`memory/bgScheduler.js` 等 | 三层记忆全链路（能力位解析/写回、记忆 IPC、salvage 晋升、M4 容量硬闸与半衰期、分层召回 UI） | N1 / N7 |
+| `README.md` | 累积追加各轮会话总结（含本节） | 用户固定规则 |
+
+**新增文件（Added）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/main/memory/memoryFile.js` | 项目级 `.mjcode/memory.md` / 全局级 `~/.mjcode/user_profile.md` 只读导出视图（500ms 防抖落盘 + 基线 mtime re-import 幂等），SQLite 为唯一事实来源 | N7（三层记忆核心，此前未入库导致 untracked-deps 门禁红） |
+| `desktop/test/tool-registration-matrix.test.mjs` | 工具登记矩阵 8 环节差集聚合断言 + 防恒绿自检 | N4 |
+| `desktop/test/lint-ratchet.test.mjs` | lint 警告棘轮守护（基线常量 ↔ package.json ↔ 真跑统计三方一致） | N2 |
+| `desktop/test/memory-file-channel.test.mjs`、`memory-m4-hardening.test.mjs`、`memory-mem-command.test.mjs`、`memory-salvage.test.mjs`、`memory-scope.test.mjs` | 三层记忆各能力回归测试 | N7 |
+| `docs/MJCode-AgentHarness第六轮全量审查报告-2026-10-19.md` | 第六轮全量审查报告落库（本轮任务来源） | 规格归档 |
+
+### 验证结果
+- `npm run typecheck`：**通过**（exit 0）。
+- `npm run lint`：**0 error**，161 条历史 warning（与棘轮基线一致）。
+- 专项门禁：`i18n` **7/7**、`ui-conventions` **13/13**（rawButton 仍 260/260，未上升）、`mcp-lazy-prewarm` **47/47**、`tool-registration-matrix` **17/17**、`lint-ratchet` **4/4**、`untracked-deps` **6/6**、`eval --check` **exit 0**。
+- 全量 `npm test`：**总计 217 · 通过 216 · 失败 1**；唯一失败为 `test/tools-cwd.test.js`（「显式 full-access 不应被沙箱包裹」——**既有环境类失败**，macOS 沙箱，报告 N11 已记录，非本轮引入）。
+- 全量 `node --check`：**157 文件 bad=0**（N3 本地等价验证）。
+- git：提交 `2eb9e46`（40 文件，+3323/-142）并推送，`origin/main` 与本地 **0 分叉**，N7 验收达成。
+
+### 尚存问题与推荐下一步
+- **唯一遗留失败**：`test/tools-cwd.test.js` 为 macOS 沙箱环境类问题（非门禁代码问题），需在 Linux 真机/CI ubuntu runner 上复核或单独排障。
+- **N1 运行时目视验证尚未完成**：能力开关与预置目录仅以静态门禁 + 代码审查为依据，需在真实 Electron 应用内目视确认「标某模型支持图像 → 拖入截图 → 模型基于图像内容作答」的端到端验收。
+- **G2+N8 冷启动日志验证建议**：按验收要求在冷启动日志确认 whitelist/manual 服务不自动重连、首次调用才连接。
+- 推荐下一步：进入报告 §6 后续批次（如 N5/N6/N9/N10/N11 等），或按用户节奏推进下一里程碑。
