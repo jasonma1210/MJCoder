@@ -345,16 +345,16 @@ const RECONNECT_CONCURRENCY = 4;
 async function reconnectMcpServers() {
   const all = loadMcpConfig();
   if (all.length === 0) return;
-  // 期 1：懒启动灰度。MJCODE_MCP_LAZY 未置位 → 行为完全不变（全量重连）。
-  // 置位后仅拉起「启动时应自动连接」的子集（auto-start 档 + developer 档的 git 类），
-  // 其余（whitelist 白名单 / manual 高危）不再随启动 spawn，改由 callMcpTool 按需拉起。
+  // G2+N8（第六轮）：三层分级**默认生效**——启动只拉起 auto-start 档（developer 档另含 git 类），
+  // whitelist/manual 档不再随启动 spawn，改由 callMcpTool 按需连接。
+  // 应急开关：显式 MJCODE_MCP_LAZY=0/false/off 时回落到旧行为（全量重连），仅用于排障兼容。
   const lazy = isLazyMode();
   const profile = getGovernance().profile;
   const config = lazy ? autoStartConfigs(all, { profile }) : all;
   if (lazy) {
-    console.log(`[mcp] 懒启动（MJCODE_MCP_LAZY=1，profile=${profile}）：自动拉起 ${config.length}/${all.length} 个服务（auto-start 档${profile === PROFILES.DEVELOPER ? ' + git 类' : ''}），其余按需拉起`);
+    console.log(`[mcp] tier 分级生效（默认，profile=${profile}）：自动拉起 ${config.length}/${all.length} 个服务（auto-start 档${profile === PROFILES.DEVELOPER ? ' + git 类' : ''}），其余按需拉起`);
   } else {
-    console.log(`[mcp] 自动重连 ${config.length} 个已保存服务（并发 ${RECONNECT_CONCURRENCY}）...`);
+    console.log(`[mcp] 懒启动已显式关闭（MJCODE_MCP_LAZY=0）：全量重连 ${config.length} 个已保存服务（并发 ${RECONNECT_CONCURRENCY}）...`);
   }
   let okCount = 0;
   let failCount = 0;

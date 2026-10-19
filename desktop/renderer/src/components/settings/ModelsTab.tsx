@@ -5,16 +5,25 @@
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 import { confirm } from '../feedback';
-import { IconX } from '../icons';
+import { IconX, IconCheck } from '../icons';
 import { useI18n } from '../../i18n';
 import { Section, Input } from './shared';
 import Dot from '../ui/Dot';
+import Button from '../ui/Button';
+
+// N1：模型能力位（与 main/modelsFile.js:defaultCaps 契约一致）
+interface ModelCaps {
+  supportsImages?: boolean;
+  supportsToolCall?: boolean;
+  supportsReasoning?: boolean;
+}
 
 interface ProviderModel {
   id?: string;
   model_id?: string;
   modelId?: string;
   display_name?: string;
+  caps?: ModelCaps;
 }
 
 export interface Provider {
@@ -118,6 +127,22 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
       await api.updateProvider(p.id, { api_key: keyValue.trim() });
       setKeyPid(null);
       setKeyValue('');
+    } catch (err) {
+      setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: (err as Error).message } }));
+    }
+  }
+
+  // N1：切换单个模型的能力位（图像 / 工具 / 推理）。file 来源写 models.json，本机来源写本地库。
+  async function toggleCap(p: Provider, mid: string, key: keyof ModelCaps, current: boolean) {
+    const patch: ModelCaps = { [key]: !current };
+    try {
+      if (p.source === 'file') {
+        await api.updateFileModelCaps(p.fileKey as string, mid, patch);
+        loadModelsFile(); // 文件写回后按 mtime 热同步回流列表
+      } else {
+        await api.updateProviderModelCaps(p.id, mid, patch);
+      }
+      onProvidersChange();
     } catch (err) {
       setTestStatus((s) => ({ ...s, [p.id]: { ok: false, error: (err as Error).message } }));
     }
@@ -260,10 +285,24 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
                 <div className="mt-2 space-y-1">
                   {p.models?.map((m) => {
                     const mid = m.model_id || m.modelId;
+                    const caps = m.caps || {};
                     return (
                       <div key={m.id ?? mid} className="flex items-center gap-2 pl-4 text-xs text-text2 group">
                         <Dot size="xs" className="bg-text2" />
                         <span className="truncate">{m.display_name || mid}</span>
+                        {!isServer && !!mid && (
+                          <span className="flex items-center gap-1 ml-2 shrink-0">
+                            <CapChip label={t('settings.modelCapsImages')} title={t('settings.modelCapsImagesHint')}
+                              on={caps.supportsImages === true}
+                              onToggle={() => toggleCap(p, mid as string, 'supportsImages', caps.supportsImages === true)} />
+                            <CapChip label={t('settings.modelCapsTools')} title={t('settings.modelCapsToolsHint')}
+                              on={caps.supportsToolCall !== false}
+                              onToggle={() => toggleCap(p, mid as string, 'supportsToolCall', caps.supportsToolCall !== false)} />
+                            <CapChip label={t('settings.modelCapsReasoning')} title={t('settings.modelCapsReasoningHint')}
+                              on={caps.supportsReasoning === true}
+                              onToggle={() => toggleCap(p, mid as string, 'supportsReasoning', caps.supportsReasoning === true)} />
+                          </span>
+                        )}
                         {!isServer && (
                           <button
                             onClick={async () => {
@@ -360,5 +399,25 @@ export default function ModelsTab({ providers, onProvidersChange, globalProvider
         ))}
       </Section>
     </>
+  );
+}
+
+// N1：能力位开关 Chip（文本 + 勾选标记表示开/关；不用 emoji/彩色，保持界面克制风格）。
+// 开：secondary 变体（描边）+ IconCheck；关：ghost 变体（无描边、降透明度）。
+function CapChip({ label, title, on, onToggle }: {
+  label: string; title: string; on: boolean; onToggle: () => void;
+}) {
+  return (
+    <Button
+      size="xs"
+      variant={on ? 'secondary' : 'ghost'}
+      aria-pressed={on}
+      title={title}
+      onClick={onToggle}
+      className={on ? '' : 'opacity-50'}
+    >
+      {on && <IconCheck size={10} className="shrink-0 text-select-fg" />}
+      {label}
+    </Button>
   );
 }

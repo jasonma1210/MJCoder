@@ -156,23 +156,33 @@ function ok(name) { n += 1; console.log(`  ✓ ${name}`); }
   assert.ok(hit.some((m) => m.content.includes('外部网页')), 'query 显式命中：低可信条目按低权重返回');
   ok('P0-2c：recallContents 按可信度过滤（低可信默认不注入，显式命中才低权重返回）');
 
-  // ── 11. P1-17：分域半衰期 ──
+  // ── 11. P1-17 / M4：半衰期（按 scope 差异化，domain 兼容回落）──
   assert.strictEqual(scorer.halfLifeDaysFor('session'), 7, 'session 半衰期 7 天');
   assert.strictEqual(scorer.halfLifeDaysFor('global_knowledge'), 30, 'global_knowledge 半衰期 30 天');
   assert.strictEqual(scorer.halfLifeDaysFor('no-such-domain'), 14, '未知域回落 14 天（兼容旧口径）');
+  // 三层记忆 M4：scope 表优先（层级越高越持久）
+  assert.strictEqual(scorer.halfLifeDaysFor('project'), 30, 'M4：project 层半衰期 30 天');
+  assert.strictEqual(scorer.halfLifeDaysFor('global'), 90, 'M4：global 层半衰期 90 天（最持久）');
   const halfTs = Date.now() - 14 * 24 * 3600 * 1000;
-  assert.ok(scorer.recencyScore(halfTs, Date.now(), 'session') < scorer.recencyScore(halfTs, Date.now(), 'global_knowledge'),
-    '同一时间点：session 半衰期短 → recency 分更低');
+  assert.ok(scorer.recencyScore(halfTs, Date.now(), 'session') < scorer.recencyScore(halfTs, Date.now(), 'global'),
+    '同一时间点：session 层半衰期短 → recency 分更低');
   mem.remember({ spaceId: '/half', domain: 'session', content: '半衰期测试 session', importance: 0.5 });
   mem.db.prepare('UPDATE memories SET updated_at = ? WHERE content = ?').run(Date.now() - 14 * 86400000, '半衰期测试 session');
-  mem.remember({ spaceId: '/half', domain: 'global_knowledge', content: '半衰期测试 global', importance: 0.5 });
+  // 项目层：user_input 来源 → scope=project（30 天）
+  mem.remember({ spaceId: '/half', domain: 'global_knowledge', content: '半衰期测试 global', importance: 0.5, source: 'user_input' });
   mem.db.prepare('UPDATE memories SET updated_at = ? WHERE content = ?').run(Date.now() - 14 * 86400000, '半衰期测试 global');
+  // 三层记忆 M4：全局层（scope=global，90 天）——同 14 天衰减最慢
+  mem.remember({ spaceId: '/half', domain: 'private', content: '半衰期测试 L3', importance: 0.5, source: 'user_input', scope: 'global' });
+  mem.db.prepare('UPDATE memories SET updated_at = ? WHERE content = ?').run(Date.now() - 14 * 86400000, '半衰期测试 L3');
   mem.decayJob({});
   const afterS = mem.db.prepare('SELECT importance FROM memories WHERE content = ?').get('半衰期测试 session');
   const afterG = mem.db.prepare('SELECT importance FROM memories WHERE content = ?').get('半衰期测试 global');
+  const afterL3 = mem.db.prepare('SELECT importance FROM memories WHERE content = ?').get('半衰期测试 L3');
   assert.ok(Math.abs(afterS.importance - 0.125) < 0.01, `session 14 天衰减到 0.125（实际 ${afterS.importance}）`);
-  assert.ok(Math.abs(afterG.importance - 0.5 * Math.pow(0.5, 14 / 30)) < 0.01, `global_knowledge 30 天半衰期衰减更慢（实际 ${afterG.importance}）`);
-  ok('P1-17：分域半衰期（session 7 / entity、global_knowledge 30）');
+  assert.ok(Math.abs(afterG.importance - 0.5 * Math.pow(0.5, 14 / 30)) < 0.01, `project 层 30 天半衰期衰减更慢（实际 ${afterG.importance}）`);
+  assert.ok(Math.abs(afterL3.importance - 0.5 * Math.pow(0.5, 14 / 90)) < 0.01, `M4：global 层 90 天半衰期衰减最慢（实际 ${afterL3.importance}）`);
+  assert.ok(afterS.importance < afterG.importance && afterG.importance < afterL3.importance, 'M4：三层衰减速率单调（session > project > global）');
+  ok('P1-17 / M4：半衰期按 scope 差异化（session 7 / project 30 / global 90，domain 回落）');
 
   // ── 12. P1-17：promoteToLongTerm（人工确认长期留存）+ invalidate ──
   const keep = mem.remember({ spaceId: '/half', domain: 'global_knowledge', content: '需要长期保留的知识', source: 'user_input' });

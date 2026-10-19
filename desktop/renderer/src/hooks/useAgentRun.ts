@@ -203,18 +203,23 @@ export default function useAgentRun(d) {
       content = `${raw}${raw ? '\n' : ''}${attachments.map((a) => `@${a.path}`).join('\n')}`;
     }
     if (!content.trim()) return;
-    // P0-2a：/mem 显式记忆指令——自动沉淀默认关闭后，这是用户主动留存的入口。
-    // 语义：`/mem <内容>` 直接把内容写入项目记忆（来源 user_input，最高可信，落 global_knowledge 域），
-    // 不触发模型运行；仅输入 `/mem` 时补全前缀等待补充内容。
+    // P0-2a：/mem 显式记忆指令（用户主动留存入口）。M1 作用域分流：
+    //   `/mem <内容>` → project + global_knowledge（零迁移，UI 显示「项目知识」）；
+    //   `/mem -g <内容>` → global + private（跨项目私有资产）；来源固定 user_input，不触发模型运行。
     if (raw === '/mem' || raw.startsWith('/mem ') || raw.startsWith('/mem\n')) {
-      const memText = raw.slice(4).trim();
-      if (!memText) { setInput('/mem '); return; }
+      let memText = raw.slice(4).trim();
+      let scope = 'project'; let domain = 'global_knowledge';
+      if (memText === '-g' || memText.startsWith('-g ') || memText.startsWith('-g\n')) {
+        scope = 'global'; domain = 'private';
+        memText = memText.slice(2).trim();
+      }
+      if (!memText) { setInput(scope === 'global' ? '/mem -g ' : '/mem '); return; }
       if (!project?.path) {
         toast({ message: tGlobal('runtime.memNeedProject') });
         return;
       }
       try {
-        await window.mjcode?.localAddMemory?.({ projectPath: project.path, content: memText, source: 'user_input' });
+        await window.mjcode?.localAddMemory?.({ projectPath: project.path, content: memText, source: 'user_input', domain, scope });
         setInput('');
         toast({ message: tGlobal('runtime.memSaved') });
       } catch (err) {

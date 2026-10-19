@@ -292,7 +292,12 @@ function startAgentRun(payload, sender) {
     const memorySpaceId = payload.projectPath || payload.cwd || 'default';
     const archiveMemory = (args) => {
       try {
-        return (deps.rememberMemory && deps.rememberMemory({ spaceId: memorySpaceId, ...args })) || null;
+        return (deps.rememberMemory && deps.rememberMemory({
+          spaceId: memorySpaceId,
+          // 三层记忆 M0：绑定本会话（L1 会话作用域的归属键）；非会话层由 remember 内部解绑
+          conversationId: payload.conversationId || null,
+          ...args,
+        })) || null;
       } catch (e) {
         console.warn(`[agentRun] 记忆归档失败（不影响运行） runId=${runId}:`, e.message);
         return null;
@@ -484,9 +489,12 @@ function startAgentRun(payload, sender) {
           if (evt.type === 'verify_ledger' && !evt.sub) vrun.onLedger(evt);
           // P0-2：压缩摘要归档——引擎只发事件（trace 通道），落记忆库是宿主副作用。
           // 只归档主 run（!sub）：子代理压缩与 verify_ledger 同口径，不参与本 run 的沉淀。
+          // 三层记忆 M0：压缩摘要属「跨会话的反思沉淀」→ domain=reflection + scope=project
+          //   （此前落 session 域，只能被本会话召回且 re_hit 无法晋升，等于写进死结；改为项目级可跨会话复用）。
           if (evt.type === 'memory_saved' && !evt.sub && String(evt.summary || '').trim()) {
             archiveMemory({
-              domain: 'session', importance: 0.7, entityTags: ['compression_summary'], source: 'compressor',
+              domain: 'reflection', scope: 'project', importance: 0.7,
+              entityTags: ['compression_summary'], source: 'compressor',
               content: String(evt.summary),
               summary: String(evt.summary).slice(0, 300),
             });

@@ -173,7 +173,7 @@ export const api = {
   // 多模型：本机 provider 模型条目增删（服务端无删除路由，仅本机支持）
   addProviderModel: (pid, data) => (String(pid).startsWith('s')
     ? request(`/providers/${String(pid).slice(1)}/models`, { method: 'POST', body: JSON.stringify(data) })
-    : window.mjcode.localAddProviderModel({ id: pid, model_id: data.model_id, display_name: data.display_name })),
+    : window.mjcode.localAddProviderModel({ id: pid, model_id: data.model_id, display_name: data.display_name, caps: data.caps })),
   removeProviderModel: (pid, modelId) => (String(pid).startsWith('s')
     ? Promise.reject(new Error(t('runtime.serverModelDeleteUnsupported')))
     : window.mjcode.localRemoveProviderModel({ id: pid, model_id: modelId })),
@@ -192,7 +192,10 @@ export const api = {
   // file 来源 provider 的写回：删除/添加模型会修改配置文件（再由 mtime 热同步回流列表）
   removeFileProviderModel: (fileKey, modelId) => window.mjcode.localModelsFileRemoveModel({ fileKey, modelId }),
   removeFileProvider: (fileKey) => window.mjcode.localModelsFileRemoveProvider({ fileKey }),
-  addFileProviderModel: (fileKey, data) => window.mjcode.localModelsFileAddModel({ fileKey, model_id: data.model_id, display_name: data.display_name }),
+  addFileProviderModel: (fileKey, data) => window.mjcode.localModelsFileAddModel({ fileKey, model_id: data.model_id, display_name: data.display_name, caps: data.caps }),
+  // N1：模型能力位写回（图像理解 / 工具调用 / 推理强度）。file 来源写 models.json，本机来源写本地库。
+  updateFileModelCaps: (fileKey, modelId, caps) => window.mjcode.localModelsFileUpdateModelCaps({ fileKey, modelId, caps }),
+  updateProviderModelCaps: (pid, modelId, caps) => window.mjcode.localUpdateProviderModelCaps({ id: pid, model_id: modelId, caps }),
 
   // Server-side global providers（离线不可用）。
   // 离线模式必须静默跳过——否则启动即打 3001 被 CSP connect-src 拦截，产生无意义控制台报错

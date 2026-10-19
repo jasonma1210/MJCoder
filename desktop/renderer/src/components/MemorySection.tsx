@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useI18n } from '../i18n';
 import { confirm } from './feedback';
+import Button from './ui/Button'; // G7：新增动作按钮一律走 ui/Button 原语（裸 <button> 基线只降不升）
 
 // 与 SettingsModal 内部 Section 同款卡片容器（该组件为文件私有，此处独立复刻避免循环依赖）
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
@@ -22,6 +23,8 @@ interface MemoryItem {
   id: string;
   spaceId: string;
   domain: string;
+  // 三层记忆 M3：作用域（session / project / global）——管理 UI 分区展示
+  scope: string;
   tier: number;
   content: string;
   summary: string | null;
@@ -48,6 +51,8 @@ interface BgTaskRow {
 interface MemoryStats {
   total: number;
   byDomainTier: Array<{ domain: string; tier: number; n: number }>;
+  // 三层记忆 M3：按作用域计数（session / project / global）
+  byScope: Array<{ scope: string; n: number }>;
   bgTasks: Array<{ status: string; n: number }>;
 }
 
@@ -68,6 +73,17 @@ const DOMAIN_KEYS: Record<string, string> = {
   reflection: 'settings.memoryDomainReflection',
 };
 
+// 三层记忆 M3：作用域 → i18n key（与记忆 index 的 SCOPES 同集合）
+const SCOPE_KEYS: Record<string, string> = {
+  session: 'settings.memoryScopeSession',
+  project: 'settings.memoryScopeProject',
+  global: 'settings.memoryScopePersonal',
+};
+
+// 作用域筛选档（'all' + 三层；顺序与层级优先级一致）
+const SCOPE_FILTERS = ['all', 'session', 'project', 'global'] as const;
+type ScopeFilter = (typeof SCOPE_FILTERS)[number];
+
 function fmtTime(ts: number, locale: string) {
   if (!ts) return '';
   try { return new Date(ts).toLocaleString(locale); } catch { return String(ts); }
@@ -79,6 +95,9 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
   const [tasks, setTasks] = useState<BgTaskRow[]>([]);
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [autoCapture, setAutoCapture] = useState(false);
+  // 三层记忆 M3：作用域筛选（默认全部）与团队共享开关
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
+  const [teamSharing, setTeamSharing] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   // 操作反馈（ UpdateSection 同款：命令式 toast 的 TS 签名要求 actionLabel/onAction，
   // 本组件用本地 notice 行承载，避免为过个提示传空动作）
@@ -87,17 +106,19 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
   const reload = useCallback(async () => {
     if (!projectPath) return;
     try {
-      const [st, bg, list, pref] = await Promise.all([
+      const [st, bg, list, pref, teamPref] = await Promise.all([
         window.mjcode?.memoryStats?.() as Promise<{ ok?: boolean; stats?: MemoryStats }> | undefined,
         window.mjcode?.memoryBgTasks?.({ limit: 20 }) as Promise<{ ok?: boolean; tasks?: BgTaskRow[] }> | undefined,
         window.mjcode?.memoryList?.({ projectPath, limit: 50 }) as Promise<{ ok?: boolean; items?: MemoryItem[] }> | undefined,
         window.mjcode?.localGetPreference?.({ key: 'memory.autoCapture' }) as Promise<unknown> | undefined,
+        window.mjcode?.localGetPreference?.({ key: 'memory.teamSharing' }) as Promise<unknown> | undefined,
       ]);
       setUnavailable(!!st && st.ok === false);
       if (st?.ok && st.stats) setStats(st.stats);
       if (bg?.ok) setTasks(bg.tasks || []);
       if (list?.ok) setItems(list.items || []);
       setAutoCapture(pref === true);
+      setTeamSharing(teamPref === true);
     } catch (err) {
       console.warn('[settings] memory section load failed:', err);
     }
@@ -156,9 +177,45 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
     }
   }
 
+  // 三层记忆 M3：清空某一层（高级管理；project 限当前项目空间，global 为跨项目全清）
+  async function resetScope(scope: string) {
+    const scopeLabel = t(SCOPE_KEYS[scope] || 'settings.memoryScopeProject');
+    const ok = await confirm({
+      title: t('settings.memoryResetScopeTitle', { scope: scopeLabel }),
+      message: t('settings.memoryResetScopeMsg'),
+      danger: true,
+      confirmLabel: t('feedback.delete'),
+    });
+    if (!ok) return;
+    try {
+      const r = await window.mjcode?.memoryResetScope?.({ scope, projectPath }) as { ok?: boolean; removed?: number } | undefined;
+      if (r?.ok) { setNotice(t('settings.memoryResetDone', { n: r.removed ?? 0 })); await reload(); }
+      else setNotice(t('settings.memoryOpFailed'));
+    } catch (err) {
+      console.warn('[settings] memory resetScope failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  // 三层记忆 M3：团队共享开关（写入偏好 memory.teamSharing，主进程据此决定 .mjcode/ 是否 gitignore）
+  async function toggleTeamSharing() {
+    const next = !teamSharing;
+    try {
+      await window.mjcode?.localSetPreference?.({ key: 'memory.teamSharing', value: next });
+      setTeamSharing(next);
+      setNotice(next ? t('settings.memoryTeamSharingOn') : t('settings.memoryTeamSharingOff'));
+    } catch (err) {
+      console.warn('[settings] memory teamSharing toggle failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
   const domainCount = (domain: string) => (stats?.byDomainTier || [])
     .filter((r) => r.domain === domain).reduce((s, r) => s + r.n, 0);
   const bgCount = (status: string) => (stats?.bgTasks || []).find((r) => r.status === status)?.n || 0;
+  // 三层记忆 M3：按作用域计数与筛选
+  const scopeCount = (scope: string) => (stats?.byScope || []).find((r) => r.scope === scope)?.n || 0;
+  const filteredItems = scopeFilter === 'all' ? items : items.filter((it) => (it.scope || 'project') === scopeFilter);
 
   return (
     <Section title={t('settings.memoryTitle')}>
@@ -200,6 +257,17 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
               </div>
             )}
           </div>
+          {/* ②b 分层计数（M3：会话 / 项目 / 个人三层作用域） */}
+          {!unavailable && (
+            <div className="py-4 border-t border-border">
+              <div className="text-sm font-medium mb-2">{t('settings.memoryByScopeTitle')}</div>
+              <div className="text-xs text-text2 flex flex-wrap gap-x-4 gap-y-1">
+                {Object.keys(SCOPE_KEYS).map((sc) => (
+                  <span key={sc}>{t(SCOPE_KEYS[sc])}: {scopeCount(sc)}</span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="py-4 border-t border-border">
             <div className="text-sm font-medium mb-2">{t('settings.memoryBgTasksTitle')}</div>
             {tasks.length === 0 ? (
@@ -220,16 +288,28 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
             )}
           </div>
 
-          {/* ③ 当前项目记忆列表 + 单条作废 / 长期留存 */}
+          {/* ③ 当前项目记忆列表 + 作用域筛选 + 单条作废 / 长期留存 */}
           <div className="py-4 border-t border-border">
             <div className="text-sm font-medium mb-2">{t('settings.memoryListTitle')}</div>
-            {items.length === 0 ? (
+            {/* M3：作用域筛选（全部 / 本次会话 / 项目 / 个人） */}
+            <div className="flex flex-wrap gap-2 mb-3">
+              {SCOPE_FILTERS.map((sc) => (
+                <Button key={sc} size="xs" variant={scopeFilter === sc ? 'primary' : 'secondary'}
+                  onClick={() => setScopeFilter(sc)}>
+                  {t(sc === 'all' ? 'settings.memoryScopeAll' : SCOPE_KEYS[sc])}
+                </Button>
+              ))}
+            </div>
+            {filteredItems.length === 0 ? (
               <p className="text-xs text-text2">{t('settings.memoryListEmpty')}</p>
             ) : (
               <div className="flex flex-col gap-3">
-                {items.map((item) => (
+                {filteredItems.map((item) => (
                   <div key={item.id} className="border border-border rounded-xl px-3 py-2">
                     <div className="flex items-center gap-2 text-xs text-text2 mb-1">
+                      <span className="border border-border rounded px-2 py-1">
+                        {t(SCOPE_KEYS[item.scope] || 'settings.memoryScopeProject')}
+                      </span>
                       <span className="border border-border rounded px-2 py-1">
                         {t(DOMAIN_KEYS[item.domain] || 'settings.memoryDomainSession')}
                       </span>
@@ -257,6 +337,31 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
                 ))}
               </div>
             )}
+          </div>
+
+          {/* ④ 高级管理（M3：团队共享开关 + 按层清空） */}
+          <div className="py-4 border-t border-border">
+            <div className="text-sm font-medium mb-2">{t('settings.memoryAdvancedTitle')}</div>
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{t('settings.memoryTeamSharingLabel')}</div>
+                <p className="text-xs text-text2 mt-1">{t('settings.memoryTeamSharingDesc')}</p>
+              </div>
+              <Button size="sm" variant={teamSharing ? 'primary' : 'secondary'} onClick={toggleTeamSharing}
+                className="shrink-0">
+                {teamSharing ? t('settings.memoryTeamSharingOn') : t('settings.memoryTeamSharingOff')}
+              </Button>
+            </div>
+            <div className="py-2">
+              <p className="text-xs text-text2 mb-2">{t('settings.memoryResetScopeHint')}</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(SCOPE_KEYS).map((sc) => (
+                  <Button key={sc} size="sm" variant="danger-ghost" onClick={() => resetScope(sc)}>
+                    {t('settings.memoryResetScopeAction', { scope: t(SCOPE_KEYS[sc]) })}
+                  </Button>
+                ))}
+              </div>
+            </div>
           </div>
         </>
       )}

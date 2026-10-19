@@ -452,15 +452,31 @@ class LocalStore {
   }
 
   // 多模型：添加条目（首个同步为兼容字段 modelId）
-  addProviderModel(providerId, { model_id, display_name } = {}) {
+  addProviderModel(providerId, { model_id, display_name, caps } = {}) {
     const p = this.data.providers.find((x) => x.id === Number(providerId));
     const mid = String(model_id || '').trim();
     if (!p) throw new Error('本地模型服务不存在');
     if (!mid) throw new Error('模型 ID 不能为空');
     if (!Array.isArray(p.models)) p.models = [];
     if (p.models.some((m) => m.modelId === mid)) throw new Error('该模型已存在');
-    p.models.push({ modelId: mid, displayName: String(display_name || '').trim() || mid });
+    // N1：能力位随条目落库（缺失时不写字段，解析侧按默认值处理）
+    const entry = { modelId: mid, displayName: String(display_name || '').trim() || mid };
+    if (caps && typeof caps === 'object') entry.caps = { ...caps };
+    p.models.push(entry);
     if (!p.modelId) p.modelId = mid; // 首模型兼容字段
+    this.flush();
+    return { id: p.id, modelId: p.modelId, models: p.models };
+  }
+
+  // N1：写回某个模型条目的能力位（图像 / 工具调用 / 推理强度）。caps 只覆盖传入字段。
+  updateProviderModelCaps(providerId, modelId, caps = {}) {
+    const p = this.data.providers.find((x) => x.id === Number(providerId));
+    const mid = String(modelId || '').trim();
+    if (!p) throw new Error('本地模型服务不存在');
+    if (!Array.isArray(p.models)) p.models = [];
+    const m = p.models.find((x) => x.modelId === mid);
+    if (!m) throw new Error('模型条目不存在');
+    m.caps = { ...(m.caps || {}), ...(caps && typeof caps === 'object' ? caps : {}) };
     this.flush();
     return { id: p.id, modelId: p.modelId, models: p.models };
   }

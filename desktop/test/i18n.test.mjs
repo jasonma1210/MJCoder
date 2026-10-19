@@ -184,5 +184,43 @@ await check('i18n 源码禁止 typeof import.meta.glob 运行时宿主判定', (
   }
 });
 
+// ── ⑥ 动态 map 引用的 key 存在性（M1 新增，2026-10-20）──
+// 缺口实证：MemorySection 的 DOMAIN_KEYS / BG_STATUS_KEYS、builtinSkills 的 nameKey/descKey 等
+// 映射表把 i18n key 当作「值」引用（如 { global_knowledge: 'settings.memoryDomainGlobal' }），
+// 断言③只扫字面量 t('x.y')/tGlobal('x.y')，扫不到映射表 ⇒ settings.memoryDomain{Private,Session,
+// Global,Entity,Reflection} 5 个 key 从未登记却门禁全绿，真机 UI 直接渲染原始 key（事故级）。
+// 本条按「模块名前缀的字符串字面量」补齐该缺口：凡形如 'mod.subKey' 且 mod 为已存在语言包模块的
+// 字符串字面量，其 key 必须真实存在于 zh-CN 包中；非语言包模块前缀（URL、扩展名等）自动跳过。
+await check('映射表引用的 i18n key 全部存在（动态引用防漏登记）', () => {
+  const files = [];
+  (function walk(d) {
+    for (const f of fs.readdirSync(d)) {
+      const p = path.join(d, f);
+      if (p === path.join(SRC, 'i18n')) return; // i18n 基础设施排除（注释含示例 key）
+      if (fs.statSync(p).isDirectory()) walk(p);
+      else if (/\.(jsx?|tsx?)$/.test(f)) files.push(p);
+    }
+  })(SRC);
+  const mods = new Set(Object.keys(zh));
+  const missing = new Set();
+  const re = /['"]([a-z][\w]*\.[\w.]+)['"]/g;
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8')
+      .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, ''); // 剥注释（注释里的示例 key 不算引用）
+    for (const m of src.matchAll(re)) {
+      const key = m[1];
+      const mod = key.split('.')[0];
+      if (!mods.has(mod)) continue; // 非语言包模块前缀（如文件扩展名/域名）跳过
+      let cur = zh[mod];
+      for (const seg of key.split('.').slice(1)) {
+        if (!cur || typeof cur !== 'object') { cur = undefined; break; }
+        cur = cur[seg];
+      }
+      if (typeof cur !== 'string') missing.add(`${key}（${path.relative(SRC, f)}）`);
+    }
+  }
+  if (missing.size) throw new Error(`字符串字面量引用的 key 缺失：\n${[...missing].slice(0, 40).join('\n')}`);
+});
+
 console.log(`\ni18n: ${pass}/${total} 通过`);
 process.exit(pass === total ? 0 : 1);

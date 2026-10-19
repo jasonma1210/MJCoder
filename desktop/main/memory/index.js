@@ -18,6 +18,23 @@
 //   （global_knowledge 等需人工确认才长期留存：晋升 Tier3 后永不被衰减/清理）。
 // P3-3：容量总闸——recall 限量载入 + Top-K 钳制（打分成本由 O(总量) 降为 O(scanLimit)）；
 //   单空间写入上限 MAX_MEMORIES_PER_SPACE（先清过期失效行，再按域优先级失效最旧 session 行）。
+// 三层记忆 M0（2026-10-20）：新增作用域（scope）维度——session / project / global。
+//   · scope/conversation_id 列由本模块惰性补齐（与 content_hash 同风格，幂等）；存量行回落 project；
+//   · 写入分流经 resolveScope（唯一事实来源）+ 去重键随作用域分化（session 含会话、global 忽略空间）；
+//   · recall 增分层模式（每层配额 + 跨层去重）+ recallForPrompt（预算内注入文本块）；
+//   · 新增 updateMemory / importItems / resetScope / promoteScope。
+// 三层记忆 M2（2026-10-20）：晋升链落地——会话删除 salvage（决策 3）+ 后台批量跨层晋升。
+//   · salvageConversation：purge 会话前两段式（有价值的 L1 → L2 沉淀，其余 L1 物理删除）；
+//   · promoteScopeByHits：L1 命中≥3→L2、L2 命中≥5 且 user_input→L3（bgScheduler promote-scope 处理器）。
+// 三层记忆 M3（2026-10-20）：管理 UI + 文件双通道 + 分层召回注入。
+//   · recallContents 增分层模式（scopes/conversationId）且输出 scope——渲染层据此加层级前缀注入；
+//   · stats 增按作用域计数、新增 listScope/projectSpaces（管理 UI 仪表盘 + 文件导出取数）；
+//   · importItems 增 onlyNew（文件导入幂等跳过已存在内容，避免覆盖来源/语义域）；
+//   · onChange 变更通知：写路径变更经此驱动文件双通道导出视图（memoryFile.js 防抖落盘）。
+// 三层记忆 M4（2026-10-20）：补齐设计文档 L1958 的两项承诺——① 半衰期按 scope 差异化
+//   （scorer.HALF_LIFE_DAYS_BY_SCOPE，session 7 / project 30 / global 90，domain 表作兼容回落）；
+//   ② L3 全局层独立容量闸 MAX_GLOBAL_MEMORIES=300（跨空间按 scope 计数 + LRU 硬淘汰）。
+//   容量闸抽象为 _enforceCap 统一实现（空间闸 / 全局层闸共用淘汰口径）。
 const crypto = require('crypto');
 const { scoreMemory, relevance, halfLifeDaysFor } = require('./scorer');
 
@@ -34,10 +51,38 @@ const SOURCE_TRUST = {
 // 低于该可信度的来源默认不进 system prompt 注入（P0-2c）
 const TRUST_THRESHOLD = 0.6;
 
+// ── 三层记忆（M0，2026-10-20）：作用域（scope）与写入分流 ──
+// scope 与 domain 正交：domain 是语义分类（会话/知识/反思…），scope 是记忆层级（可见范围与生存周期）。
+//   session —— 本轮会话工作记忆：绑定 conversation_id，仅同会话可见（最强时效、最快衰减）
+//   project —— 项目记忆：按 space_id 分区，项目内跨会话可见
+//   global  —— 全局记忆：跨项目可见，仅「用户显式确认」的可信资产允许写入
+// 顺序即层级优先级（晋升只允许自左向右）：跨层去重取更高优先级者。
+const SCOPES = ['session', 'project', 'global'];
+// 来源 → 默认作用域（写入分流的唯一事实来源，配合下方两条硬约束生效）
+const SOURCE_DEFAULT_SCOPE = {
+  user_input: 'project',       // 用户显式输入/指令：项目级资产
+  model_conclusion: 'session', // 模型自动结论：本轮会话工作记忆（跨会话经压缩/晋升沉淀到项目级）
+  compressor: 'project',       // 内部压缩摘要：跨会话的反思沉淀，直接进项目级
+  external_content: 'session', // 外部内容：不可信，强制收敛到会话层
+  'legacy-import': 'project',  // 旧记忆导入：历史沉淀按项目级（保持既有可召回语义）
+};
+// 分层召回配额（受控注入预算：会话 2 / 项目 3 / 全局 2，合计 7 条上限）
+const LAYER_QUOTA = { session: 2, project: 3, global: 2 };
+
+// ── 三层记忆 M2：晋升阈值（会话删除 salvage 与后台 promote-scope 共用，单一事实来源）──
+//   salvageConversation：L1 命中≥3 或已长期固化（tier≥3）→ 沉淀为 L2（project）
+//   后台 promote-scope：L1 命中≥3 → L2；L2 命中≥5 且来源 user_input → L3（global）
+const SALVAGE_MIN_HITS = 3;
+const SALVAGE_MIN_TIER = 3;
+const PROMOTE_L1_MIN_HITS = 3;
+const PROMOTE_L2_MIN_HITS = 5;
+
 // ── P3-3：容量总闸常量 ──
 const RECALL_SCAN_LIMIT = 200;        // recall 单次最多扫描打分的行数（按 updated_at 取最新窗口）
 const RECALL_TOP_K_MAX = 50;          // Top-K 硬上限
 const MAX_MEMORIES_PER_SPACE = 500;   // 单空间（项目）记忆总量上限（有效 + 失效）
+// 三层记忆 M4：L3 全局层独立容量闸（设计文档 L1958 承诺）——全局资产跨项目唯一，按 scope 计数
+const MAX_GLOBAL_MEMORIES = 300;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INVALID_GRACE_MS = 7 * DAY_MS;  // 失效行物理删除宽限（P1-17：半衰期 + 7 天）
 
@@ -45,6 +90,18 @@ function trustOf(memory) {
   const s = String(memory?.source || '').trim();
   if (Object.prototype.hasOwnProperty.call(SOURCE_TRUST, s)) return SOURCE_TRUST[s];
   return SOURCE_TRUST.model_conclusion; // 未知来源（含历史 'ipc' 等）按模型结论档：不放大、不误杀
+}
+
+// 三层记忆 M0：作用域分流（唯一事实来源）——既遵循来源默认档，又施加两条硬约束：
+//   ① external_content 不可信 → 强制收敛到会话层（禁止跨会话/跨项目传播不可信内容）；
+//   ② 全局层是「用户显式确认的跨项目资产」→ 非 user_input 一律降级项目层（防自动沉淀污染全局）。
+// 调用方传入非法 requestedScope（不在 SCOPES 内）时回落来源默认档，绝不写入未知作用域。
+function resolveScope({ source = '', requestedScope } = {}) {
+  const src = String(source || '').trim() || 'model_conclusion';
+  const scope = SCOPES.includes(requestedScope) ? requestedScope : (SOURCE_DEFAULT_SCOPE[src] || 'project');
+  if (src === 'external_content') return 'session';
+  if (scope === 'global' && src !== 'user_input') return 'project';
+  return scope;
 }
 
 // P0-2b：内容归一化——trim + 连续空白压缩为单空格 + 大小写折叠（去重键的计算基础）
@@ -58,11 +115,20 @@ function contentHashOf(normalized) {
 }
 
 class MemoryManager {
-  // deps: { db }（better-sqlite3 或 sql.js 适配层）
-  constructor({ db }) {
+  // deps: { db, onChange? }（better-sqlite3 或 sql.js 适配层）
+  // 三层记忆 M3：onChange({ scope, spaceId }) 为变更通知钩子——缺省空实现，不影响既有调用方；
+  // 宿主据此驱动文件双通道导出视图（SQLite 仍是唯一事实来源）。
+  constructor({ db, onChange = null }) {
     this.db = db;
+    this.onChange = onChange;
     this.writeChain = Promise.resolve(); // 写锁：异步操作（如压缩的 LLM 调用）串行排队
     this._ensureHashColumn();
+    this._ensureScopeColumns();
+  }
+
+  // 三层记忆 M3：变更通知（文件导出视图触发源）。异常不影响写入（fail-open）。
+  _notify(scope, spaceId = null) {
+    try { this.onChange?.({ scope, spaceId: spaceId || null }); } catch { /* 通知失败不影响写入 */ }
   }
 
   _id() { return `mem-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`; }
@@ -86,6 +152,27 @@ class MemoryManager {
     }
   }
 
+  // 三层记忆 M0：scope / conversation_id 列惰性补齐（幂等，与 _ensureHashColumn 同风格自包含）。
+  // 为什么同样放本模块：db/index.js 的迁移链由任务编排底座统一维护，本模块只做「使用前确保列存在」。
+  // 存量行 scope 缺省回落 'project'——历史记忆此前全部按项目空间归档，语义等价，无需数据回填。
+  _ensureScopeColumns() {
+    try {
+      const names = new Set(this.db.prepare('PRAGMA table_info(memories)').all().map((c) => c.name));
+      if (!names.has('scope')) {
+        this.db.exec("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'project'");
+        console.log('[memory] 已补齐 memories.scope 列（三层记忆作用域）');
+      }
+      if (!names.has('conversation_id')) {
+        this.db.exec('ALTER TABLE memories ADD COLUMN conversation_id TEXT');
+        console.log('[memory] 已补齐 memories.conversation_id 列（L1 会话作用域绑定）');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(space_id, scope, conversation_id)');
+    } catch (e) {
+      // 补齐失败不阻断启动：分层召回退化为单层（旧行为），其余能力不受影响
+      console.warn('[memory] scope 列补齐失败（三层作用域降级为单层）：', e.message);
+    }
+  }
+
   // 串行化入口：所有「可能涉及 LLM 调用」的写操作排进写链，避免并发写脏数据
   _serialized(fn) {
     const run = this.writeChain.then(fn, fn);
@@ -94,7 +181,9 @@ class MemoryManager {
   }
 
   // ── 写入（Tier1）──
-  remember({ spaceId, domain = 'session', content, importance = 0.5, entityTags = [], source = '', summary = null }) {
+  // 三层记忆 M0：新增 scope（作用域，缺省按来源默认档）+ conversationId（L1 会话层绑定）。
+  // 作用域分流全部经 resolveScope（唯一事实来源），调用方无需自行判断约束。
+  remember({ spaceId, domain = 'session', scope, conversationId = null, content, importance = 0.5, entityTags = [], source = '', summary = null }) {
     // P0-2b：来源白名单校验——未知来源拒绝写入并返回 null（调用方据此报错），
     // 不静默按模型结论档收留（那会让不可控来源混入长期记忆）
     const src = String(source || '').trim() || 'model_conclusion';
@@ -111,22 +200,28 @@ class MemoryManager {
       console.warn('[memory] external_content 来源禁止入 global_knowledge，已降级为 session 域');
       dom = 'session';
     }
+    // 三层记忆 M0：作用域分流（约束在 resolveScope 内统一处理）
+    const sc = resolveScope({ source: src, requestedScope: scope });
+    // 只有会话层绑定 conversation_id；其余层一律解绑（跨会话可见，不受单会话生命周期影响）
+    const conv = sc === 'session' && conversationId ? String(conversationId) : null;
     const now = this._now();
     const space = spaceId || 'default';
     const hash = contentHashOf(normalizeContent(text));
-    // P0-2b：hash 去重——同 space+domain+hash 已存在则刷新元数据，不重复 INSERT。
+    // 去重（去重键随作用域分化）：命中则刷新元数据，不重复 INSERT。
     // re_hit_count 不在此刷新：它只由召回命中驱动（recall），重复写入刷高会误触发
     // promoteByHits 的「高频晋升」，把一次性重复当成多次使用。
-    const dup = this.db.prepare('SELECT * FROM memories WHERE space_id = ? AND domain = ? AND content_hash = ? LIMIT 1')
-      .get(space, dom, hash);
+    const dup = this._findDup({ space, scope: sc, dom, hash, conversationId: conv });
     if (dup) {
       this.db.prepare('UPDATE memories SET updated_at = ?, usage_count = usage_count + 1, source = ?, importance = MAX(importance, ?) WHERE id = ?')
         .run(now, src, Math.max(0, Math.min(1, Number(importance) || 0.5)), dup.id);
+      this._notify(sc, space); // 三层记忆 M3：变更通知（文件导出视图）
       return this.get(dup.id);
     }
     const mem = {
       id: this._id(),
       space_id: space,
+      scope: sc,
+      conversation_id: conv,
       domain: dom,
       tier: 1,
       content: text.slice(0, 8000),
@@ -143,47 +238,83 @@ class MemoryManager {
       updated_at: now,
       trust: trustOf({ source: src }), // 返回值与 _rowToMemory 输出同构（含可信度）
     };
-    this.db.prepare(`INSERT INTO memories (id, space_id, domain, tier, content, summary, importance, entity_tags,
+    this.db.prepare(`INSERT INTO memories (id, space_id, scope, conversation_id, domain, tier, content, summary, importance, entity_tags,
       expire_at, is_valid, compressed, re_hit_count, usage_count, source, created_at, updated_at, content_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(mem.id, mem.space_id, mem.domain, mem.tier, mem.content, mem.summary, mem.importance,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(mem.id, mem.space_id, mem.scope, mem.conversation_id, mem.domain, mem.tier, mem.content, mem.summary, mem.importance,
         mem.entity_tags, mem.expire_at, mem.is_valid, mem.compressed, mem.re_hit_count, mem.usage_count,
         mem.source, mem.created_at, mem.updated_at, hash);
     this._enforceSpaceCap(space); // P3-3：容量总闸（写入侧）
-    return mem;
+    if (sc === 'global') this._enforceGlobalCap(); // 三层记忆 M4：L3 全局层独立容量闸
+    this._notify(sc, space); // 三层记忆 M3：变更通知（文件导出视图）
+    // 与去重命中路径返回同构（统一经 _rowToMemory：camelCase + 含 scope/conversationId/trust），
+    // 避免「新插入返 snake_case、重复写入返 camelCase」的双形态给调用方造成字段歧义。
+    return this.get(mem.id);
   }
 
-  // P3-3：单空间容量总闸——总量超 MAX_MEMORIES_PER_SPACE 时：
-  //   ① 先物理删除已失效且过宽限期的行（与 cleanupJob 同口径）；
-  //   ② 仍超限则物理删除最旧的 session 域行（session 是瞬时域，优先淘汰；
-  //      硬总闸必须硬删除——只置 is_valid=0 不缩表，闸门永远合不拢）；
-  //   global_knowledge / entity / reflection 受保护——那是用户显式确认的知识资产，
-  //   宁可超限也不自动删（超限时由上方统计与 UI 暴露，交用户处理）。
-  _enforceSpaceCap(spaceId) {
-    const total = this.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get(spaceId).n;
-    if (total <= MAX_MEMORIES_PER_SPACE) return 0;
+  // 三层记忆 M0：去重键随作用域分化——
+  //   session —— 含 conversation_id（不同会话的同内容各自独立，避免跨会话互相覆盖归属）；
+  //   global  —— 忽略 space_id（全局资产跨项目唯一，避免同内容在多个项目各存一份）；
+  //   project —— space_id + scope + domain + content_hash。
+  _findDup({ space, scope, dom, hash, conversationId }) {
+    if (scope === 'session') {
+      return this.db.prepare('SELECT * FROM memories WHERE space_id = ? AND scope = ? AND domain = ? AND content_hash = ? AND conversation_id IS ? LIMIT 1')
+        .get(space, scope, dom, hash, conversationId);
+    }
+    if (scope === 'global') {
+      return this.db.prepare('SELECT * FROM memories WHERE scope = ? AND domain = ? AND content_hash = ? LIMIT 1')
+        .get(scope, dom, hash);
+    }
+    return this.db.prepare('SELECT * FROM memories WHERE space_id = ? AND scope = ? AND domain = ? AND content_hash = ? LIMIT 1')
+      .get(space, scope, dom, hash);
+  }
+
+  // P3-3 / M4：容量硬闸通用实现（空间闸与全局层闸共用淘汰口径，单一事实来源）——
+  //   ① 先物理删已失效且过宽限期的行（与 cleanupJob 同口径）；② 仍超限则按 victimDomain
+  //   淘汰最旧行（null = 淘汰最旧任意行）。硬闸必须硬删——只置 is_valid=0 不缩表，闸门合不拢。
+  //   where/args 为计数与淘汰共用的范围条件（空间闸：space_id=?；全局层闸：scope='global'）。
+  _enforceCap({ label, limit, where, args, victimDomain = null }) {
+    const count = () => this.db.prepare(`SELECT COUNT(*) AS n FROM memories WHERE ${where}`).get(...args).n;
+    if (count() <= limit) return 0;
     let removed = 0;
-    const stale = this.db.prepare('DELETE FROM memories WHERE space_id = ? AND is_valid = 0 AND updated_at < ?')
-      .run(spaceId, this._now() - INVALID_GRACE_MS);
+    const stale = this.db.prepare(`DELETE FROM memories WHERE ${where} AND is_valid = 0 AND updated_at < ?`)
+      .run(...args, this._now() - INVALID_GRACE_MS);
     removed += stale.changes || 0;
-    const still = this.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get(spaceId).n - MAX_MEMORIES_PER_SPACE;
+    const still = count() - limit;
     if (still > 0) {
-      const victims = this.db.prepare(`SELECT id FROM memories WHERE space_id = ? AND domain = 'session'
-        ORDER BY updated_at ASC LIMIT ?`).all(spaceId, still);
-      for (const v of victims) {
-        this.db.prepare('DELETE FROM memories WHERE id = ?').run(v.id);
-        removed += 1;
-      }
-      if (victims.length) {
-        console.warn(`[memory] 空间 ${spaceId} 超容量总闸（${MAX_MEMORIES_PER_SPACE} 条），物理淘汰最旧 session 记忆 ${victims.length} 条`);
-      }
+      const dom = victimDomain ? ` AND domain = '${victimDomain}'` : '';
+      const victims = this.db.prepare(`SELECT id FROM memories WHERE ${where}${dom} ORDER BY updated_at ASC LIMIT ?`)
+        .all(...args, still);
+      for (const v of victims) { this.db.prepare('DELETE FROM memories WHERE id = ?').run(v.id); removed += 1; }
+      if (victims.length) console.warn(`[memory] ${label}超容量硬闸（${limit} 条），物理淘汰最旧记忆 ${victims.length} 条`);
     }
     return removed;
+  }
+
+  // P3-3：单空间容量总闸——超限淘汰最旧 session 域行（瞬时域优先）；global_knowledge /
+  //   entity / reflection 为受保护知识资产，宁可超限也不自动删（交用户在 UI 处理）。
+  _enforceSpaceCap(spaceId) {
+    return this._enforceCap({
+      label: `空间 ${spaceId}`, limit: MAX_MEMORIES_PER_SPACE,
+      where: 'space_id = ?', args: [spaceId], victimDomain: 'session',
+    });
+  }
+
+  // M4：L3 全局层独立容量闸——按 scope 计数（忽略 space_id，全局资产跨项目唯一）。
+  //   L3 无「瞬时域」可优先淘汰，故按 updated_at 最旧硬淘汰（确定性 LRU）；晋升进入 L3 同样受此闸约束；
+  //   Tier3 固化条目不例外（物理上限 ≠ 时间衰减豁免）。
+  _enforceGlobalCap() {
+    return this._enforceCap({
+      label: '全局层（scope=global）', limit: MAX_GLOBAL_MEMORIES,
+      where: "scope = 'global'", args: [], victimDomain: null,
+    });
   }
 
   _rowToMemory(r) {
     return r ? {
       id: r.id, spaceId: r.space_id, domain: r.domain, tier: r.tier,
+      // 三层记忆 M0：作用域/会话绑定/内容去重键随条目输出（缺失列时回落：scope=project、其余 null）
+      scope: r.scope || 'project', conversationId: r.conversation_id || null, contentHash: r.content_hash || null,
       content: r.content, summary: r.summary, importance: r.importance,
       entityTags: (() => { try { return JSON.parse(r.entity_tags || '[]'); } catch { return []; } })(),
       expireAt: r.expire_at, isValid: !!r.is_valid, compressed: !!r.compressed,
@@ -197,15 +328,56 @@ class MemoryManager {
     return this._rowToMemory(this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id));
   }
 
+  // 三层记忆 M0：局部更新（不可变字段保持不动：id / tier / 命中计数 / 创建时间 / 作用域）。
+  // 改 content 时同步重算 content_hash，保证去重键与内容一致；无有效补丁时原样返回。
+  updateMemory(id, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
+    if (!row) return null;
+    const sets = [];
+    const vals = [];
+    if (typeof patch.content === 'string' && patch.content.trim()) {
+      const text = patch.content.trim().slice(0, 8000);
+      sets.push('content = ?', 'content_hash = ?');
+      vals.push(text, contentHashOf(normalizeContent(text)));
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'summary')) {
+      sets.push('summary = ?');
+      vals.push(patch.summary ? String(patch.summary).slice(0, 2000) : null);
+    }
+    if (patch.importance != null) {
+      sets.push('importance = ?');
+      vals.push(Math.max(0, Math.min(1, Number(patch.importance) || 0)));
+    }
+    if (Array.isArray(patch.entityTags)) {
+      sets.push('entity_tags = ?');
+      vals.push(JSON.stringify(patch.entityTags.slice(0, 20)));
+    }
+    if (patch.domain && ['private', 'session', 'global_knowledge', 'entity', 'reflection'].includes(patch.domain)) {
+      sets.push('domain = ?');
+      vals.push(patch.domain);
+    }
+    if (!sets.length) return this.get(id);
+    sets.push('updated_at = ?');
+    vals.push(this._now());
+    this.db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+    this._notify(row.scope || 'project', row.space_id); // 三层记忆 M3：变更通知
+    return this.get(id);
+  }
+
   // ── 分层召回路由（P2-6）──
   // 路由顺序：先 Tier3/Tier2（摘要层，性价比高）→ Tier1（原文）；按六因子 Top-K 重排。
   // query 为空（如启动注入）→ 跳过相关性因子，退化为 importance×recency 排序。
   // P3-3：限量载入 + Top-K 钳制——只扫描最近 scanLimit 条进入打分（复杂度 O(scanLimit)，
   // 与记忆总量解耦）；topK 超硬上限时按上限截断。
-  recall({ spaceId, query = '', topK = 5, domains = null, minScore = 0, scanLimit = RECALL_SCAN_LIMIT }) {
+  // 三层记忆 M0：新增 scopes（作用域数组）+ conversationId。传入 scopes 即走分层模式
+  // （每层按 LAYER_QUOTA 配额、跨层同 content_hash 去重）；缺省保持单空间旧行为（向后兼容）。
+  recall({ spaceId, query = '', topK = 5, scopes = null, conversationId = null, domains = null, minScore = 0, scanLimit = RECALL_SCAN_LIMIT }) {
     const space = spaceId || 'default';
-    const k = Math.min(Math.max(1, Number(topK) || 5), RECALL_TOP_K_MAX);
     const scan = Math.min(Math.max(1, Number(scanLimit) || RECALL_SCAN_LIMIT), RECALL_SCAN_LIMIT);
+    if (Array.isArray(scopes) && scopes.length) {
+      return this._recallLayered({ space, query, scopes, conversationId, domains, minScore, scan });
+    }
+    const k = Math.min(Math.max(1, Number(topK) || 5), RECALL_TOP_K_MAX);
     const rows = this.db.prepare(
       'SELECT * FROM memories WHERE space_id = ? AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?'
     ).all(space, scan);
@@ -227,18 +399,96 @@ class MemoryManager {
     return scored.map(({ memory, score }) => ({ ...memory, score: Number(score.total.toFixed(4)) }));
   }
 
+  // 三层记忆 M0：分层召回（session 配额 2 / project 3 / global 2）。
+  //   ① 每层独立扫描打分，各取本层配额（受 RECALL_TOP_K_MAX 硬上限约束）；
+  //   ② 按层优先级（session > project > global）合并，跨层同 content_hash 去重（先入者即高层，胜出）；
+  //   ③ 结果按总分重排，命中反馈与单层路径同口径。
+  // 无会话上下文（conversationId 缺省）时跳过会话层——不注入无法归属的会话工作记忆。
+  _recallLayered({ space, query, scopes, conversationId, domains, minScore, scan }) {
+    const collected = [];
+    const seen = new Set();
+    for (const sc of SCOPES) {
+      if (!scopes.includes(sc)) continue;
+      if (sc === 'session' && !conversationId) continue;
+      const rows = this._layerRows({ space, scope: sc, conversationId, scan });
+      const quota = Math.max(1, Math.min(LAYER_QUOTA[sc], RECALL_TOP_K_MAX));
+      const scored = rows.map((r) => this._rowToMemory(r))
+        .filter((m) => !domains || domains.includes(m.domain))
+        .map((m) => ({ memory: m, score: scoreMemory(m, { query }), trust: trustOf(m) }))
+        .map((x) => ({ memory: x.memory, score: { ...x.score, total: x.score.total * x.trust } }))
+        .filter((x) => x.score.total > minScore)
+        .sort((a, b) => b.score.total - a.score.total)
+        .slice(0, quota);
+      for (const x of scored) {
+        const key = x.memory.contentHash || `id:${x.memory.id}`; // 跨层去重键：内容 hash（缺列回落 id）
+        if (seen.has(key)) continue;
+        seen.add(key);
+        collected.push(x);
+      }
+    }
+    collected.sort((a, b) => b.score.total - a.score.total);
+    const out = collected.slice(0, RECALL_TOP_K_MAX);
+    for (const { memory } of out) {
+      this.db.prepare('UPDATE memories SET re_hit_count = re_hit_count + 1, usage_count = usage_count + 1, updated_at = ? WHERE id = ?')
+        .run(this._now(), memory.id);
+    }
+    return out.map(({ memory, score }) => ({ ...memory, score: Number(score.total.toFixed(4)) }));
+  }
+
+  // 三层记忆 M0：单层取行（限量载入，scan 上限与旧路径同口径）。
+  //   session —— 同空间 + 会话绑定；project —— 同空间；global —— 忽略空间（跨项目）。
+  _layerRows({ space, scope, conversationId, scan }) {
+    if (scope === 'session') {
+      return this.db.prepare(`SELECT * FROM memories WHERE space_id = ? AND scope = 'session' AND conversation_id IS ?
+        AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(space, conversationId, scan);
+    }
+    if (scope === 'global') {
+      return this.db.prepare(`SELECT * FROM memories WHERE scope = 'global'
+        AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(scan);
+    }
+    return this.db.prepare(`SELECT * FROM memories WHERE space_id = ? AND scope = 'project'
+      AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(space, scan);
+  }
+
+  // 三层记忆 M0：给主对话 / Worker 注入用的「预算内记忆文本块」。
+  // 分层召回（session 2 / project 3 / global 2）→ 可信度过滤（低可信默认不进，query 显式命中才带）
+  // → 按 budgetChars 逐条累积装配（超预算即停止）。返回可直接拼进 system prompt 的文本；
+  // 无命中返回空串（调用方据此不注入「相关记忆」段）。
+  recallForPrompt({ projectPath, conversationId = null, query = '', budgetChars = 4000 } = {}) {
+    const budget = Math.max(0, Number(budgetChars) || 4000);
+    const hits = this.recall({
+      spaceId: projectPath, query, scopes: [...SCOPES], conversationId,
+    });
+    const q = String(query || '').trim();
+    const kept = hits.filter((m) => trustOf(m) >= TRUST_THRESHOLD
+      || (q && relevance(q, `${m.summary || ''}\n${m.content || ''}`) > 0));
+    const lines = [];
+    let used = 0;
+    for (const m of kept) {
+      const text = String(m.summary || m.content || '').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const line = `- ${text}`;
+      if (used + line.length + 1 > budget) break;
+      lines.push(line);
+      used += line.length + 1;
+    }
+    return lines.join('\n');
+  }
+
   // 注入格式兼容旧链路（renderer 取 content 列表）
   // P0-2c：域 + 可信度过滤——低可信（trust < TRUST_THRESHOLD，即 external_content）条目
   // 默认不进 system prompt 注入；仅当 query 显式命中（词法相关性 > 0）时才返回
   // （打分侧的 trust 乘子保证其权重仍然低）。
-  recallContents({ spaceId, query, topK = 5, domains, includeLowTrust = false }) {
+  // 三层记忆 M3：增 scopes/conversationId 分层模式，且输出 scope——渲染层据此加层级前缀
+  // （`[个人]/[项目]/[本次会话]`）后注入 system prompt（引擎仍吃 string[]，零改动）。
+  recallContents({ spaceId, query, topK = 5, domains, includeLowTrust = false, scopes = null, conversationId = null }) {
     const q = String(query || '').trim();
-    const hits = this.recall({ spaceId, query, topK, domains });
+    const hits = this.recall({ spaceId, query, topK, domains, scopes, conversationId });
     const kept = includeLowTrust
       ? hits
       : hits.filter((m) => trustOf(m) >= TRUST_THRESHOLD
         || (q && relevance(q, `${m.summary || ''}\n${m.content || ''}`) > 0));
-    return kept.map((m) => ({ id: m.id, content: m.summary || m.content, domain: m.domain, trust: trustOf(m) }));
+    return kept.map((m) => ({ id: m.id, content: m.summary || m.content, domain: m.domain, scope: m.scope || 'project', trust: trustOf(m) }));
   }
 
   // ── 压缩（P2-4）：同空间同域的未压缩 Tier1 批量合并为 1 条 Tier2 摘要 ──
@@ -295,6 +545,22 @@ class MemoryManager {
     return rows.length;
   }
 
+  // 三层记忆 M2：按命中次数批量跨层晋升（后台维护任务 promote-scope 的处理器）。
+  //   L1(session) 命中≥PROMOTE_L1_MIN_HITS → L2(project) 且解绑 conversation_id（跨会话可见）；
+  //   L2(project) 命中≥PROMOTE_L2_MIN_HITS 且来源 user_input → L3(global)。
+  // 全局层只收「用户显式输入」的高频资产：与 resolveScope 的全局硬约束同源——
+  // 模型自动结论即使高频也只停在项目层，避免自动沉淀污染跨项目全局。
+  // 单条晋升复用 promoteScope（唯一事实来源：仅向上、解绑会话、忽略失效条目）。
+  promoteScopeByHits({ l1MinHits = PROMOTE_L1_MIN_HITS, l2MinHits = PROMOTE_L2_MIN_HITS } = {}) {
+    let toProject = 0;
+    let toGlobal = 0;
+    const l1 = this.db.prepare("SELECT id FROM memories WHERE scope = 'session' AND is_valid = 1 AND re_hit_count >= ?").all(l1MinHits);
+    for (const r of l1) if (this.promoteScope(r.id, 'project')) toProject += 1;
+    const l2 = this.db.prepare("SELECT id FROM memories WHERE scope = 'project' AND is_valid = 1 AND re_hit_count >= ? AND source = 'user_input'").all(l2MinHits);
+    for (const r of l2) if (this.promoteScope(r.id, 'global')) toGlobal += 1;
+    return { toProject, toGlobal };
+  }
+
   // ── P1-17：人工确认长期留存（confirm/promote）──
   // 语义：global_knowledge 等域的半衰期衰减只作用于 tier < 3（见 decayJob）；用户显式
   // 晋升 Tier3 后，该条不再被时间衰减失效，也不再被容量总闸优先淘汰——
@@ -307,11 +573,76 @@ class MemoryManager {
     return this.get(id);
   }
 
-  // ── 衰减（P2-3 时间维度的批量执行）：importance 按分域半衰期衰减，低分失效 ──
+  // 三层记忆 M0：作用域晋升（session → project → global），用于会话删除时的 salvage 沉淀。
+  // 仅允许向上晋升（SCOPES 层级自左向右）；离开会话层即解绑 conversation_id（跨会话可见）；
+  // 已失效条目不晋升（先作废再确认/晋升没有意义）。非法目标返回 null；同级/降级保持不变（返回原条目）。
+  promoteScope(id, targetScope) {
+    const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
+    if (!row || !row.is_valid) return null;
+    if (!SCOPES.includes(targetScope)) return null;
+    const from = row.scope || 'project';
+    if (SCOPES.indexOf(targetScope) <= SCOPES.indexOf(from)) return this.get(id);
+    this.db.prepare('UPDATE memories SET scope = ?, conversation_id = NULL, updated_at = ? WHERE id = ?')
+      .run(targetScope, this._now(), id);
+    // 三层记忆 M4：晋升进入 L3 时同样受全局层容量闸约束（晋升不是绕过容量闸的口子）
+    if (targetScope === 'global') this._enforceGlobalCap();
+    // 三层记忆 M3：变更通知——来源层（失去该条目）与目标层（获得该条目）的文件视图都要刷新
+    this._notify(from, row.space_id);
+    this._notify(targetScope, row.space_id);
+    return this.get(id);
+  }
+
+  // 三层记忆 M2（决策 3）：会话删除时的 salvage 沉淀（两段式）。
+  //   ① 先把该会话「有价值的」L1 晋升为项目级（跨会话留存）：命中≥SALVAGE_MIN_HITS 或已长期固化（tier≥SALVAGE_MIN_TIER）；
+  //   ② 再物理删除该会话剩余的 L1（未被沉淀的瞬时工作记忆随会话一并清除）。
+  // 为什么挂 purge 而非 archive：archive 可恢复（restoreThread），删早了会丢；purge 不可恢复，是最合适的沉淀点。
+  // spaceId 可选：仅当调用方已知项目路径时用于收窄范围（会话行本就同 space，缺省按 conversationId 全量处理）。
+  // 返回 { promoted, removed }：promoted=沉淀为项目级条数，removed=随会话物理删除条数。
+  salvageConversation({ conversationId, spaceId = null } = {}) {
+    const conv = conversationId == null || conversationId === '' ? null : String(conversationId);
+    if (!conv) return { promoted: 0, removed: 0 };
+    const filter = ["scope = 'session'", 'conversation_id IS ?'];
+    const args = [conv];
+    if (spaceId) { filter.push('space_id = ?'); args.push(spaceId); }
+    const where = filter.join(' AND ');
+    const rows = this.db.prepare(`SELECT id, tier, re_hit_count FROM memories WHERE ${where}`).all(...args);
+    let promoted = 0;
+    for (const r of rows) {
+      if ((r.tier || 1) >= SALVAGE_MIN_TIER || (r.re_hit_count || 0) >= SALVAGE_MIN_HITS) {
+        // 晋升后 scope='project' 且 conversation_id=NULL → 不再被下方 DELETE 命中
+        if (this.promoteScope(r.id, 'project')) promoted += 1;
+      }
+    }
+    const del = this.db.prepare(`DELETE FROM memories WHERE ${where}`).run(...args);
+    // 三层记忆 M3：变更通知——会话层无文件视图，沉淀结果落在项目层（spaceId 收窄时按该空间刷新）
+    this._notify('project', spaceId || null);
+    return { promoted, removed: del.changes || 0 };
+  }
+
+  // 三层记忆 M0：作用域重置（清空某层）——
+  //   session —— 按 conversation_id 精确删除该会话的工作记忆；
+  //   project —— 按 space_id 删除该项目的项目级记忆；
+  //   global  —— spaceId 缺省时清全部全局记忆（跨项目资产，属显式管理操作）。
+  resetScope({ scope, spaceId = null, conversationId = null } = {}) {
+    if (!SCOPES.includes(scope)) return 0;
+    let r;
+    if (scope === 'session') {
+      r = this.db.prepare('DELETE FROM memories WHERE scope = ? AND conversation_id IS ?').run(scope, conversationId || null);
+    } else if (scope === 'global' && !spaceId) {
+      r = this.db.prepare("DELETE FROM memories WHERE scope = 'global'").run();
+    } else {
+      r = this.db.prepare('DELETE FROM memories WHERE scope = ? AND space_id = ?').run(scope, spaceId || 'default');
+    }
+    if ((r.changes || 0) > 0) this._notify(scope, scope === 'global' ? null : (spaceId || null)); // 三层记忆 M3：变更通知
+    return r.changes || 0;
+  }
+
+  // ── 衰减（P2-3 时间维度的批量执行）：importance 按分域/分层半衰期衰减，低分失效 ──
   // P1-17：分域半衰期（session 7 天 / entity 30 天 / global_knowledge 30 天），
+  // 三层记忆 M4：改为按 scope 取半衰期（session 7 / project 30 / global 90），domain 作兼容回落，
   // 把「一条污染记忆约 54 天才物理删除」提速到「半衰期 + 7 天宽限」。
   decayJob({ minImportance = 0.05 } = {}) {
-    const rows = this.db.prepare('SELECT id, domain, importance, updated_at FROM memories WHERE is_valid = 1 AND tier < 3').all();
+    const rows = this.db.prepare('SELECT id, scope, domain, importance, updated_at FROM memories WHERE is_valid = 1 AND tier < 3').all();
     const now = this._now();
     const DAY = DAY_MS;
     let decayed = 0;
@@ -319,7 +650,7 @@ class MemoryManager {
     for (const r of rows) {
       const days = Math.max(0, (now - r.updated_at) / DAY);
       if (days < 1) continue; // 1 天内不打折
-      const halfLife = halfLifeDaysFor(r.domain); // P1-17：分域半衰期
+      const halfLife = halfLifeDaysFor(r.scope || r.domain); // 三层记忆 M4：scope 优先（域回落）
       const next = (r.importance || 0) * Math.pow(0.5, days / halfLife);
       if (next < minImportance) {
         this.db.prepare('UPDATE memories SET is_valid = 0, updated_at = ? WHERE id = ?').run(now, r.id);
@@ -329,6 +660,8 @@ class MemoryManager {
         decayed += 1;
       }
     }
+    // 三层记忆 M3：失效跨空间/跨层发生，通知按层泛化（spaceId 缺省 = 刷新该层全部空间的文件视图）
+    if (invalidated > 0) { this._notify('project'); this._notify('global'); }
     return { decayed, invalidated };
   }
 
@@ -338,13 +671,16 @@ class MemoryManager {
     const cutoff = this._now() - graceDays * DAY_MS;
     const r1 = this.db.prepare('DELETE FROM memories WHERE is_valid = 0 AND updated_at < ?').run(cutoff);
     const r2 = this.db.prepare('DELETE FROM memories WHERE expire_at IS NOT NULL AND expire_at < ?').run(this._now());
+    if ((r1.changes + r2.changes) > 0) { this._notify('project'); this._notify('global'); } // 三层记忆 M3：变更通知
     return { purged: r1.changes + r2.changes };
   }
 
   // ── 失效（显式：被新事实推翻时；设置页单条作废也走这里）──
   invalidate(id, reason = '') {
+    const row = this.db.prepare('SELECT scope, space_id FROM memories WHERE id = ?').get(id);
     this.db.prepare('UPDATE memories SET is_valid = 0, source = COALESCE(source, \'\') || ?, updated_at = ? WHERE id = ?')
       .run(reason ? `（失效原因：${String(reason).slice(0, 100)}）` : '', this._now(), id);
+    if (row) this._notify(row.scope || 'project', row.space_id); // 三层记忆 M3：变更通知（失效条目从导出视图移除）
     return this.get(id);
   }
 
@@ -358,13 +694,34 @@ class MemoryManager {
     return rows.map((r) => this._rowToMemory(r));
   }
 
+  // 三层记忆 M3：按作用域取数（管理 UI 分层计数 + 文件导出视图取数）。
+  //   global —— 忽略空间（跨项目资产）；session/project —— 限定空间（container 的会话/项目层）。
+  listScope({ scope, spaceId = null, limit = 500 } = {}) {
+    if (!SCOPES.includes(scope)) return [];
+    const lim = Math.min(Math.max(1, Number(limit) || 500), 500);
+    if (scope === 'global') {
+      return this.db.prepare(`SELECT * FROM memories WHERE scope = 'global' AND is_valid = 1
+        ORDER BY updated_at DESC LIMIT ?`).all(lim).map((r) => this._rowToMemory(r));
+    }
+    return this.db.prepare(`SELECT * FROM memories WHERE scope = ? AND space_id = ? AND is_valid = 1
+      ORDER BY updated_at DESC LIMIT ?`).all(scope, spaceId || 'default', lim).map((r) => this._rowToMemory(r));
+  }
+
+  // 三层记忆 M3：存在项目级记忆的空间集合（文件双通道导出视图遍历用）。
+  projectSpaces() {
+    return this.db.prepare("SELECT DISTINCT space_id FROM memories WHERE scope = 'project' AND is_valid = 1")
+      .all().map((r) => r.space_id).filter((s) => s && s !== 'default');
+  }
+
   // ── 统计（可视化 UI 数据源）──
   stats() {
     const rows = this.db.prepare(`SELECT domain, tier, COUNT(*) AS n FROM memories WHERE is_valid = 1
       GROUP BY domain, tier`).all();
+    // 三层记忆 M3：按作用域计数（管理 UI 分层仪表盘）
+    const scopeRows = this.db.prepare('SELECT scope, COUNT(*) AS n FROM memories WHERE is_valid = 1 GROUP BY scope').all();
     const total = this.db.prepare('SELECT COUNT(*) AS n FROM memories WHERE is_valid = 1').get().n;
     const bg = this.db.prepare(`SELECT status, COUNT(*) AS n FROM memory_bg_tasks GROUP BY status`).all();
-    return { total, byDomainTier: rows, bgTasks: bg };
+    return { total, byDomainTier: rows, byScope: scopeRows, bgTasks: bg };
   }
 
   // ── 旧 JSON 记忆一次性导入（localStore POC → SQLite）──
@@ -386,8 +743,53 @@ class MemoryManager {
     return n;
   }
 
+  // 三层记忆 M0：批量导入（可显式指定 scope，供团队共享项目记忆 / 记忆文件导入用）。
+  // 与 importLegacy 的差别：这里逐条接受 scope/domain/source 覆盖，且默认走项目级（团队共享语义）；
+  // 幂等仍由 remember 的去重键保证（重复导入只刷新元数据，不重复插）。
+  importItems(items, { scope = 'project', onlyNew = false, source = 'legacy-import' } = {}) {
+    let n = 0;
+    for (const it of items || []) {
+      if (!it?.content) continue;
+      const space = it.projectPath || it.spaceId || 'default';
+      const sc = it.scope || scope;
+      // 三层记忆 M3：onlyNew —— 文件导入时跳过「内容已存在」条目（含失效行），
+      // 避免重复写入经去重路径刷新来源/语义域（防「自写自读」污染），也防已删除条目的复活。
+      if (onlyNew && this._hashExists({ space, scope: sc, hash: contentHashOf(normalizeContent(it.content)) })) continue;
+      const m = this.remember({
+        spaceId: space,
+        domain: it.domain || 'global_knowledge',
+        scope: sc,
+        conversationId: it.conversationId || null,
+        content: it.content,
+        summary: it.summary || null,
+        importance: it.importance == null ? 0.5 : it.importance,
+        entityTags: it.entityTags || [],
+        source: it.source || source,
+      });
+      if (m) n += 1;
+    }
+    return n;
+  }
+
+  // 三层记忆 M3：内容哈希存在性判断（不筛 is_valid——失效条目视为已存在，不因导入而复活）
+  _hashExists({ space, scope, hash }) {
+    if (scope === 'global') {
+      return !!this.db.prepare('SELECT 1 AS x FROM memories WHERE scope = ? AND content_hash = ? LIMIT 1').get(scope, hash);
+    }
+    return !!this.db.prepare('SELECT 1 AS x FROM memories WHERE space_id = ? AND scope = ? AND content_hash = ? LIMIT 1')
+      .get(space || 'default', scope, hash);
+  }
+
   // 词法相关性暴露给外部（Worker 注入时按任务标题查询）
   relevanceFor(query, text) { return relevance(query, text); }
 }
 
-module.exports = { MemoryManager, SOURCE_TRUST, TRUST_THRESHOLD, normalizeContent, contentHashOf, trustOf };
+module.exports = {
+  MemoryManager, SOURCE_TRUST, TRUST_THRESHOLD, normalizeContent, contentHashOf, trustOf,
+  // 三层记忆 M0：作用域分流与常量（供宿主/测试统一引用，避免各处重写规则）
+  resolveScope, SCOPES, SOURCE_DEFAULT_SCOPE, LAYER_QUOTA,
+  // 三层记忆 M2：晋升阈值（salvage / promote-scope 共用同一事实来源）
+  SALVAGE_MIN_HITS, SALVAGE_MIN_TIER, PROMOTE_L1_MIN_HITS, PROMOTE_L2_MIN_HITS,
+  // 三层记忆 M4：容量闸常量（空间闸 500 / L3 全局层闸 300）
+  MAX_MEMORIES_PER_SPACE, MAX_GLOBAL_MEMORIES,
+};

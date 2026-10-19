@@ -82,9 +82,10 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      # ── 桌面端：静态检查门禁（P1-6 新增）──
-      # ESLint：0 error 硬门禁。warning 不阻断（存量 84 个多为空 catch 的未用参数，
-      # 属项目既有风格；后续可分批清零，改 --max-warnings=0 收紧）。
+      # ── 桌面端：静态检查门禁（P1-6 新增；第六轮 N2 收紧）──
+      # ESLint：0 error 硬门禁 + warning 棘轮（--max-warnings=161 = 2026-10-19 实测基线，只降不升）。
+      # 原为 --max-warnings=9999（等于只 gate error，warning 无感）；现新增 warning 即红，
+      # 清掉一批后需同步下调基线（test/lint-ratchet.test.mjs 守这条棘轮）。
       - name: Desktop lint (ESLint)
         working-directory: desktop
         run: npm run lint
@@ -101,11 +102,15 @@ jobs:
           npm run typecheck
           npm run build
 
-      # ── 语法门禁：全部服务端/主进程文件 ──
-      - name: Syntax gate
+      # ── 语法门禁：全量扫描（第六轮 N3）──
+      # 原实现只 node --check 8 个写死文件（main/main.js 等），**新增文件永不被检查**——假绿。
+      # 现改为：server/src + desktop 全部服务端/主进程/引擎/脚本目录的 .js/.mjs 全量 --check，任一文件
+      # 语法错误即红。node 按文件最近的 package.json 判定 ESM/CJS，故 agent-core（type:module）同样可被
+      # 正确解析；renderer 的 ts/tsx 由 tsc 类型门禁覆盖，不在此扫描（node --check 无法解析 TS）。
+      - name: Syntax gate (full scan)
         run: |
-          cd server && for f in $(find src -name '*.js'); do node --check "$f"; done
-          cd ../desktop && node --check main/main.js && node --check main/preload.js && node --check main/approval.js && node --check main/skills.js && node --check main/sandbox.js && node --check main/github.js && node --check main/scheduler.js && node --check main/localStore.js
+          cd server && for f in $(find src -type f -name '*.js' -not -path '*/node_modules/*'); do node --check "$f" || exit 1; done
+          cd ../desktop && for f in $(find main agent-core eval scripts shared shared-ipc chrome-extension -type f \( -name '*.js' -o -name '*.mjs' \) -not -path '*/node_modules/*'); do node --check "$f" || exit 1; done
 
   # ═══════════════════════════════════════════
   #  发布 job（P0-G）：tag（v*）触发，三平台 matrix 打包

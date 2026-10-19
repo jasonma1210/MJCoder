@@ -181,6 +181,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   localModelsFileRemoveModel: (payload) => ipcRenderer.invoke('local:models-file/remove-model', payload),
   localModelsFileRemoveProvider: (payload) => ipcRenderer.invoke('local:models-file/remove-provider', payload),
   localModelsFileAddModel: (payload) => ipcRenderer.invoke('local:models-file/add-model', payload),
+  // N1：模型能力位（图像/工具/推理）写回
+  localModelsFileUpdateModelCaps: (payload) => ipcRenderer.invoke('local:models-file/update-model-caps', payload),
+  localUpdateProviderModelCaps: (payload) => ipcRenderer.invoke('local:providers/update-model-caps', payload),
   // B1：项目一等实体
   localProjects: () => ipcRenderer.invoke('local:projects/list'),
   localAddProject: (payload) => ipcRenderer.invoke('local:projects/add', payload),
@@ -269,6 +272,10 @@ contextBridge.exposeInMainWorld('mjcode', {
   memoryList: (opts) => ipcRenderer.invoke('memory:list', opts),
   memoryInvalidate: (payload) => ipcRenderer.invoke('memory:invalidate', payload),
   memoryPromote: (payload) => ipcRenderer.invoke('memory:promote', payload),
+  // 三层记忆 M3：记忆文件双通道同步（打开项目时导入外部变更 + 落盘当前视图）
+  memorySyncFile: (payload) => ipcRenderer.invoke('local:memories/syncFile', payload),
+  // 三层记忆 M3：按作用域清空（设置页「记忆」分区高级管理）
+  memoryResetScope: (payload) => ipcRenderer.invoke('memory:resetScope', payload),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
   // P1-5：用户自定义生命周期 hooks（preToolUse / postToolUse）——HooksSection 消费
   hooksGetConfig: () => ipcRenderer.invoke('hooks:getConfig'),
@@ -296,6 +303,7 @@ contextBridge.exposeInMainWorld('mjcode', {
   },
   // Computer Use（M4-C）
   cuaStatus: () => ipcRenderer.invoke('cua:status'),
+  cuaPermissionHelp: (payload) => ipcRenderer.invoke('cua:permission-help', payload),
   cuaRun: (payload) => ipcRenderer.invoke('cua:run', payload),
   cuaStop: () => ipcRenderer.invoke('cua:stop'),
   onCuaEvent: (cb) => {

@@ -73,3 +73,5 @@ export const IconFilter = (p) => <S {...p}><path d="M3 5h18l-7 8v5l-4 3v-8z" /><
 export const IconSend = (p) => <S {...p}><path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" /></S>;
 // 在系统浏览器中打开（内置浏览器顶栏）
 export const IconExternalLink = (p) => <S {...p}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6" /></S>;
+// 记忆（设置页三层记忆入口）：三层堆叠意象，对应 会话 / 项目 / 个人 三层作用域
+export const IconMemory = (p) => <S {...p}><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></S>;

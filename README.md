@@ -1808,6 +1808,572 @@ Grep / Read（源码符号定位与关键片段取证）、Edit（8 环节逐处
 3. **P3**：评估是否为 MCP 客户端补 `resources/list`、`prompts/get` 支持（如后续确有消费场景）。
 
 
+## 会话总结：记忆体系完整性审查（对标 WorkBuddy「记忆与进化」）· 2026-10-19
+
+### 会话背景
+用户提出新需求：实现「多重记忆」功能，对标 WorkBuddy 的记忆能力，并特别询问「同一工作目录下不同会话之间的 3 重记忆」是否已完整实现。本轮为**只读审查**，未改动任何业务代码。
+
+### 会话的主要目的
+通读 MJCode 记忆子系统全链路源码，判定其是否完整实现「会话级 / 工作目录级 / 全局级」三层记忆，并逐项对标 WorkBuddy「记忆与进化」的三类能力，输出差距清单供决策。
+
+### 完成的主要任务
+- 通读记忆子系统全部实现：`main/memory/index.js`（MemoryManager）、`main/memory/scorer.js`、`main/memory/bgScheduler.js`、`main/db/index.js`（memories 表）、`main/ipc/localData.js`（记忆 IPC）、`renderer/src/components/MemorySection.tsx`、`renderer/src/hooks/useAgentRun.ts`、`agent-core/index.js`（记忆段装配）。
+- 输出完整性盘点、三层作用域对照表、WorkBuddy 对标表与差距清单。
+
+### 会话中主要使用的技术栈
+SQLite（`memories` / `memory_bg_tasks` 表）+ Electron 主进程 MemoryManager（写锁串行）+ 引擎 trace `memory_saved` 归档闭环 + 渲染层 MemorySection UI。
+
+### 关键决策和结论
+1. **结论：不完整**——现有记忆是「**单层作用域（工作目录） × 五域 × 三压缩层**」，缺少用户所问的另外两层作用域。
+2. **三层作用域对照**：
+   - **工作目录级（跨会话）**：✓ 已实现。空间键 `space_id = projectPath`，同一目录下所有会话共享同一空间（写入与召回都按 `space_id` 过滤）。
+   - **会话级（单次对话隔离）**：△ 部分。对话历史按 thread 存，但记忆**不按 conversationId 隔离**——`session` 只是语义域（半衰期 7 天），同目录所有会话混写同一 space。
+   - **全局/个人级（跨项目）**：✗ 缺失。所有记忆均受 `WHERE space_id = ?` 约束；`global_knowledge` 名为 global 实为**域**，仍绑定单个空间，无跨项目公共空间。
+3. **三 Tier 语义澄清**：Tier1 原文 / Tier2 压缩摘要 / Tier3 长期固化是「内容压缩层级」，**非作用域层级**，易与用户所问的「3 重记忆」混淆。
+4. **对标 WorkBuddy「记忆与进化」**：对话记忆 ✓（`memory.autoCapture` 开关，默认关；另有 `/mem` 显式写）；本地记忆与技能 ✓（SQLite 本地 + 技能系统）；管理记忆 △（自动整理 ✓、查看/作废/晋升 ✓，但**编辑 / 导入 UI / 重置** 三项缺失）。
+
+### 会话中主要使用的工具
+`Read`、`Grep`（源码定位）、`Shell`（`wc -l`）、`AskUserQuestion`（范围/方向确认）。
+
+### 修改了哪些文件
+- **`README.md`**：追加本节会话总结。**原因**：遵循用户「每次会话结束追加结构化总结到 README」的固定规则。
+- 其余**无文件改动**（本轮为只读审查）。
+
+### 尚存问题
+- 缺「全局/个人级」跨项目记忆层。
+- 无「会话级隔离」——同目录多会话记忆互相混写，无法区分来源会话。
+- 管理记忆缺「编辑正文 / 导入 / 重置」三项（WorkBuddy 有）。
+
+### 推荐下一步
+1. **P1**：确认是否补齐三层作用域（全局级 + 会话级隔离），并规划里程碑顺序。
+2. **P2**：补管理记忆 UI 的编辑 / 导入 / 重置能力。
+3. **P3**：评估 autoCapture 默认值与被写入内容质量（当前为「问→结论」截断，非模型提炼）。
 
 
+## 会话总结：三层作用域记忆设计方案（只出方案，未开发）· 2026-10-19
+
+### 会话背景
+承上一轮记忆体系完整性审查结论（缺「全局级」与「会话级隔离」两层），用户选择「先只出方案，暂不开发」。本轮产出三层作用域记忆的设计方案与里程碑规划，**未改动任何业务代码**。
+
+### 会话的主要目的
+给出 MJCode 记忆体系从「单层作用域」升级为「三层作用域」的完整设计方案（数据模型、写入分流、召回路由、生命周期、管理 UI、里程碑、风险），供评审决策。
+
+### 完成的主要任务
+- 输出「三层作用域 × 五域 × 三 Tier」目标模型与对照（L1 会话 / L2 工作目录 / L3 全局）。
+- 给出最小改动的数据模型方案（新增 `scope` + `conversation_id`，保留 `space_id`）。
+- 给出写入分流表、晋升链、召回分层配额与注入路由、生命周期与容量策略。
+- 给出管理记忆 UI 三补齐项（编辑/导入/重置）与里程碑规划 M0→M4。
+
+### 关键决策和结论
+1. **正交维度**：新增 `scope` 作为与「域」「Tier」正交的作用域维度；既有记忆行默认 `scope='project'` → 行为零变化。
+2. **写入分流**：`user_input`→L2、`model_conclusion`(autoCapture)→L1、`compressor`→L2、`external_content`→仅 L1 且**禁入 L3**（扩展现有「禁入 global_knowledge」约束）。
+3. **晋升链**：L1 高频→L2→（人工确认）→L3，复用 `bgScheduler` 底座。
+4. **召回路由**：分层配额（全局 2 + 项目 3 + 会话 2）+ 跨层同 hash 去重（会话>项目>全局）+ 来源标注注入。
+5. **污染防控**：L3 跨项目聚合 → 建议只允许 `user_input` 与人工确认进入 L3。
+6. **命名纪律**：现有 `session` 是「域」不是「作用域」，UI 一律用「全局/项目/会话」，避免与域/Tier 混淆。
+
+### 里程碑规划
+| 里程碑 | 内容 | 验收 |
+|---|---|---|
+| M0 地基 | scope 模型 + 迁移 + MemoryManager 多作用域 API | 单测，UI/引擎零改动 |
+| M1 召回 | 三层合并召回 + 引擎注入装配 + 注入过滤 | 注入装配门禁 |
+| M2 写入分流 | 来源→层级分流 + 晋升链 + 后台任务 | 分流/晋升单测 |
+| M3 管理 UI | 分层视图 + 编辑/导入/重置 + i18n | 类型/lint/单测 |
+| M4 验收 | 真机端到端 + WorkBuddy 对标复核 | 真机验收 |
+
+### 待决策的开放项
+1. L3 是否允许 autoCapture 自动写入（建议：否，仅显式 + 人工确认）。
+2. 会话级记忆在会话删除时是否一并失效（建议：是）。
+3. 召回分层配额的具体数值。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Shell`、`AskUserQuestion`。
+
+### 修改了哪些文件
+- **`README.md`**：追加本节会话总结与方案要点。**原因**：遵循用户「每次会话结束追加结构化总结到 README」的固定规则。
+- 其余**无文件改动**（本轮只出方案，未开发）。
+
+### 尚存问题与推荐下一步
+- 方案未评审、未开工；落地前需先确认上述 3 个开放项。
+- 推荐下一步：评审本方案并确认开放项 → 确认后从 **M0 地基**起步，按里程碑顺序推进。
+
+
+## 会话总结：WorkBuddy / Codex / Trae 记忆设计调研（对标参考）· 2026-10-19
+
+### 会话背景
+用户询问「WorkBuddy 以及 Codex 怎么设计（记忆体系）」，作为 MJCode 三层记忆设计的外部对标参考。本轮为**联网调研**，未改动业务代码。
+
+### 完成的主要任务
+- 网研并核实三家产品的公开记忆设计（区分「已证实」与「推断」，附来源 URL）。
+- 输出三者对比表与对 MJCode 三层设计的启示。
+
+### 关键结论（含重要前提纠正）
+1. **前提纠正**：**WorkBuddy 是腾讯产品**（workbuddy.cn / 腾讯云 CodeBuddy 团队），**非字节**；字节的直接对标是 **Trae**（`docs.trae.cn/ide_memories`）。
+2. **WorkBuddy（腾讯）**：默认开启；会话历史自动抽取 + 每晚整理；`memoryExtraction` / `teamMemory.enabled` 显式分「个人记忆 / 团队(项目)记忆」（团队记忆落项目目录）；「记忆与进化」可查看/编辑/删除/关闭；正文按用户画像/项目经历/技术栈等分类组织（相当于「域」）。
+3. **Codex（OpenAI）**：AGENTS.md 层级＝全局层（只取首个非空文件）+ 项目层「root→cwd 就近覆盖」，总大小超 `project_doc_max_bytes`（默认 32 KiB）截断、每次运行重建；新增 memory 预览（第三方称 `~/.codex/memories/`，`memory_summary.md` 注入约 5k token，**默认关闭**、**无可视化 UI**）；compaction 仅为会话内保命机制（"compaction is not memory"）。
+4. **Trae（字节）**：**全局记忆** `~/.trae-cn/memory/user_profile.md` + **项目记忆** `~/.trae-cn/memory/projects/{project_path}/project_memory.md`，本地存储、不可跨设备、可开关 + 手动编辑。
+5. **行业形态**：普遍为「**2 层（项目 + 全局）** + 会话靠上下文窗口」；MJCode 要做的「**3 层独立持久化（含会话级）**」实为**超出三家**。
+
+### 对 MJCode 三层设计的启示
+1. 「存储位置＝作用域锚点」是共识 → L2/L3 建议**可读文件 + SQLite 索引**双通道（优于 Codex 无 UI、Trae 无检索）。
+2. 引入**注入总字数预算**（参考 Codex 32 KiB / ~5k token），叠加在分层配额之上。
+3. 坚持「压缩 ≠ 记忆」红线；MJCode 的 `compress → memory_saved` 已把摘要持久成记忆（比 Codex 更进一步），可作 **L1→L2 晋升**原料。
+4. WorkBuddy 的「团队记忆」是 MJCode 暂缺的维度，将来多人共享同一工作目录时可加「个人/团队」可见性开关。
+5. 「可查看 + 可编辑 + 可关闭」是三家底线，方向正确。
+
+### 会话中主要使用的工具
+`Read`（截图解析）、`Agent`(general-purpose，联网调研 + WebSearch/WebFetch)。
+
+### 修改了哪些文件
+- **`README.md`**：追加本节调研总结。**原因**：遵循用户「每次会话结束追加结构化总结到 README」的固定规则。
+- 其余**无文件改动**。
+
+### 尚存问题与推荐下一步
+- Codex memory 的存储结构仅有第三方整理（官方未披露），标注「待核」；WorkBuddy 是否存在独立会话级持久记忆**无公开资料**。
+- 推荐下一步：把上述启示并入三层记忆方案（补「文件+SQLite 双通道」与「注入字数预算」两条），再评审确认开放项。
+
+
+## 会话总结：三层记忆具体实现设计（基于真实源码，未开发）· 2026-10-19
+
+### 会话背景
+用户要求「基于调研结果，给出三层记忆的具体实现设计」。本轮先通读记忆子系统真实源码确认接线事实，再产出可落地设计。**未改动任何业务代码**。
+
+### 完成的主要任务
+- 通读并核实：`main/memory/index.js`、`main/memory/scorer.js`、`main/db/index.js`（memories 表 + 索引）、`main/agentRunner.js`（归档）、`main/main.js`（rememberMemory）、`main/ipc/localData.js`（4 条记忆 IPC）、`main/preload.js`、`renderer/src/components/ChatArea.jsx`、`renderer/src/hooks/useAgentRun.ts`。
+- 产出三层作用域（session / project / global）的具体实现设计：schema 迁移、MemoryManager API 扩展、调用方 4 处改动、后台晋升、文件双通道、管理 UI、门禁、里程碑。
+
+### 关键事实（源码核实）
+1. **结构性根因**：召回与写入**全部只以 `projectPath` 为分区键**（`local:memories/list` → `recallContents({spaceId: projectPath})`；`agentRunner.memorySpaceId = projectPath || cwd || 'default'`），**完全不感知 `conversationId`** → 会话级隔离缺失是结构性的。
+2. 两条 IPC 通道均已收口 MemoryManager（SQLite），**无遗留 JSON 轨**（`local:memories/list` 未就绪直接返回 `[]`）。
+3. `local:memories/add`（`/mem` 路径）硬编码 `domain:'global_knowledge'`。
+4. 渲染层注入载荷是 `string[]`（仅 `m.content`），**无层级/域标注**；引擎 system prompt `## 相关记忆` 消费该数组。
+5. `memory_saved`（压缩摘要）归档为 `domain:'session', source:'compressor'`。
+
+### 关键设计决策
+1. **正交维度**：新增 `scope` 列 + `conversation_id` 列，保留 `space_id`；既有行默认 `scope='project'` → 行为零变化，迁移沿用 content_hash 惰性补齐风格（幂等、离使用方最近）。
+2. **分流单一事实来源** `resolveScope()`：`user_input`→project（`/mem -g`→global）、`model_conclusion`→session、`compressor`→project、`external_content`→强制 session；并将「禁入 global_knowledge」升级为**禁入 L3**；`global` 且非 user_input → 降级 project。
+3. **召回**：分层配额 `{session:2, project:3, global:2}` + 跨层同 hash 去重（层优先 session>project>global）+ **总字数预算 4000**（呼应 Codex 32KiB/~5k token）。
+4. **引擎零改动**：`memories` 仍是 `string[]`，层级语义用文本前缀（`[个人]/[项目]/[本次会话]`）承载。
+5. **文件双通道**：L3→`~/.mjcode/user_profile.md`、L2→`<project>/.mjcode/memory.md`，SQLite 为唯一事实来源、文件为导出视图（防抖 500ms 落盘 + 启动 mtime 检测 re-import）。
+6. **后台晋升**：新增 `promote-scope`（L1 hits≥3→L2；L2 hits≥5 且 user_input→L3），半衰期按 scope 差异化，L3 独立容量闸 300。
+
+### 里程碑
+M0 地基（scope 迁移 + 多作用域 API + 门禁）→ M1 召回（分层配额 + 注入 + 前缀）→ M2 分流 + 晋升 → M3 UI + 文件双通道 → M4 真机验收。
+
+### 待确认的 4 个决策点
+1. `memory_saved` 压缩摘要默认落 L2 还是 L1（倾向 L2）。
+2. `/mem` 默认 L2、`/mem -g` 落 L3 是否符合预期。
+3. 会话删除时 L1 是否级联物理删除（倾向是）。
+4. `<project>/.mjcode/memory.md` 是否默认加入 `.gitignore`（倾向是）。
+
+### 会话中主要使用的工具
+`Read`、`Grep`。
+
+### 修改了哪些文件
+- **`README.md`**：追加本节设计总结。**原因**：遵循用户「每次会话结束追加结构化总结到 README」的固定规则。
+- 其余**无文件改动**（本轮只出设计，未开发）。
+
+### 尚存问题与推荐下一步
+- 4 个决策点未确认，方案未评审、未开工。
+- 推荐下一步：确认 4 个决策点 → 从 **M0 地基**起步按里程碑顺序推进。
+
+
+## 会话总结：三层记忆 4 个决策点的实际开发走法 · 2026-10-19
+
+### 会话背景
+用户追问「针对 4 个决策点，按照实际开发会怎么走」。本轮基于源码事实给出可执行的决策结论与落地位置。**未改动业务代码**。
+
+### 关键发现（技术死结）
+**压缩摘要不能落 L1**：`re_hit_count` 只由召回命中驱动（`recall()` 内自增，写入路径明确不刷新），而晋升链 `promoteByHits` 依赖 `re_hit_count`；L1 召回又只按本会话 `conversationId` 过滤 → 落 L1 的摘要永远拿不到跨会话命中、永远无法晋升，进死胡同。
+
+### 4 个决策点的实际走法
+| 决策 | 结论 | 落地位置 | 里程碑 |
+|---|---|---|---|
+| 1 压缩摘要（`memory_saved`） | **`scope:'project'` + `domain` 由 `session` 改 `reflection`**（30d 半衰期） | `agentRunner.js` 归档点 | M0（写入分流） |
+| 2 `/mem` 分层 | `/mem`→`project`（**保持 `domain:'global_knowledge'` 零迁移**，UI 文案改名「项目知识」消歧）；`/mem -g`→`global`+`private` | `local:memories/add` + UI | M1 / M3 |
+| 3 会话删除 | **两段式：先 salvage 晋升（`tier>=3` 或 `re_hit_count>=3` 的 L1 → 升 L2 并清 `conversation_id`），再物理删除其余 L1** | 会话删除 IPC/db 钩子 | M2 |
+| 4 项目记忆文件 | **默认写 `.mjcode/` 进 `.gitignore`**（安全默认）+ 可选「团队共享项目记忆」开关（对标 WorkBuddy `teamMemory`） | 文件双通道 + 设置项 | M3 |
+
+### 排期结论
+- **仅决策 1 是 M0 前置**（决定 `scope` 语义用法）；决策 2/3/4 可随 M1–M3 落地。
+- 建议 4 点**一起锁定**（决策成本极低，避免 M2/M3 返工），随后 M0 开工。
+
+### 会话中主要使用的工具
+`Read`、`Grep`。
+
+### 修改了哪些文件
+- **`README.md`**：追加本节总结。**原因**：遵循用户「每次会话结束追加结构化总结到 README」的固定规则。
+- 其余**无文件改动**。
+
+### 尚存问题与推荐下一步
+- 决策 1 若改 `domain`，需同步更新断言 `memory_saved` 为 `session` 域的既有测试。
+- 推荐下一步：锁定 4 点 → M0 开工（scope 迁移 + MemoryManager 多作用域 API + 决策 1 写入分流 + 门禁，不碰 UI 与引擎）。
+
+---
+
+## 会话总结：三层记忆 M0 落地实现 · 2026-10-20
+
+### 会话背景
+3 个作用域（session / project / global）与 4 个决策点已在前序会话锁定并经用户批准。用户下达「按照你的决策和计划，具体的实现内容，开始进行开发吧」，本轮严格按 **M0 → M1 → M2 → M3 → M4** 里程碑顺序，**仅完成 M0**（记忆作用域地基），不触碰 UI 与引擎装配（属 M1+）。
+
+### 会话的主要目的
+落地三层记忆 M0 地基：作用域（scope）维度写入分流、分层召回、作用域管理 API，以及决策 1（压缩摘要改落「项目级反思」）的接入；全程不提交、不推送。
+
+### 完成的主要任务
+1. **scope 列幂等迁移**：`memories` 增 `scope TEXT NOT NULL DEFAULT 'project'` + `conversation_id TEXT` + 索引 `idx_memories_scope`，沿用 `_ensureHashColumn` 的「PRAGMA 探测 + ALTER」自包含风格，存量行回落 `project`（语义等价历史归档）。
+2. **写入分流唯一事实来源** `resolveScope({source, requestedScope})`：四来源默认档 + 两条硬约束（`external_content` 强制会话层；`global` 仅 `user_input` 可写，其余降级 `project`）。
+3. **`remember` 增 `scope/conversationId` + 去重键随作用域分化**：session 键含 `conversation_id`、global 键忽略 `space_id`、project 为 `space+scope+domain+hash`；仅会话层绑定 `conversation_id`。
+4. **`recall` 分层模式**：传 `scopes` 即走分层（每层配额 `session2/project3/global2` + 跨层同 `content_hash` 去重，取更高层）；缺省保持单空间旧行为（向后兼容）。新增 `recallForPrompt({budgetChars=4000})` 预算内装配注入文本块 + 可信度过滤。
+5. **新增管理 API**：`updateMemory`（改内容同步重算 hash）、`importItems`（显式 scope 批量导入，幂等）、`resetScope`（会话层按 conversationId 精确删 / global 层清空）、`promoteScope`（仅向上晋升 + 解绑会话；非法目标返 `null`，同级/降级保持原条目）。
+6. **决策 1 落地**：`agentRunner.js` 的 `memory_saved` 归档改为 `domain:'reflection'` + `scope:'project'`；`archiveMemory` 统一绑定 `conversationId`。
+7. **门禁**：新增 `desktop/test/memory-scope.test.mjs`（13 组断言）；同步 `memory-write-closure.test.mjs` B1 断言。
+
+### 会话中主要使用的技术栈
+Electron 主进程 CJS + SQLite（better-sqlite3/sql.js 双驱动）+ Node ESM 测试（`node:test`/`assert`）+ 发现式测试入口 `test/run-all.mjs`。
+
+### 关键决策和解决方案
+- **压缩摘要改 `reflection/project`**：破解「落 L1 因 `re_hit_count` 无法跨会话自增而永不晋升」的技术死结（前序会话已论证）。
+- **`recall` 新旧签名兼容**：以「`scopes` 是否为数组」为开关——有则分层、无则单空间旧行为，零破坏既有 205+ 测试基线。
+- **`remember` 返回形态收敛**：新插入路径原返回 snake_case、去重命中路径返回 camelCase（`get()` 输出），本轮统一改为 `return this.get(mem.id)`，两路径同构（含 `scope/conversationId/trust`），避免字段歧义；既有消费方仅读 `id/domain/content/trust`，全部仍成立。
+- **幂等迁移放模块内**：`db/index.js` 迁移链由任务编排底座维护，本模块只做「使用前确保列存在」，失败仅告警不阻断（分层召回退化为单层）。
+
+### 会话中主要使用的工具
+`Read`、`Edit`、`Grep`、`Shell`（`node` / `npm run lint` / `npm run typecheck` / `npm test`）。
+
+### 修改了哪些文件
+- **`desktop/main/memory/index.js`**：M0 核心——常量（`SCOPES/SOURCE_DEFAULT_SCOPE/LAYER_QUOTA`）+ `resolveScope` + `_ensureScopeColumns` + `remember` 分流 + `_findDup` + `_rowToMemory` 输出扩展 + `recall` 分层路由 + `_recallLayered`/`_layerRows` + `recallForPrompt` + `updateMemory/importItems/resetScope/promoteScope` + 导出。
+- **`desktop/main/agentRunner.js`**：`archiveMemory` 绑定 `conversationId`；`memory_saved` 归档改 `reflection/project`。
+- **`desktop/test/memory-scope.test.mjs`**（新建）：M0 门禁 13 组断言。
+- **`desktop/test/memory-write-closure.test.mjs`**：B1 断言同步 `reflection/project`。
+- **`README.md`**：追加本节总结（用户固定规则）。
+
+### 文件修改的详细内容
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `memory/index.js` | 见上「完成的主要任务」1–5 项 | 落地三层作用域地基与写入分流/分层召回 |
+| `agentRunner.js` | `memory_saved` → `domain:'reflection'` + `scope:'project'`；`archiveMemory` 带 `conversationId` | 决策 1；会话层绑定 |
+| `memory-scope.test.mjs` | 新增 13 组断言（迁移/分流/配额/去重/新 API） | M0 回归门禁 |
+| `memory-write-closure.test.mjs` | B1 断言 `domain==='reflection' && scope==='project'` | 同步决策 1 的归档行为 |
+| `README.md` | 追加 M0 总结 | 用户固定规则 |
+
+### 验证结果
+- `node test/memory-scope.test.mjs`：13 组全通过。
+- `memory.test.js`（16 项）+ `memory-write-closure.test.mjs`（10 项）全通过。
+- `npm run lint`：**0 error**（161 条历史 warning）；`npm run typecheck`：**通过**（无输出）。
+- `npm test` 全量：**210 套件 / 209 通过 / 1 失败**，唯一失败为既有环境问题 `test/tools-cwd.test.js`（macOS 沙箱），与本次改动无关；2 项平台跳过（Linux bwrap）。
+
+### 尚存问题与推荐下一步
+- 尚未在 Electron 真机端到端验证分层召回注入主对话的实际观感；M0 未接 UI（属 M1）。
+- 决策 2（`/mem` 分层与 UI 文案）、决策 3（会话删除 salvage）、决策 4（项目记忆文件）分别留待 M1/M2/M3。
+- **本轮不提交、不推送**（用户明确指令）；推荐下一步：用户验收 M0 后进入 **M1**（`/mem` 作用域分流 + 记忆管理 UI 文案消歧）。
+
+## 会话总结：三层记忆 M1 落地实现 · 2026-10-20
+
+### 会话背景
+用户在验收 M0 后确认进入 M1。本轮严格按 **M0 → M1 → M2 → M3 → M4** 里程碑顺序，**仅完成 M1**（决策 2：`/mem` 作用域分流 + 记忆管理 UI 文案消歧），不触碰 M2+；全程不提交、不推送。
+
+### 会话的主要目的
+落地决策 2：`/mem <内容>` 写项目级（**零迁移**，仅把 UI 文案「全局知识」改称「项目知识」消歧）、`/mem -g <内容>` 写全局级；并修复 M0 审查中经**动态 map 引用**而漏检的 5 个 i18n key 缺失缺陷。
+
+### 完成的主要任务
+1. **`/mem` 作用域分流**：`renderer/src/hooks/useAgentRun.ts` 的 `/mem` 分支解析 `-g` 标志——无 `-g` → `scope:'project'` + `domain:'global_knowledge'`；`-g` → `scope:'global'` + `domain:'private'`；调用时把 `domain/scope` 一并透传 `localAddMemory`。
+2. **IPC 透传与白名单**：`main/ipc/localData.js` 的 `local:memories/add` 接收 `domain/scope`；`domain` 按五域白名单校验（非法/缺省回落 `global_knowledge`），`scope` 交由 `remember` 的 `resolveScope` 统一分流；未就绪内存队列同样保留 `domain/scope`。
+3. **UI 文案消歧**：补 5 个 `settings.memoryDomain{Private,Session,Global,Entity,Reflection}` key 到 zh-CN / en-US 两个语言包；`memoryDomainGlobal` 文案由「全局知识」改「项目知识」/「Project knowledge」。
+4. **门禁**：新增 `desktop/test/memory-mem-command.test.mjs`（5 组断言）；`desktop/test/i18n.test.mjs` 增断言⑥「映射表引用的 i18n key 全部存在（动态引用防漏登记）」。
+
+### 会话中主要使用的技术栈
+Electron 主进程 CJS + React/TS 渲染层 + i18n 双语言包（zh-CN / en-US）+ Node ESM 测试（`node:test`/`assert`）+ 发现式测试入口 `test/run-all.mjs`。
+
+### 关键决策和解决方案
+- **零迁移**：保持 `global_knowledge` 域存量语义不变，仅改 UI 文案消歧，不引入数据迁移与历史条目回填。
+- **作用域约束单一事实来源**：宿主只做 domain 白名单归一化，`scope` 合法性完全交给 `resolveScope` 判定，避免两处重复实现导致规则缺口。
+- **i18n 门禁缺口修补**：原断言③只扫字面量 `t('x.y')`/`tGlobal('x.y')`，扫不到映射表「值引用」——`MemorySection` 的 `DOMAIN_KEYS` 5 个 key 从未登记却门禁全绿；新增断言⑥按「模块名前缀的字符串字面量」扫描，实测全量零误报，永久防止同类「动态引用漏登记」。
+- **God File 软档守线**：`useAgentRun.ts` 增行触达 801 行（`split('\n')` 口径）超 800 软档，压缩注释与合并赋值语句回落至实测 3 个 >800 文件以内，不再新增基线条目。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Edit`、`Write`、`Shell`（`node` / `npm run lint` / `npm run typecheck` / `npm test`）。
+
+### 修改了哪些文件
+- **`desktop/main/ipc/localData.js`**：`local:memories/add` 增 `domain/scope` 形参 + `MEMORY_DOMAINS` 白名单归一化 + 透传 `remember` 与内存队列。
+- **`desktop/renderer/src/hooks/useAgentRun.ts`**：`/mem` 分支增 `-g` 解析与 `domain/scope` 分流，透传 `localAddMemory`。
+- **`desktop/renderer/src/i18n/locales/zh-CN/settings.json`**、**`en-US/settings.json`**：补 5 个 `memoryDomain*` key。
+- **`desktop/test/memory-mem-command.test.mjs`**（新建）：M1 门禁 5 组断言。
+- **`desktop/test/i18n.test.mjs`**：增断言⑥（动态引用 key 存在性）。
+- **`README.md`**：追加本节总结（用户固定规则）。
+
+### 文件修改的详细内容
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `main/ipc/localData.js` | `local:memories/add` 接收 `domain`（默认 `global_knowledge`，白名单校验、非法回落）与 `scope`，透传 `remember` 与未就绪队列 | `/mem` 分流需经 IPC 落到 `remember`；白名单归一化入口 |
+| `renderer/src/hooks/useAgentRun.ts` | `/mem` 分支解析 `-g`：无 → `project/global_knowledge`；有 → `global/private`；透传 `domain/scope` | 落地决策 2 的作用域分流 |
+| `i18n/locales/zh-CN/settings.json` | 增 5 个 `memoryDomain*` key，`memoryDomainGlobal`＝「项目知识」 | 修复 UI 渲染原始 key；文案消歧 |
+| `i18n/locales/en-US/settings.json` | 增 5 个 `memoryDomain*` key，`memoryDomainGlobal`＝「Project knowledge」 | 与 zh 双向一致；消歧 |
+| `test/memory-mem-command.test.mjs` | 新增 5 组断言（映射接线 / IPC 透传 / 白名单 / 队列保留） | M1 回归门禁 |
+| `test/i18n.test.mjs` | 新增断言⑥：模块名前缀字符串字面量的 key 存在性 | 补断言③对动态 map 引用的结构性失明 |
+| `README.md` | 追加 M1 总结 | 用户固定规则 |
+
+### 验证结果
+- `node test/memory-mem-command.test.mjs`：**5 组全通过**。
+- `node test/i18n.test.mjs`：**7/7 通过**（含新增断言⑥，无历史误报）。
+- `node test/max-lines.test.js`：**3/3 通过**（`useAgentRun.ts` 回落 ≤800 软档）。
+- `npm run lint`：**0 error**（161 条历史 warning）；`npm run typecheck`：**通过**（无输出）。
+- `npm test` 全量：**211 套件 / 210 通过 / 1 失败**，唯一失败为既有环境问题 `test/tools-cwd.test.js`（macOS 沙箱），与本次改动无关；2 项平台跳过（Linux bwrap）。
+
+### 尚存问题与推荐下一步
+- 未在 Electron 真机端到端验证 `/mem -g` 写入的全局记忆跨项目召回可见性，以及记忆管理 UI 域标签（「项目知识」等）的实际观感。
+- **本轮不提交、不推送**（用户明确指令）；推荐下一步：用户验收 M1 后进入 **M2**（决策 3：会话删除 salvage + 分层召回 UI 接线）。
+
+## 会话总结：三层记忆 M2 落地实现（晋升链） · 2026-10-20
+
+### 会话背景
+用户在验收 M1 后下达「继续下一步任务」。本轮严格按 **M0 → M1 → M2 → M3 → M4** 里程碑顺序，**仅完成 M2**（记忆晋升链：会话删除 salvage + 后台跨层晋升），不触碰 M3+；全程不提交、不推送。
+
+### 会话的主要目的
+落地三层记忆 M2 的**晋升链**：①决策 3（会话删除两段式 salvage）；②后台维护任务 `promote-scope`（L1 命中≥3→L2；L2 命中≥5 且 `user_input`→L3）；③补齐对应回归门禁。
+
+### 完成的主要任务
+1. **决策 3：会话删除 salvage（两段式）**——`MemoryManager.salvageConversation({ conversationId, spaceId })`：①先把该会话「有价值的」L1（`re_hit_count>=3` 或 `tier>=3`）晋升为项目级（清 `conversation_id`，跨会话留存）；②再物理删除该会话剩余的 L1（瞬时工作记忆随会话消失）。单条晋升复用既有 `promoteScope`（仅向上、解绑会话、忽略失效条目），保持晋升语义单一事实来源。
+2. **IPC 钩子接线**——`local:threads/purge`（不可恢复删除）先 salvage 再删会话；`local:threads/delete`（归档，可 `restoreThread` 恢复）刻意**不**接（删早了会丢）。salvage 失败 **fail-open**：`try/catch` 兜底，绝不阻断用户删除操作；返回体附带 `salvage` 统计。`spaceId` 为可选收窄参数（会话行本就同 space）。
+3. **后台跨层晋升**——`MemoryManager.promoteScopeByHits({ l1MinHits, l2MinHits })`：L1 命中≥3→L2、L2 命中≥5 且来源 `user_input`→L3；全局层只收「用户显式输入」的高频资产（与 `resolveScope` 的 global 硬约束同源，模型自动结论即使高频也只停项目层，防自动沉淀污染跨项目全局）。`bgScheduler` 新增 `promote-scope` 处理器（纯本地 SQL，无 LLM 成本）并纳入 `autoEnqueue` 周期性自检（优先级 3）。
+4. **晋升阈值单一事实来源**——新增并导出 `SALVAGE_MIN_HITS=3` / `SALVAGE_MIN_TIER=3` / `PROMOTE_L1_MIN_HITS=3` / `PROMOTE_L2_MIN_HITS=5`，salvage 与 promote-scope 共用，避免阈值两处硬编码漂移。
+5. **门禁**——新增 `desktop/test/memory-salvage.test.mjs`（7 组断言）。
+
+### 会话中主要使用的技术栈
+Electron 主进程 CJS + better-sqlite3/sql.js 双驱动 SQLite + Node ESM 测试（`node:test`/`assert`）+ 发现式测试入口 `test/run-all.mjs`。
+
+### 关键决策和解决方案
+- **salvage 挂 purge 而非 archive**：`local:threads/delete` 是**归档**（可 `restoreThread` 恢复），此时沉淀=L1 提前消失，会话恢复后工作记忆已不在；`local:threads/purge` 是**不可恢复删除**，是唯一值得、且必须沉淀的时点。
+- **salvage 复用 `promoteScope`**：不在 salvage 内重写「改 scope + 解绑会话 + 失效检查」逻辑，避免与 M0 的 `promoteScope` 形成两套晋升语义（单一事实来源）。
+- **fail-open 边界**：记忆维护属旁路副作用，`try/catch` 兜底——salvage 任何异常都不得让用户的删除操作失败（对齐项目「记忆归档 fail-open」既有约定）。
+- **全局层准入与 `resolveScope` 同源**：`promoteScopeByHits` 的 L2→L3 只放行 `source='user_input'`，与写入侧 `resolveScope` 的「非 user_input 一律降级 project」严格对齐，防止「自动沉淀经高频晋升绕过全局准入」的规则缺口。
+- **里程碑归属修正（透明记录）**：M1 总结曾把「分层召回 UI 接线」列入 M2；按设计文档 L1961 的里程碑链「M1 召回（配额+注入+前缀）→ M2 分流+晋升」，**召回注入/前缀属 UI 接线，本轮不纳入 M2**，改随 **M3（UI + 文件双通道）** 落地——即 M3 将把 `ChatArea` 的 `localListMemories` 由单空间召回改为带 `conversationId` + 层级前缀（`[个人]/[项目]/[本次会话]`）的分层召回（引擎侧仍吃 `string[]`，层级语义由前缀承载，引擎零改动）。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Edit`、`Write`、`Shell`（`node` / `npm run lint` / `npm run typecheck` / `npm test`）。
+
+### 修改了哪些文件
+- **`desktop/main/memory/index.js`**：新增晋升阈值常量（导出）+ `salvageConversation` + `promoteScopeByHits`；更新模块头注释。
+- **`desktop/main/memory/bgScheduler.js`**：`PROCESSORS` 增 `promote-scope`；`autoEnqueue` 增周期性入队；更新头注释。
+- **`desktop/main/ipc/localData.js`**：`local:threads/purge` 先 salvage 再删会话（fail-open + 返回统计）。
+- **`desktop/test/memory-salvage.test.mjs`**（新建）：M2 门禁 7 组断言。
+- **`README.md`**：追加本节总结（用户固定规则）。
+
+### 文件修改的详细内容
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `main/memory/index.js` | 增 `SALVAGE_MIN_HITS/SALVAGE_MIN_TIER/PROMOTE_L1_MIN_HITS/PROMOTE_L2_MIN_HITS` 常量并导出；新增 `salvageConversation`（两段式）与 `promoteScopeByHits`（批量跨层） | 落地决策 3 + 后台晋升；阈值单一事实来源 |
+| `main/memory/bgScheduler.js` | `PROCESSORS['promote-scope']` + `autoEnqueue` 增该任务的去重入队（优先级 3） | 后台维护任务驱动跨层晋升 |
+| `main/ipc/localData.js` | `local:threads/purge` 先调 `salvageConversation({conversationId: threadId})`（try/catch fail-open）再 `purgeThread`，返回体附 `salvage` | 不可恢复删除时沉淀有价值的 L1 |
+| `test/memory-salvage.test.mjs` | 新增 7 组断言：阈值/静态接线、salvage 两段式、spaceId 收窄、promoteScopeByHits 规则、bgScheduler 端到端、purge 钩子、fail-open | M2 回归门禁 |
+| `README.md` | 追加 M2 总结 | 用户固定规则 |
+
+### 验证结果
+- `node test/memory-salvage.test.mjs`：**7 组全通过**。
+- `node test/max-lines.test.js`：**3/3 通过**（`main/memory/index.js` 706 行、`bgScheduler.js` 199 行、`localData.js` 494 行，均 < 800 软档）。
+- `npm run lint`：**0 error**（161 条历史 warning）；`npm run typecheck`：**通过**（无输出）。
+- `npm test` 全量：**212 套件 / 211 通过 / 1 失败**，唯一失败为既有环境问题 `test/tools-cwd.test.js`（macOS 沙箱），与本次改动无关；2 项平台跳过（Linux bwrap）。
+
+### 尚存问题与推荐下一步
+- 未在 Electron 真机端到端验证「删除会话后高频记忆沉淀为项目级、并在新会话继续被召回」的实际观感；`promote-scope` 后台任务的 60s 轮询自治运行亦未真机观测。
+- **本轮不提交、不推送**（用户明确指令）；推荐下一步：用户验收 M2 后进入 **M3**（管理 UI + 文件双通道 + 分层召回注入/前缀接线：`ChatArea` 改带 `conversationId` 的分层召回与 `[个人]/[项目]/[本次会话]` 前缀注入）。
+
+## 会话总结：三层记忆 M3 落地实现（管理 UI + 文件双通道 + 分层召回）· 2026-10-20
+
+### 会话背景
+用户在验收 M2 后确认「推荐下一步：验收 M2 后进入 M3（管理 UI + 文件双通道 + 分层召回）」。本轮严格按 **M0 → M1 → M2 → M3 → M4** 里程碑顺序，**仅完成 M3**（对应设计文档 L1936–L2010 与决策 4），不触碰 M4；全程不提交、不推送。
+
+### 会话的主要目的
+落地三层记忆 M3 的三块能力：①**记忆管理 UI**（设置页记忆区块展示 scope/domain + 按层计数 + 按层清空的高级管理）；②**项目记忆文件双通道**（决策 4：`<project>/.mjcode/memory.md` 承载 L2、`~/.mjcode/user_profile.md` 承载 L3，SQLite 为唯一事实来源、文件为导出视图，默认 gitignore + 团队共享开关）；③**分层召回注入/前缀接线**（`ChatArea` 带 `conversationId` 分层召回，注入 `[本次会话]/[项目]/[个人]` 前缀；引擎仍吃 `string[]`，**agent-core 零改动**）。
+
+### 完成的主要任务
+1. **文件双通道模块**——新建 `main/memory/memoryFile.js`：路径/渲染/解析/原子写/幂等的纯函数 + `MemoryFileSync` 类。`MemoryManager` 任何写入经 `onChange` 钩子（构造注入）回推给 sync，project 层按 `spaceId` 防抖 500ms 落盘、global 层落 `~/.mjcode/user_profile.md`。导入侧以「基线 mtime」防止自写自读，且 `importItems({onlyNew:true})` 保证外部编辑 re-import 幂等。
+2. **manager 接线与循环依赖拆解**——`main/main.js` 先建 `MemoryFileSync({ getManager: () => memoryManager, ... })`（lazy getter），再建 `MemoryManager({ db, onChange: (e) => memoryFileSync?.onChange(e) })`，避免构造期互相引用；退出路径（`will-quit`/`exit` 兜底）调 `flushAll()` 刷盘。
+3. **IPC 与桥**——`main/ipc/localData.js`：`local:memories/list` 支持分层（`scopes:[...SCOPES]` + `conversationId`），新增 `local:memories/syncFile`、`memory:resetScope`（`assertEnum` 校验 scope）；`preload.js` 暴露 `memorySyncFile` / `memoryResetScope`。
+4. **分层召回注入**——`ChatArea.jsx` 记忆 effect 改为：先 `memorySyncFile({projectPath})`（fail-open），再 `localListMemories({projectPath, limit:7, conversationId})`，按 `scope` 映射 i18n 前缀拼接 `string[]` 注入；依赖 `[project?.path, thread?.id]`。
+5. **管理 UI**——`MemorySection.tsx` 新增：`MemoryItem.scope` / `MemoryStats.byScope`、`SCOPE_KEYS`、作用域筛选 chips（全部/本次会话/项目/个人）、分层计数区块、每条 scope 徽章、高级管理区块（团队共享开关 + 按层清空）。3 处新增动作按钮一律走 `ui/Button` 原语（`xs`/`sm`/`danger-ghost`），裸 `<button>` 基线不升。
+6. **i18n 双语 key**——`chat.json` 增 3 个召回前缀 key（`memoryScopeSession/Project/Personal`）；`settings.json` 增 15 个管理 UI key（按层标题、筛选、共享开关、按层清空等），zh/en 插值参数一致。
+7. **门禁**——新建 `desktop/test/memory-file-channel.test.mjs`（52 断言：纯函数 / `MemoryFileSync` 端到端 / 分层召回 / 源码接线）；同步修复两处被本轮改动带出的门禁：`project-switch.test.js` 判据改锚定重置 effect、`ui-conventions.test.js` rawButton 回落。
+
+### 会话中主要使用的技术栈
+Electron 主进程 CJS + better-sqlite3/sql.js 双驱动 SQLite + Node ESM 测试（`node:test`/`assert`）+ 发现式测试入口 `test/run-all.mjs` + React/TSX 渲染层 + Tailwind 语义 token + `ui/Button` 原语。
+
+### 关键决策和解决方案
+- **文件为「导出视图」而非事实源**：SQLite 仍是唯一事实来源，文件仅是 L2/L3 的可读镜像（Markdown）。写侧防抖落盘、读侧 mtime 检测 re-import，双向同步但不产生第二事实源，避免文件与库不一致时的语义歧义。
+- **循环依赖拆解顺序**：`MemoryManager` 需要 `onChange`→sync，而 sync 需要 manager——采用「先建 sync（lazy `getManager`）后建 manager（注入 onChange）」的装配顺序，二者构造期无强引用。
+- **导入幂等三件套**：①基线 mtime（仅当文件被我方外部修改后才导入，避免自写自读抖动）；②`importItems({onlyNew:true})`+`_hashExists`（不筛 `is_valid`，防已删条目复活）；③`remember` 去重命中会刷新 source/domain，故导入必须走 onlyNew，避免污染既有条目的来源与域。
+- **全局文件准入**：`legacy-import` 会被 `resolveScope` 降级为 project，故 global 文件导入以 `source:'user_input'` 落地，与写入侧全局硬约束（仅 user_input 可入 L3）严格对齐。
+- **分层召回零引擎改动**：确认 `agent-core` 仅消费 `string[]`，层级语义由 `[本次会话]/[项目]/[个人]` 文本前缀承载——引擎侧零改动即实现三层可见性区分。
+- **门禁脆弱判据修复（非降级）**：`project-switch.test.js` 原来用「依赖数组精确等于 `[project?.path]`」定位重置 effect，属脆弱匹配；改为复用既有 `findProjectResetEffect`（以 `setWorktree` 判定），判据更强而非放松。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Edit`、`Write`、`Shell`（`node test/...` / `npm run lint` / `npm run typecheck` / `npm test`）。
+
+### 修改了哪些文件
+- **`desktop/main/memory/index.js`**：新增 `onChange` 钩子与 `_notify`（接入全部写路径）、`listScope`/`projectSpaces`/`stats().byScope`/`importItems({onlyNew})`/`_hashExists`；`recall` 分层（`_recallLayered`/`_layerRows`）、`recallContents` 输出 `scope`；`resetScope` 通知。
+- **`desktop/main/memory/memoryFile.js`**（新建）：双通道文件模块（纯函数 + `MemoryFileSync`）。
+- **`desktop/main/ipc/localData.js`**：`local:memories/list` 分层入参；新增 `local:memories/syncFile`、`memory:resetScope`。
+- **`desktop/main/main.js`**：装配 `MemoryFileSync`（lazy `getManager`）+ manager `onChange`；退出 `flushAll()`。
+- **`desktop/main/preload.js`**：暴露 `memorySyncFile` / `memoryResetScope`。
+- **`desktop/renderer/src/components/ChatArea.jsx`**：分层召回注入 + 前缀（依赖 `[project?.path, thread?.id]`）。
+- **`desktop/renderer/src/components/MemorySection.tsx`**：作用域展示/筛选/计数/高级管理；3 处新按钮改 `ui/Button`。
+- **`desktop/renderer/src/i18n/locales/{zh-CN,en-US}/chat.json`**：3 个召回前缀 key。
+- **`desktop/renderer/src/i18n/locales/{zh-CN,en-US}/settings.json`**：15 个管理 UI key。
+- **`desktop/test/memory-file-channel.test.mjs`**（新建）：M3 门禁 52 断言。
+- **`desktop/test/project-switch.test.js`**：重置 effect 判据改锚定 `findProjectResetEffect`。
+- **`README.md`**：追加本节总结（用户固定规则）。
+
+### 文件修改的详细内容
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `main/memory/index.js` | 新增 `onChange`/`_notify`（接入 remember/updateMemory/promoteScope/salvageConversation/resetScope/decay/cleanup/invalidate）；新增 `listScope`/`projectSpaces`/`stats().byScope`/`importItems({onlyNew})`/`_hashExists`；`recall` 分层与 `recallContents` 输出 `scope` | 提供管理 UI 数据面 + 文件双通道导入出口 + 分层召回 |
+| `main/memory/memoryFile.js` | 新增模块：路径/渲染/解析/原子写/幂等 + `MemoryFileSync`（防抖落盘、基线 mtime re-import、团队共享决定 gitignore） | 落地决策 4 文件双通道 |
+| `main/ipc/localData.js` | `local:memories/list` 支持 `scopes`/`conversationId`；新增 `local:memories/syncFile`、`memory:resetScope`（`assertEnum` 校验） | 暴露文件同步与按层清空能力 |
+| `main/main.js` | 先建 `MemoryFileSync` 再建 `MemoryManager`（注入 onChange）；退出兜底 `flushAll()` | 接线双通道并拆循环依赖 |
+| `main/preload.js` | 暴露 `memorySyncFile` / `memoryResetScope` | 渲染层桥接 |
+| `renderer/src/components/ChatArea.jsx` | 记忆 effect 改分层召回 + 前缀（先 syncFile 再 list，带 `conversationId`） | M3 分层召回注入（引擎零改动） |
+| `renderer/src/components/MemorySection.tsx` | 作用域展示/筛选 chips/分层计数/高级管理（团队共享 + 按层清空）；3 处新按钮改 `Button` | M3 管理 UI + 门禁基线不升 |
+| `i18n/locales/{zh-CN,en-US}/chat.json` | 增 `memoryScopeSession/Project/Personal` | 召回前缀文案 |
+| `i18n/locales/{zh-CN,en-US}/settings.json` | 增 15 个管理 UI key（zh/en 插值一致） | 管理 UI 文案 |
+| `test/memory-file-channel.test.mjs` | 新增 52 断言（纯函数/`MemoryFileSync` 端到端/分层召回/源码接线） | M3 回归门禁 |
+| `test/project-switch.test.js` | 重置 effect 判据改锚定 `findProjectResetEffect` | 修复脆弱匹配（更强判据） |
+| `README.md` | 追加 M3 总结 | 用户固定规则 |
+
+### 验证结果
+- `node test/memory-file-channel.test.mjs`：**52/52 通过**。
+- `node test/ui-conventions.test.js`：**13/13 通过**（裸 `<button>` **260/260**，基线未升）。
+- `node test/project-switch.test.js`：**16/16 通过**。
+- `npm run lint`：**0 error**（161 条历史 warning）；`npm run typecheck`：**通过**（无输出）。
+- `npm test` 全量：**213 套件 / 211 通过 / 2 失败**，两处失败均为预期：`test/tools-cwd.test.js`（macOS 沙箱既有环境问题，无关）、`test/untracked-deps.test.mjs`（新文件 `main/memory/memoryFile.js` 未 `git add`，提交后即通过）；2 项平台跳过（Linux bwrap）。
+
+### 尚存问题与推荐下一步
+- 未在 Electron 真机端到端验证：①外部编辑 `<project>/.mjcode/memory.md` 后召回是否实时反映；②团队共享开关对 `.gitignore` 的实际写入；③管理 UI 三层计数/筛选/按层清空与召回前缀 `[本次会话]/[项目]/[个人]` 的界面观感一致性。
+- **本轮不提交、不推送**（用户明确指令）；`untracked-deps` 门禁需在提交后复跑确认。
+- 推荐下一步：用户验收 M3 后进入 **M4**（按设计文档 L1936–L2010 剩余项）。
+
+---
+
+## 三层记忆 M4 里程碑总结（真机端到端验收 + 设计承诺两项补齐）
+
+### 会话背景
+用户指令「做m4」，并确认两项补充决策：**「两项都补齐（推荐）」**——把设计文档 L1958 的两项承诺缺口纳入 M4（①按 scope 差异化半衰期；②补齐 L3 全局层独立容量硬闸 300）；验收方式选择**「我驱动 GUI 自动验收（推荐）」**——由 Agent 直接驱动应用鼠标/键盘完成真机端到端验收并截图存证。本轮严格承接 M0→M1→M2→M3→**M4** 的里程碑顺序，**全程不提交、不推送**。
+
+### 会话的主要目的
+1. 补齐设计承诺的两个缺口（半衰期按 scope、L3 独立容量闸），使实现与设计文档 L1936–L2010 完全对齐；
+2. 在 Electron 真机（dev 后台 `npm run dev`）端到端验收三层记忆全链路：文件双通道导出/导入/回写、`.gitignore` 默认写入与团队共享开关的移除分支、管理 UI 全元素、后台 60s 调度器。
+
+### 完成的主要任务
+1. **半衰期按 scope 差异化**——`scorer.js` 新增 `HALF_LIFE_DAYS_BY_SCOPE={session:7,project:30,global:90}`、统一查找函数 `halfLifeDaysFor(key)`（**scope 表优先 → domain 表回落 → 未知键回落 14 天**），`recencyScore(updatedAt, now, scopeOrDomain)` 与 `scoreMemory` 均改用该函数（`memory.scope || memory.domain`）。
+2. **L3 全局层独立容量硬闸**——`index.js` 新增 `MAX_GLOBAL_MEMORIES=300`，并把空间闸与全局闸统一抽象为 `_enforceCap({label,limit,where,args,victimDomain})`（**单一淘汰口径**：先清过期失效行，再按 `updated_at` 最旧淘汰）；`_enforceSpaceCap(spaceId)`（`victimDomain:'session'`）与 `_enforceGlobalCap()`（`scope='global'`）均委托它；`remember`（`sc==='global'`）与 `promoteScope`（`targetScope==='global'`）两个写入入口均受闸。改动后 `index.js` 压在 **795 行**（≤800 门禁）。
+3. **门禁补齐**——新建 `desktop/test/memory-m4-hardening.test.mjs`（6 组断言：半衰期按 scope、L3 容量闸 305→300、晋升入口受闸、decayJob 端到端 L3 衰减慢于 L2）；同步修正 `memory.test.js` 第 11 组：原「domain 决定半衰期」的断言改为 **scope 优先**语义（补 `source:'user_input'` 使 scope=project=30 天），并新增 L3（90 天）样本与三层衰减单调断言。
+4. **门禁全绿验证**——定向测试 + lint + typecheck + 全量测试逐项通过（详见「验证结果」）。
+5. **真机端到端验收（GUI 自动驱动）**——准备 git fixture（`/tmp/mjcode-m4-fixture`，预置手写 `.mjcode/memory.md`），用 Desktop Control（`uvx desktop-agent`）驱动鼠标/键盘 + `osascript` 置前窗口，逐项取证（详见「真机验收证据」）。
+
+### 会话中主要使用的技术栈
+Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测试（`node:test`）+ React/TSX + Tailwind 语义 token；真机自动化：`uvx desktop-agent`（PyAutoGUI，Desktop Control 技能）+ `osascript System Events`（置前窗口/发键）+ `screencapture -R`（区域截图 1:1 逻辑像素）。
+
+### 关键决策和解决方案
+- **半衰期查找单一事实来源**：把「按 scope 表优先、domain 表回落」收敛到唯一函数 `halfLifeDaysFor`，避免在 `recencyScore` 与 `decayJob` 两处各自判断导致规则漂移；未知键回落 14 天保证向后兼容。
+- **容量闸抽象而非复制**：空间闸与全局闸共用 `_enforceCap`，把「先清过期失效行、再 LRU 淘汰」的唯一口径固化，杜绝两处分支规则不一致（对齐项目「安全约束收敛到单一事实来源」约定）。
+- **全局闸挂两个入口**：`remember(global)` 与 `promoteScope(→global)` 都必须受闸——只在写入侧加闸会漏掉晋升侧绕过，属典型规则覆盖缺口。
+- **真机验收改道**：`computer_use` MCP 子代理首调 `list_apps` 超时后死锁不可用，改用 `uvx desktop-agent` + `osascript` 直接驱动；`uvx desktop-agent mouse scroll -12` 负数被误当选项，修正为 `mouse scroll -- -12`；`app focus` 返回 `window_not_found`（rect 0,0,0,0），改用按 PID 置前 `System Events → set frontmost`。
+- **坐标校准教训**：全屏 `screencapture` 返回 2×（3456×2234），缩放图估坐标误差大；`--region` 截图返回 **1:1 逻辑像素**（如 `0,930,300,110`→300×140），据此定位才可靠。
+
+### 会话中主要使用的工具
+`Read`、`Edit`、`Write`、`Shell`（`node test/...` / `npm run lint` / `npm run typecheck` / `npm test`）、Desktop Control 技能（`uvx desktop-agent`）、`osascript`。
+
+### 修改了哪些文件
+- **`desktop/main/memory/scorer.js`**：新增 `HALF_LIFE_DAYS_BY_SCOPE` 与 `halfLifeDaysFor`，`recencyScore`/`scoreMemory` 改按 scope 优先取半衰期。
+- **`desktop/main/memory/index.js`**：新增 `MAX_GLOBAL_MEMORIES=300`、`_enforceCap` 抽象、`_enforceGlobalCap`；`_enforceSpaceCap` 委托 `_enforceCap`；`remember`/`promoteScope` 接入全局闸；`decayJob` 改用 `halfLifeDaysFor`；整体压缩至 795 行。
+- **`desktop/test/memory-m4-hardening.test.mjs`**（新建）：M4 回归门禁 6 组断言。
+- **`desktop/test/memory.test.js`**：第 11 组半衰期用例同步为 scope 优先语义，并增 L3（90 天）样本与三层衰减单调断言。
+- **`README.md`**：追加本节 M4 总结（用户固定规则）。
+
+### 文件修改的详细内容
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `main/memory/scorer.js` | 新增 `HALF_LIFE_DAYS_BY_SCOPE={session:7,project:30,global:90}`；新增 `halfLifeDaysFor(key)`（scope 表优先→domain 表回落→14 天兜底）；`recencyScore(updatedAt,now,scopeOrDomain)` 与 `scoreMemory` 改用它 | 落地设计承诺①：半衰期按 scope 差异化；收敛为单一查找函数避免规则漂移 |
+| `main/memory/index.js` | 新增 `MAX_GLOBAL_MEMORIES=300` 与 `_enforceCap({label,limit,where,args,victimDomain})`；`_enforceSpaceCap`/`_enforceGlobalCap` 均委托它；`remember(sc==='global')`、`promoteScope(target==='global')` 接入全局闸；`decayJob` 改 `halfLifeDaysFor(r.scope||r.domain)`；压缩至 ≤800 行 | 落地设计承诺②：L3 独立容量硬闸；统一淘汰口径；两入口防绕过；过 max-lines 门禁 |
+| `test/memory-m4-hardening.test.mjs` | 新增 6 组断言：以 scope 取半衰期、L3 播种 305 保 300、晋升入口受闸、decayJob 端到端（L3 90d 慢于 L2 30d） | M4 回归门禁，锁定两项补齐行为 |
+| `test/memory.test.js` | 第 11 组断言改为 scope 优先（补 `source:'user_input'` → scope=project=30 天）；新增 L3(90 天)样本与三层衰减单调断言 | 与 scope 优先语义对齐，防旧断言与新实现冲突 |
+| `README.md` | 追加 M4 结构化总结（本节） | 用户固定规则（累积增长） |
+
+### 真机验收证据（Electron dev 真机，GUI 自动驱动 + 截图存证）
+1. **导出分支 ✅**：`/Users/jianma/Documents/.MJCoder/20261013-1271/.mjcode/memory.md` 由应用自动生成，含应用 HEADER + 5 条 `[domain]` 前缀条目。
+2. **导入 + 回写分支 ✅**：打开 fixture 项目后，其 `.mjcode/memory.md` 被重写为应用格式，3 条手写条目被导入并带上域前缀（`[reflection]`/`[global_knowledge]`/`[global_knowledge]`），mtime **1792415752 → 1792416219**；对应条目在管理 UI 中时间显示为 `2026/10/19 21:34:40`。
+3. **`.gitignore` 默认写入分支 ✅**：fixture `.gitignore` 由 `node_modules/\n*.log` 变为含 `.mjcode/`。
+4. **团队共享开启→移除分支 ✅**：在设置「通用 → 记忆 → 高级管理」点开团队共享（UI 变绿色「已开启团队共享」）后，切走再切回 fixture（触发 `exportProject`），`.gitignore` 中 `.mjcode/` **被移除**（内容变为 `node_modules/\n*.log`，mtime **1792416219 → 1792416880**）。
+5. **管理 UI 全元素 ✅**（截图存证）：自动沉淀开关（「已关闭自动沉淀」）、记忆统计（总数 44 / 私有 0 / 会话 7 / 项目知识 36 / 实体 0 / 反思 1 / 已完成 503 / 失败 0）、分层计数（本次会话 0 / 项目 44 / 个人 0）、记忆列表 + 4 个筛选 chip（全部/本次会话/项目/个人）、3 条 fixture 卡片（作用域「项目」+ 域「反思」「项目知识」+ 来源 60% + 重要度 0.50 + 删除/转长期）、高级管理（团队共享开关 + 3 个「清空XX层」按钮）。
+6. **后台 60s 调度器 ✅**（截图存证）：后台维护任务面板显示 `decay` / `promote-scope` / `cleanup` 在 21:33–21:39 每分钟执行、状态「已完成」。
+7. **环境恢复 ✅**：验收完成后把团队共享开关点回灰色「已关闭团队共享」，恢复用户真实环境原状（避免此偏好被置 true 影响后续 git 仓库项目）。
+
+### 验证结果
+- `node test/memory-m4-hardening.test.mjs`：**6/6 通过**。
+- `node test/memory.test.js`：**16/16 通过**。
+- `node test/max-lines.test.js`：**3/3 通过**（`main/memory/index.js` 795 行 ≤ 800）。
+- `npm run lint`：**0 error**（161 条历史 warning）；`npm run typecheck`：**通过**。
+- `npm test` 全量：**214 套件 / 212 通过 / 2 失败**，两处失败均为预期：`test/tools-cwd.test.js`（macOS 沙箱既有环境问题，无关）、`test/untracked-deps.test.mjs`（新增测试文件 `test/memory-m4-hardening.test.mjs` 未 `git add`，提交后即通过）。
+
+### 尚存问题与推荐下一步
+- **触发时机限制（已如实记录）**：团队共享开关对 `.gitignore` 的移除/写入只在**下一次 `exportProject`** 生效；因 `ChatArea` 记忆 effect 依赖 `[project?.path, thread?.id]`，**重新选择同一项目不会重新触发同步**，需「切走再切回」。此项已在真机复现（切走再切回后移除成功），但首次触发时机需在文档/使用说明中明确。
+- **未单独复验**：外部编辑记忆文件后**实时召回**的反映（依赖下次 `syncFile` 触发）；`computer_use` MCP 子代理本次死锁，真机自动化改由 `uvx desktop-agent` 完成，`computer_use` 本身仍未真机验收。
+- **本轮不提交、不推送**（用户固定规则）；`untracked-deps` 门禁需在提交后复跑确认；当前 `main` 领先 `origin/main` 4 个提交。
+- 推荐下一步：用户对 M4 结果做最终确认后，再决定是否提交/推送；如需继续推进，可评估「记忆文件实时监听（fs.watch）」以消除「需切走再切回」的触发时机限制。
+
+---
+
+## 会话总结（2026-10-19 · 阶段二：记忆独立栏位 + 记忆复验 + CUA 分平台授权引导）
+
+### 会话的背景
+- 承接阶段一（M4 三层记忆真机端到端验收已完成并 Append 本 README）。
+- 用户提出三项新任务：① 把三层记忆管理从「通用」设置内嵌区块升级为设置左侧导航的**独立「记忆」栏位**；② 再次验证记忆功能是否完善——作为 agent harness 必须正确、主流，且**不影响其他功能组件与逻辑**；③ 检查 computer use 实现是否正确，并针对 macOS / Linux / Windows **分别提供授权引导弹窗操作**。
+
+### 会话的主要目的
+- 提升记忆功能的可发现性（独立入口），并二次验证其正确性与隔离性（不污染其他组件）。
+- 补齐 CUA 的跨平台「授权/能力引导」缺失：原实现只显示一句「当前系统不支持」的笼统信息，缺少按平台给「去哪里授权 / 为什么当前不可用」的分步指引。
+
+### 完成的主要任务
+1. **任务 1（记忆独立栏位）✅**：新增 `IconMemory` 图标 → `NAV` 的 features 组新增 `memory` 项（插在 hooks 与 teamspace 之间）→ 新增 `{tab === 'memory' && <MemorySection projectPath={projectPath} />}` 正文分支 → 从「通用」tab 移除内嵌的 `MemorySection` → zh/en 双语补 `tabMemory`。
+2. **任务 3（CUA 分平台授权引导）✅**：主进程新增 `cua:permission-help` IPC（按 `process.platform` 分派：`darwin` → `mac_accessibility`（`canOpen:true`，`open:true` 时用主进程 `shell.openExternal` 打开固定深链）；`win32` → `win_uia_pending`；`linux` → `linux_deps`）；preload 暴露 `cuaPermissionHelp` 桥；设置页 Computer Use 区块新增「如何授权？」「重新检测」（mac 未授权时）与「查看平台说明」（win/linux）按钮，并新增按平台分派的 `Modal` 引导弹窗（macOS 额外提供「打开系统设置」按钮，点后关闭弹窗并重新探测）。
+3. **任务 2（记忆复验）✅**：复跑全部相关门禁（记忆三套件 16/16 + 52/52 + 6/6、i18n 7/7、settings-coverage 12/12、computer-use-wiring 34/34、max-lines 3/3、lint 0 error、typecheck 通过、全量 214 套件 212 通过）；核查记忆 IPC 接线（9 个 handler）与 preload 桥完整；确认 `MemorySection` 仅被 `SettingsModal` 引用（移到独立 tab 不影响其他组件）。
+
+### 会话中主要使用的技术栈
+- Electron 主进程（CJS）+ 渲染层 React/JSX/TSX + agent-core 引擎（引擎侧零改动）。
+- 三层记忆作用域 session(L1)/project(L2)/global(L3)；i18n 双语言包（zh-CN/en-US）。
+- 静态门禁体系：`ui-conventions`（裸按钮基线）、`max-lines`（800 行基线 + 1500 行硬档）、`settings-coverage`（导航↔正文一一对应）、`i18n`（含映射表动态 key 存在性检查⑥）、`computer-use-wiring`（34 条接线断言）、`untracked-deps`（干净 clone 可构建）。
+
+### 关键决策和解决方案
+- **决策 1**：记忆独立栏位不新写组件，直接复用自带 `Section` 容器的 `MemorySection` 作为 tab 正文——最小改动、零样式重复、不破坏现有观感。
+- **决策 2**：CUA 引导 IPC 只返回**结构化 code**（`mac_accessibility`/`win_uia_pending`/`linux_deps`），文案 key 全部留在渲染层——保持「主进程不传文案载荷」的既有分层约定；深链地址用**固定常量**、不接受渲染层传入（防协议注入）。
+- **决策 3**：macOS 深链不走 `shell:openExternal`（`exec.js` 只放行 http/https），而在主进程新增独立 `cua:permission-help` 并自行 import `shell` 直连——避免放宽既有外部打开白名单。
+- **决策 4**：探测函数 `probeCua()` 抽成可复用函数，从系统设置授权返回后点「重新检测」可刷新最新权限状态（否则状态滞留旧值）。
+- **决策 5（合规）**：本轮**不提交、不推送**（用户固定规则）；`untracked-deps` 门禁失败为预期（运行期源文件 `main/memory/memoryFile.js` 未 `git add`），提交后即通过。
+
+### 会话中主要使用的工具
+- `Read`/`Grep`/`Glob` 定位源码与门禁；`Edit` 落盘改动；`Shell` 跑门禁（i18n / settings-coverage / computer-use-wiring / max-lines / memory 三套件 / lint / typecheck / 全量 `npm test`）；`DeleteFile` 清理仓库根目录残留 `temp_screenshot.png`。
+
+### 修改了哪些文件
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `renderer/src/components/icons/index.jsx` | 末尾新增 `IconMemory`（三层堆叠意象，对应 会话/项目/个人 三层作用域） | 原图标集无记忆专用图标 |
+| `renderer/src/components/SettingsModal.jsx` | import 新增 `IconMemory`/`IconShield` 与 `ui/Button`；模块级新增 `CUA_GUIDE_KEYS` 按平台映射表；NAV features 组新增 `memory` 项；从通用 tab 移除 `MemorySection`；新增 `{tab === 'memory' && <MemorySection/>}` 正文分支；`BrowserTab` 新增 `cua`/`guideOpen` state、`probeCua()` 可复用探测函数、平台文案计算、两个引导按钮，以及按平台分派的 `Modal` 引导弹窗 | 落地任务 1（独立栏位）与任务 3（分平台授权引导）；映射表形态可被 i18n 检查⑥静态校验 |
+| `renderer/src/i18n/locales/zh-CN/settings.json` | 新增 `tabMemory:"记忆"`；cua 区块新增 11 个 key（`cuaGotIt`/`cuaGrantAction`/`cuaRecheck`/`cuaViewGuide`/`cuaOpenSystemSettings`/`cuaGuideTitle{Mac,Win,Linux}`/`cuaGuide{Mac,Win,Linux}Body`），均按字母序插入 | 任务 1/3 的中文文案 |
+| `renderer/src/i18n/locales/en-US/settings.json` | 新增 `tabMemory:"Memory"` 与同样 11 个 key 的英文文案（`cuaGuideMacBody` 为 4 行分步 `\n` 文案） | 任务 1/3 的英文文案；双语 399/399 key 对齐 |
+| `main/main.js` | L1 import 新增 `shell`；在 `cua:status` handler 之后新增 `cua:permission-help` IPC（按 OS 分派 + 固定深链 + `open:true` 时 `shell.openExternal`） | 任务 3：按平台提供授权引导；深链不经 `shell:openExternal` 白名单 |
+| `main/preload.js` | L303 新增 `cuaPermissionHelp: (payload) => ipcRenderer.invoke('cua:permission-help', payload)` | 渲染层桥接触达新增 IPC |
+
+### 验证结果
+- `node test/i18n.test.mjs`：**7/7 通过**（en-US 语言包 key 覆盖率 100%，与 zh-CN 双向一致；`cuaGuideMacBody` 为 4 行 `\n` 分步文案、无多余反斜杠）。
+- `node test/settings-coverage.test.js`：**12/12 通过**（含「导航每一项都有正文实现」「无孤儿分支」两条硬断言）。
+- `node test/computer-use-wiring.test.mjs`：**34/34 通过**（CUA 接线断言）。
+- `node test/max-lines.test.js`：**3/3 通过**（`>800` 文件全部在基线内，当前 3 个）。
+- `node test/memory.test.js`：**16/16 通过**；`test/memory-file-channel.test.mjs`：**52/52 通过**；`test/memory-m4-hardening.test.mjs`：**6/6 通过**。
+- `npm run lint`：**0 error**（161 条历史 warning，与基线一致）；`npm run typecheck`：**通过**（exit 0）。
+- `npm test` 全量：**214 套件 / 212 通过 / 2 失败**，两处失败均为预期：`test/tools-cwd.test.js`（macOS 沙箱既有环境问题「显式 full-access 不应被沙箱包裹」，与记忆/CUA 无关）、`test/untracked-deps.test.mjs`（运行期源文件 `desktop/main/memory/memoryFile.js` 未入库，提交后即通过）。
+- 记忆 IPC 接线核查：`local:memories/add|list|syncFile`、`memory:stats|bgTasks|list|invalidate|promote|resetScope` 共 9 个 handler 均在 `main/ipc/localData.js` 注册；preload 桥完整。`MemorySection` 仅被 `SettingsModal` 引用（无其他耦合）。
+
+### 尚存问题与推荐下一步
+- **纯浏览器无法验证 Electron 设置 UI**：在 Chrome 直连 Vite（http://localhost:5173）时，因无 preload 注入 `window.mjcode`，`CreateProjectForm.jsx` L19 抛 `Cannot read properties of undefined (reading 'getWorkspaceInfo')`，无法进入主界面与设置弹窗——**与本轮改动无关**，仅在 Electron 外跑渲染层时出现。故本轮新增「记忆」栏位与 CUA 授权弹窗**尚未做运行时目视验证**，仅以静态门禁 + 代码审查为验证依据。
+- 推荐：在真实 Electron 应用中目视确认 ①设置左侧出现独立「记忆」栏位且内容完整；②Computer Use 区块在 mac 未授权时显示「如何授权？」并可跳转系统设置、win/linux 显示「查看平台说明」并弹出对应分步说明。
+- **本轮不提交、不推送**（用户固定规则）；`untracked-deps` 门禁需在提交后复跑确认。
+- 背景：`npm run dev` 后台任务仍在运行（Vite :5173 + Electron），如需可单独停止；仓库根目录残留 `temp_screenshot.png` 已用 `DeleteFile` 清理。
 

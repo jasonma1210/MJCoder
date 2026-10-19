@@ -16,8 +16,9 @@
 //   · 带外部密钥 / 宿主命令行 / 浏览器自动化的 MCP 一律只进白名单懒加载或手动授权；
 //   · Terminal/Shell 类（desktop-commander）绝不默认自启。
 //
-// 灰度纪律：MJCODE_MCP_LAZY 未置位时**行为完全不变**（启动仍全量重连已保存服务），
-// 灰度验证通过后再切换默认，避免影响线上稳定性。
+// 生效纪律（第六轮 G2+N8）：三层分级**默认生效**——启动只拉起 auto-start 档，whitelist/manual
+// 一律按需懒连接。仅当显式设置 MJCODE_MCP_LAZY=0/false/off 时才回落到旧行为（启动全量重连），
+// 该开关只用于排障/兼容，不作为常规运行路径。
 
 // ── 三层分级枚举 ──
 const TIER = Object.freeze({
@@ -75,13 +76,15 @@ const MANUAL_PKGS = [
 const PROFILES = Object.freeze({ NORMAL: 'normal', DEVELOPER: 'developer' });
 
 /**
- * 懒启动灰度开关是否打开。缺省（未设置 / 空 / '0' / 'false' / 'off'）一律为关闭。
+ * tier 分级（懒启动）是否生效。**默认开启**：缺省/空/任意非关闭值一律为开启，
+ * 启动仅拉起 auto-start 档（developer 档另含 git 类），whitelist/manual 按需连接。
+ * 仅显式设置 '0' / 'false' / 'off' 时关闭，回落为「启动全量重连已保存服务」（排障兼容）。
  * @param {Record<string, string|undefined>} [env]
  * @returns {boolean}
  */
 function isLazyMode(env = process.env) {
   const v = String((env && env.MJCODE_MCP_LAZY) || '').trim().toLowerCase();
-  return v !== '' && v !== '0' && v !== 'false' && v !== 'off';
+  return v !== '0' && v !== 'false' && v !== 'off';
 }
 
 /** 归一化 profile：仅接受 'developer'，其余一律回落到 'normal'。 */

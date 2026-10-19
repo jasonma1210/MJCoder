@@ -16,12 +16,23 @@ const HALF_LIFE_DAYS_BY_DOMAIN = {
   reflection: 30,
   private: 30,
 };
-const HALF_LIFE_DAYS = 14; // 未知域回落值（保持导出名兼容）
+// 三层记忆 M4（2026-10-20）：半衰期按 scope 差异化（设计文档 L1958 承诺）。
+//   层级越高越持久：L1 会话工作记忆 7 天 → L2 项目记忆 30 天 → L3 全局资产 90 天。
+//   与 domain 表的关系：scope 表优先，domain 表作为「无 scope 的旧对象 / 未知键」兼容回落。
+//   两表键空间基本正交（session 既是 scope 键也是 domain 键，且取值同为 7 天，无冲突）。
+const HALF_LIFE_DAYS_BY_SCOPE = {
+  session: 7,
+  project: 30,
+  global: 90,
+};
+const HALF_LIFE_DAYS = 14; // 未知键回落值（保持导出名兼容）
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// P1-17：分域半衰期查询（未知域回落 14 天）
-function halfLifeDaysFor(domain) {
-  return HALF_LIFE_DAYS_BY_DOMAIN[domain] || HALF_LIFE_DAYS;
+// 半衰期查询（键 = scope 优先，其次 domain，未知回落 14 天）。
+// 兼容旧调用：只传 domain（如 'session' / 'global_knowledge'）时行为与 P1-17 完全一致。
+function halfLifeDaysFor(key) {
+  if (Object.prototype.hasOwnProperty.call(HALF_LIFE_DAYS_BY_SCOPE, key)) return HALF_LIFE_DAYS_BY_SCOPE[key];
+  return HALF_LIFE_DAYS_BY_DOMAIN[key] || HALF_LIFE_DAYS;
 }
 
 const WEIGHTS = {
@@ -55,10 +66,10 @@ function relevance(query, text) {
   return hit / q.size;
 }
 
-// P1-17：recency 支持按域取半衰期（domain 缺省 = 未知域，回落 14 天，行为同修复前）
-function recencyScore(updatedAt, now = Date.now(), domain = undefined) {
+// recency 支持按 scope/域取半衰期（key 缺省 = 未知键，回落 14 天，行为同修复前）
+function recencyScore(updatedAt, now = Date.now(), scopeOrDomain = undefined) {
   const days = Math.max(0, (now - (updatedAt || now)) / DAY_MS);
-  return Math.pow(0.5, days / halfLifeDaysFor(domain));
+  return Math.pow(0.5, days / halfLifeDaysFor(scopeOrDomain));
 }
 
 function frequencyScore(usageCount) {
@@ -73,8 +84,8 @@ function scoreMemory(memory, { query, now = Date.now() } = {}) {
   const hasQuery = String(query || '').trim().length > 0;
   const text = `${memory.summary || ''}\n${memory.content || ''}`;
   const relevanceV = hasQuery ? relevance(query, text) : null;
-  // P1-17：recency 按记忆所属域取半衰期（memory.domain 缺省时回落 14 天）
-  const recencyV = recencyScore(memory.updated_at, now, memory.domain);
+  // 三层记忆 M4：recency 按记忆所属作用域取半衰期（scope 优先，缺失时回落 domain）
+  const recencyV = recencyScore(memory.updated_at, now, memory.scope || memory.domain);
   const importanceV = Math.max(0, Math.min(1, Number(memory.importance) || 0));
   const frequencyV = frequencyScore(memory.usage_count);
   const tierV = TIER_BOOST[memory.tier] ?? 0.3;
@@ -105,4 +116,4 @@ function cosineSim(a, b) {
   return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
 }
 
-module.exports = { tokenize, relevance, recencyScore, frequencyScore, scoreMemory, cosineSim, halfLifeDaysFor, HALF_LIFE_DAYS, HALF_LIFE_DAYS_BY_DOMAIN };
+module.exports = { tokenize, relevance, recencyScore, frequencyScore, scoreMemory, cosineSim, halfLifeDaysFor, HALF_LIFE_DAYS, HALF_LIFE_DAYS_BY_DOMAIN, HALF_LIFE_DAYS_BY_SCOPE };

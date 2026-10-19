@@ -10,6 +10,8 @@
 //      跑到（此前 role-preset.test.mjs 就是漏注册的活证据）。
 //   2. 全量跑完：单套件崩溃只记录，不阻断后续；最后按失败清单以非零退出码报错。
 //   3. 汇总输出：FAIL 列表集中在末尾，一眼看到「哪些没过、哪些崩了」，不再被截断在中间。
+//   4.（第六轮 G11）前置门禁：把外部命令级门禁（eval --check）也纳入基线，非零退出同套件一样计失败——
+//      避免「npm run eval 存在却无人触发」的假绿。
 //
 // 保留既有的顺序执行（不并发）：多套件共用 tmpdir / 全局 stub，并发会互相污染。
 import { spawnSync } from 'node:child_process';
@@ -40,7 +42,31 @@ const failed = [];   // 非零退出（断言失败 或 崩溃）
 const crashed = [];  // 崩溃特指：套件自身进程异常退出（含未捕获异常 / NODE_MODULE_VERSION 不匹配等）
 const skipped = [];  // C2（2026-10-16）：套件内明确声明的「跳过/未执行」行（如非 Linux 平台跳过 bwrap 真机探测）
 
-console.log(`发现 ${suites.length} 个测试套件（发现式，无需注册）\n`);
+// G11（第六轮）：离线评估自检（eval --check）纳入基线。
+// 事故背景：`npm run eval` 存在但无任何自动触发方（CI 与 npm test 都不过它），评估任务集/schema
+// 腐化、fail-to-pass 基线失效都无人发现。这里作为「前置门禁」在套件之前跑，零成本（不出网、不调模型），
+// 非零退出计入失败清单（与套件同口径）。
+const GATES = [
+  { label: 'eval:check（离线评估自检）', args: ['eval/run-eval.mjs', '--check'] },
+];
+
+console.log(`前置门禁 ${GATES.length} 项（外部命令级，非 test/*.test.*）\n`);
+for (const g of GATES) {
+  const started = Date.now();
+  const r = spawnSync(process.execPath, g.args, {
+    cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
+  });
+  const ms = Date.now() - started;
+  if (r.status === 0) {
+    console.log(`✅ ${g.label}  (${ms}ms)`);
+  } else {
+    failed.push(g.label);
+    console.log(`❌ ${g.label}  (${ms}ms)`);
+    console.log(`${r.stdout || ''}${r.stderr || ''}`.trim().split('\n').slice(-8).map((l) => `      ${l}`).join('\n'));
+  }
+}
+
+console.log(`\n发现 ${suites.length} 个测试套件（发现式，无需注册）\n`);
 
 for (const [i, suite] of suites.entries()) {
   const label = `[${String(i + 1).padStart(2)}/${suites.length}] ${suite}`;
@@ -80,7 +106,7 @@ for (const [i, suite] of suites.entries()) {
 }
 
 console.log('\n──────── 测试基线汇总 ────────');
-console.log(`总计 ${suites.length} · 通过 ${suites.length - failed.length} · 失败 ${failed.length}`);
+console.log(`总计 ${suites.length + GATES.length} · 通过 ${suites.length + GATES.length - failed.length} · 失败 ${failed.length}`);
 if (failed.length > 0) {
   console.log(`\n失败套件（${failed.length}）：`);
   for (const s of failed) console.log(`  ✗ ${s}`);

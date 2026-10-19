@@ -108,7 +108,7 @@ const vp = (runId, extra = {}) => ({
   await agentRunnerReady();
 
   // B1：memory_saved trace → 归档压缩摘要
-  await check('B1 memory_saved 事件落库（compressor / session / compression_summary）', async () => {
+  await check('B1 memory_saved 事件落库（compressor / reflection / project / compression_summary）', async () => {
     const calls = [];
     const sender = makeSender();
     // 引擎会走 onTrace 通道发 memory_saved（此处直接模拟引擎的收发）
@@ -128,7 +128,9 @@ const vp = (runId, extra = {}) => ({
     const m = calls.find((c) => c.source === 'compressor');
     assert(m, `应归档压缩摘要，got=${JSON.stringify(calls)}`);
     assert(m.spaceId === '/tmp/proj', `空间键应为项目路径，got=${m.spaceId}`);
-    assert(m.domain === 'session', `域应为 session，got=${m.domain}`);
+    // 三层记忆 M0：压缩摘要改落「项目级反思」（跨会话可复用，避免 session 域死结）
+    assert(m.domain === 'reflection', `域应为 reflection，got=${m.domain}`);
+    assert(m.scope === 'project', `作用域应为 project，got=${m.scope}`);
     assert(Array.isArray(m.entityTags) && m.entityTags.includes('compression_summary'), '应带 compression_summary 标签');
   });
 

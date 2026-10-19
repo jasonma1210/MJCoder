@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron');
 const path = require('path');
 const fsp = require('fs/promises');
 const fs = require('fs');
@@ -226,6 +226,8 @@ localDataIpc.initLocalDataIpc({
   MJ_SERVER_DEFAULT,
   getMemoryManager: () => memoryManager,
   getMemoryScheduler: () => memoryScheduler,
+  // M3：记忆文件双通道（打开项目时同步 .mjcode/ 记忆文件）
+  getMemoryFileSync: () => memoryFileSync,
 });
 const { syncModelsFile, maybeSyncModelsFile, migrateLocalModelsToFile } = localDataIpc;
 
@@ -485,6 +487,8 @@ app.on('will-quit', () => {
     }
   } catch (e) { console.warn('[intentLog] 退出刷盘失败:', e.message); }
   try { memoryScheduler?.stop(); } catch { /* 调度器已停 */ }
+  // M3：退出兜底——把防抖队列里挂起的记忆文件导出立即落盘（避免最近变更丢失）
+  try { memoryFileSync?.flushAll(); } catch (e) { console.warn('[memoryFile] 退出刷盘失败:', e.message); }
   try { approvalChannel.disposeAll(); } catch (e) { console.warn('[approval] 退出清理异常:', e.message); }
   try { cuaApprovalChannel.disposeAll(); } catch (e) { console.warn('[cuaApproval] 退出清理异常:', e.message); }
   try { killAllMcpServers(); } catch (e) { console.warn('[MCP] 退出清理异常:', e.message); }
@@ -1139,6 +1143,8 @@ const dbStatus = require('./dbStatus');
 const { TaskStore } = require('./taskStore');
 const { MemoryManager } = require('./memory');
 const { MemoryBgScheduler } = require('./memory/bgScheduler');
+// 三层记忆 M3：记忆文件双通道（SQLite 唯一事实来源，文件为导出视图）
+const { MemoryFileSync } = require('./memory/memoryFile');
 const workerPool = require('./workerPool');
 const orchestrator = require('./orchestrator');
 
@@ -1146,6 +1152,7 @@ let taskStore = null;
 let taskDb = null;
 let memoryManager = null;   // P2-1：记忆唯一写入入口（SQLite，五域四层）
 let memoryScheduler = null; // P2-5：记忆后台任务调度器
+let memoryFileSync = null;  // M3：记忆文件双通道（导出视图 + 外部变更导入）
 // X4：库状态交由 main/dbStatus.js 持有（失败原因 → 状态条 + 工具错误）
 dbStatus.register(ipcMain, () => !!taskStore);
 
@@ -1190,7 +1197,13 @@ function setupTaskOrchestration(db) {
     taskStore = new TaskStore(db);
 
     // P2：记忆体系初始化（与任务编排共用 SQLite 底座）
-    memoryManager = new MemoryManager({ db });
+    // M3：文件双通道先于 manager 装配——sync 以 lazy getter 反向引用 manager（循环依赖），
+    //     manager 构造时再把 onChange 回指 sync，形成「写路径 → 防抖落盘」单向流。
+    memoryFileSync = new MemoryFileSync({
+      getManager: () => memoryManager,
+      getTeamSharing: () => localStore?.getPreference('memory.teamSharing') === true,
+    });
+    memoryManager = new MemoryManager({ db, onChange: (e) => memoryFileSync?.onChange(e) });
     // 旧 JSON 记忆一次性导入（幂等：localStore 清空后不再重复；按标记只导一次）
     try {
       if (db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source = 'legacy-import'").get().n === 0) {
@@ -1518,6 +1531,35 @@ ipcMain.handle('cua:status', async () => {
       ? ''
       : '未授予辅助功能权限：请在 系统设置 > 隐私与安全性 > 辅助功能 中允许本应用后重试',
   };
+});
+
+// 授权引导（2026-10-19）：按操作系统分派「去哪里授权 / 为什么当前不可用」。
+// 只有 macOS 存在真正的系统授权项（辅助功能 Accessibility），用官方深链直达该面板；
+// Windows 的键鼠执行需等 UIA 实现、Linux 依赖截图工具链，均无系统授权项 → 返回结构化 code，
+// 由渲染层按平台展示分步指引（i18n 文案留在渲染层，IPC 只回结构化结果，不传文案载荷）。
+// 深链协议不走 shell:openExternal（exec.js 只放行 http/https），此处用主进程 shell 直连。
+const CUA_MAC_ACCESSIBILITY_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+ipcMain.handle('cua:permission-help', async (_, payload = {}) => {
+  const platform = process.platform;
+  if (platform !== 'darwin') {
+    return {
+      ok: true,
+      platform,
+      code: platform === 'win32' ? 'win_uia_pending' : 'linux_deps',
+      canOpen: false,
+      opened: false,
+    };
+  }
+  if (payload?.open !== true) {
+    return { ok: true, platform, code: 'mac_accessibility', canOpen: true, opened: false };
+  }
+  try {
+    // 固定常量深链，不接受渲染层传入地址（防协议注入）
+    await shell.openExternal(CUA_MAC_ACCESSIBILITY_URL);
+    return { ok: true, platform, code: 'mac_accessibility', canOpen: true, opened: true };
+  } catch (e) {
+    return { ok: false, platform, code: 'mac_accessibility', canOpen: true, opened: false, error: String(e?.message || e) };
+  }
 });
 
 ipcMain.handle('cua:run', async (_, { objective, appName, approvalMode = 'on-request', conversationId, model, providerId, isGlobal = false, baseUrl, allowedApps, maxSteps, record = false, recordingName = '' }) => {

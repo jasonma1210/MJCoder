@@ -4,17 +4,29 @@
 //
 // 依赖注入（沿用 initXxx(deps) 模式）：
 //   initLocalDataIpc({ getLocalStore, getCredentialCrypto, localVault, serverBase,
-//                      MJ_SERVER_DEFAULT, getMemoryManager, getMemoryScheduler })
+//                      MJ_SERVER_DEFAULT, getMemoryManager, getMemoryScheduler, getMemoryFileSync })
 //   - localVault 为共享 Map 引用（provider id → 解密内存态），resolveSecret 在 main.js 读取；
 //   - localStore/credentialCrypto 在 whenReady 后才初始化，故用 getter。
 const { ipcMain, shell } = require('electron');
 const modelsFile = require('../modelsFile');
 const guard = require('./payloadGuard');
+// 三层记忆 M3：作用域常量（分层召回的唯一事实来源，避免宿主重写层级清单）
+const { SCOPES } = require('../memory');
 
 let deps = null;
 
 let modelsFileMtime = 0;
 let modelsFileLastStatus = { path: modelsFile.modelsFilePath(), exists: false, synced: 0, removed: 0, errors: [] };
+
+// N1：能力位白名单收敛——只接受三个布尔开关，杜绝把任意结构写进 models.json / 本地库。
+function pickCaps(c) {
+  const o = c && typeof c === 'object' ? c : {};
+  const out = {};
+  if (typeof o.supportsImages === 'boolean') out.supportsImages = o.supportsImages;
+  if (typeof o.supportsReasoning === 'boolean') out.supportsReasoning = o.supportsReasoning;
+  if (typeof o.supportsToolCall === 'boolean') out.supportsToolCall = o.supportsToolCall;
+  return out;
+}
 
 // ── 自定义模型配置文件（~/.mjcode/models.json）同步 ──
 // 时机：启动一次 + providers/list 与 status 查询时按 mtime 变化热同步（保存文件即生效，无需重启）。
@@ -126,7 +138,7 @@ function register() {
       return { ok: false, error: e.message };
     }
   });
-  ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name } = {}) => {
+  ipcMain.handle('local:models-file/add-model', async (_, { fileKey, model_id, display_name, caps } = {}) => {
     try {
       // X14：新增模型条目直接写盘；model_id 必填非空（空 id 会生成一条无法调用的模型），
       // display_name 允许缺省或留空（addModelToRaw 内回落成 model_id）
@@ -134,9 +146,21 @@ function register() {
         fileKey: 200, model_id: 300, display_name: { max: 200, optional: true, allowEmpty: true },
       });
       const raw = modelsFile.readModelsFile();
-      const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name);
+      const r = modelsFile.addModelToRaw(raw, fileKey, model_id, display_name, { caps: pickCaps(caps) });
       if (!r.ok) return r;
       return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'add-model' }) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+  // N1：写回单个模型的能力位（图像理解 / 工具调用 / 推理强度）——UI 三枚开关的落点
+  ipcMain.handle('local:models-file/update-model-caps', async (_, { fileKey, modelId, caps } = {}) => {
+    try {
+      guard.assertStrings({ fileKey, modelId }, { fileKey: 200, modelId: 300 });
+      const raw = modelsFile.readModelsFile();
+      const r = modelsFile.setModelCapsInRaw(raw, fileKey, modelId, pickCaps(caps));
+      if (!r.ok) return r;
+      return { ok: true, ...rewriteModelsFileRaw(r.raw, { reason: 'update-model-caps' }) };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -219,7 +243,23 @@ function register() {
   });
   ipcMain.handle('local:threads/purge', async (_, payload) => {
     guard.assertIds(payload, ['threadId']);
-    return deps.getLocalStore() ? deps.getLocalStore().purgeThread(payload.threadId) : { ok: false };
+    const localStore = deps.getLocalStore();
+    if (!localStore) return { ok: false };
+    // 三层记忆 M2（决策 3）：彻底删除会话前先做 salvage 沉淀——
+    // 有价值的 L1 会话记忆（命中≥3 或 tier≥3）晋升为项目级跨会话留存，其余 L1 随会话物理删除。
+    // 语义边界：purge=不可恢复删除（值得沉淀）；archive（local:threads/delete）可恢复，不在此处理。
+    // fail-open：salvage 失败绝不阻断会话删除（记忆维护不应挡用户操作）。
+    let salvage = null;
+    const memoryManager = deps.getMemoryManager();
+    if (memoryManager) {
+      try {
+        salvage = memoryManager.salvageConversation({ conversationId: payload.threadId });
+      } catch (e) {
+        console.warn('[memory] 会话删除 salvage 失败（fail-open，不阻断删除）:', e.message);
+      }
+    }
+    const res = localStore.purgeThread(payload.threadId);
+    return salvage ? { ...res, salvage } : res;
   });
   // B1：孤儿会话归组
   ipcMain.handle('local:threads/set-project', async (_, payload) => {
@@ -264,9 +304,20 @@ function register() {
   ipcMain.handle('local:providers/add-model', async (_, payload) => {
     guard.assertIds(payload, ['id']);
     guard.assertStrings(payload, { model_id: 200, display_name: { max: 200, optional: true } });
-    const { id, model_id, display_name } = payload;
+    const { id, model_id, display_name, caps } = payload;
     if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
-    return deps.getLocalStore().addProviderModel(id, { model_id, display_name });
+    // N1：未显式传能力位时按预置能力目录从模型 ID 推断（与 file 来源 addModelToRaw 同源）
+    const picked = pickCaps(caps);
+    const finalCaps = Object.keys(picked).length ? picked : modelsFile.suggestCaps(model_id);
+    return deps.getLocalStore().addProviderModel(id, { model_id, display_name, caps: finalCaps });
+  });
+  // N1：本机（UI 手工添加）provider 的能力位写回
+  ipcMain.handle('local:providers/update-model-caps', async (_, payload) => {
+    guard.assertIds(payload, ['id']);
+    guard.assertStrings(payload, { model_id: 300 });
+    const { id, model_id, caps } = payload;
+    if (!deps.getLocalStore()) throw new Error('本地数据层未初始化');
+    return deps.getLocalStore().updateProviderModelCaps(id, model_id, pickCaps(caps));
   });
   ipcMain.handle('local:providers/remove-model', async (_, payload) => {
     guard.assertIds(payload, ['id']);
@@ -398,7 +449,10 @@ function register() {
     return n;
   }
 
-  ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion' } = {}) => {
+  // 三层记忆 M1：domain 白名单（与 memory/index.js 的 remember 校验同源，宿主侧先归一化，
+  // 非法值回落 global_knowledge 以保持既有 /mem 语义不变）。
+  const MEMORY_DOMAINS = ['private', 'session', 'global_knowledge', 'entity', 'reflection'];
+  ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion', domain = 'global_knowledge', scope } = {}) => {
     // P0-2b/P1-16：写入收口 MemoryManager（SQLite）+ 显式来源（未知来源被 remember 拒绝）
     // X14：content 进 SQLite 且会被召回进模型上下文，projectPath 是记忆空间分区键——
     // 形状与长度在边界守（source 的白名单仍由 remember 判，属业务语义）
@@ -411,24 +465,48 @@ function register() {
     } catch (e) {
       return { ok: false, error: e.message };
     }
+    // 三层记忆 M1：domain/scope 由调用方显式指定（/mem 作用域分流）。
+    // domain 非法回落 global_knowledge；scope 合法性交由 remember 的 resolveScope 统一判定
+    // （单一事实来源，宿主不重复实现作用域约束）。
+    const dom = MEMORY_DOMAINS.includes(domain) ? domain : 'global_knowledge';
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
       flushMemoryQueue(); // 就绪后补写积压（P1-16）
-      const m = memoryManager.remember({ spaceId: projectPath, domain: 'global_knowledge', content, source });
+      const m = memoryManager.remember({ spaceId: projectPath, domain: dom, scope, content, source });
       return m ? { id: m.id, content: m.content } : { ok: false, error: '写入被拒绝：内容为空或来源不在白名单' };
     }
-    memoryWriteQueue.push({ spaceId: projectPath || 'default', domain: 'global_knowledge', content, source });
+    memoryWriteQueue.push({ spaceId: projectPath || 'default', domain: dom, scope, content, source });
     return { queued: true };
   });
-  ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query } = {}) => {
+  ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query, conversationId } = {}) => {
     // P2-6：分层召回路由（importance×recency×相关性 Top-K）+ P0-2c 域/可信度过滤
+    // 三层记忆 M3：分层模式——会话层（按 conversationId 绑定）+ 项目层 + 全局层（跨项目），
+    // 输出携带 scope；渲染层据此加层级前缀（`[个人]/[项目]/[本次会话]`）后注入 system prompt。
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
       flushMemoryQueue();
-      return memoryManager.recallContents({ spaceId: projectPath, query, topK: limit || 5 });
+      return memoryManager.recallContents({
+        spaceId: projectPath, query, topK: limit || 7,
+        scopes: [...SCOPES], conversationId: conversationId || null,
+      });
     }
     // P1-16：未就绪返回空——不再回落 localStore JSON 轨
     return [];
+  });
+  // 三层记忆 M3：记忆文件双通道同步（打开项目时「导入外部变更 → 落盘当前视图」）
+  ipcMain.handle('local:memories/syncFile', async (_, { projectPath } = {}) => {
+    try {
+      guard.assertStrings({ projectPath }, { projectPath: { max: 1024, optional: true, allowEmpty: true } });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    const sync = deps.getMemoryFileSync?.();
+    if (!sync || !deps.getMemoryManager()) return { ok: false, error: '记忆子系统未就绪' };
+    try {
+      return { ok: true, ...sync.syncProject(projectPath) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
   // P2-8 数据源：记忆统计与后台任务列表（可视化 UI 后续接入）
   ipcMain.handle('memory:stats', async () => (deps.getMemoryManager() ? { ok: true, stats: deps.getMemoryManager().stats() } : { ok: false }));
@@ -454,6 +532,15 @@ function register() {
     if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
     const m = memoryManager.promoteToLongTerm(id);
     return m ? { ok: true, item: m } : { ok: false, error: '记忆不存在或已失效' };
+  });
+  // 三层记忆 M3：作用域清空（设置页「记忆」分区高级管理）——
+  //   project —— 清空当前项目空间的项目级记忆；global —— 清空全部跨项目全局记忆（spaceId 不传）。
+  ipcMain.handle('memory:resetScope', async (_, { scope, projectPath } = {}) => {
+    guard.assertEnum({ scope }, 'scope', ['session', 'project', 'global']);
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    const removed = memoryManager.resetScope({ scope, spaceId: scope === 'global' ? null : (projectPath || null) });
+    return { ok: true, removed };
   });
 }
 

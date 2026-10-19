@@ -161,13 +161,37 @@ export default function ChatArea({
 
   // 项目规范 AGENTS.md 由 App 层按项目路径加载后传入（此处不再重复探测）
 
-  // 两阶段记忆 POC（stage2）：按项目加载历史沉淀，注入 system prompt
+  // 三层记忆 M3：分层召回注入——先同步项目记忆文件（导入外部变更 + 落盘当前视图），
+  // 再按「会话层 + 项目层 + 全局层」分层召回，注入前缀 `[本次会话]/[项目]/[个人]`。
+  // 引擎仍吃 string[]（agent-core 零改动），层级语义由文本前缀承载。
   useEffect(() => {
     if (!project?.path || !window.mjcode?.localListMemories) { setMemories([]); return; }
-    window.mjcode.localListMemories({ projectPath: project.path, limit: 5 })
-      .then((list) => setMemories((list || []).map((m) => m.content)))
-      .catch((err) => console.warn('[chat] memory load failed:', err));
-  }, [project?.path]);
+    const threadId = thread?.id != null ? String(thread.id) : null;
+    let cancelled = false;
+    (async () => {
+      try {
+        // 文件双通道同步失败不阻塞召回（fail-open）
+        if (window.mjcode?.memorySyncFile) {
+          await window.mjcode.memorySyncFile({ projectPath: project.path }).catch(() => {});
+        }
+        const list = await window.mjcode.localListMemories({
+          projectPath: project.path, limit: 7, conversationId: threadId,
+        });
+        if (cancelled) return;
+        const prefixOf = (scope) => {
+          if (scope === 'session') return tGlobal('chat.memoryScopeSession');
+          if (scope === 'global') return tGlobal('chat.memoryScopePersonal');
+          return tGlobal('chat.memoryScopeProject');
+        };
+        setMemories((list || []).map((m) => `${prefixOf(m.scope)} ${m.content}`));
+      } catch (err) {
+        console.warn('[chat] memory load failed:', err);
+        if (!cancelled) setMemories([]);
+      }
+    })();
+    return () => { cancelled = true; };
+    // 依赖含 thread?.id：会话切换后会话层记忆归属变化，需重新召回
+  }, [project?.path, thread?.id]);
 
   // ambient 建议 POC：基于项目真实状态生成欢迎页建议
   // 只对「本次主动选择」的项目生成：重启后残留的上次项目不生成——

@@ -127,12 +127,13 @@ check('RightPane：收起时隐藏而非卸载（保住常驻语义与状态）'
 });
 
 check('切项目重置不依赖用户可见的错误反馈（静默失效防护）', () => {
-  // 这些重置都是「预防性」的，不应抛错或依赖条件判断
-  const m = chat.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[project\?\.path\]\)/);
-  assert.ok(m, '未找到 project?.path 的重置 effect');
-  const body = m[0];
+  // 这些重置都是「预防性」的，不应抛错或依赖条件判断。
+  // P1-6：不再用「依赖数组精确等于 [project?.path]」定位 effect——ChatArea 现有多处
+  // effect 以 project?.path 开头（记忆分层召回、建议、重置）。统一复用上方
+  // findProjectResetEffect（以 setWorktree 判定为重置 effect），避免脆弱匹配。
+  assert.ok(resetBody, '未找到 project?.path 的重置 effect');
   // 不允许被 if (xxx) 守卫包住导致「某些情况不重置」
-  assert.ok(!/if\s*\([^)]*\)\s*\{?\s*setWorktree/.test(body),
+  assert.ok(!/if\s*\([^)]*\)\s*\{?\s*setWorktree/.test(resetBody),
     'setWorktree 被条件守卫，新项目可能不触发重置');
 });
 

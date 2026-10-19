@@ -2,5 +2,8 @@
   "modelNotSelected": "尚未选择模型。请在输入框下方的模型选择器中选择，或在「设置 → 模型配置」中添加。",
   "ambientSummary": "总结当前 {n} 个文件的未提交变更",
   "ambientReview": "审查这个 {lang} 项目的代码质量并给出改进建议",
-  "ambientStructure": "梳理 {name} 的项目结构，生成模块说明"
+  "ambientStructure": "梳理 {name} 的项目结构，生成模块说明",
+  "memoryScopeSession": "[本次会话]",
+  "memoryScopeProject": "[项目]",
+  "memoryScopePersonal": "[个人]"
 }

@@ -12,9 +12,10 @@ import MemorySection from './MemorySection';
 import HooksSection from './HooksSection';
 // P1-4：Windows OS 级沙箱接线入口（仅 win32 渲染，组件内部另有平台守卫）
 import WindowsSandboxSetup from './WindowsSandboxSetup';
-import { IconCheck, IconCpu, IconGitBranch, IconGlobe, IconPalette, IconSettings, IconTerminal, IconUser, IconX } from './icons';
+import { IconCheck, IconCpu, IconGitBranch, IconGlobe, IconMemory, IconPalette, IconSettings, IconShield, IconTerminal, IconUser, IconX } from './icons';
 import Switch from './ui/Switch';
 import Modal from './ui/Modal';
+import Button from './ui/Button';
 // T2-4：模型页 / 网络页与共享原语已抽到 settings/（God File 拆薄，文案与视觉零改动）
 import ModelsTab from './settings/ModelsTab';
 import NetworkTab from './settings/NetworkTab';
@@ -43,6 +44,9 @@ const NAV = [
     { id: 'browser', icon: <IconGlobe size={16} />, labelKey: 'settings.tabBrowser' },
     { id: 'git', icon: <IconGitBranch size={16} />, labelKey: 'settings.tabGit' },
     { id: 'hooks', icon: <IconTerminal size={16} />, labelKey: 'settings.tabHooks' },
+    // 2026-10-19：三层记忆独立栏位（原嵌在「通用」页内，用户反馈难以发现）。
+    // 统计 / 后台任务 / 分层列表 / 团队共享等全部记忆管理能力集中于此一页。
+    { id: 'memory', icon: <IconMemory size={16} />, labelKey: 'settings.tabMemory' },
     { id: 'teamspace', icon: <IconGitBranch size={16} />, labelKey: 'settings.tabTeamSpace' },
   ]},
 ];
@@ -63,6 +67,15 @@ const RESPONSE_STYLES = [
   { id: 'default', nameKey: 'settings.responseStyleDefault', descKey: 'settings.responseStyleDefaultDesc' },
   { id: 'detailed', nameKey: 'settings.responseStyleDetailed', descKey: 'settings.responseStyleDetailedDesc' },
 ];
+
+// CUA 授权/能力引导：按平台分派文案 key（2026-10-19）
+// macOS 存在真正的系统授权项（辅助功能），Windows 的键鼠执行需 UIA 实现、Linux 依赖截图工具链，
+// 后两者无系统授权项——文案必须按平台给「在哪里授权 / 为什么当前不可用」，不能笼统说「不支持」。
+const CUA_GUIDE_KEYS = {
+  darwin: { title: 'settings.cuaGuideTitleMac', body: 'settings.cuaGuideMacBody' },
+  win32: { title: 'settings.cuaGuideTitleWin', body: 'settings.cuaGuideWinBody' },
+  linux: { title: 'settings.cuaGuideTitleLinux', body: 'settings.cuaGuideLinuxBody' },
+};
 
 // OS 级沙箱后端 → 标签。用于未就绪时如实告诉用户「本平台本该有哪种隔离」，
 // 而不是笼统地说「你的系统不支持」（三平台后端清单见 main/sandbox.js 的 detectBackend）
@@ -377,8 +390,6 @@ export default function SettingsModal({
               })}
             </Section>
             <UpdateSection />
-            {/* P0-2：记忆管理（统计/后台任务/列表/自动沉淀开关）——随常规设置页展示 */}
-            <MemorySection projectPath={projectPath} />
           </>
         )}
 
@@ -460,6 +471,10 @@ export default function SettingsModal({
 
         {/* P1-5：生命周期 hooks（preToolUse / postToolUse）——工具执行前后的用户自定义校验 */}
         {tab === 'hooks' && <HooksSection />}
+
+        {/* 三层记忆（M0–M4）：统计 / 后台任务 / 分层列表 / 团队共享 / 按层清空。
+            MemorySection 自带 Section 容器，直接作为本页正文（不再嵌在「通用」页内）。 */}
+        {tab === 'memory' && <MemorySection projectPath={projectPath} />}
         </div>
       </div>
     </Modal>
@@ -472,12 +487,21 @@ function BrowserTab({ flags, approvalSettings, onApprovalSettingsChange }) {
   const { t } = useI18n();
   const [linkMode, setLinkMode] = useState(getLinkOpenMode);
   const [cua, setCua] = useState(null);
+  // 授权/能力引导弹窗（2026-10-19）：按平台给「去哪里授权 / 为什么当前不可用」的分步说明
+  const [guideOpen, setGuideOpen] = useState(false);
 
-  useEffect(() => {
+  // 抽成可复用函数：从系统设置授权后回到本页需重新探测，才能反映最新权限状态
+  function probeCua() {
     window.mjcode?.cuaStatus?.()
       .then((r) => setCua(r))
       .catch((err) => { console.warn('[settings] CUA status probe failed:', err); setCua({ available: false, message: t('settings.probeFailed') }); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }
+
+  useEffect(() => { probeCua(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 引导弹窗文案按平台分派（未探测到平台时回落 linux 文案；找不到平台时按钮不出现，不构成假可用）
+  const guide = CUA_GUIDE_KEYS[cua?.platform] || CUA_GUIDE_KEYS.linux;
+  const guideMac = cua?.platform === 'darwin';
 
   return (
     <>
@@ -510,6 +534,26 @@ function BrowserTab({ flags, approvalSettings, onApprovalSettingsChange }) {
               )}
             </div>
             {cua.message && <p className="text-text2 text-xs mt-1">{cua.message}</p>}
+            {/* 授权引导（2026-10-19）：macOS 有真正的系统授权项（辅助功能）→ 弹窗分步说明 +
+                直达「系统设置 › 隐私与安全性 › 辅助功能」；Windows/Linux 无系统授权项 →
+                弹窗说明当前平台能力边界与依赖。按钮只在确有信息时出现，不做假可用。 */}
+            {cua.available !== false && !cua.granted && (
+              <div className="flex items-center gap-2 py-3">
+                <Button size="sm" variant="primary" onClick={() => setGuideOpen(true)}>
+                  {t('settings.cuaGrantAction')}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={probeCua}>
+                  {t('settings.cuaRecheck')}
+                </Button>
+              </div>
+            )}
+            {(cua.platform === 'win32' || cua.platform === 'linux') && (
+              <div className="py-3">
+                <Button size="sm" variant="secondary" onClick={() => setGuideOpen(true)}>
+                  {t('settings.cuaViewGuide')}
+                </Button>
+              </div>
+            )}
             {/* G-CUA：允许 Agent（模型）在会话中调用界面自动化——opt-in，默认关闭。
                 开启后引擎才把 computer_use 放进模型的工具清单；关闭时模型完全看不到该能力。
                 与「录制/回放」面板无关：那个是设置页手动的确定性回放，本开关是模型自主调用。 */}
@@ -534,6 +578,37 @@ function BrowserTab({ flags, approvalSettings, onApprovalSettingsChange }) {
           </div>
         )}
       </Section>
+
+      {/* 授权/能力引导弹窗：文案按平台分派；macOS 额外提供「打开系统设置」直达辅助功能面板，
+          跳转后关闭弹窗并重新探测权限（探到的状态才是唯一事实，不假设用户一定授权成功）。 */}
+      {guideOpen && cua && (
+        <Modal open onClose={() => setGuideOpen(false)} frameless role="alertdialog"
+          ariaLabel={t(guide.title)}
+          overlayClassName="fixed inset-0 z-palette flex items-center justify-center bg-overlay">
+          <div className="w-[460px] max-w-[calc(100vw-2rem)] rounded-2xl bg-raise border border-border shadow-[var(--shadow-modal)] p-5 focus:outline-none">
+            <div className="flex items-start gap-3">
+              <span className="text-text2 shrink-0 mt-1"><IconShield size={18} /></span>
+              <div className="flex-1">
+                <div className="text-sm font-semibold">{t(guide.title)}</div>
+                <div className="text-xs text-text2 mt-2 leading-relaxed whitespace-pre-line">{t(guide.body)}</div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="secondary" size="md" onClick={() => setGuideOpen(false)}>{t('settings.cuaGotIt')}</Button>
+              {guideMac && (
+                <Button variant="primary" size="md"
+                  onClick={async () => {
+                    await window.mjcode?.cuaPermissionHelp?.({ open: true });
+                    setGuideOpen(false);
+                    probeCua();
+                  }}>
+                  {t('settings.cuaOpenSystemSettings')}
+                </Button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

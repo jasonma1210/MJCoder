@@ -5,7 +5,7 @@
 //
 // 本套件锁四件事：
 //   ① 预热白名单只含 filesystem / time / fetch；git / playwright / desktop-commander / 付费检索一律排除；
-//   ② 灰度开关 MJCODE_MCP_LAZY 缺省关闭（未置位时行为完全不变，保护线上稳定性）；
+//   ② tier 分级开关默认**开启**（G2+N8：懒启动不再依赖 MJCODE_MCP_LAZY，仅显式 0/false/off 关闭）；
 //   ③ 工具清单缓存读写闭环 + 损坏时 fail-open（不阻塞启动）；
 //   ④ 源码门禁：reconnectMcpServers 必须经 isLazyMode/selectPrewarm 分流；
 //      callMcpTool 必须有按需连接兜底；mcp:listTools 必须合并缓存清单。
@@ -69,13 +69,13 @@ function check(name, ok, detail = '') {
   check('selectPrewarm 非数组入参安全', Array.isArray(selectPrewarm(null)) && selectPrewarm(null).length === 0);
 }
 
-// ── ② 灰度开关缺省关闭 ──
+// ── ② tier 分级开关：默认开启，仅显式 0/false/off 关闭（G2+N8）──
 {
-  const off = ['', undefined, '0', 'false', 'FALSE', 'off', '  '];
-  for (const v of off) check(`懒启动关闭：MJCODE_MCP_LAZY=${JSON.stringify(v)}`, isLazyMode({ MJCODE_MCP_LAZY: v }) === false);
-  const on = ['1', 'true', 'TRUE', 'yes', 'on'];
-  for (const v of on) check(`懒启动开启：MJCODE_MCP_LAZY=${JSON.stringify(v)}`, isLazyMode({ MJCODE_MCP_LAZY: v }) === true);
-  check('缺省 env（无该键）关闭', isLazyMode({}) === false);
+  const on = ['', undefined, '  ', '1', 'true', 'TRUE', 'yes', 'on'];
+  for (const v of on) check(`懒启动默认开启：MJCODE_MCP_LAZY=${JSON.stringify(v)}`, isLazyMode({ MJCODE_MCP_LAZY: v }) === true);
+  const off = ['0', 'false', 'FALSE', 'off', 'OFF'];
+  for (const v of off) check(`懒启动显式关闭：MJCODE_MCP_LAZY=${JSON.stringify(v)}`, isLazyMode({ MJCODE_MCP_LAZY: v }) === false);
+  check('缺省 env（无该键）默认开启（tier 分级生效）', isLazyMode({}) === true);
 }
 
 // ── ③ 工具清单缓存：读写闭环 + fail-open ──

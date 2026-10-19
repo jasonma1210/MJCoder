@@ -70,6 +70,31 @@ function defaultCaps(entry = {}) {
   };
 }
 
+// ── 预置主流模型能力目录（N1）──
+// 目的：用户新增模型时只填 ID 也能拿到正确的能力位，避免「拖入截图却看不到图」。
+// 口径：仅对**新增**模型按 ID 关键词给出建议（不覆盖文件里已显式声明的条目——文件是事实来源）。
+// 匹配保守：命中即开（图像/推理），未命中保持默认（工具调用开、图像关、推理关）。
+const IMAGE_HINTS = [
+  'vl', 'vision', 'visual', 'omni', 'llava', 'pixtral', 'internvl', 'multimodal', '4o',
+  'gemini', 'claude-3', 'claude-4', 'claude-sonnet', 'claude-opus', 'gpt-4.1', 'gpt-4-turbo',
+  'glm-4v', 'glm-4.5v', 'kimi-vl', 'qwen-vl', 'qvq', 'gpt-4o',
+];
+const REASONING_HINTS = [
+  'reasoner', 'reasoning', 'thinking', '-r1', 'r1-', 'qwq', 'glm-z1', 'magistral',
+  'deepseek-reasoner', 'o1-', '-o1', 'o3-', '-o3', 'o4-', '-o4',
+];
+
+// 依模型 ID 关键词给出建议能力（纯函数，供新增模型时打底；未命中返回 defaultCaps）。
+function suggestCaps(modelId) {
+  const id = String(modelId || '').toLowerCase();
+  const base = defaultCaps();
+  return {
+    ...base,
+    supportsImages: base.supportsImages || IMAGE_HINTS.some((h) => id.includes(h)),
+    supportsReasoning: base.supportsReasoning || REASONING_HINTS.some((h) => id.includes(h)),
+  };
+}
+
 function keyRefOf(entry, apiKey) {
   if (entry.apiKeyEnv) return `env:${String(entry.apiKeyEnv).trim()}`;
   return apiKey ? 'key:set' : 'key:empty';
@@ -246,15 +271,33 @@ function removeProviderFromRaw(raw, fileKey, { env = process.env } = {}) {
   return { ok: true, raw: serializeProviders(next) };
 }
 
-function addModelToRaw(raw, fileKey, modelId, displayName, { env = process.env } = {}) {
+function addModelToRaw(raw, fileKey, modelId, displayName, { env = process.env, caps } = {}) {
   const { providers } = parseModelsFile(raw || '[]', { env });
   const group = providers.find((g) => g.fileKey === String(fileKey));
   if (!group) return { ok: false, error: '配置文件中找不到对应的模型服务（可能已被删除）' };
   const id = String(modelId || '').trim();
   if (!id) return { ok: false, error: '模型 ID 不能为空' };
   if (group.models.some((m) => m.modelId === id)) return { ok: false, error: '该模型已存在' };
+  // N1：未显式传 caps 时按预置能力目录从 ID 推断（图像/推理），显式传入则以传入为准
+  const finalCaps = defaultCaps({ ...suggestCaps(id), ...(caps && typeof caps === 'object' ? caps : {}) });
   const next = providers.map((g) => (g.fileKey === group.fileKey
-    ? { ...group, models: [...group.models, { modelId: id, displayName: String(displayName || '').trim() || id, caps: defaultCaps() }] }
+    ? { ...group, models: [...group.models, { modelId: id, displayName: String(displayName || '').trim() || id, caps: finalCaps }] }
+    : g));
+  return { ok: true, raw: serializeProviders(next) };
+}
+
+// N1：写回单个模型的能力位（图像 / 工具调用 / 推理强度）。caps 只覆盖传入字段，其余保持不变。
+// 序列化侧只在「非默认」时保留能力字段（图像/推理仅在 true 时写、工具调用仅在 false 时写），
+// 故「关闭某能力」= 删除该字段，下次解析自然回到默认值，语义无歧义。
+function setModelCapsInRaw(raw, fileKey, modelId, caps, { env = process.env } = {}) {
+  const { providers } = parseModelsFile(raw || '[]', { env });
+  const group = providers.find((g) => g.fileKey === String(fileKey));
+  if (!group) return { ok: false, error: '配置文件中找不到对应的模型服务（可能已被删除）' };
+  const target = group.models.find((m) => m.modelId === String(modelId));
+  if (!target) return { ok: false, error: `该服务下不存在模型 ${modelId}` };
+  const nextCaps = defaultCaps({ ...(target.caps || {}), ...(caps && typeof caps === 'object' ? caps : {}) });
+  const next = providers.map((g) => (g.fileKey === group.fileKey
+    ? { ...group, models: group.models.map((m) => (m.modelId === String(modelId) ? { ...m, caps: nextCaps } : m)) }
     : g));
   return { ok: true, raw: serializeProviders(next) };
 }
@@ -374,6 +417,6 @@ function syncFileModels({ store, encrypt, vault, raw, filePath = modelsFilePath(
 module.exports = {
   MODELS_FILE_ENV, modelsFilePath, fileKeyFor, entryBaseUrl,
   parseModelsFile, serializeProviders, migrateLocalProviders,
-  removeModelFromRaw, removeProviderFromRaw, addModelToRaw,
+  removeModelFromRaw, removeProviderFromRaw, addModelToRaw, setModelCapsInRaw, suggestCaps,
   templateContent, ensureModelsFile, readModelsFile, writeModelsFile, syncFileModels,
 };

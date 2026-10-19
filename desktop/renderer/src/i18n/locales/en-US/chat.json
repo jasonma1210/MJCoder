@@ -2,5 +2,8 @@
   "modelNotSelected": "No model selected yet. Pick one in the model selector below the input, or add one in Settings → Model Config.",
   "ambientSummary": "Summarize the uncommitted changes in {n} files",
   "ambientReview": "Review this {lang} project's code quality and suggest improvements",
-  "ambientStructure": "Outline the structure of {name} and generate a module guide"
+  "ambientStructure": "Outline the structure of {name} and generate a module guide",
+  "memoryScopeSession": "[This session]",
+  "memoryScopeProject": "[Project]",
+  "memoryScopePersonal": "[Personal]"
 }

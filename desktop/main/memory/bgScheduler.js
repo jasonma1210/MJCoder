@@ -1,12 +1,13 @@
 // P2-5：MemoryBgScheduler——记忆后台任务调度器
 // 任务队列持久化到 memory_bg_tasks 表（重启恢复：queued 任务继续跑）；
 // 60s 轮询驱动，按优先级取任务（1 最高）；前台任务不受阻塞（所有调用均异步且低频）。
-// 处理器（文档③第六节裁剪为当前可落地 4 类）：
-//   compress  优先级 1  Tier1 批量合并摘要（LLM，经写锁串行）
-//   promote   优先级 3  高频 Tier2 → Tier3 固化
-//   decay     优先级 4  importance 时间衰减 + 低分失效
-//   cleanup   优先级 5  失效/过期记忆物理删除（防膨胀）
-//   embed     优先级 2  （预留：embedding 端点配置后启用，未配置直接跳过）
+// 处理器（文档③第六节裁剪为当前可落地 5 类）：
+//   compress      优先级 1  Tier1 批量合并摘要（LLM，经写锁串行）
+//   promote       优先级 3  高频 Tier2 → Tier3 固化
+//   promote-scope 优先级 3  跨层晋升：L1 命中≥3→L2；L2 命中≥5 且 user_input→L3（三层记忆 M2）
+//   decay         优先级 4  importance 时间衰减 + 低分失效
+//   cleanup       优先级 5  失效/过期记忆物理删除（防膨胀）
+//   embed         优先级 2  （预留：embedding 端点配置后启用，未配置直接跳过）
 const crypto = require('crypto');
 
 const DEFAULT_DONE_RETENTION_MS = 7 * 24 * 3600 * 1000; // 7 天保留期
@@ -38,6 +39,8 @@ const PROCESSORS = {
     }
   },
   promote: async (_payload, deps) => ({ promoted: deps.memory.promoteByHits(3) }),
+  // 三层记忆 M2：跨层晋升（纯本地 SQL，无 LLM 成本）——L1 命中≥3→L2；L2 命中≥5 且 user_input→L3
+  'promote-scope': async (_payload, deps) => deps.memory.promoteScopeByHits({}),
   decay: async (_payload, deps) => deps.memory.decayJob({}),
   cleanup: async (_payload, deps) => deps.memory.cleanupJob({}),
   embed: async () => ({ skipped: 'embedding 端点未配置（P3 LocalBackend/向量就绪后启用）' }),
@@ -77,6 +80,9 @@ class MemoryBgScheduler {
     }
     const hasDecay = db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE type = 'decay' AND status IN ('queued','running')`).get();
     if (!hasDecay.n) { this.enqueue('decay', {}, { priority: 4 }); enqueued += 1; }
+    // 三层记忆 M2：跨层晋升（纯本地 SQL 维护任务，与 decay/cleanup 同为周期性自检项）
+    const hasPromoteScope = db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE type = 'promote-scope' AND status IN ('queued','running')`).get();
+    if (!hasPromoteScope.n) { this.enqueue('promote-scope', {}, { priority: 3 }); enqueued += 1; }
     const hasCleanup = db.prepare(`SELECT COUNT(*) AS n FROM memory_bg_tasks WHERE type = 'cleanup' AND status IN ('queued','running')`).get();
     if (!hasCleanup.n) { this.enqueue('cleanup', {}, { priority: 5 }); enqueued += 1; }
     // P0-19（2026-10-16）：定期清理已终态（done/failed）历史行，消除约 952 行/天的无限膨胀
