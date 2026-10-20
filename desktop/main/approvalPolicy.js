@@ -1,24 +1,23 @@
 // main/approvalPolicy.js
-// 审批档与沙箱策略的「取更严者」纪律——全项目唯一事实来源。
+// 审批档与沙箱策略的「取更严者」纪律——**CJS 薄壳**（主进程侧；值全部来自 shared/rolePolicyData.json）。
+// 数据单源（D-13）：档位/严格序/默认档的唯一出处是 **shared/rolePolicyData.json**，本文件与
+// shared/roleClamp.mjs（渲染层 ESM 侧）都只留「读数据 + 查表」的薄壳——改值改 JSON，别改这里。
+// 两侧为何不能合成同一个文件见 roleClamp.mjs 头部历史附录；一致性见 test/role-clamp-parity.test.mjs。
 //
-// 为什么独立成文件（2026-10-16）：这两个函数原为 agentRunner.js 的模块私有函数。
-// Worker 路径（workerPool.js 启动的子任务）需要同一条纪律，但它拿不到，于是
-// 硬编码 approvalMode:'auto-safe' —— 结果是用户选「全部询问」时子任务仍自动放行，
-// 即**产品对用户的设置撒谎**。
-//
-// 为什么不直接从 workerPool require agentRunner：
-//   · 语义上「任务池」依赖「任务运行器」方向别扭；
-//   · 本项目已有同类先例（dangerousPatterns.js 同样是因规则被手抄成两份副本而抽出），
-//     沿用该惯例可保持一致性；
-//   · 纯函数、零依赖，两个消费方都能安全引用。
+// 为什么独立成文件（2026-10-16）：两个函数原为 agentRunner.js 的模块私有函数；Worker 路径
+// （workerPool.js 启动的子任务）拿不到同一条纪律，就地硬编码 approvalMode:'auto-safe'
+// ⇒ 用户选「全部询问」时子任务仍自动放行，等于**产品对用户的设置撒谎**。
+// 不直接从 workerPool require agentRunner：语义上「任务池」依赖「任务运行器」方向别扭；且本模块
+// 纯函数零依赖（先例 dangerousPatterns.js 也因规则被手抄成两份而抽出），两个消费方都能安全引用。
 
-// 审批严格序（弹卡越多越严）：never < auto-safe < on-request < always
-const APPROVAL_ORDER = { never: 0, 'auto-safe': 1, 'on-request': 2, always: 3 };
-// 沙箱严格序（权限越小越严）：read-only < workspace-write < full-access
-const SANDBOX_ORDER = { 'read-only': 0, 'workspace-write': 1, 'full-access': 2 };
+// 缺段即抛（不兜底成空表）：JSON 少 approval/sandbox 会立刻 TypeError，而不是静默按空表比较。
+const DATA = require('../shared/rolePolicyData.json');
 
-const DEFAULT_APPROVAL = 'on-request';
-const DEFAULT_SANDBOX = 'workspace-write';
+// 严格序：审批 never<auto-safe<on-request<always，沙箱 read-only<workspace-write<full-access（浅拷贝防污染共用实例）
+const APPROVAL_ORDER = { ...DATA.approval.order };
+const SANDBOX_ORDER = { ...DATA.sandbox.order };
+const DEFAULT_APPROVAL = DATA.approval.default;
+const DEFAULT_SANDBOX = DATA.sandbox.default;
 
 /**
  * V12（2026-10-16）：枚举归一化——未知/非法值一律收敛到默认档。
@@ -91,12 +90,31 @@ function hostPolicySnapshot(cwd, approvalMode) {
   return {
     // 归一化：非法/未知档位收敛到默认档，绝不让一个不存在的档位随组快照落盘（见 V12 注释）
     approvalMode: normalizeApprovalMode(approvalMode),
-    sandboxPolicy: cwd ? 'workspace-write' : 'read-only',
+    // 档名走单点 sandboxTierForCwd（数据单源；为何刻意不归一化见该函数注释）
+    sandboxPolicy: sandboxTierForCwd(cwd),
   };
+}
+
+/**
+ * cwd → 沙箱档的**单点判定**，档名唯一出处是 JSON 的 snapshot 段（withCwd / withoutCwd）。
+ * 两处调用方共用：本文件的 hostPolicySnapshot（编排建组快照，随组落盘）与
+ * main/main.js 的定时通道（构造 runAgent 参数）。此前两处各手抄一遍同款三元判定
+ * （approvalPolicy.js 与 main.js:1133），是 D-13 的第四处手抄 —— 只改一处，定时通道就与 JSON 脱钩，
+ * 而那正是「无人值守、没人看着」的通道，最需要与交互通道一致。
+ *
+ * 刻意**不做归一化**：若 JSON 被误改成非法档名，normalizeSandboxPolicy 会静默回落默认档（可写），
+ * 而「无 cwd」这一支的意图是只读 —— 回落等于把只读放宽成可写（越权方向）。合法性交由门禁断言
+ * 两个值 ∈ SANDBOX_ORDER，让非法值在 CI 就红，而不是在运行时猜。
+ * @param {string} cwd 工作目录（真值 = 有项目目录 → 可写；空 = 无目录 → 只读）
+ * @returns {string} 沙箱档名（取自 JSON，不做改写）
+ */
+function sandboxTierForCwd(cwd) {
+  return cwd ? DATA.snapshot.withCwd : DATA.snapshot.withoutCwd;
 }
 
 module.exports = {
   hostPolicySnapshot,
+  sandboxTierForCwd,
   stricterApproval,
   stricterSandbox,
   normalizeApprovalMode,

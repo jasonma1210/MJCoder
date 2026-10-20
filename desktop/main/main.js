@@ -1130,7 +1130,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     // 与 auto-safe 地板」中更严者。2026-10-17（P1-1）：用户档来源改为 approvalSettings.getUserApprovalMode()
     // （读持久化设置，而不是「最后一次交互 run 的档」）；stricterApproval 仍由 approvalPolicy.js 提供。
     approvalMode: agentRunner.stricterApproval(schedModel.approvalMode || approvalSettings.getUserApprovalMode(), 'auto-safe'),
-    sandboxPolicy: rc.dir ? 'workspace-write' : 'read-only',
+    // D-13：cwd→沙箱档走 approvalPolicy 的单点（档名唯一出处是 shared/rolePolicyData.json），别在此手抄档名
+    sandboxPolicy: sandboxTierForCwd(rc.dir),
     conversationId: 'scheduled',
     maxRounds: 40, // 100 篇 ≈ 10 批 ×(抓取+落盘) ≈ 20 轮，原 20 轮零余量；40 轮留重试余量（按「100 篇」量级定的默认值，非永久最优）
     // P0-8c：无人值守成本闸仍保留（有界防失控，不是放开）：按每轮 ~15k prompt 估算，200k 约 13 轮就见底 → 提到 400k（交互通道 trace 里是 600k，定时取 400k 属保守）
@@ -1182,7 +1183,7 @@ dbStatus.register(ipcMain, () => !!taskStore);
 // V04：编排建组的「宿主治理快照」（审批档取用户当前设置、沙箱按 cwd 有无推导、不接受模型参数）
 // 单一事实来源在 main/approvalPolicy.js（纯函数，零依赖）——模型侧 orchestrate_task 工具与
 // tasks:* IPC（main/ipc/tasks.js）各自 import，避免两份实现漂移。
-const { hostPolicySnapshot } = require('./approvalPolicy');
+const { hostPolicySnapshot, sandboxTierForCwd } = require('./approvalPolicy');
 
 function emitTaskEvent(evt) {
   // 事件桥接：编排器监听组终态/暂停事件，驱动 auto 组自动重规划

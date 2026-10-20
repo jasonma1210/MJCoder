@@ -11,7 +11,7 @@
 const { aggregateGroup } = require('./aggregator/merge');
 const workerIsolation = require('./workerIsolation');
 const { toAgentModel } = require('./modelShape');
-const { stricterApproval } = require('./approvalPolicy');
+const { stricterApproval, sandboxTierForCwd } = require('./approvalPolicy');
 const path = require('path');
 // P2-8 / V-L1：V 层（评估接口）宿主侧编排。P1-2 后本通道**默认 l1**（此前默认 off）：
 // L1 是零网络、零边际成本的确定性对账，子任务没有理由不对账；
@@ -121,7 +121,9 @@ function dispatch(group, task) {
   // P1 遗留项落地：真并行隔离——可写任务在独立 worktree 中执行，结束后合并回主目录。
   // 非 git 仓库/创建失败自动回落主目录（不阻塞）；写沙箱为只读时不隔离（无写冲突可能）。
   // V04：沙箱档读组内快照（建组时刻的父上下文）；旧组无快照列时按 cwd 推导（兼容旧行为）。
-  const groupSandboxPolicy = group.sandbox_policy || (group.cwd ? 'workspace-write' : 'read-only');
+  // D-13：旧组无快照列时的回落走 approvalPolicy 的单点 sandboxTierForCwd（档名唯一出处是
+  // shared/rolePolicyData.json）——此前是第三处手抄的 `group.cwd ? 'workspace-write' : 'read-only'`。
+  const groupSandboxPolicy = group.sandbox_policy || sandboxTierForCwd(group.cwd);
   const wantsIsolation = !!group.cwd && groupSandboxPolicy !== 'read-only';
   (async () => {
     let iso = null;

@@ -197,7 +197,13 @@ await check('main.js：cwd 用产出目录、系统提示走 appendSystemPrompt�
   const src = fs.readFileSync(path.join(ROOT, 'main', 'main.js'), 'utf8');
   assert.match(src, /scheduledRunContext\(\{\s*app, taskName, contextCwd: schedModel\.cwd\s*\}\)/);
   assert.match(src, /cwd: rc\.dir,/, 'runAgent 未收到产出目录');
-  assert.match(src, /sandboxPolicy: rc\.dir \? 'workspace-write' : 'read-only'/);
+  // D-13：这里原本冻结的是**实现表达式**（`rc.dir ? 'workspace-write' : 'read-only'`），属“标识符类”
+  // 断言——锚在措辞上，等价重构就假红。2026-10-20 实际发生过：档名迁到 shared/rolePolicyData.json、
+  // 改由单点 sandboxTierForCwd 推导后，本套件立刻 24/25（当时只跑了「相关」套件，漏了这里）。
+  // 改为断言**契约**：沙箱档必须由单点推导（怎么实现随它演进，退回去手抄就红）。
+  // 注：code 口径（剥注释）的负向扫描在 test/role-clamp-parity.test.mjs 断言 2d 里做——那边有 readCode，
+  // 这里不引第四份 stripComments（三份手抄已在台账，别再添一份）。
+  assert.match(src, /sandboxPolicy: sandboxTierForCwd\(rc\.dir\)/, '定时通道的沙箱档未由单点 sandboxTierForCwd 推导（档名唯一出处是 shared/rolePolicyData.json）');
   assert.match(src, /appendSystemPrompt: rc\.appendPrompt/, '仍在整体替换 BASE_PROMPT');
   assert.ok(!/systemPrompt: '你是定时任务执行器/.test(src), '旧的整段替换 systemPrompt 还在');
   assert.match(src, /appendTraceEvent\(runId, evt\)/, '定时运行的 trace 未落盘（排障无从还原）');
