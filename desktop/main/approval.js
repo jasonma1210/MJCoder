@@ -287,10 +287,18 @@ const TOOL_LEVEL = {
   web_fetch: 'L2', // 可拉任意 URL（SSRF 风险由 webTools 侧守卫承担）→ 分级保持 L2 维持现状
   deep_research: 'L2', // 多轮外部检索（web_search 的上层聚合）→ 与 web_search/web_fetch 同档
   chrome_status: 'L2', // 只读连接状态；TODO(B2)：是否像 notify 那样移出审批面（当前 L2 会弹卡，疑似过严）
-  todo_write: 'L2', // 无持久副作用（与 notify 同纪律），但当前实际就是 L2；TODO(B2)：移出审批面需产品确认，本轮不改行为
+  // todo_write：2026-10-20 产品裁决「退出审批面」——判据在 toolLevel() 的特判分支（早返回 null）。
+  // 此处**刻意不留 'L2' 条目**：特判会提前 return，条目永不被末行读到 ⇒ 属「不可达配置」，
+  // 与门禁「TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅」直接冲突（读者会以为改表能改分级）。
+  // 它并非「无分级」，而是「分级由特判承担」——覆盖率门禁认 SPECIAL_CASED 这条路径。
   spawn_subagent: 'L2', // 间接执行：子代理只用只读工具集，但消耗预算且可多轮循环 → 保留 L2 而非 null
-  orchestrate_task: 'L2', // 间接执行：Worker 池内每次工具调用另有独立审批，本层不重复拦截；
-  //   TODO(B2)：复核是否应按「最危险可达子工具」升到 L3 —— 升档会改 on-request 弹卡频率，本轮不做
+  // orchestrate_task：2026-10-20 产品裁决「**不升 L3**，钉在 L2」。理由（防止后人重开这个话题）：
+  //   · Worker 池内**每一次工具调用都另有独立审批**（内层逐工具闸），外层再判 L3 等于对同一动作
+  //     二次确认：用户要连点两次「同意」，而第二次不携带任何新信息，纯属摩擦。
+  //   · 真正的风险控制点在「子 Agent 能调什么工具」，这已由能力闸 + 角色子集三级钳制守住，
+  //     不靠外层档位。
+  //   · 若将来要升 L3，**必须先回答「内层逐工具审批是否同时降级」**——否则只是把弹卡数量翻倍。
+  orchestrate_task: 'L2', // 见上方裁决块：刻意**不升 L3**（2026-10-20）
 };
 
 // 只读工具：任何档位都不询问
@@ -307,7 +315,7 @@ const READONLY_TOOLS = new Set([
 //   `READONLY_TOOLS.has(tool)`）。两表刻意**不重叠**，否则「三选一」覆盖断言失效、无法区分谁在生效。
 // 也没有 mcp__：它是前缀通配（toolLevel 用 startsWith 判），不是可枚举的工具名。
 const SPECIAL_CASED_TOOLS = new Set([
-  'notify', 'clipboard', 'http_request', 'sqlite',
+  'notify', 'todo_write', 'clipboard', 'http_request', 'sqlite',
   'shell', 'code_exec', 'cua_action', 'latex_compile',
 ]);
 
@@ -349,6 +357,12 @@ function toolLevel(tool, args = {}) {
   // 期 3：notify 不进审批面——它是「告知用户」的原语（长任务完成时提醒用户回来看），
   // 对它逐次弹卡等于废掉这个工具；且无持久副作用（与 todo_write 同纪律）。
   if (tool === 'notify') return null;
+  // 2026-10-20 产品裁决：todo_write 退出审批面（不弹卡）。真正动机是「审批脱敏」而非「它无害」：
+  // 一次 run 能触发十几次清单更新（deep_research 五阶段、长任务分步都要刷清单），逐次弹卡
+  // 会让用户对审批卡麻木——而真正需要看的审批（写文件 / 执行命令 / 外发数据）就被稀释了。
+  // 其次才是无害性：它是引擎内纯状态工具，只更新本应用自己的会话清单并经 onTodos 推给 UI，
+  // 不出网、不触盘、不出项目目录、无持久副作用，与 notify 同纪律（notify 已于期 3 退出审批面）。
+  if (tool === 'todo_write') return null;
   // 期 3：clipboard 读只读（不询问）；写覆盖用户剪贴板原内容 → L2。
   if (tool === 'clipboard') return String(args.action || 'read') === 'write' ? 'L2' : null;
   // 期 3：http_request——GET/HEAD 只读；其余方法改动外部系统状态，判 L3（可经规则豁免，

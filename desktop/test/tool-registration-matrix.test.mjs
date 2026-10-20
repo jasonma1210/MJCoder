@@ -254,7 +254,12 @@ console.log('');
       : `${registeredInTable.length} 个显式登记工具逐一一致`);
 
   // ⑤-d 特判清单与 toolLevel() 源码分支 **双向**同步（漏登记/多登记都会让门禁误判）
-  const lvBody = read('main/approval.js').match(/function toolLevel\(tool, args = \{\}\) \{([\s\S]*?)\n\}/);
+  // ⚠ 必须 blankComments 后再抓分支：本轮实测发现**不剥离注释时这条门禁可被「注释掉实现」绕过**——
+  //   把 `if (tool === 'todo_write') return null;` 整行注释掉，行为已坏（退回 L2 弹卡），
+  //   但正则照样从注释文本里抓到 `tool === 'todo_write'`，本断言仍 PASS、全套件 135/135 全绿。
+  //   即「门禁对人说『已双向同步』，而实现已经不在」。判据同本文件对 main.js 的处理（blankComments）。
+  // 残留限制：blankComments 是正则启发式而非解析器——toolLevel 体内若出现含裸 // 的字符串字面量会被当注释截断。故该函数体内禁止此类写法；要根治需 tokenizer（见台账「3 份 stripComments 手抄」）。
+  const lvBody = blankComments(read('main/approval.js')).match(/function toolLevel\(tool, args = \{\}\) \{([\s\S]*?)\n\}/);
   const branches = asSet(lvBody ? Array.from(lvBody[1].matchAll(/tool === '([a-z_][a-z0-9_]*)'/g)).map((m) => m[1]) : []);
   const notInList = [...branches].filter((n) => !SP.has(n));
   const notInSrc = [...SP].filter((n) => !branches.has(n));

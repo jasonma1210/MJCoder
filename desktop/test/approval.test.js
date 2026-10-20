@@ -20,6 +20,35 @@ check('apply_patch → L2', approval.toolLevel('apply_patch') === 'L2');
 check('git_commit → L2', approval.toolLevel('git_commit') === 'L2');
 check('MCP 工具 → L3', approval.toolLevel('mcp__rea__disassemble') === 'L3');
 
+// ── 审批面裁决（2026-10-20 产品裁决，钉死防重开）──
+// 裁决 1：todo_write 退出审批面。动机不是「它无害」而是**审批脱敏**——一次 run 能触发十几次
+// 清单更新（deep_research 五阶段 / 长任务分步都要刷），逐次弹卡会让用户对审批卡麻木，
+// 真正需要看的审批（写文件 / 执行命令 / 外发数据）就被稀释了。
+check('裁决1 todo_write 退出审批面（toolLevel → null，不进审批面）',
+  approval.toolLevel('todo_write') === null, `got=${approval.toolLevel('todo_write')}`);
+// 仅判 level 为 null 还不够——真正的用户可感行为是 needsApproval 一档都不询问。
+// on-request / always 是「最严」两档，若它们都不弹卡，则 auto-safe 必然也不弹。
+check('裁决1 todo_write 退出审批面：on-request / always 两档 needsApproval 均不询问',
+  approval.needsApproval({ tool: 'todo_write', args: { todos: [{ content: 'a', status: 'pending' }] }, approvalMode: 'on-request' }).need === false
+  && approval.needsApproval({ tool: 'todo_write', args: { todos: [{ content: 'a', status: 'pending' }] }, approvalMode: 'always' }).need === false);
+// 裁决 1 的登记形态：靠「特判」而非 TOOL_LEVEL。条目必须从表里消失——特判会提前 return，
+// 留在表里就成了永不被读到的不可达条目（误导读者以为改表能改分级）。
+check('裁决1 todo_write 登记形态：在 SPECIAL_CASED_TOOLS 且不在 TOOL_LEVEL（无遮蔽条目）',
+  approval.SPECIAL_CASED_TOOLS.has('todo_write') && !Object.prototype.hasOwnProperty.call(approval.TOOL_LEVEL, 'todo_write'));
+
+// 裁决 2：orchestrate_task 保持 L2，不升 L3。Worker 内每次工具调用另有独立审批，
+// 外层再升 L3 等于对同一动作二次确认（第二次不携带任何新信息）。
+// 若将来要升 L3，必须先回答「内层逐工具审批是否同时降级」，否则只是把弹卡数量翻倍。
+check('裁决2 orchestrate_task 钉在 L2（禁止静默升级到 L3）',
+  approval.toolLevel('orchestrate_task') === 'L2', `got=${approval.toolLevel('orchestrate_task')}`);
+check('裁决2 orchestrate_task 在 on-request 档确实弹卡（L2 语义未退化成静默放行）',
+  approval.needsApproval({ tool: 'orchestrate_task', args: { objective: 'x' }, approvalMode: 'on-request' }).need === true);
+
+// 反向自检：上面的特判不能把既有行为写坏——notify 退出审批面是期 3 的既有裁决，
+// 它落在紧邻 todo_write 特判的那一行，改错顺序或误删即在此处红。
+check('反向自检 notify 仍退出审批面（toolLevel → null，期 3 既有裁决未被波及）',
+  approval.toolLevel('notify') === null, `got=${approval.toolLevel('notify')}`);
+
 // ── 档位矩阵 ──
 const base = { args: { path: '/tmp/a.js' }, conversationId: 'c1', alwaysRules: [], conversationRules: [] };
 check('on-request + 写文件 → 询问 L2', approval.needsApproval({ ...base, tool: 'write_file', approvalMode: 'on-request' }).need === true);
