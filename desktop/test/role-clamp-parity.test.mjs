@@ -315,6 +315,14 @@ check('2c 推导值单点：sandboxTierForCwd 取自 JSON、hostPolicySnapshot �
 // 窄模式，**只**认 `? 'workspace-write' : 'read-only'` 这个派生表达式，不扫全部档名字面量：
 // sandbox.js / sandboxWindows.js / exec.js 里有几十处 `policy === 'full-access'` 这类**比较**，
 // 那是合法的（比较 ≠ 推导），扫全部档名会成片假红，也会把本门禁的责任边界糊掉。
+//
+// ⚠️ 口径边界（别把本断言读成「全仓 0 处」）：
+//   本门禁的「单源」指的是**快照/回落路径** —— hostPolicySnapshot（建组时固化、随组持久化）、
+//   sandboxTierForCwd、以及 workerPool 对旧组的回落。这三处一律走单点。
+//   而 main/tools/exec.js 的 2 处是「**逐次执行的默认档**」回落（调用方未显式指定策略时的兜底），
+//   角色与快照不同 —— 同一件事 approvalPolicy.js 的 JSDoc「边界说明（别过度声称）」已写过。
+//   所以 exec.js **不是缺口**，是 allow-list。谁按「全仓 0 处」去验收、顺手把这 2 处也改掉，
+//   本条会红 —— 那个红是对的：要么改的是「逐次默认档」语义（需单独评估），要么 800 软档已经不可用。
 const DERIVE_PATTERN = /\?\s*'workspace-write'\s*:\s*'read-only'/;
 const DERIVE_ALLOWLIST = {
   // 单源所在：它的两个值取自 JSON 的 snapshot 段，这里必须 0 处
@@ -329,7 +337,7 @@ const DERIVE_ALLOWLIST = {
   // 恰好 2 处是**只减不增棘轮**：降到 1 处也红，提醒把本表收紧到 1（否则它会慢慢腐烂成永久豁免）。
   'main/tools/exec.js': 2,
 };
-check('2d 派生表达式棘轮（窄模式）：approvalPolicy/main/workerPool 必须 0 处手抄，exec.js 恰好 2 处（allow-list）', () => {
+check('2d 派生表达式棘轮（窄模式）：快照路径 approvalPolicy/main/workerPool 必须 0 处手抄，exec.js 恰好 2 处（allow-list，非缺口）', () => {
   const report = [];
   for (const [rel, expected] of Object.entries(DERIVE_ALLOWLIST)) {
     // code 口径（readCode 剥注释）：注释里贴旧代码提醒不算违规
@@ -338,7 +346,7 @@ check('2d 派生表达式棘轮（窄模式）：approvalPolicy/main/workerPool 
     if (hits !== expected) {
       const hint = expected === 0
         ? '必须改走 sandboxTierForCwd 单点（档名唯一出处是 shared/rolePolicyData.json）'
-        : 'allow-list 棘轮：只许减少不允许增加；若确实减少了，请同步把本表收紧到实际处数';
+        : `allow-list 棘轮：只许减少不允许增加；若真减少了，同批把本表收紧到 ${hits}。若变成 0，说明有人也收敛了这处「逐次执行默认档」回落 —— 那是语义变更，需单独评估并在本表留证，不要仅为凑「全仓 0 处」去改`;
       throw new Error(`${rel} 里「cwd ? 'workspace-write' : 'read-only'」手抄体有 ${hits} 处，期望 ${expected} 处 —— ${hint}。全表实测：${report.join(' / ')}`);
     }
   }
