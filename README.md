@@ -3137,3 +3137,91 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **新列「回归触发条件」为人工描述、无自动校验**：触发条件是「改动面 → 跑哪套」的约定，门禁暂只校验常量与测试路径，未校验触发条件的完整/准确性；后续可考虑记录为机器可读映射（如按改动路径前缀匹配）再接入 CI 变更集判断。
 - **推荐下一步**：①把 7 张图的 Mermaid 源抽为独立片段文件（`docs/diagrams/*.mmd`）供文档与对话渲染共用；②把 1.5 表的「回归触发条件」升级为机器可读映射，接入「按变更路径自动挑选必跑套件」的 CI 前置；③若文档入库，可把 docs-consistency 从「fail-open 跳过」升级为「强制门禁（缺文档即红）」。
 
+---
+
+## 会话总结：调研「Grok Bot / DS Bot」多 Agent 自组织团队实现思路 · 2026-10-20
+
+### 会话背景
+用户在做桌面 Agent 项目（MJCode），提出假设「多 Agent 本质就是自己组一个团队，团队里每人是一个 agent，组成小圈子共同完成一件事」，要求对近期爆火的「Grok Bot」与「DS Bot」做真实网络调研。
+
+### 会话的主要目的
+用 WebSearch / WebFetch 取一手来源，回报：①Grok/xAI 侧多 Agent 机制；②DeepSeek 侧多 Agent / DS Bot；③DS Bot 歧义澄清；④四种多 Agent 团队协作范式对比；⑤关键工程问题清单。所有结论带来源，推测需显式标注。
+
+### 完成的主要任务
+- 查明 Grok 4 Heavy = 单模型 Grok 4 的「多 agent 版本」（并行 spawn、独立推理、互评择优、非简单多数投票）；Grok Bot（2026）为 iMessage 式 Bot 团队产品（2–6 Bot 群聊、Bot 间自动互发消息与任务交接、共享一台持久云 VM）。
+- 查明「DS Bot」= 社区非官方项目 DeepSeek-Bot（基于 DeepSeek Harness 插件，每 Bot = 一个 DSH session、持久 Markdown 记忆、Main Bot 主管降 token、群聊 admin + @ 单聊、压缩/交接摘要/FTS 搜索）。
+- 澄清 DS Bot 亦指加密/股票交易机器人（与 agent 无关）。
+- 汇总 Orchestrator 角色分工 / 并行投票 / 群聊 / 层级四范式及代表产品（Anthropic Research、AutoGen GroupChat、MetaGPT、LangGraph supervisor）。
+
+### 会话中主要使用的技术栈
+- 检索：`WebSearch` + `WebFetch`（含 `raw.githubusercontent.com` 取 GitHub README 原文）。
+- 来源分层：官方（xAI FAQ、Anthropic Engineering、DeepSeek Harness 官方页）> 权威媒体（量子位/36氪/新智元）> 二手 SEO 站点（标注低可信）。
+
+### 关键决策和解决方案
+1. **只采信一手/权威来源**：对大量细节互相矛盾、疑似 AI 生成的「Grok 4.20 四 agent（Harper/Benjamin/Lucas）」类站点，明确标注为**未证实/推测**，不纳入结论主线。
+2. **以 README 原文为准**：GitHub 网页抓取失败后改用 `raw.githubusercontent.com` 直取 `DeepSeek-Bot` README，确认其「每 Bot 一个 DSH session / Main Bot 主管 / 群聊 admin」等实现细节与作者免责声明（非 DeepSeek 官方）。
+3. **按用户规则做会话总结并 Append 本 README**（累积追加）。
+
+### 会话中主要使用的工具
+`WebSearch`（多轮检索）、`WebFetch`（Anthropic 官方博客、GitHub raw README、量子位/36氪页面）、`Read`（读持久化输出与 README 末段）、`Glob`、`Grep`（定位 README 既有「会话总结」章节格式）、`Edit`（追加本节总结）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `README.md` | 修改 | 文末累积追加本节「Grok Bot / DS Bot 多 Agent 调研」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **Grok 4 Heavy 的 agent 数量与聚合算法无官方文档**：二手报道在 4/16/32 之间打架，属推测；建议后续只以 xAI 官方 FAQ / 发布会为基线。
+- **DS Bot 为社区项目**：其「团队共享记忆 / 主管降 token」等设计值得 MJCode 借鉴，但需注意它成本地 DSH 插件、并非官方多 agent 服务。
+- **推荐下一步**：把「共享上下文、上下文压缩/交接摘要、结果聚合与冲突裁决、token 成本核算、失败与死循环处理」五点对照 MJCode 现有编排层（`orchestrator/dag.js`）做一次差距分析。
+
+---
+
+## 会话总结：Grok Bot / DS Bot 范式 × MJCode 现状差距与融入方案 · 2026-10-20（第二轮）
+
+### 会话背景
+承续上一轮「Grok Bot / DS Bot 多 Agent 自组织团队」调研，用户提出核心假设——「本质就是自己组一个团队，团队里每个人都是 agent，组成一个小圈子共同完成一件事」，并要求**结合 MJCode 本项目给出如何融入的方案**。本轮据此完成「源码取证 + 差距分析 + 融入设计」，产出可评审的落地文档。
+
+### 会话的主要目的
+把调研结论落到 MJCode 的真实代码基线上：① 摸清项目已有的多 Agent / 编排能力边界（带文件与行号取证）；② 找出与 Grok Bot / DS Bot 目标机制的真实差距；③ 给出**不重写引擎、不新增进程、不建第二套存储**的融入方案与里程碑拆分。
+
+### 完成的主要任务
+- 源码取证确认 MJCode 现状：`orchestrator/index.js` 的 `planGoal`（目标 → DAG 拆解 2~8 子任务）→ `orchestrator/dag.js` 的 `validateDag`/`topoLevels`（`MAX_TASKS=8`/`MIN_TASKS=2`/`MAX_DEPS=4`）→ `workerPool.js` 的 `pump`/`dispatch`/`runWorkerTask`（信号量默认 4 / 上限 8、worktree 隔离 + merge back、每 Worker 独立 `conversationId=task:{groupId}:{taskId}`）→ `aggregator` 聚合 → `maybeAutoReplan`（depth ≤ 1）；引擎侧已有 `spawn_subagent` / `orchestrate_task` / `runDeepResearch`；生态侧已有 **51 个数字员工**角色模板（`ecosystem/digital-employees.json`），经 `ecosystem.js#buildEmployeeRuntimePreset` 组装 `rolePreset`，权限钳制在 `shared/roleClamp.mjs`（角色只能收紧）。
+- 完成差距表：目标机制 × 现状 × 缺口（持久 Agent 身份、Agent 间消息、团队共享上下文、团队共享记忆、主管常驻调度、自主认领、群聊视图共 7 项缺失；而并发隔离、失败重规划、审批闸门、三层记忆、角色模板**均已具备**）。
+- 产出融入方案：**五构件**（T5-1 团队编制 / T5-2 消息总线 / T5-3 主管 Chief / T5-4 团队记忆 scope / T5-5 自主认领）+ 两条接线路线（路线 A 主进程编排、绕开 8 环节；路线 B 新增引擎工具、须走 8 环节全接线）+ M5 里程碑 5 任务与门禁。
+- 按项目惯例做**双形态图交付**：对话内 Inline Visuals 即时渲染分层架构图，文档内同构 Mermaid 代码块固化（架构图 + 执行流时序图）。
+
+### 会话中主要使用的技术栈
+`Read`（orchestrator/dag/workerPool/roleClamp/ecosystem 源码取证）、`Grep`（`spawn_subagent`、数字员工、里程碑关键字检索）、`Glob`（文档与 ecosystem 数据定位）、`Skill`+`DeferExecuteTool`（dynamic-ui + PureShowWidget 渲染内联架构图）、`Write`（新建融入方案文档）、`Edit`（追加本 README 总结）。
+
+### 关键决策和解决方案
+1. **不推倒重来**：判定 MJCode 已走完层级式范式约 80%，方案定为「**在层级式之上加一层团队语义**」，而非改造成纯群聊式——保住 DAG 的可控与成本优势。
+2. **硬约束三条**：不重写引擎、不新增进程、不建第二套存储。「持久 Agent」用 `conversationId + rolePreset + 记忆作用域` 表达，成员仍是一次 `runAgent`。
+3. **成本优先**：默认走「主管装配 + 消息只传引用/摘要」，明示引用 Anthropic 实测（单 agent ≈ 4×、多 agent ≈ 15×）与群聊式上下文爆炸风险。
+4. **安全不降级**：引 Grok Bot「隔离按用户、不把 Bot 当安全边界」为反面案例，坚持 per-agent worktree + 组内审批快照。
+5. **首版绕开引擎 8 环节接线**（路线 A），降低风险；主动能力（Agent 主动发消息）留待路线 B。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Glob`、`Skill`、`ToolSearch` + `DeferExecuteTool`（PureShowWidget）、`Write`、`Edit`。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `MJCode-GrokBot与DSBot多Agent团队范式-调研与融入方案-2026-10-20.md` | **新增** | 调研结论（含来源可信度分级）+ 四范式对比 + 关键工程问题 + 现状差距表（带源码行号取证）+ 五构件融入方案 + 双形态架构图/时序图 + M5 任务表与门禁 + 风险取舍 + 来源清单 | 用户要求「按照我这个项目来说如何融入进去」 |
+| `README.md` | 修改 | 文末累积追加本节「融入方案」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`MJCode-GrokBot与DSBot多Agent团队范式-调研与融入方案-2026-10-20.md`**
+  - 修改内容：新建 7 章文档；§4 差距表逐条带源码引用（`orchestrator/index.js#L77-L114`、`dag.js#L8-L10`、`workerPool.js#L253`、`workerPool.js#L506-L529`、`roleClamp.mjs#L65-L83`、`ecosystem.js#L162-L191`、`agent-core/index.js#L224-L232`）；§5.3/§5.4 两张 Mermaid；§5.7 给出 M5 五任务与门禁。
+  - 修改原因：把调研结论落到真实代码基线，形成可评审、可执行的融入方案（本轮**不改业务代码**）。
+- **`README.md`**
+  - 修改内容：Append 本节结构化会话总结（背景 / 目的 / 任务 / 技术栈 / 决策 / 工具 / 文件 / 详细内容 / 尚存问题与下一步）。
+  - 修改原因：用户固定规则（每次会话结束 Append 结构化总结，累积增加）。
+
+### 尚存问题与推荐下一步
+- **本方案为新能力设计，尚未进入实现**：建议先确认是否立 M5 里程碑、以及 §5.5 走路线 A（首版零引擎改动）还是路线 B。
+- **Grok Bot 的 Bot 间通信细节不透明**：官方未公开协议层细节，本方案的消息契约是按 DS Bot 的「session + 共享记忆 + 交接摘要」反推的**设计推测**，需在实现前用真实交互验证。
+- **团队记忆 scope 的落地方式待定**：是新增 `team` 枚举，还是复用 `project` + `teamId` 维度，需在 T5-4 立项时对齐既有三层记忆的晋升链与容量闸，避免出现第二事实源。
+- **推荐下一步**：① 评审本方案并确认 M5 立项与路线选择；② 若批准，按 T5-1 → T5-5 顺序推进（每任务过 `typecheck / lint / 全量测试 / 渲染层构建` 门禁）；③ 团队群聊视图需遵守既有视觉纪律（无 emoji、图标白底黑字、无蓝色、性冷淡配色、固定头部 `shrink-0`）。
+
