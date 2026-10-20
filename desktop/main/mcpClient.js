@@ -378,12 +378,46 @@ function retireCached(name, cached) {
   detachServer(name, cached);
 }
 
+// ── 服务名「编码后全名」长度闸（B3 #12：从 IPC 入口下移到连接收口点）──
+// 本函数是**所有**连接路径的唯一收口（手动连接 / mcp:reconnect / 启动重连 / 崩溃自动重连 /
+// 生态安装都经它建传输）。闸此前只在 ipc/mcp.js 的 mcp:connect 入口 → 存量已落盘的超长中文
+// 服务名仍能经 reconnect 连上，而它每个工具名都超供应商 function.name 上限——表现成「连上了却
+// 调不动」。阈值与判定只存在于 shared/mcpNameCodec.mjs 一处；本文件只负责接到收口点上。
+let _nameCodecMod = null;
+function loadNameCodec() {
+  if (!_nameCodecMod) _nameCodecMod = import('../shared/mcpNameCodec.mjs');
+  return _nameCodecMod;
+}
+
+/** 通过 → null；超限/不可用 → 沿用本函数既有的失败形状 `{ok:false,error}`（不另立错误形态）。 */
+async function checkServerNameBudget(name) {
+  let codec;
+  try {
+    codec = await loadNameCodec();
+  } catch (e) {
+    // 编解码器加载失败 → fail-closed（否则闸静默消失，退回到「连上了却调不动」）
+    return { ok: false, error: `服务名长度校验失败：${e && e.message ? e.message : String(e)}` };
+  }
+  const probe = codec.buildToolName(name, 'probe');
+  if (codec.isEncodedNameSafe(probe)) return null;
+  return {
+    ok: false,
+    error: `编码后全名超限，请缩短服务名：「${name}」拼成工具名后为 ${probe.length} 字符，`
+      + `超过 ${codec.MAX_ENCODED_FULL_NAME_CHARS} 字符上限`
+      + '（非 ASCII 字符按 UTF-8 逐字节编码，中文 1 字约 9 字符；该服务即使连上，'
+      + '其工具也会被模型供应商按函数名超长拒绝）。请改用更短的服务名，或改用字母/数字/连字符命名',
+  };
+}
+
 // ── 连接（IPC 处理器与启动重连共用）── transport: 'stdio'（默认，command/args/env）| 'http' | 'sse'
 async function connectMcpServer({
   name, transport = 'stdio', command, args = [], env = {}, url, headers = {},
   auth, onStatus, onLog,
 }) {
   if (!name || typeof name !== 'string') return { ok: false, error: 'name 必填' };
+  // B3 #12：闸在任何副作用之前（不建 transport、不 spawn、不写会话/缓存/配置）。
+  const budgetErr = await checkServerNameBudget(name);
+  if (budgetErr) return budgetErr;
   if (servers.has(name)) {
     const cached = servers.get(name);
     // 缓存命中前校验底层是否还活着（stdio 子进程可能已崩；http 恒活但会话可能失效）
@@ -576,7 +610,7 @@ module.exports = {
   mcpRpc, mcpRpcWithSessionRetry, dispatchMessage, handleServerMessage,
   shouldForwardLogLevel,
   createStdioTransport, createHttpTransport, consumeSse,
-  connectMcpServer, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
+  connectMcpServer, checkServerNameBudget, getMcpServer, listMcpServers, disconnectMcpServer, killAllMcpServers,
   refreshTools, sanitizeToolName, resolveToolName, recoverSession,
   // 纯核 + 缓存丢弃：可在纯 Node 下观测「按身份摘除」「先关传输再摘除」两条语义，
   // 无需起真实子进程（起进程验证会 flake，见 MAX_LINES 与并发纪律）

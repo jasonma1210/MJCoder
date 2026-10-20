@@ -451,30 +451,13 @@ function register() {
     } catch (e) {
       return { ok: false, error: `服务名校验失败：${e && e.message ? e.message : String(e)}` };
     }
-    // B2-B-13：编码后**全名长度**预算是另一条独立的破坏形态，不能并入上面那条可逆性校验：
-    //   · 上面管「能不能唯一反解回原名」（错了 → 调用被打到别的服务）；
-    //   · 这里管「拼出来的名字是否还在模型供应商的 function.name 上限内」（超了 → 握手/列表都正常，
-    //     但每次把工具交给模型都被 400 拒，表现成「连上了却调不动」，且报错与「服务名太长」无关联）。
-    // 触发条件真实存在：codec 对非安全字符按 UTF-8 逐字节 `%XX` 编码，中文 1 字符 → 9 字符，
-    // 30 个汉字的服务名编码后 >270 字符，远超 main/mcpClient.js 的 TOOL_NAME_MAX（128）。
-    // fail-closed 在**连接前**拒：否则一个名字必然被拒的服务会先被写进 mcp-servers.json，
-    // 之后每次启动都连一遍、每次调用都失败，用户只能猜原因。
-    // 不在 codec 内部截断：截断会破坏「拼名 → 反解」的可逆性（F-005 的修复前提）。
-    try {
-      const codec = await loadMcpNameCodec();
-      const probeName = codec.buildToolName(payload.name, 'probe');
-      if (!codec.isEncodedNameSafe(probeName)) {
-        return {
-          ok: false,
-          error: `编码后全名超限，请缩短服务名：「${payload.name}」拼成工具名后为 ${probeName.length} 字符，`
-            + `超过 ${codec.MAX_ENCODED_FULL_NAME_CHARS} 字符上限`
-            + '（非 ASCII 字符按 UTF-8 逐字节编码，中文 1 字约 9 字符；该服务即使连上，'
-            + '其工具也会被模型供应商按函数名超长拒绝）。请改用更短的服务名，或改用字母/数字/连字符命名',
-        };
-      }
-    } catch (e) {
-      return { ok: false, error: `服务名长度校验失败：${e && e.message ? e.message : String(e)}` };
-    }
+    // B2-B-13 / B3 #12：编码后**全名长度**预算。闸的**唯一实现**已下移到
+    // mcpClient.connectMcpServer（连接唯一收口点），覆盖 mcp:reconnect / 启动重连 /
+    // 崩溃自动重连 / 生态安装——此前只有本入口有闸，存量超长中文服务名仍能经 reconnect 连上。
+    // 这里保留一次前置调用，只因它比连接路径更早、更贴近用户动作（在 sanitize/落盘/cancel 之前
+    // 就失败）；判定与文案都取自 mcpClient，本文件不再持有第二份阈值（阈值只在 mcpNameCodec）。
+    const budgetErr = await mcp.checkServerNameBudget(payload.name);
+    if (budgetErr) return budgetErr;
     const r = await connectMcpServer(payload);
     // P1-3：用户手动连上了，撤掉该服务可能存在的自动重连在途链（人工优先，不再自动覆盖）
     if (r && r.ok && payload && payload.name && autoReconnect) autoReconnect.cancel(payload.name);
