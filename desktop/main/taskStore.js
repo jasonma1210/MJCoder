@@ -40,14 +40,14 @@ class TaskStore {
   // 由调用方（main.js 从用户当前设置取值）传入并持久化——Worker 执行时读组内快照，
   // 不再读取全局最近一次会话设置（否则会话中途改审批档会串到已在排队的组）。
   // R6（2026-10-16，用户实测反馈）：threadId = 创建组的会话——组绑定会话而非全局可见。
-  createGroup({ groupId, goal, cwd, dag, tasks, auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId }) {
+  createGroup({ groupId, goal, cwd, projectPath, dag, tasks, auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId }) {
     const now = this.now();
     const tx = this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO task_groups (group_id, goal, cwd, status, dag_json, auto, replan_depth, replan_of, approval_mode, sandbox_policy, thread_id, created_at, updated_at)
-                       VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      this.db.prepare(`INSERT INTO task_groups (group_id, goal, cwd, status, dag_json, auto, replan_depth, replan_of, approval_mode, sandbox_policy, thread_id, project_path, created_at, updated_at)
+                       VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(groupId, goal, cwd || '', JSON.stringify(dag || null),
           auto ? 1 : 0, Number(replanDepth) || 0, replanOf || null,
-          approvalMode || null, sandboxPolicy || null, threadId || null, now, now);
+          approvalMode || null, sandboxPolicy || null, threadId || null, projectPath || null, now, now);
       tasks.forEach((t, i) => {
         this.db.prepare(`INSERT INTO sub_tasks
           (task_id, group_id, seq, title, prompt, depends_on, critical, max_retry, timeout_ms, status)

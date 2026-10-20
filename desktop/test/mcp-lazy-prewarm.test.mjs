@@ -8,7 +8,7 @@
 //   ② tier 分级开关默认**开启**（G2+N8：懒启动不再依赖 MJCODE_MCP_LAZY，仅显式 0/false/off 关闭）；
 //   ③ 工具清单缓存读写闭环 + 损坏时 fail-open（不阻塞启动）；
 //   ④ 源码门禁：reconnectMcpServers 必须经 isLazyMode/selectPrewarm 分流；
-//      callMcpTool 必须有按需连接兜底；mcp:listTools 必须合并缓存清单。
+//      callMcpTool 必须有按需连接兜底；mcp:listTools 只回已连接服务（D1：不再合并未连接的缓存清单）。
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -133,7 +133,18 @@ function check(name, ok, detail = '') {
   check('reconnectMcpServers 经 autoStartConfigs(all,{profile}) 取自动启动子集', /lazy \? autoStartConfigs\(all, \{ profile \}\) : all/.test(ipc));
   check('治理档位经 getGovernance().profile 注入', /const profile = getGovernance\(\)\.profile/.test(ipc));
   check('callMcpTool 有按需连接兜底（connect-on-demand）', /reason: 'connect-on-demand'/.test(ipc));
-  check('mcp:listTools 合并缓存清单（未连接服务补缓存工具）', /getToolCache\(\)\.getManifest\(name\)/.test(ipc));
+  // D1（2026-10-20）：listTools 只回「已连接」服务——不得再用未连接的缓存清单兜底，
+  // 否则渲染层会把全部已保存 MCP 工具注入每条对话、并使意图动态加载沦为空操作。
+  {
+    // 切片边界必须取「listTools 之后的下一个 ipcMain.handle」——
+    // 不能拿 indexOf("mcp:getConfig")，因为该串在更早的注释里也出现过（L314），
+    // 会让 ltEnd < ltStart、切片为空、断言恒假（假失败）。
+    const ltStart = ipc.indexOf("mcp:listTools");
+    const ltNext = ipc.indexOf('ipcMain.handle(', ltStart + 1);
+    const ltBody = ltStart >= 0 ? ipc.slice(ltStart, ltNext > ltStart ? ltNext : ipc.length) : '';
+    check('mcp:listTools 只回已连接服务（不再合并未连接缓存清单）',
+      ltBody.includes("mcp:listTools") && !/getToolCache\(\)\.getManifest/.test(ltBody) && !/loadMcpConfig\(\)/.test(ltBody));
+  }
   check('连接成功后落工具清单缓存', /getToolCache\(\)\.saveManifest\(name, tools\)/.test(ipc));
   check('断开时清理工具清单缓存', /getToolCache\(\)\.removeManifest\(name\)/.test(ipc));
   // 期 2：连接成功落盘打 tier；getConfig 下发 governance

@@ -54,7 +54,7 @@ async function askDag(userMessage) {
 //   · contextBlock：重规划时注入的「上次执行情况」（已完成结论 / 失败原因）
 //   · approvalMode/sandboxPolicy：V04 宿主治理快照（建组时刻的父上下文），随组持久化
 //   · threadId：R6 组绑定会话——创建组的会话 id，随组持久化（渲染层据此归属显示）
-async function planGoal({ goal, cwd, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId } = {}) {
+async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId } = {}) {
   const g = String(goal || '').trim();
   if (!g) return { ok: false, error: '目标为空' };
   if (!deps) return { ok: false, error: 'Orchestrator 未初始化' };
@@ -76,7 +76,7 @@ async function planGoal({ goal, cwd, auto, replanDepth, replanOf, repairHint, co
   const levels = topoLevels(dag.tasks);
   const groupId = `tg-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
   deps.store.createGroup({
-    groupId, goal: g, cwd, dag: { levels }, tasks: dag.tasks,
+    groupId, goal: g, cwd, projectPath, dag: { levels }, tasks: dag.tasks,
     auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId,
   });
   deps.emit?.({ type: 'group_created', groupId, goal: g, tasks: dag.tasks, levels, replanOf: replanOf || null });
@@ -86,12 +86,12 @@ async function planGoal({ goal, cwd, auto, replanDepth, replanOf, repairHint, co
 // ── 自动编排（WorkBuddy 式主理人模式）──
 // 一键流：目标 → 自动拆解（JSON 校验失败自动回喂修复，最多重试 1 次）→ 自动执行。
 // threadId：R6 组绑定会话——透传给建组（对话内编排时为发起会话；IPC 路径由调用方传入）。
-async function autoOrchestrate({ goal, cwd, threadId } = {}) {
+async function autoOrchestrate({ goal, cwd, projectPath, threadId } = {}) {
   if (!deps?.runGroup) return { ok: false, error: '自动编排依赖未就绪' };
-  let r = await planGoal({ goal, cwd, auto: true, replanDepth: 0, threadId });
+  let r = await planGoal({ goal, cwd, projectPath, auto: true, replanDepth: 0, threadId });
   if (!r.ok && r.raw) {
     // 拆解输出非法 → 带原始错误自动修复重试一次
-    r = await planGoal({ goal, cwd, auto: true, replanDepth: 0, repairHint: r.error, threadId });
+    r = await planGoal({ goal, cwd, projectPath, auto: true, replanDepth: 0, repairHint: r.error, threadId });
   }
   if (!r.ok) return r;
   deps.emit?.({ type: 'auto_run', groupId: r.groupId, tasks: r.tasks.length });
@@ -130,7 +130,7 @@ async function maybeAutoReplan(groupId) {
 
   try {
     const r = await planGoal({
-      goal: src.goal, cwd: src.cwd,
+      goal: src.goal, cwd: src.cwd, projectPath: src.project_path,
       auto: true, replanDepth: (src.replan_depth || 0) + 1, replanOf: groupId,
       contextBlock: buildReplanContext(src),
       // V04：重规划组继承源组的治理快照（权限单调不增——只允许沿用，不允许借重规划放宽）

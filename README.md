@@ -2629,3 +2629,497 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **G-sites 待用户后续 promote**：已记录精简设计要点（自定义 `mjsite://` 协议优先于常驻端口服务，避免端口占用与生命周期管理）；若后续需要「整站本地预览」，按此要点实施。
 - **G-visualize 目视验证建议**：在真实 Electron 应用内确认「模型输出 ```mermaid 围栏 → 渲染为图 → 切换主题跟随重渲染 → 语法错误降级卡片」的端到端验收。
 - 推荐下一步：按用户节奏推进下一里程碑或其余批次；G-sites 若提上日程，按已记录的设计要点实施。
+
+## 会话总结：连接器分层与记忆系统审查修复 · 2026-10-20
+
+### 会话背景
+承上一轮《第六轮第四批（生态）》落地，用户下达**审查指令**：「首先我的连接器原生和mcp2个，默认对于所有的对话都加载原生，mcp可以自己选择加载或者通过输入文本后自动判断要加载哪些mcp服务。所以注意这个问题，另外包含agent harness的系统的记忆系统，所以审查这块是否出了问题；」
+
+用户以「不臆想、先读源码再下结论」「审查驱动开发、问题一次彻底解决」为纪律，要求对三条期望行为做逐条取证判定，而非凭印象给结论。
+
+### 会话的主要目的
+1. 核验「**原生工具对所有对话默认全量加载**」是否成立；
+2. 核验「**MCP 仅由用户手动选择加载 / 按输入文本意图自动判定加载**，不得默认注入每条对话」是否成立；
+3. 审查 agent harness 的**三层记忆体系（L1/L2/L3）**是否存在缺陷。
+4. 按用户 `AskUserQuestion` 确认的修复范围落地：**D1+D2（MCP 不再默认注入）+ R1（修 autoCapture 的 L1 死结）+ R2（统一 Worker 召回空间键）**。
+
+### 完成的主要任务
+| 编号 | 问题 | 根因取证 | 修复 |
+|---|---|---|---|
+| **结论①** | 原生工具是否对所有对话默认全量加载 | `desktop/agent-core/index.js`：`effectiveBaseTools = baseToolList` 无条件展开，`allTools = [...effectiveBaseTools, ...mcpTools]` —— **成立 ✓（原生无条件全量加载）** | 无需改动 |
+| **D1（核心）** | MCP 被默认注入**每一条**对话 | `desktop/main/ipc/mcp.js` 的 `mcp:listTools` 用「**已保存但未连接**」服务的**缓存清单**兜底 → `restoreMcpTools` → `App.jsx` 的 `mcpTools` 状态 → 每次 run 的 `payload.mcpTools` ⇒ **全部已保存 MCP 工具被注入所有对话**，违反「MCP 默认全关、仅自选或意图判定加载」 | **删除缓存清单兜底循环**，只回**已连接**服务工具（`connected:true`）；未连接服务改由「意图预热」按需连接后纳入本轮 |
+| **D2（D1 连带）** | `intentPrewarmToolDefs` 沦为空操作 | `desktop/main/agentRunner.js` 的 `already` 取 `payload.mcpTools` 服务名；因 D1 恒覆盖 `plan.servers` ⇒ `targets` 恒空 ⇒ 意图动态加载永不触发 | D1 修复后 `already` 只含已连接服务，落差恢复，**自动痊愈** |
+| **R1** | autoCapture 写入的会话层记忆成「孤儿行」 | `useAgentRun.ts` 未传 `conversationId`，`source=model_conclusion` → `resolveScope` 落 `session` 域，但 `conversation_id=NULL` ⇒ 会话层召回（`_layerRows` 按 conv 过滤）与 salvage（`scope='session' AND conversation_id IS ?`）均命中不到 | 全链路透传 `conversationId`：`useAgentRun.ts` → `local:memories/add` handler 解构 `conversationId` → `memoryManager.remember({ conversationId })` 与 `memoryWriteQueue` |
+| **R2** | Worker 记忆**召回**与**归档**空间键不一致 | 归档用 `payload.projectPath`，而 Worker 召回用 `group.cwd`（worktree 模式下是**临时隔离目录**）⇒ 召回不到项目记忆、记忆散入一次性空间 | 新增 DB 迁移 v7 `task_groups.project_path`；`createGroup`/`orchestrator.planGoal`/`autoOrchestrate`/`maybeAutoReplan` 全链透传 `projectPath`；`main.js` 召回键改 `group.project_path || group.cwd`；`agentRunner.js` 的 `createToolHandlers` 补 `projectPath` 接线 |
+| **R3（核查后判定无问题）** | 子代理初报「memoryFile re-import 会让已删记忆复活」 | 亲核：`invalidate` 为**软删除**（`is_valid=0` 保留行）+ `_hashExists` **不筛** `is_valid` + 变更即 `_notify` 重写导出文件 ⇒ 复活被设计阻断 | **判定无问题，不改**（避免误改） |
+
+### 会话中主要使用的技术栈
+- **三层运行架构**：Electron 主进程（CJS）/ `agent-core` headless 引擎（ESM）/ React+TS 渲染层。
+- **MCP 三层 tier 治理**：`auto-start`（filesystem/time/fetch 随启动）/ `whitelist`（按需懒启动）/ `manual`（高危仅手动）；意图驱动预热的**离线规则词典**（不调模型、不出网、fail-open）。
+- **三层记忆体系 M0~M4**：L1 会话级（绑 `conversation_id`）/ L2 项目级（按 `space_id`）/ L3 全局级；SQLite 唯一事实来源、文件为只读导出视图；`resolveScope` 作用域分流（`SOURCE_DEFAULT_SCOPE`：model_conclusion→session）。
+- **DB 迁移体系**：`MIGRATIONS` + 幂等 `addColumn`（探测列存在性后 `ALTER`）。
+- **门禁**：`npm run typecheck` → `npm run lint`（棘轮 161 warnings）→ `npm test`（发现式全量跑）。
+
+### 关键决策和解决方案
+1. **D1 只回已连接服务、彻底去掉缓存清单兜底**：缓存清单兜底的「善意」（懒启动后模型仍可见已装能力）与架构约束（MCP 不得默认注入）直接冲突；正确路径是让「未连接服务的工具」经**意图预热**在命中意图时按需连接后再纳入本轮，而非无差别预注入。
+2. **D2 不单独修**：D2 是 D1 的连带症状（`already` 恒覆盖 `plan.servers`），修 D1 即自动痊愈——避免在错误前提上做二次修补。
+3. **R1 修「前向写入」而非清理历史**：历史孤儿行（`scope='session' AND conversation_id IS NULL`）经核实**并非永久垃圾**——`decayJob` 按 `halfLifeDaysFor('session')=7天` 半衰期衰减 → `is_valid=0` → `cleanupJob` 7 天宽限后物理删除（约 30 天内自愈），且 autoCapture **默认关闭**、量小可控；故按用户确认范围只修写入死结，不额外加一次性清扫（避免过度设计）。
+4. **R2 用 DB 列固化空间键**：不依赖调用方记忆传参，而把 `project_path` 落到组行上——Worker 执行期从组快照读，避免「调用方漏传即静默回落」的漂移；历史组无该列时回落 `cwd`（向后兼容）。
+5. **测试断言边界修正（4 处门禁失败均非产品缺陷，而是断言自身与新增改动失配）**：
+   - `mcp-lazy-prewarm` 的 `ltBody` 切片用 `indexOf("mcp:getConfig")` 作右界，但该串在更早的**注释**（L314）也出现 ⇒ 右界落在左界之前、切片恒空、**断言恒假**；改为「取 `listTools` 之后的下一个 `ipcMain.handle`」作右界，并追加 `!loadMcpConfig()` 负断言。
+   - `max-lines` 的 800 行软档按 **`split('\n')` 口径**（末尾换行多出 1 项）⇒ 需 `wc -l ≤ 799`；本轮把 R1 的 2 行注释与既有 P0-2a 注释块各压缩，`useAgentRun.ts` 由 802 → **799**。
+   - `scheduled-orchestrate` 与 `computer-use-wiring` 的精确正则因 R2 新增 `projectPath` 而失配，同步把期望签名补上 `projectPath`。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Glob` 逐条取证源码与门禁基线；`Edit` 落盘修复与断言修正；`Shell` 跑门禁（`typecheck` / `lint` / 全量 `npm test`）与 git 操作；`AskUserQuestion` 确认修复范围（D1+D2 / R1 / R2）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `desktop/main/ipc/mcp.js` | `mcp:listTools` 删除「已保存但未连接服务的缓存清单兜底」循环，只回已连接服务（`return` 替换 `out.push`） | **D1（核心）**：杜绝 MCP 工具默认注入每条对话 |
+| `desktop/main/ipc/localData.js` | `local:memories/add` handler 解构新增 `conversationId`，透传给 `memoryManager.remember` 与 `memoryWriteQueue` | **R1**：会话层记忆绑定会话 |
+| `desktop/renderer/src/hooks/useAgentRun.ts` | autoCapture 写入补 `conversationId: currentThread?.id \|\| ''`；压缩 2 行新增注释与 P0-2a 注释块（802→799 行） | **R1** 修复 + **max-lines 软档回归** |
+| `desktop/main/db/index.js` | 新增迁移 `version: 7 / task-group-project-path`：`addColumn('task_groups','project_path','TEXT')` | **R2**：固化记忆召回空间键 |
+| `desktop/main/taskStore.js` | `createGroup` 解构新增 `projectPath`，INSERT 列与占位符同步补齐并落值 | **R2** |
+| `desktop/main/orchestrator/index.js` | `planGoal` / `autoOrchestrate` 新增并透传 `projectPath`；`maybeAutoReplan` 传 `src.project_path` | **R2** |
+| `desktop/main/main.js` | `toolOrchestrateTask` 接收 `projectPath` 并下发给 `autoOrchestrate`；`createToolHandlers` 签名与 `orchestrateTask` 处理器新增 `projectPath`；定时通道 `orchestrateTask` 补 `projectPath: rc.dir`；组召回键改 `group.project_path \|\| group.cwd` | **R2** 接线闭环 |
+| `desktop/main/agentRunner.js` | `createToolHandlers` 调用补 `projectPath: payload.projectPath \|\| ''` | **R2** 最后一环（否则 `ctx.projectPath` 恒 undefined、修复不生效） |
+| `desktop/test/mcp-lazy-prewarm.test.mjs` | `listTools` 断言切片右界改「下一个 `ipcMain.handle`」，追加 `loadMcpConfig()` 负断言 | **D1 门禁**（原断言恒假） |
+| `desktop/test/scheduled-orchestrate.test.js` | orchestrate 绑定断言期望签名补 `projectPath: rc.dir` | **R2** 门禁同步 |
+| `desktop/test/computer-use-wiring.test.mjs` | `createToolHandlers` 接收参数断言补 `projectPath` | **R2** 门禁同步 |
+| `README.md` | 累积追加本节会话总结 | 用户固定规则 |
+
+### 验证结果
+- `npm run typecheck`：**通过**（exit 0，空输出）。
+- `npm run lint`：**0 error**，161 条历史 warning（与棘轮基线一致，**未反弹**）。
+- 专项门禁：`mcp-lazy-prewarm` **47/47**、`max-lines` **3/3**、`scheduled-orchestrate` **8/8**、`computer-use-wiring` **33/33**。
+- 全量 `npm test`：**总计 220 · 通过 220 · 失败 0**（exit 0）。
+- 未执行/跳过（2）：`sandbox-crossplatform`（非 Linux）、`sandbox`（macOS `sandbox-exec` 环境限制）—— 与本次改动无关。
+
+### 尚存问题与推荐下一步
+- **D1 目视验证建议**：冷启动后确认「仅 auto-start 档（filesystem/time/fetch）工具出现在上下文；whitelist/manual 档在未手动连接、未命中意图时**不**出现」；随后输入触发某 MCP 意图的文本，确认该服务被按需连接且仅本轮纳入。
+- **R1 目视验证建议**：设置页开启 `memory.autoCapture` 后跑一轮对话，确认新增记忆行 `scope='session'` 且 `conversation_id` 非空；删除该会话后确认 L1 记忆被 salvage/清理。
+- **R2 目视验证建议**：在 git 项目内发起一次编排（worktree 隔离），确认 `task_groups.project_path` 落的是**项目路径**而非 worktree 临时目录，且子任务回忆起项目级记忆。
+- **网络类既有问题（非代码）**：`git push` 因访问 github.com 超时仍受阻，待网络恢复后 `git -c http.version=HTTP/1.1 push origin main` 重试。
+- 推荐下一步：按用户节奏推进剩余批次/里程碑；如需，可对 R1 的历史孤儿行补一次性清扫（本轮按确认范围未做）。
+
+## 会话总结：全项目技术流程功能文档产出 · 2026-10-20
+
+### 会话背景
+承上一轮《连接器分层与记忆系统审查修复》，该轮已完成 D1（MCP 不再默认注入每条对话）/ R1（autoCapture 会话层记忆绑定）/ R2（Worker 记忆召回空间键统一）等修复，并把会话总结累积追加至本 README。
+
+本轮用户下达指令：「把目前实现，修改，调整的最新内容同步到README里，同时更新一下目前整个项目的完整实现思路输出一份MJcoder开头的技术流程功能文档」。
+
+用户以「不臆想、不猜测——文档所有内容须来自实际读源码」为纪律，要求产出面向**整个项目完整实现思路**的技术文档，而非片段式说明。
+
+### 会话的主要目的
+1. 将上一轮最新实现 / 修改 / 调整同步进 README（承接既有会话总结章节，保持累积式）。
+2. 新建一份以 `MJcoder` 开头的**技术流程功能文档**，系统覆盖整个项目的架构、流程与功能矩阵，所有结论基于源码事实。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **T1** | 源码取证 | 精读并交叉验证 `agent-core/index.js`（BASE_TOOLS / TOOL_HANDLER_NAMES / 主循环 / sessionDir）、`main/main.js`（runScope / 审批中心）、`main/agentRunner.js`（意图预热 / 归档）、`main/engineProcess/*`（子进程 RPC / 通道白名单）、`main/mcp*.js`（三层 tier / 懒启动）、`main/memory/index.js`（三层记忆 scope/晋升/容量）、`main/orchestrator/*`（拆解与建组）、`main/ecosystem.js`（数字员工 rolePreset）、`test/run-all.mjs`（发现式全量门禁）等 |
+| **T2** | 产出技术文档 | 新建 [MJcoder-技术流程功能文档.md](computer:///Users/jianma/Desktop/MJCode/MJcoder-技术流程功能文档.md)，共 13 章 + 附录，覆盖：产品定位与三进程架构、引擎进程隔离、Agent Harness 执行流、原生工具矩阵与 8 环节接线、MCP 三层治理与意图预热、技能/生态/数字员工、三层记忆体系 M0~M4、任务编排与 Worker 池、审批/沙箱/安全约束、验证层、i18n 与界面、门禁/CI/评估、里程碑现状 |
+| **T3** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **三进程运行架构**：Electron 主进程（CJS）/ `agent-core` headless 引擎（ESM，零 Electron 依赖）/ React+TS 渲染层（Vite）。
+- **引擎进程隔离**：`utilityProcess` 子进程 + `TOOL_CHANNELS` 静态白名单 RPC。
+- **原生优先 + MCP 三层 tier 治理**：auto-start（filesystem/time/fetch）/ whitelist（按需懒启动）/ manual（仅手动授权）；意图驱动预热的离线规则词典（不出网、零延迟）。
+- **三层记忆体系 M0~M4**：L1 会话级 / L2 项目级 / L3 全局级，SQLite 唯一事实来源 + 文件只读导出视图。
+- **工具 8 环节接线 + 登记矩阵双向差集断言**（`test/tool-registration-matrix.test.mjs`）。
+- **门禁**：`typecheck` → `lint`（棘轮 161 warnings）→ `npm test`（发现式全量，220 套件）。
+
+### 关键决策和解决方案
+1. **文档须以源码为准、不得臆想**：所有机制条目均标注「机制名 → 关键文件:行号」，例如 `mcp:listTools` 只回已连接服务（`main/ipc/mcp.js:541`）、三层 tier 枚举（`main/mcpPrewarm.js:24`）、`resolveScope` 写入分流（`main/memory/index.js:99`）。
+2. **把「跨会话会丢失的口头约定」固化为文档**：8 环节接线、三层 tier 架构红线、fail-closed / fail-open 边界、单一事实来源原则，均写入文档作为后续开发的契约。
+3. **保持 README 累积式纪律**：新章节 Append 在既有总结之后，不覆盖历史，符合用户固定规则。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Glob` 逐条取证源码；`Agent`（Explore 子代理）并行取证 Agent 引擎、原生工具与 MCP、记忆/技能/编排、安全/验证/门禁四大子系统；`Write` 产出技术文档；`Edit` 追加 README 会话总结；`Shell` 探查目录结构与提取工具名清单。
+
+### 修改了哪些文件
+
+**新增文件（Added）**
+
+| 文件 | 内容 | 原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 13 章 + 附录：产品定位与三进程架构、引擎进程隔离、Agent Harness 执行流、原生工具矩阵与 8 环节接线、MCP 三层治理与意图预热、技能/生态/数字员工、三层记忆体系、任务编排与 Worker 池、审批/沙箱/安全约束、验证层、i18n 与界面、门禁/CI/评估、里程碑现状、设计原则速查 | 用户要求输出一份 `MJcoder` 开头的、覆盖整个项目完整实现思路的技术流程功能文档 |
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `README.md` | 累积追加本节「全项目技术流程功能文档产出 · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档未被版本控制追踪**：仓库 `.gitignore` 第 46 行为 `*.md`，新建的 `MJcoder-技术流程功能文档.md` 落在忽略规则内（`README.md` 因早已被追踪不受影响）。若需纳入版本库，须执行 `git add -f "MJcoder-技术流程功能文档.md"` 强制加入，或在 `.gitignore` 增加 `!MJcoder-*.md` 白名单例外。
+- **文档为静态快照**：技术文档描述的是当前源码状态；后续新增原生工具 / MCP tier 调整 / 记忆体系演进时，需同步更新对应章节与 8 环节清单（建议把「新增工具必须同步更新文档第 4.1 / 4.2 节」纳入开发检查项）。
+- **建议补充架构图**：当前文档以文字与表格为主，可在后续补充「三进程 + 工具 RPC」「三层记忆读写路径」的图示，提升传阅效率。
+- **推荐下一步**：按用户节奏推进剩余批次 / 里程碑；如需，可把本技术文档接入 README 顶部导航，或在 CI 中增加「文档中引用的文件路径存在性」轻量校验，降低文档与源码漂移风险。
+
+## 会话总结：技术文档补架构图（Inline Visuals 渲染 + 写入文档） · 2026-10-20
+
+### 会话背景
+承上一轮《全项目技术流程功能文档产出》，该轮已新建 [MJcoder-技术流程功能文档.md](computer:///Users/jianma/Desktop/MJCode/MJcoder-技术流程功能文档.md)（13 章 + 附录），并在「尚存问题」中明确提出「建议补充架构图」的下一步。
+
+本轮用户据此下达指令：「给文档补「三进程 + 工具 RPC」「三层记忆读写路径」两张架构图（用 Inline Visuals 直接渲染，并写入文档 MJcoder-技术流程功能文档.md）」。
+
+### 会话的主要目的
+1. 用 `dynamic-ui` 技能的 `PureShowWidget` 工具，在**对话中内联渲染**两张架构图（非文件、非导出图片）。
+2. 把等价的两张架构图**写入** `MJcoder-技术流程功能文档.md`，固化到文档正文。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **V1** | 内联渲染「三进程 + 工具 RPC」 | `PureShowWidget` widget `three_process_tool_rpc`：三条虚线边界带（渲染层 / Electron 主进程(焦点) / agent-core 引擎）+ 4 条带标准 marker 箭头的连接线 + 4 个标签胶囊（IPC invoke ↓ / agent:event ↑ / toolReq ↑ / toolRes ↓） |
+| **V2** | 内联渲染「三层记忆读写路径」 | `PureShowWidget` widget `memory_read_write_paths`：6 个圆角节点（写入入口 / MemoryManager(焦点) / SQLite 事实源 / 分层召回 / 文件导出视图 / Prompt 注入）+ 6 条连接线（含 C⇄F 双向两条）+ 2 个标签胶囊（召回 / 注入） |
+| **V3** | 写入文档 | 在 `MJcoder-技术流程功能文档.md` 的 **1.3 节表格之后**插入 Mermaid 图一「三进程 + 工具 RPC」；在 **第七章开头**插入 Mermaid 图二「三层记忆读写路径」，各附「关键点」导读 |
+| **V4** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **Inline Visuals**：`dynamic-ui` 技能 + `PureShowWidget` 工具，产出内联 SVG widget（根元素 `data-dynamic-ui-widget` + `data-template="architecture-elements"`、`<style>`→内容→`<script>` 输出顺序、`:root` light 默认 + `:root[data-widget-theme="dark"]` 覆盖、标准 `marker` 箭头 `markerUnits="userSpaceOnUse" orient="auto"`、viewBox `0 0 720 H`）。
+- **Markdown 图示**：文档正文采用 ```mermaid `flowchart TB` 代码块承载同构架构图，与项目 `G-visualize`（对话内 Mermaid 渲染）能力一致。
+- **源码依据**：`main/engineProcess/registry.js`（`TOOL_CHANNELS` 白名单）、`agent-core/index.js`（`TOOL_HANDLER_NAMES`）、`main/memory/index.js`（`resolveScope` 分流、`LAYER_QUOTA`、`MAX_GLOBAL_MEMORIES`、半衰期）、`main/memory/memoryFile.js`（防抖落盘 + mtime re-import）。
+
+### 关键决策和解决方案
+1. **双形态交付：内联渲染 + 文档固化**：既用 `PureShowWidget` 在对话中即时渲染（符合用户「用 Inline Visuals 直接渲染」），又把同构 Mermaid 落入文档正文，保证文档自洽、可版本化传阅。
+2. **图一聚焦「漏登记即故障」这一真实痛点**：架构图不只画拓扑，还以导读点出 `TOOL_CHANNELS` 静态白名单是唯一准入闸——漏登记会导致引擎报「未知工具」且重启不可修复，呼应第四章 8 环节接线规范。
+3. **图二聚焦「单一事实来源 + 文件只读视图」的双向同步**：明确 SQLite 为唯一事实来源，`memory.md` / `user_profile.md` 仅只读导出，经 500ms 防抖落盘与 `mtime` 幂等 re-import 同步，**绝不产生第二事实源**。
+4. **与既有约束保持一致**：图示内容全部来自已取证的源码事实（不臆想），并与 `project_memory` 中「三层记忆/白名单口径/单一事实来源」约束严格对齐。
+
+### 会话中主要使用的工具
+`Skill`（加载 `dynamic-ui` 场景与模板契约）、`DeferExecuteTool(PureShowWidget)`（内联渲染两张 widget）、`Read` / `Grep`（定位文档插入点与回读校验）、`Edit`（写入两张 Mermaid 图 + 追加 README 总结）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 在 1.3 节「三进程 / 三层运行架构」表格后插入 Mermaid 图一「三进程 + 工具 RPC」（含导读）；在第七章开头插入 Mermaid 图二「三层记忆读写路径」（含导读） | 用户要求把两张架构图写入该文档；同时指向前一轮「建议补充架构图」的下一步 |
+| `README.md` | 累积追加本节「技术文档补架构图 · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略；如需入库须 `git add -f "MJcoder-技术流程功能文档.md"` 或加 `!MJcoder-*.md` 白名单例外（本轮未擅自改 `.gitignore`）。
+- **Mermaid 渲染依赖宿主**：文档正文的两张图为 Mermaid 代码块，需宿主观测器支持 Mermaid（GitHub / 支持 Mermaid 的 Markdown 预览可正常渲染）；对话内的 `PureShowWidget` 为即时 SVG 渲染，二者形态不同但语义等价。
+- **建议下一步**：如需更强的传阅效果，可补「Agent Harness 执行流时序图」与「MCP 三层 tier 治理图」，使核心机制全部图示化；另可在文档顶部加一张「章节导航图」提升检索效率。
+
+## 会话总结：技术文档补架构图（第二轮：时序图 + tier 治理图 + 章节导航） · 2026-10-20
+
+### 会话背景
+承上一轮《技术文档补架构图》，该轮已把「三进程 + 工具 RPC」「三层记忆读写路径」两张图内联渲染并用 Mermaid 写入文档正文，同时在「尚存问题与推荐下一步」中提出：可补「Agent Harness 执行流时序图」「MCP 三层 tier 治理图」，并在文档顶部加章节导航。
+
+本轮用户据此下达指令：「补「Agent Harness 执行流时序图」「MCP 三层 tier 治理图」，并在文档顶部加章节导航」。
+
+### 会话的主要目的
+1. 在文档中新增两张机制图：Agent Harness 执行流时序、MCP 三层 tier 治理。
+2. 在文档顶部新增章节导航（目录 + 架构图索引），降低长文档检索成本。
+3. 同步用 Inline Visuals 在对话中内联渲染这两张新图（延续上一轮交付形态）。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **N1** | 章节导航 | 在文档标题后新增「## 章节导航」（13 章 + 附录的锚点链接清单）与「### 架构图索引」（4 张图的名称 / 位置 / 表达机制对照表） |
+| **N2** | 图 2 · Agent Harness 执行流时序 | 在 **3.1 节**插入 `sequenceDiagram`：5 参与者（渲染层 / 宿主 agentRunner / 引擎 runAgent / 模型 LLM / 宿主工具句柄）+ `loop` 主循环与 `opt` 工具分支，覆盖请求发起 → 装配下发 → 模型往返 → `toolReq`/`toolRes` 工具往返 → `onDone`（trace · memory_saved）→ 归档 |
+| **N3** | 图 3 · MCP 三层 tier 治理 | 在 **5.1 节**插入 `flowchart`：6 节点（用户已保存连接器 / 三层 tier 判定 / auto-start / whitelist / manual / 意图预热）+ 5 连线，标注三档行为与「命中意图且未被原生覆盖才懒连接」 |
+| **N4** | Inline Visuals 内联渲染 | `PureShowWidget` 两张 widget：`agent_harness_execution_sequence`（4 泳道 + 循环框 + 3 类连线图例）、`mcp_three_tier_governance`（tier 判定为焦点 + 三档扇出 + 意图预热回接 whitelist） |
+| **N5** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **Mermaid**：`sequenceDiagram`（含 `autonumber` / `loop` / `opt` / `->>` / `-->>`）与 `flowchart TB`（含 `-- "label" -->` 带标签连线），写入 Markdown 文档正文。
+- **Inline Visuals（dynamic-ui）**：`PureShowWidget` 内联渲染 SVG widget；时序图按「泳道/lifeline + 消息行 + 胶囊标签 + 标准 marker 箭头」手绘坐标；治理图按 `architecture-elements` 的「neutral / brand / boundary」积木组合（brand 仅用于焦点节点）。
+- **锚点规则**：GitHub 风格 Markdown 锚点（小写、去标点、空格转 `-`、CJK 保留），如 `## 七、三层记忆体系（M0 ~ M4）` → `#七三层记忆体系m0--m4`。
+- **源码依据**：`agent-core/index.js`（主循环 / `runAgent` / `TOOL_HANDLER_NAMES`）、`main/agentRunner.js`（`engineParams` 装配 / 事件透出 / 记忆归档）、`main/engineProcess/registry.js`（`TOOL_CHANNELS`）、`main/mcpPrewarm.js`（tier 枚举 / `PREWARM_NAMES`）、`main/intentMcpPrewarm.js`（`detectCapabilities` / `nonNativeCapabilities`）。
+
+### 关键决策和解决方案
+1. **导航双组件**：除常规「章节导航」外，额外提供「架构图索引」表（图号 / 名称 / 位置 / 表达机制），使 4 张图可按机制直接跳转。
+2. **时序图按 dynamic-ui 硬约束收敛**：控制在 4 条泳道、8 条消息（把「事件逐级转发渲染层」并入 `agent:event` 标签、把「宿主执行工具细节」移到正文导读），避免超出「3–5 参与者 / 4–8 消息」的可读性闸门。
+3. **治理图以 brand 单焦点**：仅「三层 tier 判定」节点使用 brand 描边/文字，auto-start / whitelist / manual 三个档位保持 neutral，避免用颜色编码顺序；三档语义差异靠连线标签（随启动拉起 / 默认不拉起 / 仅手动授权）表达。
+4. **图不只为画拓扑**：两张图各附「关键点」导读，把「引擎不碰宿主能力」「默认只拉起 auto-start 档」两条红线固化进文档。
+5. **修正上一轮遗留建议**：把上一轮 README 中「建议补充架构图」的下一步落地，形成文档「4 图 + 导航」的可传阅形态。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（定位章节与插入点、回读校验）、`Edit`（写入导航 + 两张 Mermaid 图 + 追加 README 总结）、`ToolSearch` + `DeferExecuteTool(PureShowWidget)`（内联渲染两张 widget）、`Skill`（`dynamic-ui` 的 `architecture-and-flow` 场景与 `visual-tokens` 契约）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 标题后新增「章节导航」+「架构图索引」；3.1 节插入 Mermaid 图 2（Agent Harness 执行流时序，含导读）；5.1 节插入 Mermaid 图 3（MCP 三层 tier 治理，含导读） | 用户要求补两张机制图并在文档顶部加章节导航 |
+| `README.md` | 累积追加本节「技术文档补架构图（第二轮） · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略，如需入库须 `git add -f` 或加 `!MJcoder-*.md`（本轮未擅自改 `.gitignore`）。
+- **导航锚点为 GitHub 风格**：锚点按 GitHub Markdown 规则生成；若宿主渲染器规则不同（如部分编辑器不做去标点处理），个别锚点可能不精确命中，可按宿主要求微调。
+- **文档漂移风险**：新图引用的文件/常量（`TOOL_CHANNELS`、`mcpPrewarm.js` tier、`intentMcpPrewarm.js`）后续若调整，需同步更新第 3.1 / 5.1 节与「架构图索引」表。
+- **推荐下一步**：如需，可再补「任务编排与 Worker 池」流程图与「审批 / 沙箱安全闸门」图，使剩余核心子系统也图示化；或把 4 张图的 Mermaid 源抽为独立片段文件，供文档与对话渲染共用。
+
+## 会话总结：技术文档补架构图（第三轮：任务编排与 Worker 池 + 审批 / 沙箱安全闸门） · 2026-10-20
+
+### 会话背景
+承第二轮《技术文档补架构图（第二轮：时序图 + tier 治理图 + 章节导航）》，该轮末尾已提出推荐下一步：「可再补『任务编排与 Worker 池』流程图与『审批 / 沙箱安全闸门』图，使剩余核心子系统也图示化」。
+
+本轮用户据此下达指令：「可再补「任务编排与 Worker 池」流程图、「审批 / 沙箱安全闸门」图，把剩余核心子系统也图示」。
+
+### 会话的主要目的
+1. 在文档中新增两张机制图：第八章「任务编排与 Worker 池流程」、第九章「审批 / 沙箱安全闸门」。
+2. 同步更新文档顶部的「架构图索引」表，把图 5 / 图 6 纳入可跳转清单（共 6 张图）。
+3. 延续前两轮的交付形态，用 Inline Visuals 在对话中即时内联渲染这两张新图。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **M1** | 图 5 · 任务编排与 Worker 池流程 | 在**第八章开头**插入 `flowchart TB`：两个 `subgraph`（Orchestrator 只做拆解与建组 / 执行与隔离）+ 6 节点（`planGoal` 拆解 · `validateDag`·`topoLevels` 校验分层 · `createGroup` 落库快照 · `WorkerPool` 派发 · Worker 隔离 · `Aggregator` 聚合），并画「失败 / 暂停 → 重规划（注入 `contextBlock`）」回环 |
+| **M2** | 图 6 · 审批 / 沙箱安全闸门 | 在**第九章开头**插入 `flowchart TB`：5 节点（工具调用 · `needsApproval()` 审批判定 · 审批卡 `approvalChannel` 分发 · 沙箱闸门三档 · 工具执行），标注「L1 不可豁免 / 非法决策与超时 fail-closed deny」「规则记忆 conversation / always 可撤销」「仅无 OS 级沙箱时叠加 `dangerousPatterns` 兜底」 |
+| **M3** | 架构图索引更新 | 索引表新增图 5 / 图 6 两行，写明位置锚点与表达的核心机制，图表总数由 4 → 6 |
+| **M4** | Inline Visuals 内联渲染 | `PureShowWidget` 两张 widget：`orchestration_worker_pool_flow`（纵向链路 + 左侧品牌虚线回环）、`approval_sandbox_gate_flow`（审批判定为焦点 + 弹卡 / 沙箱双分支收敛到执行） |
+| **M5** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **Mermaid**：`flowchart TB` + `subgraph` + 带标签连线（`-- "label" -->` 与虚线 `-. "label" .->`），写入 Markdown 文档正文。
+- **Inline Visuals（dynamic-ui）**：`PureShowWidget` 内联渲染 SVG widget；编排图按「单列纵向链路 + 左侧回环」骨架（viewBox `0 0 720 730`），闸门图按「分支收敛」骨架（viewBox `0 0 720 470`），品牌色仅用于单一焦点节点。
+- **校验工具**：`Grep` 复核插入位置与索引表行号。
+
+### 关键决策和解决方案
+1. **编排图以职责边界为叙事主线**：把「Orchestrator 只做拆解与建组、不做执行」写成章节头导读 + 图内 `subgraph` 边界，避免读者误以为编排层直接跑任务。
+2. **建组即快照治理档**：图内把 `createGroup` 快照 `approvalMode / sandboxPolicy / project_path` 一并画出，与「Worker 执行期从组快照读 `project_path` 作记忆召回统一空间键（召回键 `group.project_path || group.cwd`）」的既有约定对齐。
+3. **闸门图双闸门并列**：把「审批闸门（是否弹卡、谁批准）」与「沙箱闸门（以何种隔离级别执行）」分列，并单独画出「规则记忆」节点与虚线回流到判定，表达「规则豁免」不是绕过审批而是参与判定。
+4. **两图均附「关键点」导读**：把易跨会话丢失的口径固化进文档（L1 不可豁免 + fail-closed deny；三档沙箱策略；危险命令兜底仅在无 OS 级沙箱时生效）。
+5. **文档 Mermaid 与内联 SVG 语义等价、形态不必同形**：编排图文档侧用 2 个 `subgraph` 横向表达，内联侧用纵向链路 + 左侧回环，二者表达同一机制，各取可读性最优。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（定位章节与插入点、回读校验索引表）、`Edit`（写入两张 Mermaid 图与导读、更新索引表、追加 README 总结）、`ToolSearch` + `DeferExecuteTool(PureShowWidget)`（内联渲染两张 widget）、`Skill`（`dynamic-ui` 的 `architecture-and-flow` 场景与 `visual-tokens` 契约）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 第八章开头插入 Mermaid 图 5（任务编排与 Worker 池流程，含章节头导读与「关键点」导读）；第九章开头插入 Mermaid 图 6（审批 / 沙箱安全闸门，含章节头导读与「关键点」导读）；顶部「架构图索引」表新增图 5 / 图 6 两行 | 用户要求把剩余核心子系统（任务编排、审批 / 沙箱）也图示化 |
+| `README.md` | 累积追加本节「技术文档补架构图（第三轮：任务编排与 Worker 池 + 审批 / 沙箱安全闸门） · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略，如需入库须 `git add -f "MJcoder-技术流程功能文档.md"` 或加 `!MJcoder-*.md` 白名单例外（本轮未擅自改 `.gitignore`）。
+- **文档漂移风险**：图 5 引用的常量（`MIN_TASKS` / `MAX_TASKS` / 迁移 v7 的 `task_groups.project_path`）与图 6 引用的判定链（`toolLevel` / `needsApproval` / `approvalChannel` / 三档沙箱策略）后续若调整，需同步更新第八 / 九章与「架构图索引」表。
+- **Mermaid 渲染依赖宿主**：文档正文图为 Mermaid 代码块，需宿主观测器支持 Mermaid；对话内 `PureShowWidget` 为即时 SVG 渲染，二者形态不同但语义等价。
+- **推荐下一步**：可把 6 张图的 Mermaid 源抽为独立片段文件（如 `docs/diagrams/*.mmd`）供文档与对话渲染共用，消除双份维护的漂移风险；或在文档顶部补一张「系统总览图」把六个子系统串成一张全景图。
+
+## 会话总结：技术文档补「系统总览图 · 六大子系统全景」 · 2026-10-20
+
+### 会话背景
+承第三轮《技术文档补架构图（第三轮：任务编排与 Worker 池 + 审批 / 沙箱安全闸门）》，该轮末尾的推荐下一步提出：「在文档顶部补一张『系统总览图』把六个子系统串成一张全景图」。
+
+本轮用户据此下达指令：「补一张「系统总览图」把六个子系统串成全景」。
+
+### 会话的主要目的
+1. 新增一张**总览图**，把前六张图覆盖的子系统按「一次任务的贯穿路径」串成全景，解决「六张图各自为战、缺一张总纲」的问题。
+2. 新增文档小节 `1.4 系统总览（六大子系统全景）` 承载该图与导读（含三进程边界的横向说明）。
+3. 更新顶部「架构图索引」表，把总览图置于首行（图表总数 6 → 7）。
+4. 用 Inline Visuals 在对话中即时内联渲染该总览图。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **P1** | 总览图（Mermaid） | 在**第一章节新增 1.4 节**插入 `flowchart TB`：6 条横向泳道（① 交付层 · 渲染层 / ② 编排层 · 任务与 Worker 池 / ③ 引擎层 · Agent Harness / ④ 闸门层 · 审批 / 沙箱 / ⑤ 能力层 · 原生工具 + MCP tier / ⑥ 记忆层 · 三层记忆）+ 6 条连线（5 条实线下行 + 1 条虚线回环「分层召回 → 交付层装配 → 注入 system prompt」） |
+| **P2** | 章节导读 | 图前补「贯穿路径」总述，图后补「关键点」：竖轴 = 任务贯穿路径，横轴 = 三进程边界；并给出与图 1~图 6 的对应索引关系 |
+| **P3** | 架构图索引更新 | 索引表新增首行「总览图 · 系统总览 · 六大子系统全景」（位置锚点 `#14-系统总览六大子系统全景`） |
+| **P4** | Inline Visuals 内联渲染 | `PureShowWidget` 单张 widget `system_overview_six_subsystems_panorama`（viewBox `0 0 720 720`；6 条横向泳道 + 右侧下行箭头 + 左侧品牌虚线回环；品牌色仅用于焦点「③ 引擎层 · Agent Harness」与回环） |
+| **P5** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **Mermaid**：`flowchart TB` + 带标签连线（`-- "label" -->` 与 `-. "label" .->`），单节点承载多行富文本（`<br/>`）。
+- **Inline Visuals（dynamic-ui）**：`PureShowWidget` 内联渲染 SVG；按「横向泳道 + 纵向下行 + 左侧回环」骨架手绘坐标，`.nd`/`.ns`/`.lb` 三级字号（13 / 11 / 11），`c-neutral` + `c-brand` 单焦点配色，`--surface`/`--border`/`--text-muted`/`--brand*` 全部走 token 并带 dark 覆盖。
+- **源码取证**：`main/orchestrator/`、`main/workerPool.js`、`main/workerIsolation.js`、`main/approval.js`、`main/approvalChannel.js`、`main/memory/index.js`、`desktop/renderer/src/components/ChatArea.jsx`（分层召回装配位置）。
+
+### 关键决策和解决方案
+1. **以「任务贯穿路径」而非「组件清单」组织全景**：六条泳道按一次任务的实际流转排序（交付 → 编排 → 引擎 → 闸门 → 能力 → 记忆），而非按代码目录罗列，使全景图有可读的叙事主线。
+2. **编排层置于引擎层之前**：核实 `main/orchestrator/` 为宿主侧「只做拆解与建组」，Worker 子任务由引擎侧各自执行，故顺序为「编排建组 → 引擎 Harness 执行」，并以连线标签「Worker 重入同一 Harness」表达嵌套关系，避免画出交叉回环导致坐标与可读性失控。
+3. **只保留一条回环**：把「Worker 重入 Harness」并入连线标签（文字表达），仅在图上保留「记忆分层召回 → 交付层装配 → 注入 prompt」这一条品牌虚线回环，使全图连线数收敛为 6 条，满足架构图可读性闸门（≤6 模块 / ≤8 连线）。
+4. **回环终点经源码核实为交付层**：`ChatArea.jsx`（M3）负责分层召回装配，故回环指向 ① 交付层而非引擎层，避免与实现不符。
+5. **品牌色单焦点**：仅 ③ 引擎层（Harness 主循环，全系统的脊柱）使用 brand 描边与 brand-text，其余泳道保持 neutral，符合「中性结构 + 单焦点」契约。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（定位插入点、核实编排 / Worker 池 / 召回装配的归属位置）、`Edit`（写入 1.4 节图与导读、更新索引表、追加 README 总结）、`ToolSearch` + `DeferExecuteTool(PureShowWidget)`（内联渲染总览图）、`Skill`（`dynamic-ui` 的 `architecture-and-flow` 场景与 `visual-tokens` 契约）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 第一章节新增 `### 1.4 系统总览（六大子系统全景）`：Mermaid 总览图（6 泳道 + 6 连线，含实线下行与虚线回环）+ 图前总述 + 图后「关键点」导读；顶部「架构图索引」表新增首行（总览图，锚点 `#14-系统总览六大子系统全景`） | 用户要求补一张系统总览图，把六个子系统串成全景 |
+| `README.md` | 累积追加本节「技术文档补『系统总览图 · 六大子系统全景』 · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略，如需入库须 `git add -f "MJcoder-技术流程功能文档.md"` 或加 `!MJcoder-*.md` 白名单例外（本轮未擅自改 `.gitignore`）。
+- **总览图与其他图的漂移耦合**：总览图是其余 6 张图的「目录级摘要」，任一分图细节调整（如 tier 档位、沙箱档位、编排常量）都应回看 1.4 节的泳道摘要是否需要同步。
+- **Mermaid 渲染依赖宿主**：文档正文图为 Mermaid 代码块，需宿主观测器支持 Mermaid；对话内 `PureShowWidget` 为即时 SVG 渲染，二者形态不同但语义等价。
+- **推荐下一步**：可把 7 张图的 Mermaid 源抽为独立片段文件（如 `docs/diagrams/*.mmd`）供文档与对话渲染共用，消除双份维护的漂移风险；或为总览图补一份「子系统 ↔ 源文件 ↔ 关键常量」对照表，作为跨会话的口径基准。
+
+## 会话总结：技术文档补「子系统 ↔ 源文件 ↔ 关键常量 对照表」 · 2026-10-20
+
+### 会话背景
+承上一轮《技术文档补「系统总览图 · 六大子系统全景」》，该轮末尾提出推荐下一步：「或为总览图补一份『子系统 ↔ 源文件 ↔ 关键常量』对照表，作为跨会话的口径基准」。
+
+本轮用户据此下达指令：「先补「子系统 ↔ 源文件 ↔ 关键常量」对照表」。
+
+### 会话的主要目的
+1. 为总览图的六大泳道补一张**口径基准表**，把「子系统 → 核心源文件 → 关键常量 / 契约」三列对齐，解决「图里写了机制、但常量写在哪个文件要靠翻代码」的检索成本。
+2. 表格内容**全部按源码实际取证**（文件存在性 + 常量值逐一核对），不凭印象填写。
+3. 附「关键守护测试」清单，把每个子系统的回归门禁与子系统绑定。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **Q1** | 源文件与常量取证 | 通过 `Glob` 枚举 `desktop/main/**/*.js`（确认 `orchestrator/`、`workerPool.js`、`engineProcess/`、`memory/`、`mcpPrewarm.js`、`sandbox*.js`、`cuaProcess/` 等真实存在），通过 `Grep` 逐项核对常量真值 |
+| **Q2** | 对照表（文档） | 新增 `### 1.5 子系统 ↔ 源文件 ↔ 关键常量 对照表`：6 行（对应总览图 ①~⑥ 泳道）× 4 列（子系统 / 核心源文件 / 关键常量与契约 / 对应图），并在表后附「关键守护测试」清单 |
+| **Q3** | 守护测试取证 | `Grep` 核实 `desktop/test/` 下 15 个测试文件真实存在（`orchestrator.test.js`、`workerPool.test.js`、`engine-process.test.mjs`、`tool-registration-matrix.test.mjs`、`approval.test.js`、`computer-use-wiring.test.mjs`、`mcp-lazy-prewarm.test.mjs`、`mcp-governance.test.mjs`、`timeouts-contract.test.mjs`、`memory*.test.*`、`i18n.test.mjs`） |
+| **Q4** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **取证方法**：`Glob`（文件存在性）+ `Grep`（常量名 → 真值）+ `Read`（读常量定义区间）+ `Shell`（`node -e require('...registry.js')` 统计 `TOOL_CHANNELS` 条目数 = **52**）。
+- **Markdown**：GitHub 风格表格；表格单元格内的 `||` 需转义为 `\|\|`（如召回键 `group.project_path \|\| group.cwd`）。
+
+### 关键决策和解决方案
+1. **只写取证过的值**：所有常量值来自源码或运行期统计，关键几条为——`MIN_TASKS=2` / `MAX_TASKS=8`（`orchestrator/dag.js`）、`LEVELS = {L1: danger-command, L2: file-write, L3: mcp-tool}`（`approval.js`）、`APPROVAL_MODES` 四档（`never / auto-safe / on-request（默认）/ always`）、`TIER = {auto-start, whitelist, manual}` 与 `PREWARM_NAMES = {filesystem, time, fetch}`（`mcpPrewarm.js`）、`LAYER_QUOTA = {session:2, project:3, global:2}` 与 `MAX_GLOBAL_MEMORIES=300` / `MAX_MEMORIES_PER_SPACE=500` / `RECALL_TOP_K_MAX=50`（`memory/index.js`）、半衰期 7 / 30 / 90 天（`memory/scorer.js`）、`SHELL_DEFAULT_TIMEOUT_MS=480000` / `SHELL_WATCHDOG_TIMEOUT_MS=600000`（`tools/timeouts.js`）、迁移 v7 `task_groups.project_path`（`db/index.js`）。
+2. **`TOOL_CHANNELS` 用运行期统计而非目测**：直接 `require` registry 模块输出长度（52），并在文档标注「52 条」，避免肉眼数错、也避免把注释行计入。
+3. **表按总览图泳道组织**：行序与总览图 ①~⑥ 完全一致，并在「对应图」列回指图 1 / 2 / 3 / 4 / 5 / 6，使总览图与分图、源文件三方互相可跳转。
+4. **子系统 ③ 合并 Harness 与 engineProcess**：总览图泳道 ③ 的括注即「utilityProcess 子进程」，故该行同时列出 `agent-core/index.js` 与 `main/engineProcess/*`，并把图 1（三进程 + RPC）与图 2（执行流时序）一并回指，不新增第七行、保持「六大子系统」口径一致。
+5. **附守护测试清单**：把每个子系统与具体回归测试绑定，便于改动后快速定位该跑哪些门禁；测试文件均经 `Grep` 确认真实存在，未臆造文件名。
+
+### 会话中主要使用的工具
+`Glob`（枚举 `desktop/main` 源文件）、`Grep`（常量真值 + 测试文件存在性）、`Read`（`approval.js` / `registry.js` 常量定义区间）、`Shell`（运行期统计 `TOOL_CHANNELS` 长度）、`Edit`（写入 1.5 节对照表 + 追加 README 总结）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | 第一章节新增 `### 1.5 子系统 ↔ 源文件 ↔ 关键常量 对照表`：6 行 × 4 列对照表（子系统 / 核心源文件 / 关键常量与契约 / 对应图）+ 表后「关键守护测试」清单 | 用户要求补「子系统 ↔ 源文件 ↔ 关键常量」对照表，作为总览图的口径基准 |
+| `README.md` | 累积追加本节「技术文档补『子系统 ↔ 源文件 ↔ 关键常量 对照表』 · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略，如需入库须 `git add -f "MJcoder-技术流程功能文档.md"` 或加 `!MJcoder-*.md` 白名单例外（本轮未擅自改 `.gitignore`）。
+- **对照表是「抽样口径」而非全量清单**：每行只列核心源文件与最易漂移的常量，同目录辅助模块（如 `approvalPolicy.js` 之后的具体策略实现、`mcp*.js` 的传输层细节）未逐条罗列；若要做「常量全量台账」需另建自动化抽取脚本，人工维护必然漂移。
+- **常量漂移风险**：表内数值（52 条通道、8 条通知回调、半衰期 7/30/90、`MAX_GLOBAL_MEMORIES=300` 等）一旦源码调整即失效，建议在 CI 中加一条「文档常量 vs 源码常量」一致性校验。
+- **推荐下一步**：把 7 张图的 Mermaid 源抽为独立片段文件（`docs/diagrams/*.mmd`）供文档与对话渲染共用；或为 1.5 表补一列「守护测试」，把回归门禁直接落到表内。
+
+---
+
+## 会话总结：为 1.5 表补「守护测试」列（门禁落到表内） · 2026-10-20
+
+### 会话背景
+承上一轮《技术文档补「子系统 ↔ 源文件 ↔ 关键常量 对照表」》，该轮末尾给出的候选推荐下一步恰为「或为 1.5 表补一列『守护测试』，把回归门禁直接落到表内」。
+
+本轮用户据此下达指令：「为 1.5 表补一列「守护测试」把门禁直接落到表内。」
+
+### 会话的主要目的
+1. 把 1.5 对照表从 4 列扩为 **5 列**，新增「守护测试（`desktop/test/`）」列，使「子系统 → 源文件 → 常量契约 → **回归门禁** → 对应图」五要素同行对齐，改动后不跑回头翻测试。
+2. 「守护测试」列的每个文件名**逐一经源码 / 测试文件内容取证**后再归属，不凭命名猜测。
+3. 把原表后与新增列重复的「关键守护测试」段落替换为**「门禁运行方式」命令表**，消除冗余并补上统一通过标准。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **R1** | 测试文件存在性取证 | `Glob` 枚举 `desktop/test/**`，确认 `ui-conventions.test.js`、`render-smoke.mjs`、`smoke-load.mjs`、`e2e-smoke.mjs`、`tasks-ipc-wiring.test.mjs`、`exec-governance.test.mjs`、`approvalChannel.test.js`、`approval-queue.test.js`、`native-tools-p3.test.mjs`、`native-doc-tools.test.mjs`、`native-latex-tools.test.mjs`、`code-mode.test.mjs`、`memory-mem-command.test.mjs` 等均真实存在 |
+| **R2** | 测试归属判定 | `Grep` 读测试内容判定归属：`timeouts-contract.test.mjs`（断言 `SHELL_* < SHELL_WATCHDOG`、`WEB_FETCH_IMPL < WEB_FETCH_WATCHDOG`）→ ⑤；`exec-governance.test.mjs`（断言 `sandboxPolicy` 只能收紧 + `needsApproval` 分级）→ ④；`tasks-ipc-wiring.test.mjs`（头注释「`tasks:*` IPC 的 deps 契约 + V04 治理快照接线」）→ ②；`ui-conventions.test.js` / `smoke-load.mjs` / `render-smoke.mjs` → ① |
+| **R3** | 表改造为 5 列 | 表头改为 `\| 子系统 \| 核心源文件 \| 关键常量 / 契约 \| 守护测试（desktop/test/） \| 对应图 \|`，6 行均在「关键常量 / 契约」与「对应图」之间插入「守护测试」单元格（新列插在中间，保持「图回指」仍在末列） |
+| **R4** | 补表前引言 | 1.5 节引言由「只列核心源文件与最易漂移常量」扩写为「并列出该子系统改动后必跑的守护测试……并按『守护测试』列跑最小回归集」 |
+| **R5** | 去重 + 补门禁命令表 | 删除原重复的「关键守护测试」段落，替换为「**门禁运行方式**」三段式表格：`npm test`（发现式全量 220 套，含 `eval --check` 前置）/ `npm run typecheck`（零错误）/ `npm run lint`（0 error / ≤161 warnings 棘轮）/ `npm run eval:check`，并加口径注：表内仅列定点回归、跨子系统改动须跑全量兜底 |
+| **R6** | 同步 README | 累积追加本节会话总结 |
+
+### 会话中主要使用的技术栈
+- **取证方法**：`Glob`（测试文件存在性）+ `Grep`（读测试断言内容与头注释以判定归属）+ `Grep`（读文档第十二章复述门禁命令原文，确保新段落的命令与通过标准与既有章节口径一致）+ `Read` / `Edit`（文档与 README 写入）。
+- **Markdown**：GitHub 风格表格；5 列表格排布，新增列置于中段以避免「对应图」列错位；表内 `\|\|` 转义沿用（召回键 `group.project_path \|\| group.cwd`）。
+
+### 关键决策和解决方案
+1. **新列插在中间而非末尾**：列顺序定为「子系统 → 源文件 → 常量契约 → **守护测试** → 对应图」。理由：守护测试与「常量契约」同属「改动影响面」语义，相邻更便于阅读；且「对应图」保持末列，与其他章节表格的「回指列在尾」惯例一致。
+2. **归属判定以测试内容为准，不看文件名猜**：例如 `timeouts-contract.test.mjs` 名字像通用契约，实际断言的是 `SHELL_* / WEB_FETCH_*` 超时顺序 → 归 ⑤能力层；`tasks-ipc-wiring.test.mjs` 断言的是 `tasks:*` IPC deps 契约 → 归 ②编排层。避免按名字望文生义导致归错。
+3. **每行给 3~7 个测试并附括号语义**：与「关键常量 / 契约」列风格对齐（如 `approval.test.js`（分级 / `needsApproval` / 可补偿性）），使读者不点开文件也能判断该测试守的是什么。
+4. **去重优先于叠加**：新列已含各子系统守护测试清单，原表后「关键守护测试」段落即成重复，故**替换**为「门禁运行方式」命令表，把「跑什么」与「怎么跑、跑到什么标准」分层——表内答「跑什么」，命令表答「怎么跑」。
+5. **门禁命令与通过标准取自文档既有章节口径**：`npm test`（发现式全量 220 套，含 `eval --check` 前置）、`typecheck` 零错误、`lint` 0 error / 161 warnings 棘轮——与第十二章《门禁、CI 与评估》原文一致，避免两处口径打架。
+6. **补一条「口径注」防误读**：明确表内守护测试列是**定点回归**不是全集，跨子系统改动（如原生工具 8 环节接线）须以 `tool-registration-matrix.test.mjs` 双向差集断言为准并跑全量，避免读者以为表内即全部门禁。
+
+### 会话中主要使用的工具
+`Glob`（枚举 `desktop/test` 测试文件）、`Grep`（测试内容取归属 + 文档门禁命令原文）、`Read`（读 1.5 节现状与 README 末尾）、`Edit`（1.5 表 7 处改造 + 引言改 1 处 + 段落替换 1 处 + README 追加本节）。
+
+### 修改了哪些文件
+
+**已跟踪文件（Modified）**
+
+| 文件 | 修改内容 | 修改原因 |
+|---|---|---|
+| `MJcoder-技术流程功能文档.md` | ①1.5 表由 4 列扩为 5 列，新增「守护测试（`desktop/test/`）」列（6 行全部填入经核实的测试文件名 + 守卫语义）；②表前引言补「改动后必跑的守护测试」说明；③表后原「关键守护测试」段落替换为「门禁运行方式」命令表（`npm test` / `typecheck` / `lint` / `eval:check` + 通过标准）并加口径注 | 用户要求「为 1.5 表补一列『守护测试』把门禁直接落到表内」；原段落与新列重复，故替换为命令表消除冗余 |
+| `README.md` | 累积追加本节「为 1.5 表补『守护测试』列（门禁落到表内） · 2026-10-20」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 依旧被 `.gitignore` 第 46 行 `*.md` 忽略（`git check-ignore -v` 实测命中），如需入库须 `git add -f "MJcoder-技术流程功能文档.md"` 或加 `!MJcoder-*.md` 白名单例外；本轮**未擅自改** `.gitignore`。
+- **守护测试清单是「定点抽样」**：表内列的是各子系统改动后**最该跑的**测试，并非该子系统的全集；跨子系统（尤其新增原生工具 8 环节接线）仍须跑全量 `npm test` 兜底，已在文档「口径注」中写明。
+- **测试名漂移风险**：表内测试文件名一旦重命名 / 拆分即与源码脱节，建议在 CI 中加一条「文档内测试路径 vs `desktop/test` 实际文件」存在性校验（与上轮建议的「文档常量 vs 源码常量」校验可合并为一个 `docs-consistency` 门禁）。
+- **推荐下一步**：①把 7 张图的 Mermaid 源抽为独立片段文件（`docs/diagrams/*.mmd`）供文档与对话渲染共用；②为 1.5 表再补一列「回归触发条件」（该子系统改动时必跑），把「跑什么」升级为「什么时候跑」；③新增 `docs-consistency` 门禁脚本，自动校验文档内的常量数值与测试路径。
+
+---
+
+## 会话总结：1.5 表补「回归触发条件」列 + 新增 docs-consistency 文档一致性门禁 · 2026-10-20
+
+### 会话背景
+承上一轮《为 1.5 表补「守护测试」列（门禁落到表内）》，该轮末尾给出的推荐下一步为：「②为 1.5 表再补一列『回归触发条件』把『跑什么』升级为『什么时候跑』；③新增 `docs-consistency` 门禁脚本，自动校验文档内的常量数值与测试路径」。
+
+本轮用户据此下达指令：「推荐下一步的2和3。」
+
+### 会话的主要目的
+1. **推荐下一步 ②**：给 1.5 对照表补第 6 列「回归触发条件」，标明「改动命中哪些路径 / 契约时，必须跑该行的守护测试」，把门禁从「跑什么」升级为「何时跑」。
+2. **推荐下一步 ③**：新增 `desktop/test/docs-consistency.test.mjs` 门禁套件，把「文档内常量数值」与「文档内测试路径」绑定到**源码事实**，让「文档已漂移、源码已改」从人肉回看变成可自动发现的失败。
+3. 门禁须遵守项目既有纪律：**不臆造**（常量值全部经 require / 源码文本取证）、**接入现有全量基线**（发现式 `npm test` 自动纳入，无需注册）、**缺文档 fail-open**（文档受 `.gitignore` 未入库，CI 冷启动不能假红）。
+
+### 完成的主要任务
+| 编号 | 任务 | 产出 |
+|---|---|---|
+| **S1** | 门禁接入方式勘察 | 读 `test/run-all.mjs`（发现式：`/\.test\.(js\|mjs)$/` 自动纳入，前置门禁 `GATES` 走外部命令）+ `package.json`（`npm test` / `typecheck` / `lint` / `eval:check`）确认新套件命名 `*.test.mjs` 即可零注册进入基线 |
+| **S2** | 常量取证 | `require` 八个源模块核对真值：`orchestrator/dag.js`（`MIN/MAX_TASKS`）、`approval.js`（`LEVELS` / `APPROVAL_MODES`）、`mcpPrewarm.js`（`TIER` / `PREWARM_NAMES` / `DEVELOPER_AUTO_START_NAMES`）、`tools/timeouts.js`（`SHELL_*`）、`engineProcess/registry.js`（`TOOL_CHANNELS` 52 / `NOTIFY_CBS` 8 / `REQUEST_CBS` 1）、`memory/index.js`（`SCOPES` / `LAYER_QUOTA` / 阈值 / 容量闸）、`memory/scorer.js`（半衰期 7/30/90 + 回落 14）、`db/index.js`（迁移 v7） |
+| **S3** | 新增 docs-consistency 门禁 | 新建 `desktop/test/docs-consistency.test.mjs`：22 条断言（10 条数值常量 + 7 条结构常量 + 2 条计数 + 1 条半衰期 + 1 条迁移 + 1 条测试路径存在性），空白归一化比较，缺文档打印 `⚠ 跳过` 并 exit 0 |
+| **S4** | 1.5 表补第 6 列 | 表头 5 列扩为 6 列，新增「回归触发条件」列（插在「守护测试」与「对应图」之间），6 行全部按子系统改动面填入触发条件 |
+| **S5** | 文档同步说明 | 1.5 节引言补「回归触发条件」说明 + 一条 `>` 引用：本表常量与测试路径由 `docs-consistency` 门禁自动校验 |
+| **S6** | 门禁行为验证 | 正例 22/22 通过（exit 0）；漂移负例（全量替换 `MAX_TASKS = 8`→`9`）正确报错（exit 1）；缺文档 fail-open（exit 0 + ⚠ 跳过）；并跑邻近 7 个套件（lint-ratchet / lint-gate / max-lines / undef-ident / no-new-jsx / coverage-gaps / untracked-deps）全绿 |
+
+### 会话中主要使用的技术栈
+- **门禁实现**：`node:child_process`-free 的纯 Node ESM 断言脚本（对齐 `timeouts-contract.test.mjs` 的 `check()` + `process.exitCode` 风格）；`createRequire` 加载 CJS 源模块；空白归一化 `s.replace(/\s+/g,'')` 消除文档与源码的排版空格差异；正则 `/APPROVAL_MODES=\{([^}]+)\}/` 抓取枚举后与源码值逐一比对（不把「默认档」写死）。
+- **测试发现**：`test/run-all.mjs` 的 `/\.test\.(js|mjs)$/` 自动纳入；跳过行输出格式遵守 run-all 的 `/⚠.*(跳过|未执行)/` 识别规则，使「未验证」被显式记账。
+- **Markdown**：6 列表格；`\|\|` 转义沿用。
+
+### 关键决策和解决方案
+1. **门禁用「测试套件」而非「外部命令级 GATE」**：项目已有 `test/*.test.*` 发现式基线，把文档校验收敛为一个套件即可零注册进 `npm test`，且能让单套件里累积多条断言（22 条），比在 `run-all.mjs` 的 `GATES` 里挂外部命令更细粒度。
+2. **文档缺位时 fail-open 跳过而非报错**：`MJcoder-技术流程功能文档.md` 受 `.gitignore` 的 `*.md` 规则未入库，干净检出（CI）无此文件；若硬失败会让全量基线在 CI 变红。故检测不到文档时打印 `⚠ 跳过：…未入库` 并 exit 0，同时借 run-all 的跳过记账把「本次未校验」如实暴露，不伪装成「已验证」。
+3. **常量断言由源码值驱动，不写死数字**：断言 `hasDoc(`${name} = ${sourceValue}`)`。源码改数值 → 文档未同步即红；反之文档写错值也红。避免「测试里再抄一份数字」形成第三处事实源。
+4. **未导出常量（`RECALL_TOP_K_MAX`）用源码文本提取兜底**：`memory/index.js` 未导出该常量，故用 `const 名 = 值;` 正则从源码文本取值，既保持「值驱动」又不必为测试去改产品导出面。
+5. **枚举类不硬编码「默认档」**：`APPROVAL_MODES` 文档写法带「（默认）」标注，故正则抓取后去掉标注再与 `Object.values` 逐项比对——源码若改默认档 / 增删档位，断言随源码变化，不依赖测试里的手写清单。
+6. **空白归一化消除排版噪声**：文档里 `SCOPES = ['session','project','global']`（无空格）与源码 `['session', 'project', 'global']`（有空格）本会误判，归一化后按「去空白后的字面量」比对，聚焦数值一致性而非排版一致性。
+7. **新列插在「守护测试」与「对应图」之间**：使「跑什么（守护测试）」与「何时跑（触发条件）」相邻成组，末列「对应图」保持回指惯例；与上一轮的列序决策一脉相承。
+8. **口径注写法自证**：门禁负例实测暴露一条边界——文档若**同时**残留旧值与新值，本门禁仍会通过（只断言「当前源码值存在」）。此为 v1 可接受口径（漂移主因是源码改动而文档未同步，此时断言必红），已在 README「尚存问题」如实记录，避免被误读为「全量一致性」。
+
+### 会话中主要使用的工具
+`Read`（run-all.mjs / package.json / 各源模块常量定义）、`Grep`（模块 `module.exports` 导出面核对、源码常量真值、文档内测试文件名枚举）、`Glob`（`desktop/test/*.test.js` 与 `*.mjs` 存在性）、`Shell`（`require` 运行期取值 + 门禁正/负例与 fail-open 行为验证 + 邻近套件回跑）、`Write`（新建门禁套件）、`Edit`（1.5 表补列 + 引言/脚注 + README 追加）。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `desktop/test/docs-consistency.test.mjs` | **新增** | 文档一致性门禁：22 条断言（数值常量 / 结构常量 / 计数 / 半衰期 / 迁移 / 测试路径存在性），空白归一化比对，支持 `MJCODE_DOC_PATH` 覆盖，缺文档 fail-open 跳过 | 用户要求「新增 docs-consistency 门禁脚本，自动校验文档内的常量数值与测试路径」（推荐下一步 ③） |
+| `MJcoder-技术流程功能文档.md` | 修改 | ①1.5 表由 5 列扩为 6 列，新增「回归触发条件」列（6 行全部填入）；②1.5 节引言补「回归触发条件」说明；③新增一条 `>` 注：本表常量与测试路径由 `docs-consistency` 门禁自动校验 | 用户要求「为 1.5 表再补一列『回归触发条件』」（推荐下一步 ②） |
+| `README.md` | 修改 | 累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 尚存问题与推荐下一步
+- **门禁只断言「当前源码值在文档中存在」，不检测文档内新旧值并存**：若文档某处仍残留旧值、另一处已写新值，门禁不会报错（负例实测暴露此边界）。v1 判定此口径可接受（漂移主因是源码改了、文档整份未同步），如需更严可升级为「文档内同一常量只允许出现当前值」的扫描式断言。
+- **文档仍未纳入版本控制**：`MJcoder-技术流程功能文档.md` 受 `.gitignore` 第 46 行 `*.md` 规则忽略，门禁在 CI 冷启动时只能跳过（fail-open）。**根本解法仍是 `git add -f` 或加 `!MJcoder-*.md` 白名单例外**；本轮**未擅自改** `.gitignore`（保持用户授权边界）。
+- **新列「回归触发条件」为人工描述、无自动校验**：触发条件是「改动面 → 跑哪套」的约定，门禁暂只校验常量与测试路径，未校验触发条件的完整/准确性；后续可考虑记录为机器可读映射（如按改动路径前缀匹配）再接入 CI 变更集判断。
+- **推荐下一步**：①把 7 张图的 Mermaid 源抽为独立片段文件（`docs/diagrams/*.mmd`）供文档与对话渲染共用；②把 1.5 表的「回归触发条件」升级为机器可读映射，接入「按变更路径自动挑选必跑套件」的 CI 前置；③若文档入库，可把 docs-consistency 从「fail-open 跳过」升级为「强制门禁（缺文档即红）」。
+

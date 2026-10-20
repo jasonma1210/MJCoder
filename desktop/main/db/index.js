@@ -172,6 +172,17 @@ const MIGRATIONS = [
       addColumn(db, 'task_groups', 'thread_id', 'TEXT');
     },
   },
+  {
+    // R2（2026-10-20）：组持久化**项目路径**，统一 Worker 记忆召回的空间键。
+    // 此前 Worker 召回用 cwd（引擎注入的执行根，worktree 模式下是临时隔离目录），
+    // 而记忆归档用 projectPath —— 两者不一致时 Worker 召回不到项目记忆、记忆散入一次性空间。
+    // project_path = 建组时发起 run 的 projectPath；历史组无该列 → 召回回落 cwd。
+    version: 7,
+    name: 'task-group-project-path',
+    up: (db) => {
+      addColumn(db, 'task_groups', 'project_path', 'TEXT');
+    },
+  },
 ];
 
 function openDb(dataDir) {

@@ -538,26 +538,20 @@ function register() {
     });
   });
 
-  // Bug3：已连接服务的全量工具清单（含 inputSchema）——
-  // 应用重启后主进程自动重连，但渲染层 mcpTools 状态为空，
-  // 渲染层启动时调此通道重建 agent 工具集，MCP 工具即全程可用
+  // v1（2026-10-20，D1）：只回**已连接**服务的全量工具清单（含 inputSchema）。
+  // 应用重启后主进程自动重连 auto-start 档服务，但渲染层 mcpTools 状态为空，
+  // 渲染层启动时调此通道重建 agent 工具集，已连接服务（自启档 / 用户手动连接 / 意图预热）
+  // 的 MCP 工具即全程可用。
+  // 为什么不再用「已保存但未连接」服务的缓存清单兜底：那会让渲染层把**全部已保存** MCP 工具
+  // 注入**每一条**对话，与「MCP 默认全关、仅用户自选或按文本意图判定后才加载」的架构约束冲突，
+  // 也会让 intentPrewarm 的 `already` 过滤恒命中、意图动态加载沦为空操作。未连接服务的工具
+  // 改由「意图预热」在命中意图时按需连接后再纳入本轮（见 agentRunner.intentPrewarmToolDefs）。
   ipcMain.handle('mcp:listTools', async () => {
     const connected = new Set(mcp.listMcpServers());
-    const out = [...connected].map((name) => {
+    return [...connected].map((name) => {
       const s = mcp.getMcpServer(name);
       return { server: name, tools: s?.tools || [], connected: true };
     });
-    // 期 1：补上「已保存但当前未连接」服务的**缓存清单**——懒启动下这些服务不再随启动 spawn，
-    // 若只回已连接服务的工具，模型会看不见已装能力。此处用最近一次成功握手的清单兜底，
-    // 真正调用时由 callMcpTool 按需拉起并把真实结果取回。无缓存（从未连过）的服务不出现。
-    const saved = loadMcpConfig();
-    for (const s of saved) {
-      const name = String((s && s.name) || '');
-      if (!name || connected.has(name)) continue;
-      const mf = getToolCache().getManifest(name);
-      if (mf && mf.tools.length) out.push({ server: name, tools: mf.tools, connected: false });
-    }
-    return out;
   });
 
   // B3：已保存（持久化）的 MCP 配置列表 —— 前端据此渲染「已保存但未连接」状态

@@ -454,7 +454,7 @@ function register() {
   // 三层记忆 M1：domain 白名单（与 memory/index.js 的 remember 校验同源，宿主侧先归一化，
   // 非法值回落 global_knowledge 以保持既有 /mem 语义不变）。
   const MEMORY_DOMAINS = ['private', 'session', 'global_knowledge', 'entity', 'reflection'];
-  ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion', domain = 'global_knowledge', scope } = {}) => {
+  ipcMain.handle('local:memories/add', async (_, { projectPath, content, source = 'model_conclusion', domain = 'global_knowledge', scope, conversationId } = {}) => {
     // P0-2b/P1-16：写入收口 MemoryManager（SQLite）+ 显式来源（未知来源被 remember 拒绝）
     // X14：content 进 SQLite 且会被召回进模型上下文，projectPath 是记忆空间分区键——
     // 形状与长度在边界守（source 的白名单仍由 remember 判，属业务语义）
@@ -471,13 +471,18 @@ function register() {
     // domain 非法回落 global_knowledge；scope 合法性交由 remember 的 resolveScope 统一判定
     // （单一事实来源，宿主不重复实现作用域约束）。
     const dom = MEMORY_DOMAINS.includes(domain) ? domain : 'global_knowledge';
+    // 三层记忆 M3（R1 修复，2026-10-20）：会话层记忆必须绑定 conversationId——
+    // 此前 autoCapture 通道未传该键，source=model_conclusion → resolveScope 回落 session，
+    // 但 conversation_id=NULL ⇒ 会话层召回/清扫（均按 conv 过滤）永远命中不到，成为孤儿行。
+    // 非会话层由 remember 内部按 scope 自动解绑，故此处无条件透传即可。
+    const conv = conversationId ? String(conversationId) : null;
     const memoryManager = deps.getMemoryManager();
     if (memoryManager) {
       flushMemoryQueue(); // 就绪后补写积压（P1-16）
-      const m = memoryManager.remember({ spaceId: projectPath, domain: dom, scope, content, source });
+      const m = memoryManager.remember({ spaceId: projectPath, domain: dom, scope, content, source, conversationId: conv });
       return m ? { id: m.id, content: m.content } : { ok: false, error: '写入被拒绝：内容为空或来源不在白名单' };
     }
-    memoryWriteQueue.push({ spaceId: projectPath || 'default', domain: dom, scope, content, source });
+    memoryWriteQueue.push({ spaceId: projectPath || 'default', domain: dom, scope, content, source, conversationId: conv });
     return { queued: true };
   });
   ipcMain.handle('local:memories/list', async (_, { projectPath, limit, query, conversationId } = {}) => {

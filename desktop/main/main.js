@@ -897,7 +897,7 @@ const { waitGroupSettled, humanizeGroupResult, diffGroupEvents } = require('./or
 // 注意：仅在主会话 handlers 注入——Worker 内不可再编排（防递归失控）。
 // T1-3：emitSubagent 注入——把编排组内每个子任务的状态流转 diff 上报为 subagent 事件
 //（spawn/progress/done/failed + tokens + 结论摘要），供渲染层子任务树可视化。
-async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId } = {}) {
+async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId, projectPath } = {}) {
   const goal = String(args?.goal || '').trim();
   if (!goal) return { ok: false, error: 'goal 不能为空' };
   if (!taskStore) return { ok: false, error: dbStatus.toolFailure() };
@@ -921,7 +921,8 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId 
   const orchestratorRunId = runScope.getStore()?.runId || null;
   const orchestratorApproval = agentRunner.getApprovalModeFor(orchestratorRunId)
     || approvalSettings.getUserApprovalMode();
-  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, ...hostPolicySnapshot(cwd, orchestratorApproval) });
+  // R2：组持久化 projectPath（记忆归档的空间键）——未提供时回落 cwd（非 worktree/无项目场景）
+  const plan = await orchestrator.autoOrchestrate({ goal, cwd, threadId: conversationId || null, projectPath: projectPath || cwd || null, ...hostPolicySnapshot(cwd, orchestratorApproval) });
   if (!plan.ok) return { ok: false, error: `编排启动失败：${plan.error}` };
   // T1-3：spawn 上报（编排落地即逐任务发出，先于任何轮询）
   const reportSubagent = (evt) => {
@@ -1013,11 +1014,11 @@ agentRunner.initAgentRunner({
   // 其余工具与定时任务通道同源（toolShell/runWriteTool/toolGrep/... 主进程实现直调）
   // V01：createToolHandlers 接收本 run 的宿主治理值（agentRunner 已按角色钳制），
   // 工具处理器内一律使用宿主值，不读模型参数里的治理字段。
-  createToolHandlers: ({ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId, model }) => ({
+  createToolHandlers: ({ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId, model, projectPath }) => ({
     ...scheduledToolHandlers(),
     // runId 作为 streamTag：Agent 运行的流式输出带标签，渲染层按活跃会话过滤（切会话/后台运行不串显）
     chat: (chatPayload) => chatStreamOnce(chatPayload, sender, signal, runId),
-    orchestrateTask: (args) => toolOrchestrateTask(args, { signal, emitSubagent, conversationId: conversationId || '' }),
+    orchestrateTask: (args) => toolOrchestrateTask(args, { signal, emitSubagent, conversationId: conversationId || '', projectPath: projectPath || '' }),
     // 对话内网络插件搜索/安装（LobeChat 式）：搜索只读；安装恒走 L3 审批卡
     searchPlugins: (args) => searchPluginsTool(args),
     installPlugin: (args) => installNetworkPlugin(args, {
@@ -1132,7 +1133,7 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     // 追加在 BASE_PROMPT 之后（不替换）：BASE_PROMPT 承载「可用工具/默认目录/路径怎么给」，替换掉它模型就不知道自己能写文件、该写哪
     appendSystemPrompt: rc.appendPrompt,
     // 编排工具补齐：定时通道原先没有 orchestrate_task（对话有），这就是"同一句话对话能 4 Agent 并行、定时只能串行"的差别；cwd 强制产出目录，子 Agent 写入才落在用户找得到的地方。
-    toolHandlers: toolHooks.wrap(sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}` }) }), { cwd: rc.dir, conversationId: `scheduled:${taskId}` }),
+    toolHandlers: toolHooks.wrap(sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}`, projectPath: rc.dir }) }), { cwd: rc.dir, conversationId: `scheduled:${taskId}` }),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
     // trace 落盘用 runId（不是 taskId）：否则同一任务的多次运行互相覆盖，事后无法还原这一次发生了什么
     onTrace: (evt) => { sv.onTrace(evt); require('./runTrace').appendTraceEvent(runId, evt); },
@@ -1271,11 +1272,13 @@ function setupTaskOrchestration(db) {
           .filter((t) => t.status === 'done' && t.taskId !== task.taskId)
           .map((t) => `- ${t.title}：${String(t.result?.summary || '').slice(0, 300)}`);
         // P2-6：分层召回——按「目标+任务标题」查询该空间相关记忆，Top-3 注入
+        // R2：空间键统一为 project_path（与 agentRunner 归档同键），历史组无该列时回落 cwd。
+        const recallSpace = group.project_path || group.cwd;
         let memoryBlock = '';
         try {
-          if (memoryManager && group.cwd) {
+          if (memoryManager && recallSpace) {
             const hits = memoryManager.recallContents({
-              spaceId: group.cwd, query: `${group.goal} ${task.title}`, topK: 3,
+              spaceId: recallSpace, query: `${group.goal} ${task.title}`, topK: 3,
               domains: ['global_knowledge', 'entity', 'reflection'],
             });
             if (hits.length) {

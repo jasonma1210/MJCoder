@@ -51,7 +51,8 @@ check('orchestrate 的 cwd 被强制为产出目录（不让模型自选）', ()
 });
 
 check('orchestrate 绑定本次运行（signal + conversationId），可被停止/可归属', () => {
-  assert.match(mainSrc, /toolOrchestrateTask\(\{ \.\.\.a, cwd: rc\.dir \}, \{ signal, conversationId: `scheduled:\$\{taskId\}` \}\)/);
+  // R2（2026-10-20）：随 projectPath 一并下发（记忆召回空间键统一为项目路径，而非产出目录/临时 worktree）
+  assert.match(mainSrc, /toolOrchestrateTask\(\{ \.\.\.a, cwd: rc\.dir \}, \{ signal, conversationId: `scheduled:\$\{taskId\}`, projectPath: rc\.dir \}\)/);
 });
 
 const prompt = buildScheduledPrompt({ dir: '/tmp/out-x', contextCwd: '/tmp/proj-x' });

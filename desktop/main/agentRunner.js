@@ -384,6 +384,9 @@ function startAgentRun(payload, sender) {
         cwd: payload.cwd,
         // R6：发起会话 id——对话内 orchestrate_task 建组时绑定会话（组按会话归属显示）
         conversationId: payload.conversationId || '',
+        // R2（2026-10-20）：项目路径——orchestrate_task 建组时落 task_groups.project_path，
+        // 使 Worker 记忆召回与归档用同一空间键（项目路径），而非子任务 worktree 的临时目录。
+        projectPath: payload.projectPath || '',
         // G-CUA：当前会话模型（引擎侧嵌套形）——computer_use handler 据此解析凭证调 CUA 循环
         model: payload.model,
       });

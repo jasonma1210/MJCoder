@@ -77,7 +77,8 @@ const approvalSettings = require(path.join(ROOT, 'main/approvalSettings.js'));
   check('main.js createToolHandlers 注册 computerUse handler',
     /computerUse: \(args\) => toolComputerUse\(args, \{/.test(mainSrc));
   check('main.js createToolHandlers 接收 model 参数',
-    /createToolHandlers: \(\{ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId, model \}\)/.test(mainSrc));
+    // R2（2026-10-20）：签名新增 projectPath（编排建组落记忆空间键），model 仍在列
+    /createToolHandlers: \(\{ sender, signal, runId, emitSubagent, approvalMode: runApprovalMode, conversationId, model, projectPath \}\)/.test(mainSrc));
   check('toolComputerUse 顶层授权走标准审批中心（computer_use，仅 once 放行）',
     /requestApproval\('computer_use'/.test(mainSrc) && /topDecision !== 'once'/.test(mainSrc));
   check('toolComputerUse 逐次动作确认走标准审批中心（复用 cua_action）',

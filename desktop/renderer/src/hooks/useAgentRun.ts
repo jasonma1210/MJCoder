@@ -507,14 +507,14 @@ export default function useAgentRun(d) {
       rs.finalMsg = assistantMsg;
       rs.applied = wasActive; // 活跃路径马上追加进可见列表；后台路径留给切回时的拉取/补挂
       if (wasActive) setMessages((m) => [...m, assistantMsg]);
-      // P0-2a：两阶段记忆 POC 的每轮自动沉淀改为**受设置项控制，默认关闭**——
-      // 此前每轮对话结束都无差别写入长期记忆（问→结论截断拼接），形成
-      // 「不可信内容 → 模型结论 → 长期记忆 → 后续 prompt」的污染正反馈。
-      // 现仅在用户于设置页显式开启 memory.autoCapture 后才写入；用户主动留存走 /mem 指令。
+      // P0-2a：每轮自动沉淀改为**受设置项控制，默认关闭**——此前每轮都无差别写长期记忆（问→结论截断拼接），
+      // 形成「不可信内容→模型结论→长期记忆→后续 prompt」的污染正反馈；仅在设置页开启 memory.autoCapture 后才写入。
       if (project?.path && window.mjcode?.localAddMemory && !aborted && await autoCaptureEnabled()) {
         try {
           await window.mjcode.localAddMemory({
             projectPath: project.path,
+            // R1：必须带 conversationId，否则 model_conclusion 落 session 域却 conversation_id=NULL（孤儿行）
+            conversationId: currentThread?.id || '',
             content: `问「${content.slice(0, 80)}」→ 结论：${finalText.slice(0, 200)}`, // i18n-literal（记忆沉淀内容随会话语言）
             source: 'model_conclusion', // P0-2b：显式标注来源（模型结论档可信度）
           });
