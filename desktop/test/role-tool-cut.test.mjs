@@ -5,7 +5,9 @@
 //
 // 本套件锁三件事（缺一即不算闭环）：
 //   ① allowMcp:false ⇒ 通告列表里 MCP 工具被裁掉；
-//   ② 缺省 ⇒ 保持既有行为（向后兼容；翻默认值属下一版，会破坏现有员工包）；
+//   ② 缺省 ⇒ **MCP 也走角色白名单**（B1-B-02 / F-019 语义翻转：缺省不再放宽；
+//      存量数字员工的行为由 main/ecosystem.js buildEmployeeRuntimePreset 显式
+//      `allowMcp: true` 保持不变——引擎侧收紧、角色构造层显式放开）；
 //   ③ **只裁通告列表不算闭环**：模型硬调未通告的工具时，运行时白名单守卫必须拒绝，
 //      且 handler 一次都不能被调用（fail-closed，不是「报了错但已经执行」）。
 import {
@@ -75,12 +77,20 @@ async function runOnce({ rolePreset, forceCall }) {
     strict.advertised.length === 1 && strict.advertised[0] === 'read_file',
     `advertised=[${strict.advertised.join(',')}]`);
 
-  // ② 缺省 ⇒ 向后兼容（角色未声明 MCP 时保持现状）
+  // ② 缺省 ⇒ MCP 也走角色白名单（B1-B-02 / F-019：缺省值从 fail-open 翻为最小权限）
+  // 旧断言是「缺省保持 MCP 全量」（advertised.length === 2）——那是最小权限闭包在 MCP 维度
+  // 未生效（只读角色仍可调任意 MCP 写工具）。语义整体反转，原因见套件头注释 ②。
   const compat = await runOnce({ rolePreset: { toolNames: ['read_file'] } });
-  check('缺省 allowMcp ⇒ 通告 [read_file, mcp__demo__ping]（向后兼容）',
-    compat.advertised.length === 2
-    && compat.advertised.includes('read_file') && compat.advertised.includes('mcp__demo__ping'),
+  check('缺省 allowMcp ⇒ 通告恰好 [read_file]（MCP 也走白名单，F-019 翻转）',
+    compat.advertised.length === 1 && compat.advertised[0] === 'read_file',
     `advertised=[${compat.advertised.join(',')}]`);
+
+  // ②b 存量兼容接缝：角色构造层显式 allowMcp:true ⇒ MCP 保留
+  const explicit = await runOnce({ rolePreset: { toolNames: ['read_file'], allowMcp: true } });
+  check('显式 allowMcp:true ⇒ 通告 [read_file, mcp__demo__ping]（存量数字员工行为不变）',
+    explicit.advertised.length === 2
+    && explicit.advertised.includes('read_file') && explicit.advertised.includes('mcp__demo__ping'),
+    `advertised=[${explicit.advertised.join(',')}]`);
 
   // ③ 闭环：模型硬调未通告的 MCP 工具 → 守卫拒绝 + handler 未被调用
   const guarded = await runOnce({
@@ -95,10 +105,12 @@ async function runOnce({ rolePreset, forceCall }) {
   check('拒绝文案指明 fail-closed 语义', String(res.error || '').includes('fail-closed'),
     String(res.error || '').slice(0, 100));
 
-  // 对照：缺省（兼容档）下同一调用必须被放行——证明上面的拒绝确实来自「裁剪」而非别的原因
-  const allowed = await runOnce({ rolePreset: { toolNames: ['read_file'] }, forceCall: 'mcp__demo__ping' });
+  // 对照：显式 allowMcp:true（存量兼容档）下同一调用必须被放行——证明上面的拒绝
+  // 确实来自「角色裁剪」而非别的原因。对照组必须走**放开档**：新语义下缺省档本身也
+  // 已被裁剪，若仍用缺省档做对照，对照组会与实验组同为拒绝，判据就失效了。
+  const allowed = await runOnce({ rolePreset: { toolNames: ['read_file'], allowMcp: true }, forceCall: 'mcp__demo__ping' });
   const allowedRes = allowed.toolResults.find((r) => r.name === 'mcp__demo__ping')?.result || {};
-  check('对照：兼容档下同一 MCP 调用被放行（证明拒绝来源是角色裁剪）',
+  check('对照：显式 allowMcp:true 档下同一 MCP 调用被放行（证明拒绝来源是角色裁剪）',
     allowedRes.pong === true && allowed.mcpCalls === 1,
     `mcpCalls=${allowed.mcpCalls} result=${JSON.stringify(allowedRes).slice(0, 80)}`);
 }

@@ -71,6 +71,17 @@ function toAgentModel(m) {
         // P0-3②: 思考强度必须随形状转换带上——否则 Worker / 定时任务 / 编排组
         // 恒为服务端默认（引擎侧已按 model.model.reasoning_effort 下发，缺这里就断链）
         reasoning_effort: m.model?.reasoning_effort || m.model?.reasoningEffort || '',
+        // B1-B-02（F-003）：能力位必须随形状转换带上——与上面 reasoning_effort 踩的是
+        // **同一个洞**（P0-3② 已修过一次，caps 又踩了一遍）。本函数重建对象时只挑字段，
+        // 不带上就等于把能力声明抹掉，于是下面三条链路全部断链：
+        //   · Worker（workerPool 用 toAgentModel(resolveModel()) 作为子任务模型）
+        //   · 定时任务（scheduler 通道同样经本函数转嵌套形）
+        //   · 编排组（orchestrator / orchestrate_task 的 resolveModel 结果）
+        // 后果：用户把某模型标为「不支持 tool calling」，主对话按能力门裁剪了工具，
+        // 这三条链路却仍是全量工具——同一个开关在两条路径上结论相反（引擎侧
+        // resolveSupportsToolCall 只能读到传进来的东西，转换层不搬它就恒为缺省 true）。
+        // 只在来源确实声明过 caps 时才带（不造空对象：空对象会被下游读成「已声明但无字段」）。
+        ...(isPlainObject(m.model?.caps) ? { caps: { ...m.model.caps } } : {}),
       },
     };
   }
@@ -94,6 +105,15 @@ function toAgentModel(m) {
       }),
       // P0-3②: 扁平形的思考强度字段名有两种历史写法（reasoning_effort / reasoningEffort）
       reasoning_effort: m.reasoning_effort || m.reasoningEffort || '',
+      // B1-B-02（F-003）：扁平形的工具调用能力位同样必须随转换带上（理由见嵌套形分支）。
+      // 扁平侧有**两种历史写法**，都要认（与 reasoning_effort 的双写法同理）：
+      //   · m.caps —— localStore 的 providerModel 条目（{ caps: { supportsToolCall: false } }）
+      //   · m.supportsToolCall —— ~/.mjcode/models.json 的扁平条目（modelsFile.serializeProviders
+      //     把非默认能力实心化成顶层 supportsToolCall:false）
+      // 只吞对象/布尔两种形状，其余（字符串 "false" 之类）不猜——宁可缺省也不误判。
+      ...(isPlainObject(m.caps)
+        ? { caps: { ...m.caps } }
+        : (typeof m.supportsToolCall === 'boolean' ? { caps: { supportsToolCall: m.supportsToolCall } } : {})),
     },
   };
 }

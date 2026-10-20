@@ -21,6 +21,26 @@ const ORCHESTRATOR_SYSTEM = [
   '5. 输出只能是 JSON，以 { 开头以 } 结尾。',
 ].join('\n');
 
+const NO_TOOL_CAPABILITY_ERROR = '当前模型被标记为不支持 tool calling，任务编排/子代理依赖工具调用，无法执行；'
+  + '请在设置页开启该模型的能力开关或换用支持工具的模型。';
+
+// B1-B-02（F-003）：编排前的工具能力前置判定（fail-fast）。
+// 为什么必须在**拆解之前**拦：编排器的产出是「让 Worker 去用工具干活」的 DAG，
+// 模型不支持 tool calling 时整条链路注定跑空——拆解本身能成功（纯文本 JSON），
+// 然后每个 Worker 在无工具状态下空转烧预算，用户最后看到一堆「已完成」的空壳任务。
+// 与其他能力读取处同口径：只有**显式 boolean false** 才判为不支持，未声明一律视为支持
+// （否则历史配置会集体失去编排能力，那是另一种越权收窄）。
+function modelSupportsToolCall(m) {
+  const cands = [
+    m?.model?.caps?.supportsToolCall,
+    m?.caps?.supportsToolCall,
+    m?.model?.supportsToolCall,
+    m?.supportsToolCall,
+  ];
+  for (const v of cands) if (typeof v === 'boolean') return v;
+  return true;
+}
+
 let deps = null;
 
 function initOrchestrator(d) {
@@ -58,6 +78,16 @@ async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, r
   const g = String(goal || '').trim();
   if (!g) return { ok: false, error: '目标为空' };
   if (!deps) return { ok: false, error: 'Orchestrator 未初始化' };
+  // B1-B-02（F-003）：能力门在**建组之前**（比拆解更早）：拆解成功但 Worker 无工具，
+  // 用户会拿到一组注定空转的任务，比直接报错更糟（错误被伪装成进度）。
+  // resolveModel 未配置时自己会抛明确错误，这里只判能力位，不改变它的报错语义。
+  try {
+    if (!modelSupportsToolCall(deps.resolveModel())) {
+      return { ok: false, error: NO_TOOL_CAPABILITY_ERROR, code: 'NO_TOOL_CAPABILITY' };
+    }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
 
   const extra = repairHint
     ? `【修复要求】上一次输出未通过校验，原因：${repairHint}\n请重新输出严格 JSON，以 { 开头以 } 结束。`
@@ -165,4 +195,8 @@ function onTaskEvent(evt) {
   }
 }
 
-module.exports = { initOrchestrator, planGoal, autoOrchestrate, maybeAutoReplan, onTaskEvent, buildReplanContext, ORCHESTRATOR_SYSTEM };
+module.exports = {
+  initOrchestrator, planGoal, autoOrchestrate, maybeAutoReplan, onTaskEvent, buildReplanContext, ORCHESTRATOR_SYSTEM,
+  // B1-B-02：能力前置判定与其错误文案对外导出（测试直接断言 fail-fast 语义）
+  modelSupportsToolCall, NO_TOOL_CAPABILITY_ERROR,
+};

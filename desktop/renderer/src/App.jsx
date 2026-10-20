@@ -70,7 +70,7 @@ export default function App() {
         providerId: selectedModel.provider.id,
         isGlobal: !!selectedModel.provider.isGlobal,
         baseUrl: selectedModel.provider.base_url || '',
-        model: selectedModel.model.model_id,
+        model: selectedModel.model.model_id, caps: selectedModel.model.caps || undefined,
         cwd: activeProject?.path || '',
       });
     } catch (e) { console.warn('[app] failed to push scheduled-task model:', e); }

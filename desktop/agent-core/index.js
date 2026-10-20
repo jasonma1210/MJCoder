@@ -1645,6 +1645,16 @@ export function toAgentModelLite(ref) {
       model_id: String(modelId),
       context_window: Number(ref.contextWindow ?? ref.context_window) || 0,
       reasoning_effort: ref.reasoningEffort || ref.reasoning_effort || '',
+      // B1-B-02（F-003）：工具调用能力位必须随形状转换带上——扁平→嵌套这一层此前只搬
+      // 窗口与思考强度，caps 被整块抹掉，于是分档模型（worker/compact/decompose）的能力声明
+      // 与 P0-3② 的 reasoning_effort 一样在转换层断链：spawn_subagent 的能力 fail-fast
+      // 永远读不到 worker 模型是否声明了 supportsToolCall=false。
+      // 只在来源确实带声明时才写入（不凭空补默认值——缺省语义由消费侧决定）。
+      ...(ref.caps && typeof ref.caps === 'object'
+        ? { caps: { ...ref.caps } }
+        : (typeof ref.supportsToolCall === 'boolean'
+          ? { caps: { supportsToolCall: ref.supportsToolCall } }
+          : {})),
     },
   };
 }
@@ -2124,6 +2134,35 @@ function assertAgentModelShape(m) {
 }
 // 导出供测试交叉验证形状定义一致性
 export { assertAgentModelShape };
+
+// ── B1-B-02（F-003）：读取模型「是否支持 tool calling」的显式声明 ──
+// 事故背景：`supportsToolCall` 全仓只出现在模型解析（main/modelsFile.js:66,205）、
+// 持久化（main/localStore.js）与 UI（ModelsTab.tsx:299）——**执行层零消费**。
+// 用户在设置页关掉某个模型的能力开关，引擎照旧下发全部工具：开关是装饰品。
+//
+// 为什么按「四种落点」兼容读取：本项目里 model 对象有三条不同来源，caps 的位置各不相同——
+//   ① model.model.caps.supportsToolCall —— 渲染层主链（api.js providers[].models[].caps
+//      → selectedModel.model.caps → useAgentRun 的 runModel，agentRunner 原样透传 payload.model）
+//   ② model.caps.supportsToolCall       —— 直接把模型条目塞进来的扁平调用方
+//   ③ model.model.supportsToolCall / model.supportsToolCall —— ~/.mjcode/models.json 的扁平格式
+//      （main/modelsFile.js serializeProviders 把非默认能力实心化成 supportsToolCall:false）
+// 顺序即优先级：越靠近「渲染层主链」越优先。
+//
+// 缺省语义：**三者皆缺省 → true**（保持现状，零破坏）。理由与 modelsFile.defaultCaps 同口径
+// （`supportsToolCall !== false`）：本仓库的模型条目默认被视为支持工具调用，若把「未声明」
+// 解读成 false，所有历史配置与 Worker/编排路径（它们经 modelShape.toAgentModel 转换，
+// caps 不随行）会在升级瞬间集体失去工具，属于把「未声明」当「不支持」的越权收窄。
+// 只有**显式 boolean false** 才判为不支持。
+export function resolveSupportsToolCall(m) {
+  const cands = [
+    m?.model?.caps?.supportsToolCall,
+    m?.caps?.supportsToolCall,
+    m?.model?.supportsToolCall,
+    m?.supportsToolCall,
+  ];
+  for (const v of cands) if (typeof v === 'boolean') return v;
+  return true;
+}
 // P1-5：工具展示名 ↔ 通道名映射对外导出——主进程的 hooks 匹配器需要「展示名」做用户友好的
 // `match`（write_file 而非 writeFile），从单一来源取表可避免两处各写一份而漂移。
 export { TOOL_HANDLER_NAMES };
@@ -2411,28 +2450,65 @@ export async function runAgent({
     effectiveBaseTools = [...effectiveBaseTools, COMPUTER_USE_TOOL];
   }
   let allTools = [...effectiveBaseTools, ...mcpTools];
+  // ── B1-B-02：三段裁剪（顺序写死，每一段都 fail-closed）──
+  // 三条同源 P1 缺陷的根因是同一件事：工具裁剪链**全部 fail-open**——任何一环
+  // 「判定失败 / 未配置 / 名字拼错」都退回全量工具，于是「只读角色」与「不支持 tool calling
+  // 的模型」照样拿到写文件 / shell / MCP 写工具。权限方向搞反了，这不是体验问题。
+  //   ① capability 门（**硬**）：模型被标记为 supportsToolCall === false → allTools = []，
+  //      并**跳过后续所有「加回来」的分支**（角色子集 / MCP 白名单 / planMode 都不再跑）。
+  //   ② 角色子集（**软但空交集也 fail-closed**）：rolePreset.toolNames 取交集；交集为空
+  //      → allTools = []（F-018：旧行为是「保持全量」，等于给配错白名单的角色发全权）。
+  //   ③ planMode filter（既有只读白名单，逻辑不变）。
+  // **顺序不可交换**：① 必须在 ② 之前——否则 ② 的交集结果会把 ① 清零的集合又加回来；
+  // ② 必须在 ③ 之前——planMode 是对「已裁剪集合」再做只读收窄，不是对全量收窄。
+  // advertisedToolNames 由最终 allTools 派生，故 V02 运行时白名单守卫无需改动即同时收紧。
+  const toolCallCapable = resolveSupportsToolCall(model);
+  // ① capability 门（硬 · fail-closed）
+  if (!toolCallCapable) {
+    allTools = [];
+    // 明确告警而不是静默：真机排查「模型胡说调了工具」时，日志要能直接指向能力开关。
+    console.warn(`[agent] 模型 ${model?.model?.model_id || '?'} 被标记为不支持 tool calling，本次运行不下发任何工具（fail-closed）`);
+  }
+  // ② 角色子集（软 · 空交集也必须 fail-closed）
   // T4-3：角色模板工具子集——toolNames 为具体工具名白名单，对内置工具取交集。
-  // P1-10：**MCP 工具此前无条件附加，角色隔离被整体绕过**（只读角色仍可调任意写外部系统的 MCP 工具）。
-  // 现在按 allowMcp 收敛：显式 false → MCP 也走白名单（最小权限闭包）；
-  // 缺省 true → 保持既有行为（零破坏；翻默认值需同批改 buildEmployeeRuntimePreset，属下一版遗留）。
-  // advertisedToolNames 由此自动跟着收敛，运行时白名单守卫无需改动即同时收紧。
-  if (Array.isArray(rolePreset?.toolNames) && rolePreset.toolNames.length && !customTools) {
+  // F-019：allowMcp 语义**翻转**为最小权限——只有显式 true 才保留全部 mcpTools；
+  //   false 或 undefined（缺省）一律让 MCP 也走同一份白名单。
+  //   存量 51 个数字员工的行为靠 main/ecosystem.js buildEmployeeRuntimePreset 显式写
+  //   `allowMcp: true` 保持（引擎侧收紧 + 角色构造层显式放开，这是本次的接缝设计）。
+  //   「缺省 = 不放宽」是刻意的：新角色默认安全，要用 MCP 就在构造处显式声明。
+  if (toolCallCapable && Array.isArray(rolePreset?.toolNames) && rolePreset.toolNames.length && !customTools) {
     const allowed = new Set(rolePreset.toolNames.map(String));
     const picked = effectiveBaseTools.filter((t) => allowed.has(t.function?.name));
-    if (picked.length) {
-      const mcpAllowed = rolePreset.allowMcp === false
-        ? mcpTools.filter((t) => allowed.has(t.function?.name)) // 严格：只留角色显式声明的 MCP 工具
-        : mcpTools;                                             // 兼容：角色未声明时保持现状
-      allTools = [...picked, ...mcpAllowed];
-    } else {
-      console.warn('[agent] 角色模板 toolNames 与内置工具交集为空，回落全量工具');
+    const mcpAllowed = rolePreset.allowMcp === true
+      ? mcpTools                                             // 角色构造层显式放开 MCP
+      : mcpTools.filter((t) => allowed.has(t.function?.name)); // 缺省/false：MCP 也走白名单
+    allTools = [...picked, ...mcpAllowed];
+    if (!picked.length) {
+      // F-018：交集为空 = 角色白名单与内置工具名对不上（多半是拼错）。旧行为是
+      // 「回落全量工具」——等于把最受限的角色变成权限最大的角色。现在收敛为空集：
+      // 宁可这次什么也做不了（用户立刻看到「没有工具可用」并去改配置），
+      // 也不能让它带着写文件 / shell / MCP 的权限跑完。
+      console.warn(`[agent] 角色模板 toolNames 与内置工具交集为空（${rolePreset.toolNames.slice(0, 8).join(',')}），已按 fail-closed 收敛为空集，请检查角色工具名是否拼写正确`);
     }
   }
-  if (planMode) {
+  // ③ planMode filter（既有只读白名单，逻辑保持不变）
+  // 为什么加 `toolCallCapable` 前置：capability=false 时工具已被整体清零，planMode 的
+  // 「写工具已被移除」提示与下面的「无工具模式」提示会同时出现，两句互相稀释；此时
+  // 唯一准确的描述是「完全没有工具」，故让 capability 段独占 system 尾部。
+  if (planMode && toolCallCapable) {
     allTools = allTools.filter((t) => PLAN_MODE_ALLOWED.has(t.function?.name));
     convo[0] = {
       role: 'system',
       content: `${convo[0].content}\n\n## 规划模式\n当前处于规划模式（只读）：写文件、改代码、补丁、Git 写操作、shell 命令、代码执行、MCP 工具、浏览器/Chrome 操作与任务编排的工具已被移除。你只能读取与搜索代码（含只读联网查询），然后输出一份可执行的实施计划（分步骤、标注涉及文件），等待用户确认后再由后续轮次执行。`,
+    };
+  }
+  // ① capability 门的 system 侧配套：工具数组为空时必须**明确告知模型**，否则模型照旧
+  // 输出「我来写文件 / 我来跑命令」的叙述，用户看到的是「说要调工具但什么也没发生」——
+  // 这是假观测。放在 planMode 之后注入，保证它是 system 里最后一句话。
+  if (!toolCallCapable) {
+    convo[0] = {
+      role: 'system',
+      content: `${convo[0].content}\n\n## 无工具模式（当前模型不支持 tool calling）\n本次运行没有向你提供任何工具：当前模型被标记为不支持工具调用（function calling），工具清单为空，你无法读写文件、执行命令、联网抓取或调用 MCP。\n请仅基于对话上下文与已有信息回答。若任务必须依赖工具（改代码、跑测试、读文件、查外部系统），请直接说明「当前模型不支持工具调用，无法完成该任务」，并建议在设置页开启该模型的能力开关或切换到支持工具调用的模型。\n不要在回复中输出 tool_calls 结构，也不要声称自己已经执行过任何工具。`,
     };
   }
   // V02 运行时白名单守卫：本 run 实际「通告」给模型的工具集合。
@@ -3031,6 +3107,21 @@ export async function runAgent({
         if (toolResult !== undefined) return;
         switch (tc.function.name) {
           case 'spawn_subagent': {
+            // B1-B-02（F-003 同源）：子代理内部是**另一次 runAgent**。若它的模型被标记为
+            // 不支持 tool calling，子代理会带着空工具集跑满 SUBAGENT_MAX_ROUNDS——
+            // 一轮轮「模型说要调工具但无工具可用」，把预算烧在空转上，父代理最后只拿到
+            // 一句无信息量的结论。与其静默跑空轮，不如在**派发点**fail-fast，
+            // 把原因与补救路径一并回传给父代理（父代理据此换策略或如实告知用户）。
+            if (!resolveSupportsToolCall(workerModel)) {
+              const deadModel = workerModel?.model?.model_id || '?';
+              toolResult = {
+                ok: false,
+                error: `子代理无法执行：其使用的模型（${deadModel}）被标记为不支持 tool calling。子代理依赖工具探索文件与执行命令，没有工具能力时只能空转。请在设置页开启该模型的能力开关，或在任务-模型分档中为 worker 指定支持工具调用的模型。`,
+                code: 'SUBAGENT_NO_TOOL_CAPABILITY',
+              };
+              console.warn(`[agent] spawn_subagent 被拒绝：模型 ${deadModel} 不支持 tool calling（fail-fast，避免空转烧预算）`);
+              break;
+            }
             // 真子代理：只读工具子集 + 独立上下文 + token 预算（耗尽自动停止）
             const budget = Number(args.token_budget) > 0 ? Number(args.token_budget) : SUBAGENT_DEFAULT_BUDGET;
             const subCtl = new AbortController();

@@ -164,6 +164,16 @@ function buildEmployeeRuntimePreset(emp) {
   return {
     systemPrompt: String(emp.system_prompt || ''),
     toolNames,
+    // B1-B-02（F-019）：allowMcp 的缺省值在引擎侧已翻转为**最小权限**（只有显式 true 才保留
+    // 全部 mcpTools，缺省/false 一律让 MCP 也走角色白名单）。这是刻意的方向修正，但若不同批
+    // 处理存量角色，已发布的 51 个数字员工会「突然失去全部 MCP 工具」——行为变弱且无预告。
+    // 因此接缝放在这里：**引擎侧收紧 + 角色构造层显式放开**。存量角色继续拥有 MCP；
+    // 而任何不经本函数构造的角色 preset（外部导入 / 新模板忘了写）默认拿到最小权限。
+    // 写法用 `!== false` 而不是写死 true：已核查 ecosystem/digital-employees.json 的 51 条
+    // 目前**没有任何一条显式声明 allowMcp**（顶层键里根本没有这个字段），所以两种写法在今天
+    // 行为完全一致；但写死 true 会把未来员工包显式声明的 `allowMcp: false` 反向覆盖掉——
+    // 那正是本条要消灭的「配置被静默放宽」，因此保留显式 false 的否决权。
+    allowMcp: emp.allowMcp !== false,
     approvalMode: ROLE_APPROVAL_MAP[emp.approval_policy] || 'on-request',
     sandboxPolicy: emp.sandbox_policy || 'workspace-write',
     skillNames: (emp.starter_skills || []).map((s) => (s == null ? '' : String(s))).filter(Boolean),

@@ -901,6 +901,14 @@ async function toolOrchestrateTask(args, { signal, emitSubagent, conversationId,
   const goal = String(args?.goal || '').trim();
   if (!goal) return { ok: false, error: 'goal 不能为空' };
   if (!taskStore) return { ok: false, error: dbStatus.toolFailure() };
+  // B1-B-02（F-003）：工具能力门（fail-fast）——与 orchestrator/index.js 的 planGoal 同语义。
+  // 为什么 handler 入口还要再拦一次：planGoal 那道门要等 autoOrchestrate 才会走到，而本
+  // handler 之前还有审批快照/建组等副作用；更关键的是「组建好了、Worker 全空转」会让用户
+  // 看到一组漂亮的任务卡片却一个产物都没有——错误被伪装成进度，比直接失败更难排查。
+  // 判定口径与引擎一致：只有显式 boolean false 才算不支持（缺省视为支持，零破坏）。
+  if (!orchestrator.modelSupportsToolCall(scheduler.getModel())) {
+    return { ok: false, code: 'NO_TOOL_CAPABILITY', error: orchestrator.NO_TOOL_CAPABILITY_ERROR };
+  }
   const cwd = String(args?.cwd || '');
   // P0 治理修复（2026-10-16）：原实现 `workerPool.setMaxConcurrent(args.max_agents)`
   // 存在三个问题：
@@ -1191,7 +1199,14 @@ function resolveTaskModel() {
     throw new Error('未配置执行模型：请在任意会话中选择模型（任务编排复用会话模型与凭证）');
   }
   // P0-3①：思考强度必须随模型下发（定时任务/编排此前恒发默认档）
-  return { providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model, reasoningEffort: m.reasoningEffort || m.reasoning_effort || '' };
+  // B1-B-02（F-003）：能力位同理——这里若把 caps 摘掉，编排/定时链路的工具能力门就永远
+  // 读到缺省 true（引擎按「未声明=支持」处理），开关在这两条链上再次变成装饰品。
+  // 只在来源声明过时才带（scheduled:setModel 原样存载荷，本函数只搬不造）。
+  return {
+    providerId: m.providerId, isGlobal: !!m.isGlobal, baseUrl: m.baseUrl || '', model: m.model,
+    reasoningEffort: m.reasoningEffort || m.reasoning_effort || '',
+    ...(m.caps && typeof m.caps === 'object' ? { caps: m.caps } : {}),
+  };
 }
 
 function initTaskOrchestration() {
