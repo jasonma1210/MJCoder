@@ -35,15 +35,24 @@
 //   在字节上无法与 server=`my`, tool=`svc__x` 区分——名字里没有留下编码痕迹；
 //   这类名字只能靠**重新连接后重新拼名**修正（新拼名为 `mcp__my%5F%5Fsvc__x`）。
 //
-// ── 已知限制（本轮不修，需 B2 定阈值后补） ──────────────────────────────────
+// ── 编码后全名长度预算（B2-B-13） ────────────────────────────────────────────
 //   编码后长度会膨胀：ASCII 安全字符 1:1，而**每个被转义字节 → 3 字符**（`%XX`）。
 //   UTF-8 下中文 1 字符 = 3 字节 = **9 字符**（实测：8 字中文服务名 8 → 72；120 字 → 1080）。
-//   模型供应商对 `function.name` 有长度上限（本仓库 main/mcpClient.js 对**工具名**段限 128），
-//   服务名段当前**没有**编码后长度校验（入口只校验原始 name ≤ 120 字符），因此超长中文服务名
-//   可能在供应商侧被 400 拒绝。改前这种情况是「含非 ASCII 直接被拒」，现在至少能连上、
-//   只在极长时触顶 —— 故本轮**不擅自加拒绝规则**（会误伤现有中文命名配置），留待 B2 统一
-//   定「编码后全名长度预算」后补校验。
+//   模型供应商对 `function.name` 有长度上限，本仓库 main/mcpClient.js 已对**工具名**段
+//   限 128（`TOOL_NAME_MAX = 128`），但**服务名段原本无上限**（入口只校验原始 name ≤ 120 字符）
+//   → 一个 30 汉字的服务名编码后 >270 字符：握手成功、工具也在列表里，但每次把工具交给模型
+//   都会被供应商 400 拒掉，表现成「连上了却调不动」，且错误信息与「服务名太长」毫无线索关联。
 //
+//   本模块只**声明预算 + 提供判定**，不做截断：
+//     截断会破坏「拼名 → 反解」的可逆性，而这正是 F-005 修复的前提（见文件头）。
+//   拒绝动作放在入口 `main/ipc/mcp.js` 的 `mcp:connect`（fail-closed 在连接前拒，
+//   而不是让一个「名字必然被供应商拒」的服务被写进 mcp-servers.json 后长期不可用）。
+//   取值 128 与 mcpClient.js 的 `TOOL_NAME_MAX` 对齐 —— 供应商看到的是**同一个**完整名字
+//   字符串，两处用不同数字只会在中间留出一段「本仓认为合法、供应商认为超长」的灰区。
+
+/** 完整 `mcp__<编码服务名>__<工具名>` 的字符上限（与 main/mcpClient.js 的 `TOOL_NAME_MAX` 对齐）。 */
+export const MAX_ENCODED_FULL_NAME_CHARS = 128;
+
 // ── 零依赖 ──────────────────────────────────────────────────────────────────
 //   不用 `Buffer`（渲染层经 Vite 打包，无 Node 内建），只用 `TextEncoder` / `TextDecoder`
 //   （Node ≥11 与所有浏览器均为全局）。与 shared/untrustedContent.mjs、shared/mcpToolDefs.mjs
@@ -152,12 +161,15 @@ export function decodeToolName(fullName) {
 }
 
 /**
- * 该完整工具名是否为**可唯一反解**的规范拼名（入口校验用）。
- * 判定 = 「反解后再拼回去，必须逐字节相同」：既排除结构非法，也排除非规范编码
- * （如小写十六进制 `%5f`、旧格式 `my__svc` 片段）。
+ * 该完整工具名是否为**可唯一反解且长度在预算内**的规范拼名（入口校验用）。
+ * 判定 = 「反解后再拼回去，必须逐字节相同」且「长度 ≤ MAX_ENCODED_FULL_NAME_CHARS」：
+ *   · 前者排除结构非法与非规范编码（如小写十六进制 `%5f`、旧格式 `my__svc` 片段）；
+ *   · 后者排除「可逆但供应商必然拒」的超长编码名（见文件头「编码后全名长度预算」）。
+ * 两项都必须过：只可逆不控长 → 连接成功但工具永远调不动；只控长不可逆 → 调用错路由。
  */
 export function isEncodedNameSafe(fullName) {
   const name = fullName == null ? '' : String(fullName);
+  if (name.length > MAX_ENCODED_FULL_NAME_CHARS) return false; // 超长：编码膨胀撞供应商上限
   const parsed = decodeToolName(name);
   if (!parsed) return false;
   return buildToolName(parsed.server, parsed.tool) === name;

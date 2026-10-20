@@ -50,7 +50,41 @@ function loadMcpNameCodec() {
 let toolCache = null;
 function getToolCache() {
   if (toolCache) return toolCache;
-  toolCache = createMcpToolCache({ filePath: path.join(app.getPath('userData'), 'mcp-tool-manifests.json') });
+  toolCache = createMcpToolCache({
+    filePath: path.join(app.getPath('userData'), 'mcp-tool-manifests.json'),
+    // B2-B-12 移交项：此前**没有**注入 audit —— mcpToolCache 早已支持可选 audit 依赖，
+    // 但构造处没接线，于是「工具定义超限」只在内存里留一行 warn，落不到
+    // userData/audit-log.jsonl。后果：缓存文件里只剩**截断后**的描述，事后追问
+    // 「这个服务的描述原本有多大 / 是被我们压小的还是本来就小」时没有任何可查证据。
+    //
+    // 这里注入的是**适配器**而不是 deps.audit 本身，因为两者签名不同：
+    //   · mcpToolCache 的契约是 audit(event, payloadObject)（见 mcpToolCache.js 头注释）；
+    //   · auditLog 的契约是 audit(action, target, detail, approvalResult)（见 audit/auditLog.js）。
+    // 适配后本地审计行形如：
+    //   action=mcp:toolDefLimited  target=mcp:<server>
+    //   detail="tool=<名> description=<原始>/<上限>chars stored=<落盘后>chars schema=... reason=..."
+    //   approval_result=limited
+    audit: (event, payload) => {
+      try {
+        // 契约外的未知事件不入审计：审计口径只认这一个事件名，避免将来 mcpToolCache
+        // 新增事件时被这里无意识地塞进审计日志污染统计。
+        if (event !== 'mcp_tool_def_limited') return;
+        const p = payload && typeof payload === 'object' ? payload : {};
+        const limits = p.limits && typeof p.limits === 'object' ? p.limits : {};
+        deps.audit(
+          'mcp:toolDefLimited',
+          p.server ? `mcp:${p.server}` : '',
+          `tool=${p.tool || ''}`
+            + ` description=${p.descriptionChars || 0}/${limits.descriptionChars || 0}chars`
+            + ` stored=${p.storedDescriptionChars || 0}chars`
+            + ` schema=${p.schemaBytes || 0}/${limits.schemaBytes || 0}bytes`
+            + ` depth=${p.schemaDepth || 0}/${limits.schemaDepth || 0}`
+            + ` reason=${p.reason || ''}`,
+          'limited',
+        );
+      } catch { /* 审计是可丢失遥测：写失败绝不影响缓存落盘（缓存是懒启动的前提） */ }
+    },
+  });
   return toolCache;
 }
 
@@ -416,6 +450,30 @@ function register() {
       }
     } catch (e) {
       return { ok: false, error: `服务名校验失败：${e && e.message ? e.message : String(e)}` };
+    }
+    // B2-B-13：编码后**全名长度**预算是另一条独立的破坏形态，不能并入上面那条可逆性校验：
+    //   · 上面管「能不能唯一反解回原名」（错了 → 调用被打到别的服务）；
+    //   · 这里管「拼出来的名字是否还在模型供应商的 function.name 上限内」（超了 → 握手/列表都正常，
+    //     但每次把工具交给模型都被 400 拒，表现成「连上了却调不动」，且报错与「服务名太长」无关联）。
+    // 触发条件真实存在：codec 对非安全字符按 UTF-8 逐字节 `%XX` 编码，中文 1 字符 → 9 字符，
+    // 30 个汉字的服务名编码后 >270 字符，远超 main/mcpClient.js 的 TOOL_NAME_MAX（128）。
+    // fail-closed 在**连接前**拒：否则一个名字必然被拒的服务会先被写进 mcp-servers.json，
+    // 之后每次启动都连一遍、每次调用都失败，用户只能猜原因。
+    // 不在 codec 内部截断：截断会破坏「拼名 → 反解」的可逆性（F-005 的修复前提）。
+    try {
+      const codec = await loadMcpNameCodec();
+      const probeName = codec.buildToolName(payload.name, 'probe');
+      if (!codec.isEncodedNameSafe(probeName)) {
+        return {
+          ok: false,
+          error: `编码后全名超限，请缩短服务名：「${payload.name}」拼成工具名后为 ${probeName.length} 字符，`
+            + `超过 ${codec.MAX_ENCODED_FULL_NAME_CHARS} 字符上限`
+            + '（非 ASCII 字符按 UTF-8 逐字节编码，中文 1 字约 9 字符；该服务即使连上，'
+            + '其工具也会被模型供应商按函数名超长拒绝）。请改用更短的服务名，或改用字母/数字/连字符命名',
+        };
+      }
+    } catch (e) {
+      return { ok: false, error: `服务名长度校验失败：${e && e.message ? e.message : String(e)}` };
     }
     const r = await connectMcpServer(payload);
     // P1-3：用户手动连上了，撤掉该服务可能存在的自动重连在途链（人工优先，不再自动覆盖）

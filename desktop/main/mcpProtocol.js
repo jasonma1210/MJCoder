@@ -4,7 +4,8 @@
 // 为什么单独一个文件而不是从 mcpClient 导出：
 //   `mcpAuth.js` 也需要协议版本（它的 401 探测会先发一个 initialize 探针），
 //   若 mcpAuth → mcpClient，而 mcpClient 未来又需要 mcpAuth，就会形成循环 require。
-//   本文件零依赖（只放常量与纯函数），两侧都可以安全引用。
+//   本文件无模块依赖（唯一的 require 是同目录上层的 package.json 数据文件，见 readClientVersion），
+//   两侧都可以安全引用。
 //
 // 版本策略（H-4 核实）：
 //   · 客户端在 initialize 里**提议** PROTOCOL_VERSION（2025-11-25 = 握手时代的最后一版，
@@ -43,7 +44,30 @@ const CLIENT_CAPABILITIES = Object.freeze({
   completion: Object.freeze({}),
   logging: Object.freeze({}),
 });
-const CLIENT_INFO = Object.freeze({ name: 'mj-coder', version: '1.0' });
+// ── 客户端自述版本：必须与应用版本同源（F-013） ──────────────────────────────
+//
+// 改前写死 `version: '1.0'`：initialize / 401 探针都会把它发给服务端，于是服务端日志、
+// 兼容性诊断里看到的是一个**从不存在的版本**。排障时「按版本对照行为差异」这条线索直接失效，
+// 而且它看起来很像真值（'1.0' 比 '0.6.1-beta' 更像正式版），误导性比缺省更强。
+//
+// 取值口径：`desktop/package.json` 的 `version` 是打包产物名的同一来源（electron-builder
+// 直接读它），因此这里**直接读它**，不新增第二份版本常量、也不引入任何构建期依赖。
+// 为什么不用 readFileSync：require JSON 由 Node 自己缓存与解析，不会在本文件引入 fs/path；
+// `../package.json` 与应用同目录，asar 打包后依然可 require（app 的 package.json 恒在包内）。
+// 循环依赖风险评估：package.json 是数据文件、不 require 任何模块，不构成环。
+function readClientVersion() {
+  try {
+    const v = require('../package.json').version;
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  } catch (e) {
+    // 只在「产物包被异常裁剪、package.json 不在」这种异常态触发。
+    // 此时**宁可显式标记未知**，也不要退回一个看起来像真值的虚构版本号。
+    console.warn('[mcp] 读取应用版本失败，clientInfo.version 标记为 unknown:', e && e.message ? e.message : String(e));
+  }
+  return 'unknown';
+}
+
+const CLIENT_INFO = Object.freeze({ name: 'mj-coder', version: readClientVersion() });
 
 /** 服务端返回的版本是否在本客户端支持集内（空值视为「未声明」，由调用方决定回落）。 */
 function isSupportedProtocolVersion(v) {

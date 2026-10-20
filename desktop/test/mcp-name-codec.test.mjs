@@ -27,6 +27,7 @@ const require = createRequire(import.meta.url);
 
 const {
   encodeServerSegment, decodeToolName, buildToolName, isEncodedNameSafe,
+  MAX_ENCODED_FULL_NAME_CHARS,
 } = await import(path.join(ROOT, 'shared/mcpNameCodec.mjs'));
 const { toToolDefs } = await import(path.join(ROOT, 'shared/mcpToolDefs.mjs'));
 
@@ -210,6 +211,48 @@ check('⑦c 入口语义有牙齿：非法 Unicode（孤立代理对）编码不
   assert.notDeepEqual(back && back.server, bad, '孤立代理对竟被判定为可逆');
   const accepted = back && back.server === bad && back.tool === 'probe';
   eq(accepted, false, '入口应拒绝该名字');
+});
+
+// ── ⑦d 编码后全名长度预算（B2-B-13） ──
+// 缺陷形态：codec 对非安全字符按 UTF-8 逐字节 `%XX` 编码 → 中文 1 字符 = 9 字符。
+//   入口此前只校验「原始 name ≤ 120 字符」，服务名段**无编码后上限**：30 个汉字的服务名
+//   拼出的工具名 >270 字符，远超供应商 function.name 上限（本仓 mcpClient.js 对工具名段限 128）。
+//   后果不是「连不上」，而是握手/列表都正常、每次把工具交给模型都被 400 拒 ——
+//   表现成「连上了却调不动」，且报错与「服务名太长」无任何线索关联。
+check('⑦d 长度预算与 mcpClient 的工具名上限同源（128，不是第二份独立数字）', () => {
+  eq(MAX_ENCODED_FULL_NAME_CHARS, 128);
+  // 从源码文本取，避免把 128 在测试里写死成「自己对自己的断言」
+  const clientSrc = fs.readFileSync(path.join(ROOT, 'main/mcpClient.js'), 'utf8');
+  const m = clientSrc.match(/const\s+TOOL_NAME_MAX\s*=\s*(\d+)\s*;/);
+  assert.ok(m, 'mcpClient.js 未找到 TOOL_NAME_MAX 常量');
+  eq(Number(m[1]), MAX_ENCODED_FULL_NAME_CHARS, 'codec 的预算与 mcpClient 的工具名上限分叉');
+});
+
+check('⑦d 超长中文服务名判不安全、短名判安全（边界逐字符对齐）', () => {
+  // 30 个汉字 → 编码片段 270 字符，全名远超上限
+  const longCn = '汉'.repeat(30);
+  assert.ok(buildToolName(longCn, 't').length > MAX_ENCODED_FULL_NAME_CHARS,
+    `构造失败：${buildToolName(longCn, 't').length}`);
+  eq(isEncodedNameSafe(buildToolName(longCn, 't')), false, '超长中文服务名竟被判为安全');
+  // 短名仍在预算内 → 必须放行（不许误伤现有中文配置）
+  eq(isEncodedNameSafe(buildToolName('中文 服务', 't')), true, '短中文服务名被误拒');
+  eq(isEncodedNameSafe(buildToolName('filesystem', 't')), true, '普通安全名被误拒');
+  // 边界：'mcp__' + seg + '__' + 't' → 全名长度 = seg.length + 8
+  const atCap = 'a'.repeat(MAX_ENCODED_FULL_NAME_CHARS - 8);
+  const overCap = 'a'.repeat(MAX_ENCODED_FULL_NAME_CHARS - 7);
+  eq(buildToolName(atCap, 't').length, MAX_ENCODED_FULL_NAME_CHARS, '边界构造失败');
+  eq(isEncodedNameSafe(buildToolName(atCap, 't')), true, '恰好等于上限应放行');
+  eq(isEncodedNameSafe(buildToolName(overCap, 't')), false, '超出一字符应拒绝');
+});
+
+check('⑦e 长度闸真的接在 mcp:connect 入口（不许只实现不接线）', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'main/ipc/mcp.js'), 'utf8');
+  assert.ok(src.includes('isEncodedNameSafe'), '入口未调用 isEncodedNameSafe');
+  assert.ok(src.includes('MAX_ENCODED_FULL_NAME_CHARS'), '入口未引用长度预算常量');
+  assert.ok(/编码后全名超限，请缩短服务名/.test(src), '拒绝文案未说明「编码后全名超限，请缩短服务名」');
+  // 不许在 codec 内部截断（截断会破坏可逆性 —— F-005 的修复前提）
+  const codecSrc = fs.readFileSync(path.join(ROOT, 'shared/mcpNameCodec.mjs'), 'utf8');
+  assert.ok(!/encodeServerSegment[\s\S]{0,400}?\.slice\(0,\s*MAX_/.test(codecSrc), 'codec 内部出现了截断');
 });
 
 // ── ⑧ 调用点行为证据：意图预热的「已在本轮工具里就不重复连」必须按反解后的服务名判定 ──

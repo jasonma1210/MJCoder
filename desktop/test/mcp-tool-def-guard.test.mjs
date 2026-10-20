@@ -279,4 +279,107 @@ await checkAsync('⑥ 未注入 audit 时 saveManifest 正常（零开销、不�
   }
 });
 
+// ── ⑥d 磁盘侧收敛（B2-B-12）──
+// 改前：`mcpToolDefs` 在构造 function 定义时截断，但 `mcpToolCache` 把**未截断**的原始描述
+//   直接落盘 —— 于是 50 KB 描述仍然躺在 mcp-tool-manifests.json 里，「手工打开清单/从缓存
+//   重建工具集」这条路径仍会把原始大描述再喂回模型。定义侧闸门挡不住磁盘侧。
+// 本断言锁两件事：① 落盘描述 ≤ 同一套阈值 + 同一套后缀（不许出现第二份数字/后缀）；
+//   ② 「原始有多大」不丢 —— 审计里有原始字符数与落盘后字符数，可对照出压缩倍率。
+await checkAsync('⑥ 磁盘侧收敛：saveManifest 落盘前截断 description（同一套阈值/后缀），原始长度留在审计里', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-tooldef-disk-'));
+  const file = path.join(dir, 'mcp-tool-manifests.json');
+  const events = [];
+  const cache = createMcpToolCache({
+    filePath: file, log: () => {}, audit: (evt, payload) => events.push({ evt, payload }),
+  });
+  const hugeDesc = 'q'.repeat(50000);
+  const schema = { type: 'object', properties: { a: { type: 'string' } } };
+  try {
+    await cache.saveManifest('disk-server', [
+      { name: 'huge_desc', description: hugeDesc, inputSchema: schema },
+      { name: 'short_desc', description: '短描述', inputSchema: { type: 'object', properties: {} } },
+    ]);
+    // getManifest 直接读盘 → 这里看到的就是**磁盘上的真实内容**，不是内存副本
+    const mf = cache.getManifest('disk-server');
+    ok(mf && mf.tools.length === 2, '清单未落盘');
+    const byName = Object.fromEntries(mf.tools.map((t) => [t.name, t]));
+    const cap = MAX_TOOL_DESCRIPTION_CHARS + TOOL_DESCRIPTION_TRUNCATION_SUFFIX.length;
+    ok(byName.huge_desc.description.length <= cap,
+      `落盘描述 ${byName.huge_desc.description.length} 字符 > 预算上限 ${cap}`);
+    ok(byName.huge_desc.description.includes(TOOL_DESCRIPTION_TRUNCATION_SUFFIX), '落盘描述缺截断后缀');
+    ok(byName.huge_desc.description.length < hugeDesc.length / 10, '磁盘侧压缩比不足（未真正收敛）');
+    // inputSchema 不得改：截断 schema 会产出非法 schema，调用必然失败
+    eq(JSON.stringify(byName.huge_desc.inputSchema), JSON.stringify(schema), 'inputSchema 被改动');
+    // 未超限的工具原样保留（不连带截断）
+    eq(byName.short_desc.description, '短描述', '正常描述被误截断');
+    // 审计：原始长度必须可见，且能看出落盘后长度
+    const limited = events.filter((e) => e.evt === 'mcp_tool_def_limited');
+    eq(limited.length, 1, `审计事件数（只有 huge_desc 超限）：${limited.map((e) => e.payload.tool).join(',')}`);
+    eq(limited[0].payload.tool, 'huge_desc');
+    eq(limited[0].payload.descriptionChars, hugeDesc.length, '审计未保留原始长度');
+    ok(limited[0].payload.storedDescriptionChars <= cap,
+      `审计里的落盘长度 ${limited[0].payload.storedDescriptionChars} 超上限 ${cap}`);
+    ok(limited[0].payload.descriptionChars > limited[0].payload.storedDescriptionChars,
+      '原始长度与落盘长度未拉开差距（说明截断没生效）');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── ⑦ B2 移交项：`__blocked__` 的**消费方**（agent-core 组装 allTools 时下架）──
+// 改前：`__blocked__` 没有任何消费方 —— 被闸门判死的工具仍以 `[schema-too-large]` 前缀
+//   披露给模型，等于把「不可调用」的工具算进工具选择空间（既占上下文，又诱导模型去调一个
+//   必然失败的工具）。本断言走 runAgent 的真实组装路径，抓 chatFn 收到的 `tools`：
+//   ① 被阻塞的工具**不在**其中；② 同批正常工具**在**其中；③ 不抛异常。
+{
+  const { runAgent } = await import(path.join(ROOT, 'agent-core/index.js'));
+  const mixedForRun = toToolDefs('guard', [
+    { name: 'fine_tool', description: '正常工具', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
+    { name: 'too_deep', description: '深 20 层', inputSchema: deepSchema(20) },
+  ]);
+  // 反空过：输入里必须真的有一个被阻塞的（否则「不在 tools 里」这条断言恒真）
+  eq(mixedForRun.filter((d) => isBlockedToolDef(d)).length, 1, '构造的 MCP 工具表里没有被阻塞项，断言会空过');
+
+  let captured = null;
+  let runErr = null;
+  try {
+    await runAgent({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: {
+        provider: { id: 1, isGlobal: false, base_url: 'https://api.test/v1' },
+        model: { id: 1, model_id: 'guard-test', context_window: 128000 },
+      },
+      cwd: ROOT,
+      mcpTools: mixedForRun,
+      toolHandlers: {
+        chat: async (payload) => {
+          captured = payload;
+          return { content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } };
+        },
+      },
+    });
+  } catch (e) {
+    runErr = e;
+  }
+
+  check('⑦ 组装 allTools 时不抛异常（一个坏工具不得拖垮整个 run）', () => {
+    eq(runErr, null, `runAgent 抛了：${runErr && runErr.message}`);
+    ok(captured, 'chat 通道未被调用');
+  });
+
+  check('⑦ 被 __blocked__ 的工具不进 tools（消费方生效），正常工具仍在', () => {
+    const names = (captured.tools || []).map((t) => t.function && t.function.name);
+    ok(!names.includes('mcp__guard__too_deep'), `被阻塞的工具仍被披露给模型：${names.filter((n) => n.startsWith('mcp__')).join(',')}`);
+    ok(names.includes('mcp__guard__fine_tool'), '正常 MCP 工具被连带下架');
+    // 内置工具不受影响（过滤只作用于 MCP 工具）
+    ok(names.includes('read_file'), '内置工具被误删');
+  });
+
+  check('⑦ 下架的 MCP 工具数恰好为 1（不是把整个 server 一起删掉）', () => {
+    const mcpNames = (captured.tools || []).map((t) => t.function && t.function.name).filter((n) => n && n.startsWith('mcp__'));
+    eq(mcpNames.length, 1, `MCP 工具数：${mcpNames.join(',')}`);
+    eq(mcpNames[0], 'mcp__guard__fine_tool');
+  });
+}
+
 console.log(`\n结果：${pass}/${total} 通过`);

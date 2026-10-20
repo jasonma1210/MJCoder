@@ -41,14 +41,31 @@ const FILE_MODE = 0o600;
 
 // 只保留模型需要的三字段（name/description/inputSchema），
 // 避免把服务端返回的整个工具对象（含无关元数据）落盘造成文件膨胀。
-function slimTools(tools) {
+//
+// B2-B-12（F-007 磁盘侧残留）：`shared/mcpToolDefs.mjs` 在**构造 function 定义**时已把
+// 超长 description 截断，但本缓存此前**原样**落盘未截断的原始描述 —— 于是磁盘上仍然躺着
+// 50 KB 描述（清单文件体积、以及「从缓存重建工具集」这条路径会把原始大描述再喂回模型）。
+// 现在落盘前对 `description` 应用**同一套** `truncateDescription`（阈值从
+// shared/contextBudget.mjs 取，本文件不写第二份数字），`inputSchema` **不动**
+// （截断 schema 会产出非法 schema，调用必然失败 —— 与 mcpToolDefs 侧同一取舍）。
+//
+// @param {Array<object>} tools 服务端原始工具清单
+// @param {{truncateDescription?: Function}|null} [budget] 预算模块（contextBudget.mjs）；
+//   未提供时按未截断原样返回（仅供不需要截断的纯单测直接调用，生产路径 saveManifest 恒传入）
+function slimTools(tools, budget) {
+  const truncate = budget && typeof budget.truncateDescription === 'function'
+    ? budget.truncateDescription
+    : null;
   return (Array.isArray(tools) ? tools : [])
     .filter((t) => t && typeof t === 'object' && t.name)
-    .map((t) => ({
-      name: String(t.name),
-      description: typeof t.description === 'string' ? t.description : '',
-      inputSchema: t.inputSchema || { type: 'object', properties: {} },
-    }));
+    .map((t) => {
+      const rawDesc = typeof t.description === 'string' ? t.description : '';
+      return {
+        name: String(t.name),
+        description: truncate ? truncate(rawDesc).text : rawDesc,
+        inputSchema: t.inputSchema || { type: 'object', properties: {} },
+      };
+    });
 }
 
 /**
@@ -90,10 +107,17 @@ function createMcpToolCache({ filePath, log = console.warn, audit } = {}) {
       if (!r.descriptionTruncated && !r.schemaTooLarge) continue;
       const reason = r.reason
         || `description ${r.descriptionChars} chars > ${mod.MAX_TOOL_DESCRIPTION_CHARS}`;
+      // B2-B-12：截断只发生在**落盘侧**，原始长度必须留在审计里 ——
+      // 否则「磁盘上有多大」与「服务端实际给了多大」两个事实都被截断掩盖，
+      // 排障时无法区分「服务本身失控」与「我们把它的东西压小了」。
+      const stored = mod.truncateDescription(
+        typeof t.description === 'string' ? t.description : '',
+      );
       const detail = {
         server: String(serverName),
         tool: String(t.name),
-        descriptionChars: r.descriptionChars,
+        descriptionChars: r.descriptionChars, // 服务端给出的**原始**字符数
+        storedDescriptionChars: stored.text.length, // 落盘后的字符数（未截断时两者相等）
         descriptionTruncated: r.descriptionTruncated,
         schemaBytes: r.schemaBytes,
         schemaDepth: r.schemaDepth,
@@ -141,13 +165,25 @@ function createMcpToolCache({ filePath, log = console.warn, audit } = {}) {
   }
 
   /** 记录某服务最近一次成功握手的工具清单。 */
-  function saveManifest(name, tools) {
+  async function saveManifest(name, tools) {
     if (!name) return writeChain;
-    const entry = { tools: slimTools(tools), updatedAt: Date.now() };
+    const raw = Array.isArray(tools) ? tools : [];
+    // B2-B-12：落盘前先取预算模块 —— 截断阈值只从 shared/contextBudget.mjs 取。
+    // fail-open：模块取不到（异常产物包 / 动态 import 失败）时按未截断原样落盘并告警，
+    // 绝不因为「压不住体积」而让缓存整条丢失（缓存是懒启动的前提）。
+    let budgetMod = null;
+    try {
+      budgetMod = await loadBudgetModule();
+    } catch (e) {
+      logWarn('[mcp] 预算模块不可用，工具描述按原样落盘（未截断）:', e && e.message ? e.message : String(e));
+    }
+    const entry = { tools: slimTools(raw, budgetMod), updatedAt: Date.now() };
     // 落盘与审计并行：审计既不在写链里（不拖慢落盘），也不会因自己的错误让落盘失败。
     // 返回 promise 仍只代表「这次 save 处理完」（落盘 + 审计都结束），解析值维持 undefined。
+    // 注意：审计拿到的是 raw（原始清单）—— 审计里的 descriptionChars 必须是**服务端给的原始值**，
+    // 用落盘后的截断体去算，会让「原始有多大」这个唯一有排障价值的事实丢失。
     const written = enqueue((all) => { all[String(name)] = entry; });
-    return Promise.all([written, auditToolDefs(name, tools)])
+    return Promise.all([written, auditToolDefs(name, raw)])
       .then(() => undefined)
       .catch(() => undefined); // 两者内部都已各自兜错；这里只保证调用方 await 永不抛
   }
