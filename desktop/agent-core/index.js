@@ -6,7 +6,8 @@
 // B2-B-01（D-03 第一阶段·观测档）：工具表总字节观测。
 // 上限的唯一来源是 shared/contextBudget.mjs（该模块是纯常量 + 纯函数、零 Node 内置依赖，
 // 可被渲染层 Vite 打包与引擎子进程共同消费）——本文件不写任何阈值数字。
-import { inspectToolTableBudget } from '../shared/contextBudget.mjs';
+// B3 #10：同时取强制档判定（toolTableEnforcement，缺省 'warn' = 改前行为，见该函数注释）。
+import { inspectToolTableBudget, toolTableEnforcement, TOOL_TABLE_ENFORCE_ENV } from '../shared/contextBudget.mjs';
 
 // ── node:fs 惰性获取（仅 sessionDir 落盘时需要）──
 // 渲染层经 Vite 打包：这里不写静态 import，用 process.getBuiltinModule 同步获取，
@@ -2550,17 +2551,24 @@ export async function runAgent({
   // 事件形如 {type:'run_start'|'model'|'model_error'|'tool'|'run_end', ...}，
   // 由宿主（agentRunner）落 JSONL；任何 onTrace 异常都不得影响主流程（与 onBudget 同纪律）。
   const trace = (evt) => { try { onTrace?.(evt); } catch { /* trace 上报绝不影响主流程 */ } };
-  // ── B2-B-01（D-03 第一阶段 · 观测档）：工具表总字节 ──
-  // 只观测、**不强制**：超限仅留一条 trace/warn（含实际字节与上限），不截断、不改变本 run 下发的
-  // 工具集合 —— 截断工具表会让模型看到残缺 schema，风险远大于收益；本轮先用真实运行数据校准阈值。
-  // 上限唯一来源是 shared/contextBudget.mjs；任何异常都不得影响主流程（与 onTrace 同纪律）。
-  try {
-    const tableBudget = inspectToolTableBudget(allTools);
-    if (tableBudget.over) {
-      console.warn(`[agent] 工具表总字节超观测上限：${tableBudget.reason}（B2-B-01 观测档，本轮不截断）`);
-      trace({ type: 'tool_table_budget', bytes: tableBudget.bytes, limit: tableBudget.limit, tools: tableBudget.toolCount });
+  // ── B2-B-01 观测档（不截断、不改下发的工具集合）+ B3 #10 采样/强制分离 ──
+  // 缺口 1：改前只有「超限」才留字节数 → 未超限的 run 一个样本都不留，将来按真实分布重定阈值时
+  //   样本被**左截断**（只剩尾部超限样本，均值必然偏高）。现在每次 run 都算一遍（复用同一份
+  //   inspectToolTableBudget，不新写第二份计量），由下面的 run_start 带出。
+  // 缺口 2：动作从「写死 warn」变成可切换档位，判定在 run_start 之后（见该处注释）。
+  // 这里只**算样本**、不产生输出：run_start 必须是本次 run 的第一条 trace（宿主靠它定位时间线起点）。
+  // 上限唯一来源 shared/contextBudget.mjs；异常一律吞掉（与 onTrace 同纪律）。
+  const tableSample = (() => {
+    try {
+      const b = inspectToolTableBudget(allTools);
+      // MCP 服务数：从**本 run 实际下发**的工具名反推（与字节数同一张表），按真实服务名去重。
+      // 必须走 decodeToolName，不手写分隔符切分——朴素切分会让 `my__svc` 这类服务名拆错（F-005）。
+      const servers = new Set(allTools.map((t) => decodeToolName(t?.function?.name)?.server).filter(Boolean));
+      return { bytes: b.bytes, over: b.over, reason: b.reason, limit: b.limit, mcpServerCount: servers.size };
+    } catch {
+      return { bytes: null, over: false, reason: '', limit: null, mcpServerCount: 0 }; // 不编造数字
     }
-  } catch { /* 观测失败绝不影响主流程 */ }
+  })();
   // ── P0-2（记忆写入闭环）：压缩摘要归档通道 ──
   // 摘要产出后，引擎**只发事件**，落记忆库是宿主（agentRunner）的副作用——引擎保持 headless 纯净、
   // 不引入任何存储依赖（与 LoopEngine 不碰 DB 同一纪律）。
@@ -2661,7 +2669,49 @@ export async function runAgent({
       ...extra,
     });
   };
-  trace({ type: 'run_start', model: model?.model?.model_id || '', cwd: cwd || '', tools: allTools.length, maxRounds, tokenBudget });
+  // B3 #10：run_start 补齐三个采样字段（**每次 run 都带**，不只超限时）——
+  //   toolTableBytes 本 run 实际下发工具表的字节数（与 inspectToolTableBudget 同源，不新写计量）
+  //   mcpServerCount 本 run 涉及的 MCP 服务数（decodeToolName 反推去重，不是工具数）
+  //   toolTableOver  是否超当前上限（布尔，与 toolTableBytes 一起构成完整分布样本）
+  // 既有字段一个不动（向后兼容）：旧消费方按 type/model/cwd/tools/maxRounds/tokenBudget 读。
+  trace({
+    type: 'run_start', model: model?.model?.model_id || '', cwd: cwd || '', tools: allTools.length, maxRounds, tokenBudget,
+    toolTableBytes: tableSample.bytes, mcpServerCount: tableSample.mcpServerCount, toolTableOver: tableSample.over,
+  });
+  // ── B3 #10 缺口 2：强制档判定（**必须在任何下发之前**）──
+  // 位置：run_start 之后、第一次模型调用之前。两件事都刻意：
+  //   · 先发 run_start → 被 block 的 run 也留下采样（否则「超限的 run 全被丢掉」= 又一次左截断，
+  //     正是本次要修的缺口 1）；
+  //   · 在任何模型调用 / 工具下发之前抛 → 不会留下「跑了一半的工具副作用」的半截 run。
+  // 档位每次判都重读环境变量（toolTableEnforcement 不缓存），宿主运行中切档立即生效。
+  let enforceMode = 'warn';
+  try { enforceMode = toolTableEnforcement(); } catch { /* 取档位失败 → warn（不丢观测、不改行为） */ }
+  if (tableSample.over && enforceMode !== 'off') {
+    if (enforceMode === 'block') {
+      // 抛错**不在 try/catch 里**：它是本档位的设计动作，被吞掉就等于 block 档静默失效。
+      // 抛之前必须先**闭合时间线**：下游（runTrace / 诊断包 / 将来的 span 模型）看到只有
+      // run_start 没有 run_end 会当成「异常中断的 run」，反而污染可观测性。
+      // 刻意**不调 emitRunEnd**（它依赖下面 TDZ 之后的 usage），也**不伪造** usage / ms ——
+      // 被阻断的 run 一个 token 都没花、耗时没有意义，填 0 会让下游把它算进用量统计。
+      // 字段只给这 6 个；字节与上限在这里给全，故 block 档不再另发 tool_table_budget（避免同一事实两条）。
+      trace({
+        type: 'run_end', status: 'blocked', reason: 'tool_table_budget',
+        bytes: tableSample.bytes, limit: tableSample.limit, tools: allTools.length,
+      });
+      const err = new Error(
+        `工具表总字节超上限，已按 ${TOOL_TABLE_ENFORCE_ENV}=block 阻断本次运行：${tableSample.bytes} 字节 > 上限 ${tableSample.limit}`
+        + `（${allTools.length} 个工具，涉及 ${tableSample.mcpServerCount} 个 MCP 服务）。放行方式：设 ${TOOL_TABLE_ENFORCE_ENV}=warn`
+        + '（只告警不阻断）或 =off（完全静默）后重试。这可能意味着装了太多重型 MCP server —— 阈值依据是 3 个'
+        + '无密钥小服务的实测均值，而 playwright / desktop-commander 这类 server 单服务即数十 KB，请先确认常驻服务是否都必要。'
+        + '（调阈值改 shared/contextBudget.mjs 的 MAX_TOOL_SCHEMA_TOTAL_BYTES；排查看 run_start 的 toolTableBytes / mcpServerCount）',
+      );
+      err.code = 'TOOL_TABLE_BUDGET_EXCEEDED';
+      throw err;
+    }
+    // warn 档：超限事件留一条（off 档不留：off 的语义是「完全静默，只留 run_start 采样」）。
+    trace({ type: 'tool_table_budget', bytes: tableSample.bytes, limit: tableSample.limit, tools: allTools.length, mode: enforceMode });
+    console.warn(`[agent] 工具表总字节超观测上限：${tableSample.reason}（B3 #10 档位 ${enforceMode}，本轮不截断）`);
+  }
   // P1-11a：任务-模型分档（缺省全部回落主模型，零破坏）
   const compactModel = resolveTaskModel(model, modelOverrides, 'compact');
   const workerModel = resolveTaskModel(model, modelOverrides, 'worker');

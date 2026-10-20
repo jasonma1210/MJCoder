@@ -49,6 +49,10 @@
 //         工具表再往上长，会话历史就会被挤到没有可用空间。
 //       未验证项：per-server 均值取自 3 个无密钥小服务，playwright / desktop-commander 这类重型
 //         server 单服务即可达数十 KB；故本值只作**观测档起点**，跑一轮真实数据后再定强制值。
+//   · 强制档（B3 #10）：本文件同时**声明**强制档语义（toolTableEnforcement / 'off'|'warn'|'block'，
+//       缺省 'warn' = 改前行为）。消费方是 agent-core/index.js（run_start 之后、下发之前判定）。
+//       为什么档位也放这里：阈值与「超限后怎么处置」必须同源 —— 分成两个文件就必然出现
+//       「阈值按 A 判超限、动作按 B 决定」的漂移，与上一段「上限只在一处定义」是同一条纪律。
 //   · MAX_RESIDENT_MCP_SERVERS = 8
 //       实测口径：默认 auto-start 档 3 个服务（filesystem / time / fetch）+ 白名单档可懒启动的
 //       常用服务（git / playwright / desktop-commander / memory / context7 等）里取 5 个，
@@ -211,4 +215,51 @@ export function inspectToolTableBudget(tools, limit = MAX_TOOL_SCHEMA_TOTAL_BYTE
     over,
     reason: over ? `工具表 ${bytes} 字节 > 上限 ${limit}（${list.length} 个工具）` : '',
   };
+}
+
+// ── B3 #10：强制档开关（默认 'warn'，即改前行为）──────────────────────────────
+// 为什么默认**不是** 'block'：MAX_TOOL_SCHEMA_TOTAL_BYTES 的取值依据是 3 个无密钥小服务
+// （filesystem / time / fetch）的实测均值 3,660 字节/服务；而 playwright / desktop-commander
+// 这类重型 server **单服务即可达数十 KB**。阈值还没用真实分布校准过就默认阻断，等于把
+// 「装了 playwright 的正常用户」全部打成不可用 —— 误伤面过大。
+// 所以顺序是：先靠 run_start 的每次采样攒真实分布 → 重定阈值 → 再由用户/发布方显式切 block。
+//
+// 'off'   ：完全静默（连 console.warn 都不打，只保留 run_start 里的字节采样）
+// 'warn'  ：当前行为（超限 console.warn + 一条 tool_table_budget trace）
+// 'block' ：超限时由引擎在**下发之前**抛错阻断本次 run（不留半截 run）
+
+/** 强制档环境变量名（唯一事实来源 —— 文档与错误文案都引用它，不各写一份）。 */
+export const TOOL_TABLE_ENFORCE_ENV = 'MJCODE_TOOL_TABLE_ENFORCE';
+
+/** 合法档位。 */
+export const TOOL_TABLE_ENFORCE_MODES = ['off', 'warn', 'block'];
+
+/**
+ * 缺省档位。**必须是 'warn'**（= 保持 B2-B-01 已上线的可观测行为，零行为变化）。
+ * 改成 'block' 之前必须先完成「用真实分布重定阈值」，否则会误伤重型 MCP server。
+ */
+export const DEFAULT_TOOL_TABLE_ENFORCE = 'warn';
+
+/**
+ * 本进程的工具表强制档：环境变量 `MJCODE_TOOL_TABLE_ENFORCE`（off/warn/block）> 缺省 'warn'。
+ *
+ * 无效值（拼错 / 空串 / 大小写外的怪值）一律回落 'warn'，**不做前缀猜测**：
+ *   · 静默回落 'off' 会让「设置了但拼错」变成「观测消失」（最坏的失败形态：以为有闸，其实没有）；
+ *   · 回落到 'block' 会把拼错变成不可用（阈值未校准前的误伤代价更大）。
+ * 'warn' 是唯一「既不丢观测、又不改行为」的安全落点。
+ *
+ * 每次调用都重读环境变量（不缓存）：测试可在同一进程内切换档位，宿主也可在运行中切回。
+ * @param {Record<string, unknown>} [env] 缺省读 process.env；显式传入仅为单测免于改全局状态
+ * @returns {'off'|'warn'|'block'}
+ */
+export function toolTableEnforcement(env) {
+  let raw;
+  try {
+    const source = env && typeof env === 'object' ? env : globalThis.process?.env;
+    raw = source ? source[TOOL_TABLE_ENFORCE_ENV] : undefined;
+  } catch {
+    return DEFAULT_TOOL_TABLE_ENFORCE; // 取环境变量失败绝不影响主流程
+  }
+  const value = String(raw == null ? '' : raw).trim().toLowerCase();
+  return TOOL_TABLE_ENFORCE_MODES.includes(value) ? value : DEFAULT_TOOL_TABLE_ENFORCE;
 }

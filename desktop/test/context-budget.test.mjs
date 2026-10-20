@@ -34,6 +34,7 @@ const {
 } = budget;
 const { BASE_TOOLS, LOAD_SKILL_TOOL, runAgent } = await import(path.join(ROOT, 'agent-core/index.js'));
 const mcpToolDefs = await import(path.join(ROOT, 'shared/mcpToolDefs.mjs'));
+const { buildToolName } = await import(path.join(ROOT, 'shared/mcpNameCodec.mjs'));
 
 let pass = 0;
 let total = 0;
@@ -257,6 +258,181 @@ await checkAsync('③b 未超限时 runAgent 不产出 tool_table_budget 事件�
   eq((captured?.tools || []).length, 1, '工具数被改动');
   const noise = traceEvents.filter((e) => e && e.type === 'tool_table_budget');
   eq(noise.length, 0, `未超限却产生了告警：${JSON.stringify(noise)}`);
+});
+
+// ── ③c B3 #10：run_start 每次采样 + 强制档可切换（off / warn / block）──
+// 两个缺口：
+//   缺口 1（采样偏差）改前只有**超限**才留字节数 → 未超限的 run 一个样本都不留，将来用真实分布
+//     重定阈值时样本被左截断（只剩尾部超限样本）。故第一条断言 = 「**每次** run 都带
+//     toolTableBytes，且该值等于独立现算值」——只断「字段存在」会漏掉「字段有但算错了」。
+//   缺口 2（无法升强制）改前动作写死 warn。档位由 MJCODE_TOOL_TABLE_ENFORCE 控制，
+//     默认必须是 warn（阈值取自 3 个小服务均值，直接 block 会误伤 playwright 这类重型 server）。
+//
+// 隔离纪律：环境变量在每个用例内设置并在 finally 复原、console.warn 临时接管后复原 ——
+//   本套件其他用例不得受档位影响（否则「改成 block 后前 18 条全红」会把信号淹没）。
+const ENFORCE_ENV = 'MJCODE_TOOL_TABLE_ENFORCE';
+const fnTool = (name) => ({ type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } } });
+
+async function runOnce({ tools: t, mcpTools = [], env } = {}) {
+  const savedEnv = process.env[ENFORCE_ENV];
+  if (env === undefined) delete process.env[ENFORCE_ENV];
+  else process.env[ENFORCE_ENV] = env;
+  const traceEvents = [];
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => { warns.push(args.map(String).join(' ')); };
+  let captured = null;
+  let error = null;
+  try {
+    await runAgent({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: MODEL,
+      cwd: path.resolve(ROOT),
+      tools: t,
+      mcpTools,
+      onTrace: (e) => traceEvents.push(e),
+      toolHandlers: { chat: async (payload) => { captured = payload; return { content: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } }; } },
+    });
+  } catch (e) {
+    error = e;
+  } finally {
+    console.warn = origWarn;
+    if (savedEnv === undefined) delete process.env[ENFORCE_ENV];
+    else process.env[ENFORCE_ENV] = savedEnv;
+  }
+  return {
+    traceEvents, warns, captured, error,
+    start: traceEvents.filter((e) => e && e.type === 'run_start'),
+    overEvents: traceEvents.filter((e) => e && e.type === 'tool_table_budget'),
+    budgetWarns: warns.filter((w) => w.includes('工具表总字节')),
+  };
+}
+
+await checkAsync('③c 缺口1：**每次** run 的 run_start 都带采样，且 toolTableBytes 等于独立现算值', async () => {
+  const tools = [fnTool('tiny')];
+  // 混用「编码后」与「改前格式」的同一个服务名（两代拼名必须去重成 1 个服务），
+  // 外加一个服务名自身含 `__` 的服务（编码后为 my%5F%5Fsvc）——服务数按 decodeToolName 反推。
+  const mcpTools = [
+    fnTool(buildToolName('filesystem', 'read_file')),
+    fnTool('mcp__filesystem__list_dir'),
+    fnTool(buildToolName('my__svc', 'x')),
+  ];
+  const expectedBytes = toolTableByteSize([...tools, ...mcpTools]); // 独立现算，不复用引擎内部值
+  const r = await runOnce({ tools, mcpTools });                     // env 不设 → 默认档
+  eq(r.start.length, 1, 'run_start 条数');
+  const s = r.start[0];
+  ok(Object.prototype.hasOwnProperty.call(s, 'toolTableBytes'), 'run_start 缺 toolTableBytes（未超限也必须带，否则样本左截断）');
+  eq(s.toolTableBytes, expectedBytes, 'toolTableBytes 与独立现算的 toolTableByteSize 不一致（字段有了但值错）');
+  ok(Number.isInteger(s.toolTableBytes) && s.toolTableBytes > 100, `toolTableBytes 不是有效字节数：${s.toolTableBytes}`);
+  eq(s.tools, 4, 'run_start.tools 工具数');
+  eq(s.mcpServerCount, 2, 'mcpServerCount 必须按 decodeToolName 的服务名去重（filesystem + my__svc）');
+  eq(s.toolTableOver, false, '未超限时 toolTableOver 必须为 false');
+  // 既有字段一个不动（向后兼容）
+  for (const k of ['model', 'cwd', 'tools', 'maxRounds', 'tokenBudget']) {
+    ok(Object.prototype.hasOwnProperty.call(s, k), `run_start 丢了既有字段 ${k}`);
+  }
+});
+
+await checkAsync('③c 缺口1：未超限时 toolTableOver=false 且无 tool_table_budget 事件、无告警（不产生噪声）', async () => {
+  const r = await runOnce({ tools: [fnTool('tiny')] });
+  eq(r.start[0].toolTableOver, false, 'toolTableOver');
+  eq(r.overEvents.length, 0, `未超限却产生了超限事件：${JSON.stringify(r.overEvents)}`);
+  eq(r.budgetWarns.length, 0, `未超限却打了告警：${r.budgetWarns.join(' | ')}`);
+  ok(r.captured && r.captured.tools.length === 1, '未超限时工具表不应被改动或阻断');
+});
+
+await checkAsync('③c 缺口2（warn 档＝默认）：超限留采样 + 1 条事件 + 1 条告警，仍下发全量工具', async () => {
+  const tools = bigToolTable(40, 1800);
+  const bytes = toolTableByteSize(tools);
+  ok(bytes > MAX_TOOL_SCHEMA_TOTAL_BYTES, `构造失败：${bytes} 未超 ${MAX_TOOL_SCHEMA_TOTAL_BYTES}`);
+  const r = await runOnce({ tools });
+  eq(r.start[0].toolTableBytes, bytes, '超限 run 的采样字节数不符');
+  eq(r.start[0].toolTableOver, true, '超限时 toolTableOver 必须为 true');
+  eq(r.overEvents.length, 1, `超限应恰好 1 条 tool_table_budget，实际 ${r.overEvents.length}`);
+  eq(r.overEvents[0].bytes, bytes, '事件里的字节数不符');
+  eq(r.overEvents[0].limit, MAX_TOOL_SCHEMA_TOTAL_BYTES, '事件里的上限与常量不同源');
+  eq(r.overEvents[0].mode, 'warn', '事件应记录生效档位');
+  eq(r.budgetWarns.length, 1, `超限应恰好 1 条告警，实际 ${r.budgetWarns.length}：${r.budgetWarns.join(' | ')}`);
+  ok(r.budgetWarns[0].includes(String(bytes)), `告警缺实际字节：${r.budgetWarns[0]}`);
+  ok(r.captured && r.captured.tools.length === 40, 'warn 档不得阻断、不得截断工具表');
+  // 时间线必须是「正常闭合」：恰好 1 条 run_end、位于最后、且不是 blocked 形态
+  const ends = r.traceEvents.filter((e) => e.type === 'run_end');
+  eq(ends.length, 1, `warn 档应恰好 1 条 run_end，实际 ${ends.length}`);
+  eq(r.traceEvents[r.traceEvents.length - 1].type, 'run_end', 'run_end 必须是最后一条事件（下游按「最后一条即终态」判）');
+  eq(ends[0].status, undefined, 'warn 档的 run_end 不应带 blocked 标记');
+  eq(ends[0].budgetKind, 'normal', 'warn 档正常收尾的 budgetKind 应为 normal');
+});
+
+await checkAsync(`③c 缺口2（off 档）：超限但完全静默，run_start 采样仍在`, async () => {
+  const tools = bigToolTable(40, 1800);
+  const bytes = toolTableByteSize(tools);
+  const r = await runOnce({ tools, env: 'off' });
+  eq(r.overEvents.length, 0, `off 档不得留工具表事件：${JSON.stringify(r.overEvents)}`);
+  eq(r.budgetWarns.length, 0, `off 档不得告警：${r.budgetWarns.join(' | ')}`);
+  eq(r.start[0].toolTableBytes, bytes, 'off 档仍必须留 run_start 采样（静默 ≠ 不采样）');
+  eq(r.start[0].toolTableOver, true, 'off 档仍必须标出超限（否则观测只剩字节数没有判定）');
+  ok(r.captured && r.captured.tools.length === 40, 'off 档不得阻断');
+  // 静默 ≠ 时间线不闭合：off 档照旧是一条正常 run_end 收尾
+  const ends = r.traceEvents.filter((e) => e.type === 'run_end');
+  eq(ends.length, 1, `off 档应恰好 1 条 run_end，实际 ${ends.length}`);
+  eq(ends[0].status, undefined, 'off 档不应产生 blocked 闭合事件');
+  eq(r.traceEvents[r.traceEvents.length - 1].type, 'run_end', 'run_end 必须是最后一条事件');
+});
+
+await checkAsync('③c 缺口2（block 档）：超限抛错，信息含字节/上限/放行方式，且阻断发生在下发之前', async () => {
+  const tools = bigToolTable(40, 1800);
+  const bytes = toolTableByteSize(tools);
+  const r = await runOnce({ tools, env: 'block' });
+  ok(r.error, 'block 档超限必须抛错（实际未抛，等于档位静默失效）');
+  eq(r.error.code, 'TOOL_TABLE_BUDGET_EXCEEDED', '错误码应可被宿主分支识别');
+  const msg = String(r.error.message);
+  ok(msg.includes(String(bytes)), `错误信息缺实际字节 ${bytes}：${msg}`);
+  ok(msg.includes(String(MAX_TOOL_SCHEMA_TOTAL_BYTES)), `错误信息缺上限 ${MAX_TOOL_SCHEMA_TOTAL_BYTES}：${msg}`);
+  ok(new RegExp(`${ENFORCE_ENV}=warn`).test(msg), `错误信息缺放行方式（${ENFORCE_ENV}=warn）：${msg}`);
+  ok(/MCP|server/i.test(msg), `错误信息未提示「可能装了太多重型 MCP server」：${msg}`);
+  eq(r.captured, null, 'block 档必须在任何模型调用/工具下发之前阻断（否则会留下半截 run）');
+  eq(r.start.length, 1, '被阻断的 run 也必须先留 run_start 采样（否则超限 run 全被丢弃＝又一次左截断）');
+  eq(r.start[0].toolTableOver, true, '被阻断 run 的采样也应标出超限');
+  // 时间线闭合：block 档的 trace 序列必须**恰好两条** run_start → run_end(status=blocked)，
+  // 既不能只剩 run_start（下游会当异常 run），也不能夹带第三条（同一事实发两遍）。
+  const seq = r.traceEvents.map((e) => e.type).join('→');
+  eq(seq, 'run_start→run_end', `block 档 trace 序列必须恰为 run_start→run_end，实际 ${seq}`);
+  const end = r.traceEvents[1];
+  eq(end.status, 'blocked', 'block 闭合事件必须带 status=blocked（新值，runTrace 落盘不做 schema 校验，安全）');
+  eq(end.reason, 'tool_table_budget', 'block 闭合事件必须标明原因');
+  eq(end.bytes, bytes, '闭合事件里的字节数不符');
+  eq(end.limit, MAX_TOOL_SCHEMA_TOTAL_BYTES, '闭合事件里的上限与常量不同源');
+  eq(end.tools, 40, '闭合事件里的工具数不符');
+  // 不伪造用量/耗时：被阻断的 run 一个 token 都没花，填 0 会被下游算进用量统计
+  for (const k of ['usage', 'ms', 'durationMs', 'roundsUsed']) {
+    ok(!Object.prototype.hasOwnProperty.call(end, k), `block 闭合事件不得伪造 ${k}（宁可少字段，不要给下游假用量）`);
+  }
+});
+
+await checkAsync('③c 缺口2（block 档）：未超限不抛，正常跑完（档位不能把正常配置打成不可用）', async () => {
+  const r = await runOnce({ tools: [fnTool('tiny')], env: 'block' });
+  eq(r.error, null, `block 档在未超限时抛了错：${r.error && r.error.message}`);
+  ok(r.captured && r.captured.tools.length === 1, 'block 档未超限时应正常下发');
+  eq(r.overEvents.length, 0, '未超限不应产生超限事件');
+});
+
+check('③c 档位解析：缺省 warn、非法值回落 warn、大小写/空白容错（不静默变 off 也不误升 block）', () => {
+  const { toolTableEnforcement, DEFAULT_TOOL_TABLE_ENFORCE, TOOL_TABLE_ENFORCE_ENV, TOOL_TABLE_ENFORCE_MODES } = budget;
+  eq(DEFAULT_TOOL_TABLE_ENFORCE, 'warn', '缺省档位必须是 warn（= 改前行为，阈值未校准前不得 block）');
+  eq(TOOL_TABLE_ENFORCE_ENV, ENFORCE_ENV, '环境变量名与测试实际设置的名字不同源');
+  eq(TOOL_TABLE_ENFORCE_MODES.slice().sort().join(','), 'block,off,warn', '合法档位集合变了');
+  eq(toolTableEnforcement({}), 'warn', '未设环境变量应回落 warn');
+  eq(toolTableEnforcement({ [ENFORCE_ENV]: 'off' }), 'off', 'off 未生效');
+  eq(toolTableEnforcement({ [ENFORCE_ENV]: 'block' }), 'block', 'block 未生效');
+  eq(toolTableEnforcement({ [ENFORCE_ENV]: ' BLOCK ' }), 'block', '大小写/空白应容错');
+  eq(toolTableEnforcement({ [ENFORCE_ENV]: 'blok' }), 'warn', '拼错必须回落 warn（静默变 off 会让观测凭空消失）');
+  eq(toolTableEnforcement({ [ENFORCE_ENV]: '' }), 'warn', '空串必须回落 warn');
+});
+
+check('③c mcpServerCount 走 shared/mcpNameCodec.mjs 的 decodeToolName（不得手写分隔符切分＝F-005 复发）', () => {
+  const src = readSrc('agent-core/index.js');
+  ok(/decodeToolName\(/.test(src), 'agent-core 未使用 decodeToolName 反解 MCP 工具名');
+  eq((src.match(/split\((['"])__\1\)/g) || []).length, 0, 'agent-core 里出现手写的分隔符切分（F-005 会复发）');
 });
 
 // ── ④ 实测基线量级仍成立（阈值取值依据的有效性检查）──
