@@ -268,12 +268,49 @@ const TOOL_LEVEL = {
   // 与 unconfined_exec 同纪律：L1 硬地板不可经规则豁免，且（见 NON_REMEMBERABLE）不落规则库；
   // 其内部的逐次动作另由 cua_action 的 L1/L2 分级独立把关。
   computer_use: 'L1',
+  // ── F-002（第七轮）：把「隐式兜底 L2」显式化 ───────────────────────────────
+  // 下列 11 个工具此前既不在本表、也未被 toolLevel() 特判，级别实际来自**唯一兜底**
+  // `return TOOL_LEVEL[tool] || 'L2'`（见 toolLevel 末行）。危险在于 auto-safe 档对 L2 直接放行
+  // （见 needsApproval），于是「新工具漏登记」＝「默认自动批准」—— 一个新增的写文件/外发工具
+  // 会在无人值守档位静默过闸。本轮纪律：11 条一律显式写 'L2'，与兜底值**完全相同**，
+  // 实际审批行为逐字节不变（不升 L3、不移出审批面 —— 那些属产品行为变更，另案评估）。
+  // 门禁：test/tool-registration-matrix.test.mjs 断言每个模型工具「不得依赖 || 'L2' 兜底」。
+  search_plugins: 'L2', // 市场检索只读，但会向外部 registry 发起查询（外发数据）→ 不放宽到 null
+  pr_list: 'L2', // 只读 GitHub API；但涉及用户 token 与私有仓库元数据，故不并入
+  pr_view: 'L2', //   READONLY_TOOLS（并入后 on-request 档不再提示），保持 L2 = 维持现状
+  pr_diff: 'L2', //   同 pr_list / pr_view（diff 内容含私有仓库代码）
+  web_search: 'L2', // 读取外部内容且外发查询词 → 留 L2；后续收紧应与 web_fetch 统一评估
+  web_fetch: 'L2', // 可拉任意 URL（SSRF 风险由 webTools 侧守卫承担）→ 分级保持 L2 维持现状
+  deep_research: 'L2', // 多轮外部检索（web_search 的上层聚合）→ 与 web_search/web_fetch 同档
+  chrome_status: 'L2', // 只读连接状态；TODO(B2)：是否像 notify 那样移出审批面（当前 L2 会弹卡，疑似过严）
+  todo_write: 'L2', // 无持久副作用（与 notify 同纪律），但当前实际就是 L2；TODO(B2)：移出审批面需产品确认，本轮不改行为
+  spawn_subagent: 'L2', // 间接执行：子代理只用只读工具集，但消耗预算且可多轮循环 → 保留 L2 而非 null
+  orchestrate_task: 'L2', // 间接执行：Worker 池内每次工具调用另有独立审批，本层不重复拦截；
+  //   TODO(B2)：复核是否应按「最危险可达子工具」升到 L3 —— 升档会改 on-request 弹卡频率，本轮不做
+  // ⚠ 本表另有 3 条**被特判遮蔽（shadowed）、对 toolLevel() 不可达**的条目：
+  //   shell / code_exec / latex_compile —— 它们的特判分支在 `|| 'L2'` 之前就 return 了，
+  //   故这三行的值**永远不会被读到**，保留仅为让「默认分级表」可读（文档性条目，删了反而丢信息）。
+  //   实际分级由特判决定，不看本行：shell → DANGEROUS_PATTERNS 命中与否（命中 L1 / 否则 null）；
+  //   code_exec → isDangerousCode（危险 L1 / 否则 L3）；latex_compile → args.probeOnly（探测 null / 否则 L2）。
+  //   门禁用硬编码 SHADOWED 白名单把这 3 个钉死（新增重叠即红），避免「登记了以为生效」的错觉。
 };
 
 // 只读工具：任何档位都不询问
 const READONLY_TOOLS = new Set([
   'read_file', 'list_dir', 'grep', 'glob',
   'git_status', 'git_diff', 'git_log', 'git_branch',
+]);
+
+// toolLevel() 在 `|| 'L2'` 兜底**之前**按工具名特判的工具（对应 toolLevel 里逐个 if 分支）。
+// ⚠ 本清单必须与 toolLevel() 的特判分支**保持同步，漏一个会让门禁误判**：
+//   漏登记 → 门禁把该工具误判成「依赖 || 'L2' 兜底」；多登记 → 门禁放过一个其实没特判的工具。
+//   故 test/tool-registration-matrix.test.mjs 会从 toolLevel() 源码反解 `tool === 'x'` 分支做交叉校验。
+// 为什么不含 read_file 等 8 个只读工具：它们由上面的 READONLY_TOOLS 承担（toolLevel 第 1 个分支就是
+//   `READONLY_TOOLS.has(tool)`）。两表刻意**不重叠**，否则「三选一」覆盖断言失效、无法区分谁在生效。
+// 也没有 mcp__：它是前缀通配（toolLevel 用 startsWith 判），不是可枚举的工具名。
+const SPECIAL_CASED_TOOLS = new Set([
+  'notify', 'clipboard', 'http_request', 'sqlite',
+  'shell', 'code_exec', 'cua_action', 'latex_compile',
 ]);
 
 // P0-S1：危险命令规则不再在本文件手写副本，统一从 dangerousPatterns.js 导入。
@@ -716,4 +753,7 @@ module.exports = {
   isReadonlySql,
   // P2-7：执行后告知（正交布尔偏好；纯函数 + 通知出口）
   APPROVAL_MODES, reversibilityOf, buildExecutionNotice, notifyExecuted, setNoticeSink, emitExecutionNotice,
+  // F-002：把「工具分级登记面」导出，供 test/tool-registration-matrix.test.mjs 做逐工具门禁
+  //（此前只有 toolLevel() 可调用，门禁无法区分「显式登记」与「落 || 'L2' 兜底」，漏登记只能靠人眼）。
+  TOOL_LEVEL, REVERSIBILITY, SPECIAL_CASED_TOOLS,
 };
