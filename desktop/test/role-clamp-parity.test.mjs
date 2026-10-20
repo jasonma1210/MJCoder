@@ -338,6 +338,15 @@ const DERIVE_ALLOWLIST = {
   'main/tools/exec.js': 2,
 };
 check('2d 派生表达式棘轮（窄模式）：快照路径 approvalPolicy/main/workerPool 必须 0 处手抄，exec.js 恰好 2 处（allow-list，非缺口）', () => {
+  // 扫描面自检（与断言 5 的「目录不存在即抛 / 扫描面过小即红」同一纪律）：
+  // 本门禁的**文案自带 DERIVE_PATTERN**（标题、口径说明、红态提示里都写着那串表达式）。一旦有人
+  // 把 test/ 加进扫描面，门禁会匹配到**自己**，计数恒 ≥2 → 永久红，而看的人会以为是代码退化了。
+  // 光靠注释挡不住（注释只有读它的人看得到，而「扩扫描面」的人往往正好没读），所以这里断言。
+  for (const rel of Object.keys(DERIVE_ALLOWLIST)) {
+    if (/^test\//.test(rel) || !/^(main|shared|agent-core|renderer\/src)\//.test(rel)) {
+      throw new Error(`扫描面自检失败：${rel} 不在生产源码目录（main/ shared/ agent-core/ renderer/src/）内。测试目录会匹配到本门禁自身的文案（标题/口径说明/红态提示都含该模式），导致计数恒 ≥2 的永久红`);
+    }
+  }
   const report = [];
   for (const [rel, expected] of Object.entries(DERIVE_ALLOWLIST)) {
     // code 口径（readCode 剥注释）：注释里贴旧代码提醒不算违规
