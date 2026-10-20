@@ -23,6 +23,9 @@ const {
 } = require('./mcpProtocol');
 const { answerServerRequest } = require('./mcpServerRequests'); // P2-4：已声明能力的请求应答（ping/roots/completion）
 const { createStdioTransport } = require('./mcpStdioTransport'); // 2026-10-18：stdio 传输 + stderr 分级降噪
+// 2026-10-20：Streamable HTTP / 旧版 SSE / consumeSse 抽到独立模块（800 行软档，见该文件头注释）。
+// 这里引入后仍原样再导出（module.exports 里保留），调用方与既有测试无需改动。
+const { createHttpTransport, consumeSse, createSseTransport } = require('./mcpHttpTransport');
 
 const servers = new Map(); // name -> server 实例（跨传输统一注册表）
 
@@ -221,6 +224,12 @@ async function performHandshake(server, version = PROTOCOL_VERSION) {
   // 落状态时以**服务端实际返回值**为准：peerVersion 为空（服务端未声明版本）时保持空，
   // 不拿我们自己提议的版本冒充协商结果（提议值单独记在 proposedProtocolVersion）。
   server.protocolVersion = peerVersion;
+  // 第七轮 F-006 / B1-B-04：把**协商结果**交给传输层，供后续所有 POST 带 MCP-Protocol-Version。
+  // 放在版本校验之后、notifications/initialized 之前：initialized 与 tools/list 都必须带这个头。
+  // 只对实现了该方法的传输生效（stdio / 旧 SSE 传输没有这个方法，协议里也不要求）。
+  if (server.transport && typeof server.transport.setProtocolVersion === 'function') {
+    server.transport.setProtocolVersion(peerVersion);
+  }
   server.capabilities = (initRes && initRes.capabilities) || {};
   server.serverInfo = (initRes && initRes.serverInfo) || {};
   if (initRes && typeof initRes.instructions === 'string') server.instructions = initRes.instructions;
@@ -340,232 +349,11 @@ async function mcpRpcWithSessionRetry(server, method, params, timeoutMs) {
 // ── stdio 传输（2026-10-18 抽到 mcpStdioTransport.js，含 stderr 分级降噪）──
 // createStdioTransport 由下方 require 引入并在 connectMcpServer 中经 dispatch=dispatchMessage 装配
 
-// ── Streamable HTTP 传输 ──
-// auth（T7 OAuth 引擎注入，均可缺省）：
-//   getHeader() -> 'Bearer xxx' | null  —— 每次发送前取有效令牌（静态 headers 已带 Authorization 时不覆盖）
-//   refresh()   -> 'Bearer xxx' | null  —— 401 时强制续期，成功重试一次，仍 401 抛 mcpAuthRequired
-function createHttpTransport({ name, url, headers = {}, onLog, auth }) {
-  const base = String(url || '').trim().replace(/\/+$/, '');
-  if (!base) throw new Error('HTTP 传输需要服务地址（url）');
-  let sessionId = '';
-  const transport = {
-    kind: 'http',
-    async send(payload, requestId) {
-      const call = (bearer) => fetch(base, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
-          ...headers,
-          ...(bearer ? { Authorization: bearer } : {}),
-        },
-        body: payload,
-        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-      });
-      let res = await call(auth && !headers.Authorization ? await auth.getHeader() : null);
-      if (res.status === 401 && auth) {
-        await res.text().catch(() => {});
-        const fresh = await auth.refresh().catch(() => null);
-        if (fresh) res = await call(fresh);
-        if (res.status === 401) {
-          await res.text().catch(() => {});
-          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
-          err.mcpAuthRequired = true;
-          throw err;
-        }
-      }
-      // 会话建立：initialize 的响应头带 Mcp-Session-Id，后续请求必须回带
-      const sid = res.headers.get('mcp-session-id');
-      if (sid) sessionId = sid;
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        // H-4：会话失效（服务端已丢弃 Mcp-Session-Id，常见于服务重启/会话超时）→ 404。
-        // 规范要求：MUST 重新 initialize（不带 session id）后重试。这里只把「会话失效」标记出来，
-        // 由 mcpClient 的 mcpRpcWithSessionRetry 统一重新握手，避免传输层自己发起握手造成递归。
-        if (res.status === 404 && sessionId && requestId !== undefined) {
-          const err = new Error(`MCP 会话已失效（HTTP 404${text ? `: ${text.slice(0, 120)}` : ''}），将重新握手`);
-          err.mcpSessionExpired = true;
-          throw err;
-        }
-        // 通知（无 id）没有响应：JSON-RPC 规范里它的失败不影响主流程。
-        // 实测部分服务端对 notifications/initialized 直接回 404/405（只有真实请求才建会话），
-        // 若按错误抛出会把「通知被拒」误报成「连接失败」。
-        if (requestId === undefined) {
-          if (onLog) onLog(`通知返回 HTTP ${res.status}（按规范忽略）`);
-          return;
-        }
-        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
-      }
-      const ctype = String(res.headers.get('content-type') || '');
-      if (/text\/event-stream/i.test(ctype)) {
-        // SSE：逐事件解析 data: 行，命中对应 id 即完成；流保持到服务端关闭
-        await consumeSse(res, (msg) => dispatchMessage(transport.serverRef, msg));
-        return;
-      }
-      // 单 JSON 响应
-      const text = await res.text();
-      if (!text.trim()) return; // 通知（notifications/*）的 202 无 body：不是错误，别刷日志
-      try { dispatchMessage(transport.serverRef, JSON.parse(text)); }
-      catch (e) { if (onLog) onLog(`非 JSON 响应: ${text.slice(0, 120)}`); }
-    },
-    close() { /* HTTP 无子进程；会话随进程结束（DELETE 语义属服务端可选实现，不强制） */ },
-    // H-4：重新 initialize 前必须清掉旧会话 id，否则新握手仍带着已失效的会话
-    resetSession() { sessionId = ''; },
-    alive() { return true; },
-    stderrTail: '',
-  };
-  return transport;
-}
-
-// 解析 SSE 流：事件 → JSON
-//
-// 2026-10-17 真机修复（远程 MCP 大面积连不上的根因）：
-//   SSE 规范允许三种行尾（LF / CRLF / CR），实测 DeepWiki 用 **CRLF**——原实现只按 '\n\n' 切分，
-//   CRLF 下事件分隔是 '\r\n\r\n'（序列为 \r \n \r \n，不含连续 '\n\n'），于是**永远切不开**：
-//   initialize 的响应到了却没人解析 → 卡满 30s 报「MCP initialize 超时」。
-//   而返回单 JSON 的服务端（24haowan）正常 ⇒ 现象恰好表现为「一部分能连、一部分连不上」。
-// 同时按规范处理一个事件内多行 data（用 '\n' 拼接后再 parse）与注释/event/id/retry 行。
-async function consumeSse(res, onData, onNamedEvent) {
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  const handleEvent = (raw) => {
-    let evtName = 'message';
-    const dataLines = [];
-    for (const line of raw.split('\n')) {
-      if (line.startsWith('event:')) { evtName = line.slice(6).trim() || 'message'; continue; }
-      if (!line.startsWith('data:')) continue; // id: / retry: / ':' 注释行一律跳过
-      dataLines.push(line.slice(5).replace(/^ /, '')); // 规范：冒号后首个空格是分隔符
-    }
-    if (!dataLines.length) return;
-    const data = dataLines.join('\n').trim();
-    // 命名事件（SSE 传输的 `endpoint`）的 data 是路径而非 JSON-RPC，交给调用方
-    if (evtName !== 'message' && typeof onNamedEvent === 'function') { onNamedEvent(evtName, data); return; }
-    if (!data || data === '[DONE]') return;
-    try { onData(JSON.parse(data)); } catch { /* 非 JSON 事件忽略 */ }
-  };
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    // 行尾归一后再切事件。归一化是幂等的；跨 chunk 被截断的 '\r' 会在下一轮重新归一，
-    // 最坏情况只是把一个事件提前切开一次，data 内容仍完整（已推演边界）。
-    buf = (buf + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const events = buf.split('\n\n');
-    buf = events.pop();
-    for (const evt of events) handleEvent(evt);
-  }
-  if (buf.trim()) handleEvent(buf); // 流结束时没有尾随空行
-}
-
-// ── SSE 传输（旧版 HTTP+SSE，即 MIN_PROTOCOL_VERSION 那一代的 http 形态）──
-//
-// 与 streamableHttp 的区别（为什么必须单独一个 transport）：
-//   · streamableHttp：一个 POST 携带一条消息，响应在同一次 POST 里回来（JSON 或 SSE 流）；
-//   · SSE：先 GET 建一条长连接，服务端用 `event: endpoint` 告知消息投递路径，
-//     之后客户端 POST 到该路径，**响应从那条长连接回来**。
-// 两者的 endpoint 发现与发送语义完全不同，共用一个 transport 会把两种情况都做错。
-//
-// 2026-10-17 新增：WorkBuddy 目录里有 11 条 `type: sse` 的服务，此前被直接跳过（导入时排除），
-// 用户点不到。这里补上，按官方实现顺序：GET → 等 endpoint → POST。
-function createSseTransport({ name, url, headers = {}, onLog, auth }) {
-  const base = String(url || '').trim();
-  if (!base) throw new Error('SSE 传输需要服务地址（url）');
-  let endpoint = '';
-  let closed = false;
-  let started = false;
-  let abortCtl = null;
-  let readyResolve = null;
-  let readyReject = null;
-  const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-  ready.catch(() => { /* 未消费的 rejection 会刷 unhandledRejection 日志，这里兜住 */ });
-
-  const withAuth = async (extra) => {
-    const h = { ...extra, ...headers };
-    if (auth && !headers.Authorization) {
-      const bearer = await auth.getHeader().catch(() => null);
-      if (bearer) h.Authorization = bearer;
-    }
-    return h;
-  };
-
-  const transport = {
-    kind: 'sse',
-    // 由 connectMcpServer 在 transportObj.serverRef 赋值后调用：
-    // 必须等到 serverRef 就绪才能 dispatch（否则事件到达时找不到分发表）
-    ensureStarted() {
-      if (started) return;
-      started = true;
-      abortCtl = new AbortController();
-      (async () => {
-        const res = await fetch(base, { headers: await withAuth({ Accept: 'text/event-stream' }), signal: abortCtl.signal });
-        if (res.status === 401) {
-          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
-          err.mcpAuthRequired = true;
-          throw err;
-        }
-        if (!res.ok) throw new Error(`SSE 建流失败：HTTP ${res.status}`);
-        if (!res.body || typeof res.body.getReader !== 'function') throw new Error('SSE 建流失败：响应不是流');
-        await consumeSse(
-          res,
-          (msg) => dispatchMessage(transport.serverRef, msg),
-          (evtName, data) => {
-            if (evtName !== 'endpoint') return;
-            // data 可能是相对路径（`/messages?sessionId=xxx`）——按建流地址解析成绝对 URL
-            try { endpoint = new URL(data, base).toString(); } catch { endpoint = data; }
-            if (onLog) onLog(`SSE endpoint: ${endpoint}`);
-            readyResolve();
-          },
-        );
-      })()
-        .catch((e) => {
-          closed = true;
-          if (!endpoint) readyReject(e);
-          else if (onLog) onLog(`SSE 流已断开：${e.message}`);
-        })
-        .finally(() => { closed = true; });
-    },
-    async send(payload, requestId) {
-      await ready; // endpoint 未就绪时先等（initialize 也走这条路）
-      if (closed) throw new Error('SSE 连接已断开，请重新连接该服务');
-      const isNotification = requestId === undefined;
-      const post = (h) => fetch(endpoint, {
-        method: 'POST',
-        headers: { ...h, 'Content-Type': 'application/json' },
-        body: payload,
-        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-      });
-      let res = await post(await withAuth({}));
-      if (res.status === 401 && auth) {
-        await res.text().catch(() => {});
-        const fresh = await auth.refresh().catch(() => null);
-        if (fresh) res = await post({ ...headers, Authorization: fresh });
-        if (res.status === 401) {
-          await res.text().catch(() => {});
-          const err = new Error('授权无效或已过期（HTTP 401），请在连接器面板重新授权该服务');
-          err.mcpAuthRequired = true;
-          throw err;
-        }
-      }
-      // 规范：消息投递成功即 202；部分实现回 200/204，也算成功
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        if (isNotification) { if (onLog) onLog(`通知返回 HTTP ${res.status}（按规范忽略）`); return; }
-        throw new Error(`SSE 发送失败：HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
-      }
-      await res.text().catch(() => {});
-    },
-    close() {
-      closed = true;
-      try { abortCtl?.abort(); } catch { /* 已关闭 */ }
-    },
-    alive() { return started && !closed; },
-    // 注意：stdio 传输的 stderr 尾巴写在 transport.stderrTail（下方 on('data') 里持续写入）。
-    // 这里**不要**再加一个同名的 server.stderrTail 空字段——它从来没人写，
-    // 后人读到会以为「拿到空串 = 服务端没输出」，把真实报错原因又吞回去。
-  };
-  return transport;
-}
+// ── HTTP 传输族（2026-10-20 抽到 mcpHttpTransport.js）──
+// Streamable HTTP / 旧版 SSE / consumeSse 三者内聚且与握手语义无关，整块搬出以避免
+// 撞破 max-lines 的 800 行软档（该清单只减不增，禁止新增条目）。
+// 注入 dispatch=dispatchMessage 与 timeoutMs=DEFAULT_TIMEOUT_MS：既保证消息仍回本文件的
+// dispatchMessage，也保证超时口径只在本文件定义一处（不产生循环 require）。
 
 // 按身份摘除的纯核：只在「registry 里这个名字仍指向同一个 server」时才删；抽成 registry 入参以便纯 Node 单测。
 function detachFrom(registry, name, server) {
@@ -624,10 +412,17 @@ async function connectMcpServer({
 
   let transportObj;
   try {
+    // dispatch / timeoutMs 由本文件注入（见 mcpHttpTransport.js 头注释的「依赖注入」段）：
+    //   · dispatchMessage —— 收到的 JSON-RPC 仍回本文件的分发器（按 id 唤醒 pending）；
+    //   · DEFAULT_TIMEOUT_MS —— 超时口径只在本文件定义一处，不制造第二个 30000。
     transportObj = transport === 'http'
-      ? createHttpTransport({ name, url, headers, onLog, auth })
+      ? createHttpTransport({
+        name, url, headers, onLog, auth, dispatch: dispatchMessage, timeoutMs: DEFAULT_TIMEOUT_MS,
+      })
       : transport === 'sse'
-        ? createSseTransport({ name, url, headers, onLog, auth })
+        ? createSseTransport({
+          name, url, headers, onLog, auth, dispatch: dispatchMessage, timeoutMs: DEFAULT_TIMEOUT_MS,
+        })
         : createStdioTransport({ command, args, env, onLog, dispatch: dispatchMessage });
   } catch (e) {
     return { ok: false, error: e.message };
