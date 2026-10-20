@@ -34,6 +34,19 @@ which structurally prevents them from drifting apart.
 | Sandbox isolation | See tiering below | Per-platform |
 | Local audit log | Tool calls, plugin installs, and approval decisions are all persisted and traceable | All |
 
+### MCP scope: tools profile
+
+MJ Coder is an MCP **client that implements the tools profile only** — it consumes `tools/list` and
+`tools/call`. Resources browsing (`resources/list` / `resources/read`), prompt templates, task
+primitives, and reverse sampling (`sampling` / `elicitation`) are **not supported**, and are declined
+with `-32601` where the protocol expects an answer. **None of these may be implied as available** in
+documentation, UI copy, or marketing material.
+
+Structured output (`outputSchema` / `structuredContent` on `tools/call`) is **also not consumed yet**.
+Unlike the list above, this sits *inside* the tools spec rather than outside the tools profile, so it
+is tracked as an **open gap**, not declared out of scope: a tool that relies on it will still be
+callable, but the structured shape of its result is dropped.
+
 ### Sandbox capability by platform
 
 **macOS and Linux provide OS-level isolation out of the box; Windows ships an OS-level backend that
