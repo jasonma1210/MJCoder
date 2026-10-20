@@ -100,7 +100,7 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 | `desktop/` | Electron 桌面应用：主进程（安全/沙箱/工具执行）+ React 渲染层（UI）+ agent-core（headless 引擎） |
 | `server/` | 可选的 Node.js 服务端：账号体系、云端任务队列、协同同步、数据看板 |
 | `miniprogram/` | 可选的微信小程序控制面：查看任务、远程审批（不执行任何代码） |
-| `ecosystem/` | 生态资产：**100 个技能、77 个 MCP 连接器、51 个数字员工角色模板 = 228**（数字由 `desktop/scripts/gen-ecosystem-counts.mjs` 从源码现算，并由 `desktop/test/ecosystem-counts.test.mjs` 守护）。77 个连接器收敛为「装得上/可按官方规范填凭证」的主流服务，其余场景走「自定义连接器」。另有 `mcp-connectors-workbuddy.json` 的 **214 条原始导入清单**，与精选 77 条**零重叠**（两套独立命名空间，运行时不合并去重），故**不计入 228**。51 个数字员工**角色模板**为结构化定义，当前未接入 Agent 运行时，仅作为可复用的角色提示词与工具权限模板库 |
+| `ecosystem/` | 生态资产：**100 个技能、77 个 MCP 连接器、51 个数字员工角色模板 = 228**（数字由 `desktop/scripts/gen-ecosystem-counts.mjs` 从源码现算，并由 `desktop/test/ecosystem-counts.test.mjs` 守护）。77 个连接器收敛为「装得上/可按官方规范填凭证」的主流服务，其余场景走「自定义连接器」。另有 `mcp-connectors-workbuddy.json` 的 **214 条原始导入清单**，与精选 77 条**零重叠**（两套独立命名空间，运行时不合并去重），故**不计入 228**。51 个数字员工**角色模板**已接入 Agent 运行时，形态是**线程级、单角色预设**：在生态中心「招募」后即取回该角色的运行时预设（`ecosystem:employeeRuntime`），此后每轮对话都以 `rolePreset` 携带进 `agent:run`，主进程再把审批档与沙箱策略按「角色声明与用户设置中更严格者」收紧——角色只能收紧权限、不能放宽。范围如实说明：这是**把单个角色预设接进单个会话**，**不是**多员工编排（没有调度器，也没有员工间委派） |
 
 > 完整的目录结构与职责说明见仓库内 `docs/` 目录（不随代码发布）。
 

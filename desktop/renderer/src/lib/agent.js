@@ -7,6 +7,10 @@
 import { runAgent as coreRunAgent, BASE_TOOLS, BUILTIN_SKILL_IDS, decomposeTask, looksLargeTask, parsePlanResponse } from '../../../agent-core/index.js';
 // T0-2：IPC 边界契约（与主进程同源，shared-ipc/contract.mjs 为唯一事实来源）
 import { validateAgentEvent } from '../../../shared-ipc/contract.mjs';
+// F-020：角色模板「审批/沙箱只收紧不放宽」纪律——回退路径与主进程通道同源（纯函数、零依赖，
+// 渲染层可静态引用，同 mcpNameCodec.mjs 先例；与 main/approvalPolicy.js 的逐值一致性由
+// test/agent-fallback-clamp.test.mjs 全矩阵对账守护）
+import { stricterApproval, stricterSandbox } from '../../../shared/roleClamp.mjs';
 
 // i18n：本文件被纯 Node 测试静态导入，不能 import i18n/index.ts（TS+React）；
 // 经 globalThis.__MJ_T__ 运行时通道取翻译（i18n 模块加载时置位；未置位回落返回 key）
@@ -143,6 +147,22 @@ function runAgentViaMain(options) {
   });
 }
 
+// F-020：数字员工 rolePreset 的审批档/沙箱钳制——**两条通道必须同源**。
+// 主进程通道（main/agentRunner.js 的 `if (payload.rolePreset)` 段）已按「取角色与用户设置中
+// 更严格者」钳制；本回退通道此前一处钳制都没有 ⇒ 同一份 rolePreset 在主通道收紧、在回退通道
+// 不收紧，即「同一个产品，两个行为」。回退路径不是死代码（旧版 preload / 纯 Node 测试环境走它），
+// 所以这个差异是真实可触发的权限差异，不是纸面问题。
+// 无 rolePreset 时原样返回：不补默认档，行为与既往完全一致（与主进程侧同形状）。
+export function applyRoleClamp(params) {
+  const preset = params?.rolePreset;
+  if (!preset) return params;
+  return {
+    ...params,
+    approvalMode: stricterApproval(params.approvalMode, preset.approvalMode),
+    sandboxPolicy: stricterSandbox(params.sandboxPolicy, preset.sandboxPolicy),
+  };
+}
+
 // 进程内模式（回退/测试）：引擎在当前上下文运行，工具通道经 window.mjcode.* 组装注入
 function runAgentInProcess(options) {
   const mj = () => globalThis.window?.mjcode;
@@ -173,7 +193,8 @@ function runAgentInProcess(options) {
     mcpCallTool: requireChannel('mcpCallTool'),
   };
   // P0-5：默认注入前台 token 预算（分层：大任务自动升档）；options.tokenBudget 显式传值（含 0）时以调用方为准
-  return coreRunAgent({ ...options, tokenBudget: resolveTokenBudget(options), toolHandlers });
+  // F-020：rolePreset 的审批/沙箱在此钳制（applyRoleClamp），与主进程通道取同一纪律
+  return coreRunAgent(applyRoleClamp({ ...options, tokenBudget: resolveTokenBudget(options), toolHandlers }));
 }
 
 export function runAgent(options = {}) {
