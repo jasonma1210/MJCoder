@@ -27,9 +27,32 @@
 //       字典容器不额外计一层，见 schemaDepth 注释）。依据：存量工具 schema 深度 ≤ 4；
 //       8 层足够表达 `object → properties → object → items → object` 这类合法结构，
 //       而深 20 层的 schema 已无实际表达价值，只会拖垮序列化与模型理解。
-//   · MAX_MCP_TOOL_CALLS_PER_SERVER / MAX_RESIDENT_MCP_SERVERS
-//       先给**占位常量**：B2-B-01（工具发现粒度策略 / 常驻服务数上限）启用，本轮**不做强制**。
+//   · MAX_MCP_TOOL_CALLS_PER_SERVER
+//       仍是**占位常量**：B2-B-01 的工具发现粒度策略启用，本轮**不做强制**。
 //       只是为了「上限只在一处定义」这条纪律先落地，避免 B2 又开第二份硬编码。
+//   · MAX_RESIDENT_MCP_SERVERS / MAX_TOOL_SCHEMA_TOTAL_BYTES（B2-B-01 落地）
+//       本轮**只设阈值、不做强制**（观测档）：超限只留一条 trace/warn，不截断、不改行为。
+//       取值依据是本轮**实测基线**（2026-10-20 现算；测量方式：临时拉起真实 MCP 服务后
+//       走 stdio 的 initialize + tools/list，再用 shared/mcpToolDefs.mjs 的 toToolDefs 转形）：
+//         - 52 个静态工具（BASE_TOOLS）：整表 JSON 34,617 字节（仅 parameters 之和 15,719 字节、
+//           description 合计 6,155 字符），平均 666 字节/工具；常见 53 工具形态
+//           （summary 技能披露模式 +load_skill）34,981 字节。
+//         - 3 个默认 auto-start 预热服务（main/mcpPrewarm.js 的 filesystem / time / fetch）
+//           实测 17 个工具、整表 JSON 10,979 字节（filesystem 14 工具 8,645 / time 2 工具 1,245 /
+//           fetch 1 工具 1,089），平均 3,660 字节/服务。
+//         - 故当前默认配置 = 52 + 17 = 69 个工具、45,596 字节。
+//       为什么 MAX_TOOL_SCHEMA_TOTAL_BYTES = 65536：
+//         34,617（静态）+ 8 × 3,660（MAX_RESIDENT_MCP_SERVERS 个服务的实测均值）≈ 63,897 字节，
+//         向上取整到 64 KiB = 65,536 —— 即「默认配置（3 个预热服务）留 1.44 倍余量，常驻服务
+//         用满 8 个刚好触顶」。另一口径：64 KiB ≈ 16k token（按 4 字节/token），约等于未知模型
+//         的回落窗口（main/modelWindows.js 的 DEFAULT_CONTEXT_WINDOW = 32768）的一半 ——
+//         工具表再往上长，会话历史就会被挤到没有可用空间。
+//       未验证项：per-server 均值取自 3 个无密钥小服务，playwright / desktop-commander 这类重型
+//         server 单服务即可达数十 KB；故本值只作**观测档起点**，跑一轮真实数据后再定强制值。
+//   · MAX_RESIDENT_MCP_SERVERS = 8
+//       实测口径：默认 auto-start 档 3 个服务（filesystem / time / fetch）+ 白名单档可懒启动的
+//       常用服务（git / playwright / desktop-commander / memory / context7 等）里取 5 个，
+//       合计 8 个。超过 8 个常驻服务的场景，工具表总字节必然先触 MAX_TOOL_SCHEMA_TOTAL_BYTES。
 //
 // 纪律：本文件是纯常量 + 纯函数（零依赖、无 Node 内置模块），可被主进程（CJS 动态 import）、
 //   渲染层（Vite ESM）与 Node 测试共同消费——与 shared/untrustedContent.mjs 同构。
@@ -46,8 +69,15 @@ export const MAX_INPUT_SCHEMA_DEPTH = 8;
 /** 每服务单轮 MCP 工具调用上限 —— 占位，B2-B-01 启用，本轮不强制。 */
 export const MAX_MCP_TOOL_CALLS_PER_SERVER = 40;
 
-/** 常驻 MCP 服务数上限 —— 占位，B2-B-01 启用，本轮不强制。 */
+/** 常驻 MCP 服务数上限 —— 观测档（超限只留痕，不断开、不拒连）。 */
 export const MAX_RESIDENT_MCP_SERVERS = 8;
+
+/**
+ * 工具表总字节上限（整表 `JSON.stringify(tools)` 的 UTF-8 字节）—— 观测档（超限不截断）。
+ * 语义等价于「一次模型请求里 `tools` 字段的体积」：不可枚举的内部标记（`__blocked__` 等）
+ * 天然不计入，与线上报文同口径。
+ */
+export const MAX_TOOL_SCHEMA_TOTAL_BYTES = 65536;
 
 /**
  * 截断后缀。单独导出是为了「后缀也算进长度预算」时不出现第二处字面量
@@ -141,5 +171,44 @@ export function inspectToolDefinition(tool) {
     descriptionTruncated: descriptionChars > MAX_TOOL_DESCRIPTION_CHARS,
     schemaTooLarge: sizeOver || depthOver,
     reason: parts.join('；'),
+  };
+}
+
+/**
+ * 工具表整表字节数（UTF-8）。
+ * 用 `JSON.stringify(整表)` 计量而不是逐字段累加：不可枚举的内部标记不计入，与一次模型请求里
+ * `tools` 字段的真实体积同口径（宿主把 allTools 原样写进 body.tools）。
+ * 序列化失败（循环引用等）返回 Infinity —— 观测档宁可报「超限」，也不静默放过一个坏工具表。
+ * @param {unknown} tools
+ * @returns {number}
+ */
+export function toolTableByteSize(tools) {
+  try {
+    const json = JSON.stringify(Array.isArray(tools) ? tools : []);
+    if (typeof json !== 'string') return 0;
+    return new TextEncoder().encode(json).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * 工具表相对总预算的判定（B2-B-01 观测用）。
+ * 调用方**只**据此留痕：本轮不做「超限即截断」—— 截断工具表会让模型看到残缺 schema，
+ * 风险远大于收益，阈值先靠真实运行数据校准。
+ * @param {unknown} tools
+ * @param {number} [limit] 缺省取 MAX_TOOL_SCHEMA_TOTAL_BYTES（测试可注入小值验证告警路径）
+ * @returns {{toolCount: number, bytes: number, limit: number, over: boolean, reason: string}}
+ */
+export function inspectToolTableBudget(tools, limit = MAX_TOOL_SCHEMA_TOTAL_BYTES) {
+  const list = Array.isArray(tools) ? tools : [];
+  const bytes = toolTableByteSize(list);
+  const over = bytes > limit;
+  return {
+    toolCount: list.length,
+    bytes,
+    limit,
+    over,
+    reason: over ? `工具表 ${bytes} 字节 > 上限 ${limit}（${list.length} 个工具）` : '',
   };
 }

@@ -3,6 +3,11 @@
 // 引擎内部零 window / 零 Electron 依赖：所有工具与模型调用经 toolHandlers 注入；
 // 未提供 toolHandlers 时回落 globalThis.window.mjcode（兼容旧调用方）。
 
+// B2-B-01（D-03 第一阶段·观测档）：工具表总字节观测。
+// 上限的唯一来源是 shared/contextBudget.mjs（该模块是纯常量 + 纯函数、零 Node 内置依赖，
+// 可被渲染层 Vite 打包与引擎子进程共同消费）——本文件不写任何阈值数字。
+import { inspectToolTableBudget } from '../shared/contextBudget.mjs';
+
 // ── node:fs 惰性获取（仅 sessionDir 落盘时需要）──
 // 渲染层经 Vite 打包：这里不写静态 import，用 process.getBuiltinModule 同步获取，
 // 失败时动态 import 兜底（@vite-ignore 避免 Vite 解析 node: 前缀）。
@@ -786,7 +791,8 @@ export const TTFB_TARGET_MS = 3000;
 // 「何时使用」写在 description 里。因此索引层只注入 name + description（约 100 tokens/技能），
 // 正文在模型命中后按需加载（仍走 guardUntrusted + maxChars:6000）。
 // load_skill 是引擎内置只读工具：**仅当宿主提供 toolHandlers.loadSkill 时才通告给模型**，
-// 否则回落 full 模式（零破坏——BASE_TOOLS 的条数被 test/web-todo-tools.test.js 钉死为 41，不得新增）。
+// 否则回落 full 模式（零破坏——BASE_TOOLS 的条数由 test/web-todo-tools.test.js 的工具总数
+// 断言钉死，不得新增；该测试另有防复发断言，禁止在注释里写死具体条数）。
 export const LOAD_SKILL_TOOL = { type: 'function', function: {
   name: 'load_skill',
   description: '加载某个技能的完整说明（只读）。技能清单里只有名称与简介，需要按该技能的步骤执行时先调用本工具取正文。',
@@ -2444,9 +2450,10 @@ export async function runAgent({
     'load_skill',
   ]);
   // P1-6：summary 模式下额外通告 load_skill（只在宿主提供了 loadSkill 通道时；
-  // BASE_TOOLS 条数被 test/web-todo-tools.test.js 钉死为 41，不得往里加，故在此动态追加）
+  // BASE_TOOLS 条数由 test/web-todo-tools.test.js 的工具总数断言钉死——该测试另有防复发断言，
+  // 禁止在注释里写死具体条数——故不得往里加，在此动态追加）
   const baseToolList = customTools || BASE_TOOLS;
-  // 条件追加（一律不进 BASE_TOOLS 静态清单，其条数被 test/web-todo-tools.test.js 钉死）：
+  // 条件追加（一律不进 BASE_TOOLS 静态清单，其条数由 test/web-todo-tools.test.js 钉死）：
   //   · summary 技能披露模式 → 补 load_skill（正文按需加载）；
   //   · opt-in 桌面自动化（macOS + 用户主动开启）→ 补 computer_use。
   let effectiveBaseTools = baseToolList;
@@ -2456,7 +2463,23 @@ export async function runAgent({
   if (computerUseEnabled && !customTools) {
     effectiveBaseTools = [...effectiveBaseTools, COMPUTER_USE_TOOL];
   }
-  let allTools = [...effectiveBaseTools, ...mcpTools];
+  // ── B2 移交项（F-007 定义侧闸门的**消费方**）──
+  // shared/mcpToolDefs.mjs 用不可枚举的 `__blocked__`（原因字符串）标记 schema 超限的 MCP 工具，
+  // 但此前无人读取 —— 被阻塞的工具仍以 `[schema-too-large]` 前缀披露给模型，等于把「不可调用」
+  // 的工具算进工具选择空间（既占上下文，又诱导模型去调一个必然失败的工具）。在此统一下架：
+  // 只减不增、**绝不抛异常**。读标记而不 import isBlockedToolDef()：本文件刻意保持极薄的
+  // import 面（只有零 Node 内置依赖的纯常量/纯函数模块），标记语义由 mcpToolDefs 定义，
+  // 此处只按其契约读取（test/context-budget.test.mjs 锁两端一致）。
+  let usableMcpTools = mcpTools;
+  if (Array.isArray(mcpTools) && mcpTools.length) {
+    const blocked = mcpTools.filter((t) => t && typeof t === 'object' && t.__blocked__);
+    if (blocked.length) {
+      usableMcpTools = mcpTools.filter((t) => !blocked.includes(t));
+      const names = blocked.slice(0, 5).map((t) => t?.function?.name).filter(Boolean);
+      console.warn(`[agent] 因 schema 超限下架 ${blocked.length} 个 MCP 工具（${names.join(',') || '名称缺失'}）：工具定义不进模型上下文，调用会被拒绝`);
+    }
+  }
+  let allTools = [...effectiveBaseTools, ...usableMcpTools];
   // ── B1-B-02：三段裁剪（顺序写死，每一段都 fail-closed）──
   // 三条同源 P1 缺陷的根因是同一件事：工具裁剪链**全部 fail-open**——任何一环
   // 「判定失败 / 未配置 / 名字拼错」都退回全量工具，于是「只读角色」与「不支持 tool calling
@@ -2487,8 +2510,8 @@ export async function runAgent({
     const allowed = new Set(rolePreset.toolNames.map(String));
     const picked = effectiveBaseTools.filter((t) => allowed.has(t.function?.name));
     const mcpAllowed = rolePreset.allowMcp === true
-      ? mcpTools                                             // 角色构造层显式放开 MCP
-      : mcpTools.filter((t) => allowed.has(t.function?.name)); // 缺省/false：MCP 也走白名单
+      ? usableMcpTools                                     // 角色构造层显式放开 MCP
+      : usableMcpTools.filter((t) => allowed.has(t.function?.name)); // 缺省/false：MCP 也走白名单
     allTools = [...picked, ...mcpAllowed];
     if (!picked.length) {
       // F-018：交集为空 = 角色白名单与内置工具名对不上（多半是拼错）。旧行为是
@@ -2527,6 +2550,17 @@ export async function runAgent({
   // 事件形如 {type:'run_start'|'model'|'model_error'|'tool'|'run_end', ...}，
   // 由宿主（agentRunner）落 JSONL；任何 onTrace 异常都不得影响主流程（与 onBudget 同纪律）。
   const trace = (evt) => { try { onTrace?.(evt); } catch { /* trace 上报绝不影响主流程 */ } };
+  // ── B2-B-01（D-03 第一阶段 · 观测档）：工具表总字节 ──
+  // 只观测、**不强制**：超限仅留一条 trace/warn（含实际字节与上限），不截断、不改变本 run 下发的
+  // 工具集合 —— 截断工具表会让模型看到残缺 schema，风险远大于收益；本轮先用真实运行数据校准阈值。
+  // 上限唯一来源是 shared/contextBudget.mjs；任何异常都不得影响主流程（与 onTrace 同纪律）。
+  try {
+    const tableBudget = inspectToolTableBudget(allTools);
+    if (tableBudget.over) {
+      console.warn(`[agent] 工具表总字节超观测上限：${tableBudget.reason}（B2-B-01 观测档，本轮不截断）`);
+      trace({ type: 'tool_table_budget', bytes: tableBudget.bytes, limit: tableBudget.limit, tools: tableBudget.toolCount });
+    }
+  } catch { /* 观测失败绝不影响主流程 */ }
   // ── P0-2（记忆写入闭环）：压缩摘要归档通道 ──
   // 摘要产出后，引擎**只发事件**，落记忆库是宿主（agentRunner）的副作用——引擎保持 headless 纯净、
   // 不引入任何存储依赖（与 LoopEngine 不碰 DB 同一纪律）。
