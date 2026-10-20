@@ -50,7 +50,7 @@ React 渲染界面，对标 codex app 等主流桌面 Agent，**排除云与在�
 - **默认最小权限自启**：默认自启只包含「原生工具 + 少量无密钥 MCP」；带外部密钥 / 宿主命令行 / 浏览器自动化的 MCP 一律只进白名单懒加载或手动授权。
 - **Shell/Terminal 类高权限能力绝不默认自启**，必须由用户手动开启并额外配置权限控制。
 - **本地存储为唯一事实来源**：记忆、任务、连接器等均以本机 SQLite / 文件为准。
-- 移除登录系统，启动后直接进入主页面；设置页仅保留版本更新能力，不再保留用户配置区块。
+- 移除登录系统，启动后直接进入主页面；无账户体系，但**设置页保留完整配置能力**——按两组共 10 个页签组织（`settings.navGroupSettings`：通用 / 外观 / 模型；`settings.navGroupFeatures`：生态 / 网络 / 浏览器 / Git / Hooks / 记忆 / 团队空间），版本更新区块（`UpdateSection`）归入「通用」页内，不单独成页。
 
 ### 1.2 目录结构
 
@@ -62,13 +62,18 @@ React 渲染界面，对标 codex app 等主流桌面 Agent，**排除云与在�
 │   ├── renderer/            # React + TypeScript 渲染层（Vite 打包）
 │   ├── shared/              # 主进程/引擎/渲染层共享的纯函数模块（ESM）
 │   ├── shared-ipc/          # IPC 契约（zod 校验）
-│   ├── test/                # 发现式全量测试（220 套件基线）
+│   ├── test/                # 发现式全量测试（*.test.{js,mjs} + 2 个 smoke；R7 基线 218+2=220 suite，另 1 个 eval:check gate → 合计 221 个检查项）
 │   └── eval/                # 离线评估任务集与自检脚本
 ├── ecosystem/               # 生态目录（数字员工、MCP 连接器、技能）
 ├── miniprogram/             # 微信小程序（功能开关默认冻结）
 ├── chrome-extension/        # Chrome 扩展（浏览器接管能力）
-└── server/                  # 本地服务端（Spring Boot，可选）
+└── server/                  # 本地服务端（Node.js + Express，可选）
 ```
+
+> 目录树中的 `server/` 技术栈以 `server/package.json` 为准：包名 `mj-code-server@0.6.1-beta`，
+> `express@^4.21.0` + `pg@^8.13.0` + `yjs@^13.6.33` + `y-protocols@^1.0.7` + `jsonwebtoken@^9.0.2` +
+> `bcryptjs@^2.4.3` + `cors@^2.8.5` + `croner@^10.0.1` + `dotenv@^16.4.5`，入口 `src/index.js`（`node src/index.js` 启动）。
+> **不是 Java 技术栈**：该目录下无 `pom.xml` / `build.gradle` / `*.java`（`find server -name "*.java"` 零命中）。
 
 ### 1.3 三进程 / 三层运行架构
 
@@ -515,7 +520,7 @@ flowchart TB
 flowchart TB
     subgraph O["Orchestrator —— 只做拆解与建组"]
         P["planGoal：用户目标 → LLM 拆解（严格 JSON，失败回喂 repairHint）"]
-        V["validateDag · topoLevels<br/>规模常量 MIN / MAX_TASKS = 8"]
+        V["validateDag · topoLevels<br/>规模常量 MIN_TASKS = 2 / MAX_TASKS = 8 / MAX_DEPS = 4"]
         S["createGroup：task_groups / sub_tasks 落 SQLite<br/>快照 approvalMode · sandboxPolicy · project_path"]
     end
     subgraph E["执行与隔离"]
@@ -539,7 +544,7 @@ flowchart TB
 `main/orchestrator/` 是「最小版 Orchestrator」，职责边界：**只做拆解与建组**；执行交给 WorkerPool，聚合交给 Aggregator。
 
 - `planGoal({ goal, cwd, projectPath, ... })`：用户目标 → LLM 拆解 → `validateDag` 校验 → `topoLevels` 拓扑分层 → `store.createGroup` 持久化任务组。
-- 拆解提示与 DAG 校验**共用同一规模常量**（`MIN_TASKS` / `MAX_TASKS`=8），消除「提示说 2~6、校验允 8」的双重口径漂移。
+- 拆解提示与 DAG 校验**共用同一规模常量**（`MIN_TASKS = 2` / `MAX_TASKS = 8` / `MAX_DEPS = 4`，定义于 `main/orchestrator/dag.js:8-10`），消除「提示说 2~6、校验允 8」的双重口径漂移。
 - 拆解输出严格 JSON；非法 JSON 时**自动回喂修复**（`repairHint`），最多重试 1 次。
 - `autoOrchestrate`：一键流（目标 → 自动拆解 → 自动执行），即 WorkBuddy 式主理人模式。
 - `maybeAutoReplan`：失败/暂停组自动重规划，注入「上次执行情况」（已完成结论 / 失败原因）作为 `contextBlock`。
@@ -666,8 +671,24 @@ flowchart TB
 |---|---|---|
 | `npm run typecheck` | 渲染层 TypeScript 类型检查 | 零错误 |
 | `npm run lint` | ESLint（含棘轮阈值守护） | 0 error / 161 warnings（棘轮，不得反弹） |
-| `npm test` | **发现式全量测试**（`test/run-all.mjs`） | 220 套件全部通过 |
+| `npm test` | **发现式全量测试**（`test/run-all.mjs`） | 218 个 `*.test.{js,mjs}` + 2 个 smoke = 220 suite，另有 1 个 `eval:check` gate，合计 221 个检查项（R7 基线口径，见下方说明） |
 | `npm run eval:check` | 离线评估自检（任务集/schema 完整性） | 作为 `npm test` 前置门禁 |
+
+> **口径（三个数字不可互换，混用是本轮修正的缺陷本体）**：
+> **218** = 发现式扫描到的 `test/*.test.{js,mjs}` **文件数**；
+> **220** = 218 + **2 个 smoke**（`smoke-load.mjs` / `render-smoke.mjs`）= `run-all.mjs` 的 **suite 数**；
+> **221** = 220 + `run-all.mjs` 的 `GATES` 里 **1 项** `eval:check` = 汇总行「总计 N」的**检查项数**。
+> 历史写法把 220 当成「全部检查项」并称之为「套件」，既漏了 gate、又把「套件」与「检查项」两个概念混用，本轮已改为 218 / 220 / 221 三段式。
+>
+> **这组数字是 R7 基线（HEAD `e1e5fff`）的快照，不是常量——每增删一个测试文件它都会变。**
+> 因此**不得把它当事实源引用**：`218 / 220 / 221` 只在描述「R7 基线那一刻」时成立。
+> 第七轮执行期间又有多个测试文件陆续新增/变动，实算值在审查期内**已多次变化**（这也正是不能把它写死的理由：
+> 任何「当前是 N」的表述在活跃开发轮次里都会在数分钟内失真，写死即制造新的可证伪事实）。
+> 需要当前值时**现算**（`desktop/` 下）：
+> `ls test/*.test.js test/*.test.mjs | wc -l`（文件数）、`ls test/smoke-load.mjs test/render-smoke.mjs | wc -l`（smoke 数，2）、
+> `rg -c "label:" test/run-all.mjs`（`GATES` 项数，1）；三者相加即「总计 N」。或直接 `npm test` 读汇总行。
+>
+> **历史结果（2026-10-19 第六轮）：全绿。** 本轮（2026-10-20）**未运行**全量 `npm test`，勿据此推断当前状态。
 
 ### 12.2 发现式全量测试
 

@@ -100,7 +100,7 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 | `desktop/` | Electron 桌面应用：主进程（安全/沙箱/工具执行）+ React 渲染层（UI）+ agent-core（headless 引擎） |
 | `server/` | 可选的 Node.js 服务端：账号体系、云端任务队列、协同同步、数据看板 |
 | `miniprogram/` | 可选的微信小程序控制面：查看任务、远程审批（不执行任何代码） |
-| `ecosystem/` | 生态资产：100 个技能、**80 个 MCP 连接器**（收敛为「装得上/可按官方规范填凭证」的主流服务，其余场景走「自定义连接器」）、50 个数字员工**角色模板**（结构化定义，当前未接入 Agent 运行时，仅作为可复用的角色提示词与工具权限模板库） |
+| `ecosystem/` | 生态资产：**100 个技能、77 个 MCP 连接器、51 个数字员工角色模板 = 228**（数字由 `desktop/scripts/gen-ecosystem-counts.mjs` 从源码现算，并由 `desktop/test/ecosystem-counts.test.mjs` 守护）。77 个连接器收敛为「装得上/可按官方规范填凭证」的主流服务，其余场景走「自定义连接器」。另有 `mcp-connectors-workbuddy.json` 的 **214 条原始导入清单**，与精选 77 条**零重叠**（两套独立命名空间，运行时不合并去重），故**不计入 228**。51 个数字员工**角色模板**为结构化定义，当前未接入 Agent 运行时，仅作为可复用的角色提示词与工具权限模板库 |
 
 > 完整的目录结构与职责说明见仓库内 `docs/` 目录（不随代码发布）。
 
@@ -109,7 +109,11 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 - **桌面端**：Electron 33 · React 18 · Vite · Tailwind CSS；UI 组件层为 JavaScript（JSX），**IPC / Agent 边界契约为 TypeScript + zod 运行时校验**（渐进迁移中，新边界文件强制 `.ts`）
 - **引擎**：原生 JavaScript（零框架、零运行时依赖的 headless Agent 引擎，独立子进程驻留改造见开发计划 T3-7）
 - **服务端**（可选）：Node.js · Express · PostgreSQL · Yjs
-- **测试**：Node 内置 test runner，全部测试套件绿灯（数量以 `desktop/test/` 实测为准）
+- **测试**：Node 内置 test runner。三个数字含义不同，不可混用：**218** 个 `*.test.{js,mjs}` 文件 + **2** 个 smoke
+  = **220** suite，另有 **1** 个 `eval:check` gate = `npm test` 共 **221** 个检查项。这是 **R7 基线（HEAD `e1e5fff`）
+  的快照，不是常量**——每增删一个测试文件即变。最近一次全绿：2026-10-19（第六轮）；本轮未运行全量 `npm test`，
+  勿据此推断当前状态。需要当前值时现算（`desktop/` 下）：`ls test/*.test.js test/*.test.mjs | wc -l` +
+  `ls test/smoke-load.mjs test/render-smoke.mjs | wc -l` + `rg -c "label:" test/run-all.mjs`
 
 ## 快速开始
 
@@ -155,5 +159,11 @@ MJCoder/
 
 本项目采用 [MIT 许可证](LICENSE)。你可以自由使用、修改、分发与商用本软件。
 
-`ecosystem/` 下的 230 项生态资产（100 技能 / 80 MCP 连接器 / 50 数字员工角色模板）为本项目原创的
+`ecosystem/` 下的 228 项生态资产（100 技能 / 77 MCP 连接器 / 51 数字员工角色模板）为本项目原创的
 结构化定义，适用上述 MIT 许可；若某项资产需标注第三方许可，会在该资产内单独声明。
+
+> 计数溯源（防止数字再漂回去）：100 = `ecosystem/skills/` 的一级子目录数；77 = `ecosystem/mcp-connectors.json`
+> → `.connectors`（该文件**顶层是对象**，不是数组——直接 `JSON.parse(...).length` 会得 `undefined`）；
+> 51 = `ecosystem/digital-employees.json`（顶层数组）。`ecosystem/mcp-connectors-workbuddy.json` → `.connectors`
+> 是**另一份 214 条的原始导入清单**，与精选 77 条 **id 零重叠**，被刻意**排除**在 228 之外（两套独立命名空间，
+> 非父子关系，运行时不合并、不去重）。可用 `node desktop/scripts/gen-ecosystem-counts.mjs` 重新生成。

@@ -104,7 +104,7 @@ guarded by `desktop/test/sandbox-crossplatform.test.js` (61 assertions).
 | `desktop/` | Electron desktop app: main process (security / sandbox / tools) + React renderer (UI) + agent-core (headless engine) |
 | `server/` | Optional Node.js backend: accounts, cloud task queue, collaboration sync, analytics |
 | `miniprogram/` | Optional WeChat mini-program control plane: view tasks, remote approvals (executes no code) |
-| `ecosystem/` | Ecosystem assets: 100 skills, **80 MCP connectors** (curated to mainstream services that either install-and-connect or declare their credentials per the official spec; anything else goes through "Custom connector"), 50 digital-employee **role templates** (structured definitions; not yet wired into the Agent runtime — currently a reusable library of role prompts and tool-permission templates) |
+| `ecosystem/` | Ecosystem assets: **100 skills, 77 MCP connectors, 51 digital-employee role templates = 228** (counts are computed from source by `desktop/scripts/gen-ecosystem-counts.mjs` and guarded by `desktop/test/ecosystem-counts.test.mjs`). The 77 connectors are curated to mainstream services that either install-and-connect or declare their credentials per the official spec; anything else goes through "Custom connector". Separately, `mcp-connectors-workbuddy.json` holds a **214-entry raw import list** with **zero overlap** with the curated 77 (two independent namespaces, never merged or de-duplicated at runtime), so it is **not** counted in 228. The 51 digital-employee **role templates** are structured definitions; not yet wired into the Agent runtime — currently a reusable library of role prompts and tool-permission templates |
 
 > Full directory structure and responsibilities are documented under `docs/` (not published with the code).
 
@@ -113,7 +113,13 @@ guarded by `desktop/test/sandbox-crossplatform.test.js` (61 assertions).
 - **Desktop**: Electron 33 · React 18 · Vite · Tailwind CSS; UI component layer is plain JavaScript (JSX), while **IPC / Agent boundary contracts are TypeScript with zod runtime validation** (progressive migration; new boundary files must be `.ts`)
 - **Engine**: plain JavaScript (headless Agent engine with zero framework and zero runtime dependencies)
 - **Server** (optional): Node.js · Express · PostgreSQL · Yjs
-- **Testing**: Node built-in test runner, all suites green (see `desktop/test/` for the current count)
+- **Testing**: Node built-in test runner. Three distinct numbers, not one: **218** `*.test.{js,mjs}` files + **2**
+  smoke suites = **220** suites, plus **1** `eval:check` gate = **221** checks in `npm test` — that is the R7
+  baseline (HEAD `e1e5fff`), and it shifts whenever a test file is added or removed, so treat it as a snapshot,
+  not a constant. Last full green run: 2026-10-19 (round 6); the current round did not run the full `npm test`,
+  so do not infer present status from it. Recompute with `cd desktop && npm test` (full) or, for counts only,
+  `ls test/*.test.js test/*.test.mjs | wc -l` + `ls test/smoke-load.mjs test/render-smoke.mjs | wc -l` +
+  `rg -c "label:" test/run-all.mjs`
 
 ## Quick Start
 
@@ -167,9 +173,17 @@ MJCoder/
 This project is licensed under the [MIT License](LICENSE). You are free to use, modify,
 distribute, and use commercially.
 
-The 230 ecosystem assets in `ecosystem/` (100 skills / 80 MCP connectors / 50 digital-employee
+The 228 ecosystem assets in `ecosystem/` (100 skills / 77 MCP connectors / 51 digital-employee
 role templates) are original structured definitions covered by the MIT license above; any asset
 requiring third-party attribution declares it within the asset itself.
+
+> Count provenance (so the numbers cannot drift back): 100 = first-level directories under
+> `ecosystem/skills/`; 77 = `ecosystem/mcp-connectors.json` → `.connectors` (the file's **top level is an
+> object**, not an array — `JSON.parse(...).length` yields `undefined`); 51 = `ecosystem/digital-employees.json`
+> (a top-level array). `ecosystem/mcp-connectors-workbuddy.json` → `.connectors` is a **separate 214-entry raw
+> import list**; it has **zero id overlap** with the curated 77 and is deliberately **excluded** from 228
+> (two independent namespaces — not a parent/child pair, and runtime does not merge or de-duplicate them).
+> Regenerate with `node desktop/scripts/gen-ecosystem-counts.mjs`.
 
 ---
 
@@ -2732,7 +2746,7 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **原生优先 + MCP 三层 tier 治理**：auto-start（filesystem/time/fetch）/ whitelist（按需懒启动）/ manual（仅手动授权）；意图驱动预热的离线规则词典（不出网、零延迟）。
 - **三层记忆体系 M0~M4**：L1 会话级 / L2 项目级 / L3 全局级，SQLite 唯一事实来源 + 文件只读导出视图。
 - **工具 8 环节接线 + 登记矩阵双向差集断言**（`test/tool-registration-matrix.test.mjs`）。
-- **门禁**：`typecheck` → `lint`（棘轮 161 warnings）→ `npm test`（发现式全量，220 套件）。
+- **门禁**：`typecheck` → `lint`（棘轮 161 warnings）→ `npm test`（发现式全量：218 个 `*.test.{js,mjs}` + 2 个 smoke = 220 suite，另有 1 个 `eval:check` gate，合计 221 个检查项）。
 
 ### 关键决策和解决方案
 1. **文档须以源码为准、不得臆想**：所有机制条目均标注「机制名 → 关键文件:行号」，例如 `mcp:listTools` 只回已连接服务（`main/ipc/mcp.js:541`）、三层 tier 枚举（`main/mcpPrewarm.js:24`）、`resolveScope` 写入分流（`main/memory/index.js:99`）。
