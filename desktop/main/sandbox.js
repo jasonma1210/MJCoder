@@ -41,15 +41,29 @@ const FALLBACK_DANGEROUS = DANGEROUS_PATTERNS;
 // 三平台全量接通 OS 级沙箱后（2026-10），兜底守卫的判定必须按「当前平台真正的后端」
 // 走，而不是写死 darwin：
 //   · darwin  → sandbox-exec 是否存在
-//   · linux   → bwrap 二进制是否存在（findBwrap 是跨平台纯探测，非 linux 上返回 null）
+//   · linux   → bwrap **真正可用**（B3-#11-A：走 TTL 缓存后的真探测，不再是「装了吗」）
 //   · win32   → 就绪态是异步的（net user 查询），同步无法判定 → 保守按不可用，守卫生效
 // 这样做的原因：OS 级沙箱已把破坏面限制在项目目录内，此时再叠黑名单会误伤
 // 「rm -rf ./build」这类项目内合理命令；反过来，没有 OS 沙箱时必须靠黑名单兜底。
 // 第 5 参 backendAvail 允许调用方传入**已确认**的可用性（如 Windows 异步探测结果），
 // 传入时不再走推断。
+//
+// Linux 分支历史口径是 `!!findBwrap()`（只看二进制存在）。那是**第二处 fail-open**，
+// 而且与 detectBackend 的修正方向相反，会形成更糟的组合：
+//   本层（沿用旧口径）以为「有沙箱」→ 跳过 30 条黑名单；同时 detectBackend（已修正）
+//   如实报 none → 真沙箱也没有 ⇒ **两层同时失效**，破坏面比不修还大。
+// 现改为读同一个缓存真探测（linuxSandboxStatusCached），双层判定同源：
+//   available=true ⇒ 命名空间隔离能建起来，黑名单让位是安全的；
+//   available=false ⇒ OS 级隔离不存在，黑名单必须兜住。
+// 开销：TTL 内 = 一次字符串比较 + Date.now()；冷缓存那一次由**本次调用自身**承担
+// （同步探测一次，之后按 TTL 摊销）。刻意不做模块加载期预热，理由见文件末尾。
+// { platform } 必须**显式传**：否则这里（可能被注入 platform 的调用方/测试）会拿到
+// process.platform 口径的缓存键，度量对象就错配了——注意 detectBackend() 调同一函数
+// 是**不带** platform 的（它取 process.platform，正确），两处看着不一致但都对；
+// 为了「两处写法统一」把这个参数删掉，缓存键会退化成 not-linux:darwin，结果测试绿、真机错。
 function defaultOsSandboxAvailable(platform, execExists) {
   if (platform === 'darwin') return !!execExists;
-  if (platform === 'linux') return !!linuxBackend.findBwrap();
+  if (platform === 'linux') return !!linuxBackend.linuxSandboxStatusCached({ platform }).available;
   return false;
 }
 
@@ -198,6 +212,13 @@ const windowsBackend = require('./sandboxWindows');
 
 /**
  * 探测当前平台可用的 OS 级沙箱后端。
+ *
+ * B3-#11（fail-open 收口）：Linux 分支改读 linuxSandboxStatusCached()——真探测结论 + TTL 缓存，
+ * **不在本函数内直接起子进程探测**。缓存未命中时那次探测由 cached 内部 spawnSync 同步完成
+ * （每次 exec 最多一次，TTL 内后续调用零子进程）；因此这里的返回语义从
+ * 「bwrap 装了吗」纠正为「bwrap 真能隔离吗」，与执行路径同源。
+ * 注意：本函数自己不探测也不预热——冷缓存时那次探测由 linuxSandboxStatusCached 内部
+ * spawnSync 同步完成。刻意不做模块加载期自预热（理由见文件末尾 warmSandboxProbe 说明）。
  * @returns {{backend: 'seatbelt'|'bubblewrap'|'windows-restricted-user'|'none', reason: string}}
  */
 function detectBackend() {
@@ -207,15 +228,33 @@ function detectBackend() {
       : { backend: 'none', reason: 'sandbox-exec 不可用' };
   }
   if (process.platform === 'linux') {
-    return linuxBackend.linuxSandboxAvailable()
-      ? { backend: 'bubblewrap', reason: '' }
-      : { backend: 'none', reason: 'bwrap 未安装（Ubuntu/Debian: apt install bubblewrap）' };
+    const st = linuxBackend.linuxSandboxStatusCached();
+    if (st.available) return { backend: 'bubblewrap', reason: '' };
+    // 区分「没装」与「装了但用不了」：前者该装包，后者该改内核/容器配置。
+    // 用 detail（已含失败原因与真实 stderr）而非整段 hint——reason 会被写进日志/UI 提示，
+    // 必须是能一行读完的定性信息，完整排查步骤由 linuxSandboxStatus().hint 承载。
+    return {
+      backend: 'none',
+      reason:
+        st.reason === 'bwrap-missing'
+          ? 'bwrap 未安装（Ubuntu/Debian: apt install bubblewrap）'
+          : `bwrap 已安装但无法建立隔离命名空间（${st.reason}）：${String(st.detail || '').slice(0, 200)}`,
+    };
   }
   if (process.platform === 'win32') {
     // Windows 后端需一次性管理员设置；此处只做静态提示，运行时由 windowsSandboxReady() 异步确认
     return { backend: 'windows-restricted-user', reason: '需先执行一次性管理员设置（windowsSandboxPlan）' };
   }
   return { backend: 'none', reason: `未支持的平台：${process.platform}` };
+}
+
+/**
+ * 显式预热沙箱探测缓存（宿主启动时调一次），把首次 exec 的探测开销提前。
+ * 非 Linux 平台零成本（not-linux 判定不起子进程）。
+ * @returns {{available: boolean, reason: string, detail: string, hint: string}}
+ */
+function warmSandboxProbe() {
+  return linuxBackend.warmLinuxSandboxStatus();
 }
 
 /**
@@ -245,11 +284,25 @@ async function describeCapability() {
   return { backend: b.backend, available: b.backend !== 'none', reason: b.reason, nestedSandbox: false };
 }
 
+// ── 关于 warmSandboxProbe()：刻意**不做**模块加载期自预热（B3-#11-B 定稿）────────────
+// 曾试过在模块作用域用 setImmediate 自调度一次预热，被否掉了，理由记在这里防止回潮：
+//   ① 本模块被 exec 路径普遍引入（main.js → tools/exec → sandbox，另加大量测试进程），
+//      在模块作用域注册自调度等于让「import 一个纯判定模块」产生 spawn 副作用；
+//      依赖方不该为引入一个纯函数库付出子进程代价。「模块加载期零探测」是 #11 的硬要求。
+//   ② 收益不成立：预热只是把首次探测从「第一次工具执行」挪到「启动后下一个 tick」，
+//      两者都是同步 spawnSync，延迟并没有消失；TTL 缓存已经保证稳态成本为零。
+//   ③ 再叠一个「关掉预热」的开关，会让测试多一扇门，容易出现「某套件设了、行为与生产不一致」。
+// 因此：warmSandboxProbe() 只作为**可选**导出（宿主想提前探测可显式调一次），
+// 生产零调用方不算死代码——本项目同类先例是 resetSeatbeltProbe（导出给宿主/测试用）。
+
 module.exports = {
   buildSeatbeltProfile, sandboxAvailable, shouldSandbox, checkCommandGuard,
   FALLBACK_DANGEROUS, SANDBOX_EXEC,
   // 三平台分发（新增）
   detectBackend, osSandboxUsable,
+  // B3-#11：宿主**可选**调用；不调用时首次 detectBackend()/checkCommandGuard() 承担一次
+  // 探测（已 TTL 缓存）。刻意不做模块加载期自预热，见上方说明。
+  warmSandboxProbe,
   // N3：Seatbelt 真实可用性探测（嵌套沙箱环境诚实上报）
   seatbeltUsable, resetSeatbeltProbe, describeCapability,
   linuxBackend, windowsBackend,

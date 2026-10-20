@@ -40,8 +40,22 @@ check('workspace-write 有项目目录时的决策与 detectBackend 一致',
 
 // ── 2. Linux bubblewrap ──
 check('Linux 候选路径含标准安装位', Array.isArray(linux.BWRAP_CANDIDATES) && linux.BWRAP_CANDIDATES.includes('/usr/bin/bwrap'));
+// B3-#11（fail-open 收口）：此处原断言是
+//   linuxSandboxAvailable() === (platform === 'linux' && !!findBwrap())
+// 它把「装了 bwrap」等同于「可用」——**这正是 fail-open 的测试固化**：bwrap 装了但建不出
+// 隔离命名空间（内核禁 userns / AppArmor 拦截 / 容器未放开）时，等式两边同为 true，
+// 断言照样 PASS，而沙箱实际没生效。
+// 现改为与真探测同源：available ⟺ reason === 'ok'（Linux 上由 TTL 缓存的隔离探测定性）。
 check('非 linux 平台上 linuxSandboxAvailable 恒 false（不误报可用）',
-  linux.linuxSandboxAvailable() === (process.platform === 'linux' && !!linux.findBwrap()));
+  process.platform !== 'linux'
+    ? linux.linuxSandboxAvailable() === false
+      && linux.linuxSandboxStatusCached().reason === 'not-linux'
+    : linux.linuxSandboxAvailable() === (linux.linuxSandboxStatusCached().reason === 'ok'),
+  `platform=${process.platform} available=${linux.linuxSandboxAvailable()}`
+    + ` reason=${linux.linuxSandboxStatusCached().reason}`);
+check('linuxSandboxAvailable 与缓存后的真探测同源（不再用 !!findBwrap() 静态口径）',
+  linux.linuxSandboxAvailable() === linux.linuxSandboxStatusCached().available,
+  `available=${linux.linuxSandboxAvailable()} cached=${linux.linuxSandboxStatusCached().available}`);
 
 // workspace-write：项目目录唯一可写
 const ww = linux.buildBwrapExec('workspace-write', CWD, 'npm test', '/bin/sh', FAKE_BWRAP);

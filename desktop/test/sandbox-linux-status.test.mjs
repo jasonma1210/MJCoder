@@ -11,12 +11,16 @@
 //   ③ 每个 reason 都映射到**非空且非敷衍**的 hint（必须含可执行命令/具体动作）；
 //   ④ 本机（darwin）真实调用 → reason === 'not-linux' 且 available === false。
 //
-// 另有一条**回归门禁**：linuxSandboxAvailable() 必须保持历史静态口径
-// （平台 + 二进制存在，不做运行时探测）——它是同步热路径（sandbox.js:210 detectBackend
-// ← osSandboxUsable ← 每次 exec），在此起子进程会让每次执行多两次 fork+exec。
+// 另有一条**语义门禁**（B3-#11 修正）：linuxSandboxAvailable() 不再返回「平台 + 二进制
+// 存在」的静态口径，而是返回 **TTL 缓存后的真探测** 结论——因为旧口径是 fail-open：
+// bwrap 装了但建不出隔离命名空间时仍报 available:true，调用方据此关掉命令级兜底，
+// 隔离实际为零。探测开销用「启动探一次 + 60s TTL 缓存」摊掉，热路径（sandbox.js
+// detectBackend ← osSandboxUsable ← 每次 exec）依旧零子进程。
 //
-// 全部用例在 macOS 上可跑：platform / findBwrap / bwrap 二进制均可注入，
-// 不依赖本机是否装了 bwrap，也不需要 Linux。
+// 全部用例在 macOS 上可跑：platform / findBwrap / bwrap 二进制 / TTL 均可注入，
+// 不依赖本机是否装了 bwrap，也不需要 Linux。末尾另有一节把 process.platform 伪装成
+// linux，走**零注入**的真实入口（linuxSandboxAvailable / detectBackend / osSandboxUsable）
+// 做端到端证据。
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -24,6 +28,7 @@ import os from 'node:os';
 
 const require = createRequire(import.meta.url);
 const linux = require('../main/sandboxLinux');
+const sandbox = require('../main/sandbox');
 
 let pass = 0;
 let fail = 0;
@@ -73,6 +78,45 @@ for (const [mode, lines] of Object.entries(FAKE_SCRIPTS)) {
   fs.chmodSync(p, 0o755);
   FAKE[mode] = p;
 }
+
+// ── 带调用日志的假 bwrap（用于**数真实 spawn 次数**，证明 TTL 缓存真的生效）──
+// 「缓存生效」不能用「调用看起来很快」来证明，必须数子进程：每次 spawn 追加一行参数，
+// 行数即探测次数（一轮完整探测 = --version + --unshare-all 两次 spawn）。
+const PROBE_LOG = path.join(TMPDIR, 'probe.log');
+function makeLoggingBwrap(name, isolationOk) {
+  const p = path.join(TMPDIR, `bwrap-log-${name}`);
+  const lines = [
+    '#!/bin/sh',
+    `echo "$1" >> "${PROBE_LOG}"`,
+    'case "$1" in',
+    '  --version) echo "bubblewrap 0.8.0"; exit 0 ;;',
+    isolationOk
+      ? '  *) exit 0 ;;'
+      : '  *) echo "bwrap: Creating new namespace failed: Operation not permitted" >&2; exit 1 ;;',
+    'esac',
+  ];
+  fs.writeFileSync(p, `${lines.join('\n')}\n`, { mode: 0o755 });
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+const LOG_BWRAP_OK = makeLoggingBwrap('ok', true);
+const LOG_BWRAP_BROKEN = makeLoggingBwrap('broken', false);
+function spawnCount() {
+  try {
+    return fs.readFileSync(PROBE_LOG, 'utf8').split('\n').filter(Boolean).length;
+  } catch {
+    return 0; // 日志还没生成 = 0 次 spawn
+  }
+}
+function resetProbeLog() { try { fs.rmSync(PROBE_LOG, { force: true }); } catch { /* 首次就没有日志 */ } }
+function clearBwrapEnv() { delete process.env.MJCODE_BWRAP_BIN; delete process.env.MJCODE_SANDBOX_PROBE_TTL_MS; }
+
+// ── 无副作用守卫（B3-#11-B 定稿）─────────────────────────────────────────────
+// sandbox.js / sandboxLinux.js 被 exec 路径普遍引入（main.js → tools/exec → sandbox，另加大量
+// 测试进程），**模块加载期必须零探测**：import 一个纯判定模块不得产生 spawn 副作用。
+// 这条以前只是「设计意图」，现在钉成断言——两个模块已在上方 require 完毕，此刻 spawn 必须是 0。
+check('无副作用：require sandbox.js + sandboxLinux.js 之后 bwrap spawn 计数 = 0（模块加载期零探测）',
+  spawnCount() === 0, `spawn=${spawnCount()}`);
 
 const STATUS_KEYS = ['available', 'reason', 'detail', 'hint'];
 function wellFormed(s, label) {
@@ -196,21 +240,122 @@ for (const plat of ['darwin', 'win32', 'freebsd']) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⑥ 回归门禁：linuxSandboxAvailable() 行为**保持不变**（静态口径）
-//   — 等价于 test/sandbox-crossplatform.test.js:44 的断言，此处再钉一次防止有人
-//     把它改成 probe 版而引入每次 exec 两次 fork+exec 的性能回归。
+// ⑥ B3-#11：fail-closed 语义 + TTL 缓存
+//   旧口径 `linuxSandboxAvailable() === (platform==="linux" && !!findBwrap())` 已移除：
+//   它把「装了 bwrap」当作「bwrap 可用」，这正是 fail-open 的测试固化。
 // ─────────────────────────────────────────────────────────────────────────────
 {
-  const expectStatic = process.platform === 'linux' && !!linux.findBwrap();
-  check('linuxSandboxAvailable() 返回值 === 历史静态口径（platform==="linux" && !!findBwrap()）',
-    linux.linuxSandboxAvailable() === expectStatic,
-    `实际=${linux.linuxSandboxAvailable()} 期望=${expectStatic}（platform=${process.platform}）`);
+  // ── 6.1 核心证据：bwrap 装了但坏了 ⇒ 必须判不可用（改前此处为 true）──
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_BROKEN;
+  delete process.env.MJCODE_SANDBOX_PROBE_TTL_MS;
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  const broken = linux.linuxSandboxStatusCached({ platform: 'linux' });
+  check('fail-closed：--version 成功但隔离失败 ⇒ linuxSandboxStatusCached 判 bwrap-broken',
+    broken.reason === 'bwrap-broken' && broken.available === false,
+    `reason=${broken.reason} available=${broken.available}`);
+  const brokenDirect = linux.linuxSandboxStatus({ platform: 'linux' });
+  check('fail-closed：无缓存入口 linuxSandboxStatus() 结论一致（同一判定，非缓存特例）',
+    brokenDirect.reason === 'bwrap-broken' && brokenDirect.available === false,
+    `reason=${brokenDirect.reason}`);
+  const oldStaticAvail = linux.linuxSandboxStatus({ platform: 'linux', probe: false }).available;
+  check('fail-closed：同一二进制下旧静态口径仍为 true —— 即改前 linuxSandboxAvailable() 的返回值，'
+    + '它就是被治理的 fail-open（装了≠可用）',
+    oldStaticAvail === true, `旧口径=${oldStaticAvail} 真探测=${broken.available}`);
+
+  // ── 6.2 反面：正常 bwrap 不得被误判为不可用 ──
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_OK;
+  linux.resetLinuxSandboxStatusCache();
+  const good = linux.linuxSandboxStatusCached({ platform: 'linux' });
+  check('不误判：两关都过的 bwrap ⇒ reason === ok 且 available === true',
+    good.reason === 'ok' && good.available === true, `reason=${good.reason} available=${good.available}`);
+
+  // ── 6.3 缓存生效：TTL 内连续调用只探测 1 轮（1 轮 = 2 次 spawn）──
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  const ttlCalls = [];
+  for (let i = 0; i < 10; i++) ttlCalls.push(linux.linuxSandboxStatusCached({ platform: 'linux' }).available);
+  const spawnsAfter10 = spawnCount();
+  check('缓存生效：TTL(60s) 内 10 次调用只产生 1 轮探测 = 2 次 bwrap spawn（否则每次 exec 都要额外 fork+exec）',
+    spawnsAfter10 === 2, `spawn 次数=${spawnsAfter10}（期望 2）`);
+  check('缓存命中时每次返回同一结论（10 次全 true，没有中途翻脸）',
+    ttlCalls.every((v) => v === true), JSON.stringify(ttlCalls));
+  check('缓存命中不改变结论来源：available ⟺ reason === ok',
+    linux.linuxSandboxStatusCached({ platform: 'linux' }).reason === 'ok');
+
+  // ── 6.4 TTL=0（测试用）：每次调用都真探测 ──
+  process.env.MJCODE_SANDBOX_PROBE_TTL_MS = '0';
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  for (let i = 0; i < 3; i++) linux.linuxSandboxStatusCached({ platform: 'linux' });
+  const spawnsTtl0 = spawnCount();
+  check('TTL=0 ⇒ 每次调用都重探：3 次调用 = 6 次 spawn（MJCODE_SANDBOX_PROBE_TTL_MS 覆盖生效）',
+    spawnsTtl0 === 6, `spawn 次数=${spawnsTtl0}（期望 6）`);
+
+  // ── 6.5 TTL 过期后重探 ──
+  // TTL 取 200ms（不是更小）：单次 spawn 在慢机上也可能几毫秒，「TTL 内命中」必须留足
+  // 余量，否则会变成时序 flaky 而不是在验证缓存逻辑。
+  process.env.MJCODE_SANDBOX_PROBE_TTL_MS = '200';
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  linux.linuxSandboxStatusCached({ platform: 'linux' });
+  const spawnsFirst = spawnCount();
+  linux.linuxSandboxStatusCached({ platform: 'linux' });
+  const spawnsHit = spawnCount();
+  await new Promise((r) => { setTimeout(r, 260); }); // 越过 200ms TTL
+  linux.linuxSandboxStatusCached({ platform: 'linux' });
+  const spawnsExpired = spawnCount();
+  check('TTL 内第 2 次调用命中缓存（spawn 数不增）', spawnsHit === spawnsFirst,
+    `第1次后=${spawnsFirst} 第2次后=${spawnsHit}`);
+  check('TTL 过期后自动重探（spawn 数 +2，不会永远用旧结论）', spawnsExpired === spawnsHit + 2,
+    `过期前=${spawnsHit} 过期后=${spawnsExpired}`);
+
+  // ── 6.6 缓存键跟随二进制路径：换 bwrap 后不得复用另一路径的旧结论 ──
+  delete process.env.MJCODE_SANDBOX_PROBE_TTL_MS; // 恢复 60s TTL
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_OK;
+  linux.resetLinuxSandboxStatusCache();
+  linux.linuxSandboxStatusCached({ platform: 'linux' }); // 先缓存 ok
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_BROKEN;      // TTL 内换成一个坏 bwrap
+  const swapped = linux.linuxSandboxStatusCached({ platform: 'linux' });
+  check('TTL 内更换 bwrap 路径 ⇒ 缓存不串味（ok 不会粘到坏二进制上）',
+    swapped.reason === 'bwrap-broken' && swapped.available === false,
+    `reason=${swapped.reason}`);
+
+  // ── 6.7 预热：warmLinuxSandboxStatus() 强制重探并写缓存 ──
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_OK;
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  const warmed = linux.warmLinuxSandboxStatus({ platform: 'linux' });
+  const spawnsWarm = spawnCount();
+  check('预热：warmLinuxSandboxStatus() 立即真探测（返回值即探测结论）',
+    warmed.reason === 'ok' && warmed.available === true, `reason=${warmed.reason}`);
+  linux.linuxSandboxStatusCached({ platform: 'linux' });
+  check('预热后热路径零子进程（warm 之后调用 spawn 数不再增长）', spawnCount() === spawnsWarm,
+    `warm 后=${spawnsWarm} 再调后=${spawnCount()}`);
+  linux.warmLinuxSandboxStatus({ platform: 'linux' });
+  check('预热可重复调用（force 语义：显式预热/重新检测总是重探）', spawnCount() === spawnsWarm + 2,
+    `两次 warm 后=${spawnCount()}`);
+
+  // ── 6.8 静态口径不污染真探测缓存、也不起子进程 ──
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+  const staticOnly = linux.linuxSandboxStatusCached({ platform: 'linux', probe: false });
+  check('linuxSandboxStatusCached({probe:false}) 走静态口径但不 spawn',
+    staticOnly.available === true && spawnCount() === 0, `available=${staticOnly.available} spawn=${spawnCount()}`);
+  const stillCached = linux.linuxSandboxStatusCached({ platform: 'linux' });
+  check('静态口径不写缓存：随后真探测仍是真探测结论（不被静态 ok 冒充）',
+    stillCached.reason === 'ok' && spawnCount() === 2, `spawn=${spawnCount()}`);
+
+  // ── 6.9 契约：返回严格布尔，非 linux 平台恒 false（不误报可用）──
   check('linuxSandboxAvailable() 返回严格布尔（不是对象/undefined）',
     typeof linux.linuxSandboxAvailable() === 'boolean', typeof linux.linuxSandboxAvailable());
-  check('linuxSandboxAvailable() === linuxSandboxStatus({probe:false}).available（同源不漂移）',
-    linux.linuxSandboxAvailable()
-    === linux.linuxSandboxStatus({ probe: false }).available,
-    `两处一致`);
+  check('linuxSandboxAvailable() 与 linuxSandboxStatusCached().available 同源不漂移',
+    linux.linuxSandboxAvailable() === linux.linuxSandboxStatusCached().available);
+
+  // 收尾：清环境与缓存，避免影响后续小节
+  clearBwrapEnv();
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +387,166 @@ for (const plat of ['darwin', 'win32', 'freebsd']) {
   ]);
   check('自检：四个 reason 分支全部可达（否则某分支＝死代码，诊断仍有盲区）',
     REASONS.every((r) => reached.has(r)), `到达=${[...reached].join(',')}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑨ 端到端：把 process.platform 伪装成 linux，走**零注入**的真实入口
+//   （linuxSandboxAvailable / detectBackend / osSandboxUsable / warmSandboxProbe
+//    —— 前三个正是 exec 热路径上的调用链）
+//   ⑥ 用 opts.platform 验证判定逻辑本身；本节验证「生产入口真的会读到该判定」，
+//   否则可能出现在「注入时正确、真实入口仍走旧口径」的假修复。
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const realPlatform = process.platform;
+  const spoof = (v) => Object.defineProperty(process, 'platform',
+    { value: v, configurable: true, enumerable: true, writable: false });
+  try {
+    // ── 9.1 坏 bwrap（--version 成功 / 隔离失败）：四个入口必须一致判不可用 ──
+    spoof('linux');
+    process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_BROKEN;
+    delete process.env.MJCODE_SANDBOX_PROBE_TTL_MS;
+    linux.resetLinuxSandboxStatusCache();
+    check('端到端(linux)：坏 bwrap ⇒ linuxSandboxAvailable() === false（**改前此处为 true**）',
+      linux.linuxSandboxAvailable() === false, `实际=${linux.linuxSandboxAvailable()}`);
+    const e2eStatus = linux.linuxSandboxStatus();
+    check('端到端(linux)：linuxSandboxStatus() 给出 bwrap-broken + 可行动 hint',
+      e2eStatus.reason === 'bwrap-broken' && /unprivileged_userns_clone/.test(e2eStatus.hint),
+      `reason=${e2eStatus.reason}`);
+    const bBroken = sandbox.detectBackend();
+    check('端到端(linux)：detectBackend() 不再谎报 bubblewrap（backend=none 且 reason 指明隔离失败）',
+      bBroken.backend === 'none' && bBroken.reason.includes('bwrap-broken'), `backend=${bBroken.backend}`);
+    const uBroken = sandbox.osSandboxUsable('workspace-write', '/home/u/proj');
+    check('端到端(linux)：osSandboxUsable() 判 use=false（否则 exec 会以为有 OS 隔离而关掉命令守卫）',
+      uBroken.use === false, `use=${uBroken.use} reason=${uBroken.reason}`);
+
+    // ── 9.2 正常 bwrap：不得被误判 ──
+    process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_OK;
+    linux.resetLinuxSandboxStatusCache();
+    check('端到端(linux)：正常 bwrap ⇒ linuxSandboxAvailable() === true',
+      linux.linuxSandboxAvailable() === true);
+    const bOk = sandbox.detectBackend();
+    check('端到端(linux)：detectBackend() 报 bubblewrap', bOk.backend === 'bubblewrap', `backend=${bOk.backend}`);
+    const uOk = sandbox.osSandboxUsable('workspace-write', '/home/u/proj');
+    check('端到端(linux)：osSandboxUsable() 判 use=true 且 backend=bubblewrap',
+      uOk.use === true && uOk.backend === 'bubblewrap', JSON.stringify(uOk));
+    const warmed = sandbox.warmSandboxProbe();
+    check('端到端(linux)：导出 warmSandboxProbe() 可显式预热并返回探测结论',
+      warmed.reason === 'ok' && warmed.available === true, `reason=${warmed.reason}`);
+
+    // ── 9.3 契约不变：osSandboxUsable 的返回结构一个字段都没变 ──
+    check('osSandboxUsable 可用时结构为 {use, backend}（无新增字段）',
+      JSON.stringify(Object.keys(uOk).sort()) === JSON.stringify(['backend', 'use']),
+      JSON.stringify(Object.keys(uOk)));
+    check('osSandboxUsable 不可用时结构为 {use, reason}（无新增字段）',
+      JSON.stringify(Object.keys(uBroken).sort()) === JSON.stringify(['reason', 'use']),
+      JSON.stringify(Object.keys(uBroken)));
+    check('detectBackend 结构为 {backend, reason}（无新增字段）',
+      JSON.stringify(Object.keys(bOk).sort()) === JSON.stringify(['backend', 'reason']),
+      JSON.stringify(Object.keys(bOk)));
+  } finally {
+    spoof(realPlatform);
+    clearBwrapEnv();
+    linux.resetLinuxSandboxStatusCache();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑩ 守卫与探测同源（B3-#11-A）：命令守卫不能再拿「装了吗」当「能用吗」
+//   被治理的第二处 fail-open：`defaultOsSandboxAvailable()` 曾用 `!!findBwrap()`，
+//   坏 bwrap 时本层谎报「有沙箱」→ 30 条黑名单被跳过；而 detectBackend 已如实报 none
+//   → 真沙箱也没有 ⇒ **两层同时失效**。必须给出正/反两个样本：加严不能把主路径改坏。
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_BROKEN;   // 反样本：装了但建不出命名空间
+  delete process.env.MJCODE_SANDBOX_PROBE_TTL_MS;
+  linux.resetLinuxSandboxStatusCache();
+  const negBlocked = sandbox.checkCommandGuard('read-only', 'rm -rf /', 'linux'); // backendAvail 省略 → 走推断
+  check('守卫同源(反样本)：坏 bwrap ⇒ checkCommandGuard 仍拦 rm -rf /（改前此处 blocked=false，是第二处 fail-open）',
+    negBlocked.blocked === true, `blocked=${negBlocked.blocked}`);
+  const negSudo = sandbox.checkCommandGuard('read-only', 'sudo rm -rf /', 'linux');
+  check('守卫同源(反样本)：sudo rm -rf / 同样被拦，reason 仍含「无 OS 级沙箱」语义',
+    negSudo.blocked === true && negSudo.reason.includes('无 OS 级沙箱'), negSudo.reason.slice(0, 60));
+
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_OK;       // 正样本：真能隔离
+  linux.resetLinuxSandboxStatusCache();
+  const posBlocked = sandbox.checkCommandGuard('read-only', 'rm -rf /', 'linux');
+  check('守卫同源(正样本)：好 bwrap ⇒ 黑名单让位（有真 OS 隔离时不再双重拦截，既有设计不被改坏）',
+    posBlocked.blocked === false, `blocked=${posBlocked.blocked}`);
+  check('守卫同源(正样本)：workspace-write 下项目内 rm -rf ./build 仍放行',
+    sandbox.checkCommandGuard('workspace-write', 'rm -rf ./build', 'linux').blocked === false);
+
+  process.env.MJCODE_BWRAP_BIN = LOG_BWRAP_BROKEN;
+  linux.resetLinuxSandboxStatusCache();
+  const fa = sandbox.checkCommandGuard('full-access', 'rm -rf /', 'linux');
+  check('守卫同源：full-access 仍最先返回 unblocked（opt-in 不受新闸影响）',
+    fa.blocked === false && fa.reason === '', JSON.stringify(fa));
+
+  check('守卫签名/契约不变：显式传 backendAvail=true ⇒ 放行（旧调用方行为完全不变）',
+    sandbox.checkCommandGuard('read-only', 'rm -rf /', 'linux', true, true).blocked === false);
+  check('守卫签名/契约不变：显式传 backendAvail=false ⇒ 拦截（旧调用方行为完全不变）',
+    sandbox.checkCommandGuard('read-only', 'rm -rf /', 'linux', true, false).blocked === true);
+
+  clearBwrapEnv();
+  linux.resetLinuxSandboxStatusCache();
+  resetProbeLog();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑪ 无加载期副作用 + 预热是**显式 opt-in**（B3-#11-B 定稿）
+//   曾试过在 sandbox.js 模块作用域用 setImmediate 自调度一次预热，已否掉：
+//   sandbox.js 被 exec 路径普遍引入（main.js → tools/exec → sandbox，另加大量测试进程），
+//   「import 一个纯判定模块」不应产生 spawn 副作用；且预热只是把同一段同步探测挪个位置，
+//   延迟并不消失（稳态成本已由 TTL 缓存解决）。
+//   这里用子进程把 process.platform 伪装成 linux，验证三件事：
+//     ① 只 require（不调用任何函数）→ spawn = 0（无加载期自调度）
+//     ② require + 显式 warmSandboxProbe() → spawn = 2（导出可用，非死代码）
+//     ③ 非 Linux 上显式 warm → spawn = 0（not-linux 在起子进程前就返回）
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const MAIN = path.resolve(import.meta.dirname, '..', 'main', 'sandbox.js');
+  const PROBE_LINES = `(() => { try { return fs.readFileSync(${JSON.stringify(PROBE_LOG)}, 'utf8')`
+    + '.split(\'\\n\').filter(Boolean).length; } catch { return 0; } })()';
+  // callWarm=true 时在 require 之后显式调用一次导出（模拟宿主主动预热）
+  const child = (spoofLinux, callWarm) => {
+    const code = `${spoofLinux ? "Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });" : ''}
+const fs = require('fs');
+const sb = require(${JSON.stringify(MAIN)});
+${callWarm ? 'sb.warmSandboxProbe();' : ''}
+setImmediate(() => { process.stdout.write(String(${PROBE_LINES})); });`;
+    return require('node:child_process').execFileSync(process.execPath, ['-e', code], {
+      env: { ...process.env, MJCODE_BWRAP_BIN: LOG_BWRAP_OK, MJCODE_SANDBOX_PROBE_TTL_MS: '60000' },
+      encoding: 'utf8',
+      timeout: 20000,
+    }).trim();
+  };
+
+  resetProbeLog();
+  const requireOnly = child(true, false);
+  check('无加载期副作用：仅 require sandbox.js（linux）→ spawn = 0（import 纯判定模块不得产生子进程）',
+    requireOnly === '0', `spawn=${requireOnly}`);
+
+  resetProbeLog();
+  const warmExplicit = child(true, true);
+  check('预热是显式 opt-in：require + warmSandboxProbe() → 探测 1 轮 = 2 次 spawn（导出可用，非死代码）',
+    warmExplicit === '2', `spawn=${warmExplicit}（期望 2）`);
+
+  if (process.platform !== 'linux') {
+    resetProbeLog();
+    const nonLinux = child(false, true); // 不伪装：真实非 Linux 平台，显式调 warm
+    check('非 Linux 零成本：显式 warm 也在 not-linux 判定处即返回，spawn=0',
+      nonLinux === '0', `spawn=${nonLinux}`);
+  }
+  resetProbeLog();
+}
+
+// ── 平台诚实性声明（D-09-B 风险表第一条）──────────────────────────────────────
+// 本套件在非 Linux 上的所有 Linux 断言都由「注入 platform / 伪装 process.platform + 假 bwrap」
+// 驱动：验证的是**判定逻辑**（包括 fail-closed 语义），**不等于** bwrap 真机隔离能力已验证。
+// 必须在非 Linux 上显式记账为「未执行」，否则 macOS 上的全绿会造成虚假信心。
+// run-all.mjs 以 /⚠.*(跳过|未执行)/ 识别此类声明并单列在「未执行/跳过」清单里。
+if (process.platform !== 'linux') {
+  console.log(`⚠ Linux 真机隔离能力未执行（本机=${process.platform}）：本套件仅验证 fail-closed 判定逻辑，`
+    + 'bwrap 真实命名空间隔离需在 Linux 真机 / CI ubuntu runner 上跑');
 }
 
 // 清理临时假 bwrap

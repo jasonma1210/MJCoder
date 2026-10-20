@@ -19,6 +19,11 @@
 //
 // 降级路径：bwrap 不存在或内核不支持 namespace 时，返回 { use: false }，
 // 由调用方落到 sandbox.js 的跨平台命令守卫（30 条危险模式硬拦截）。
+//
+// 可用性判定（B3-#11 收口）：linuxSandboxAvailable() 走 linuxSandboxStatusCached()，
+// 即「真探测 + TTL 缓存」（默认 60s，MJCODE_SANDBOX_PROBE_TTL_MS 可覆盖）。
+// 历史实现只看「平台 + 二进制存在」，那是 fail-open——bwrap 装了但建不出隔离命名空间时
+// 仍报可用，调用方据此关掉命令级兜底，隔离实际为零。现语义为 fail-closed。
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 
@@ -35,6 +40,19 @@ function findBwrap() {
     try { if (fs.existsSync(`${dir}/bwrap`)) return `${dir}/bwrap`; } catch { /* 忽略 */ }
   }
   return null;
+}
+
+// MJCODE_BWRAP_BIN：显式指定 bwrap 二进制路径，**优先级高于** BWRAP_CANDIDATES 搜索。
+// 用途：测试用假 bwrap 驱动 broken/ok 两条分支（不能把假脚本装进 /usr/bin）；
+// 次要用途是用户把 bwrap 装在非常规位置时免改 PATH。
+function bwrapFromEnv() {
+  const p = String(process.env.MJCODE_BWRAP_BIN || '').trim();
+  return p || null;
+}
+
+// 探测/执行共用的默认查找：环境变量注入优先，其次候选目录 + PATH
+function defaultBwrapFinder() {
+  return bwrapFromEnv() || findBwrap();
 }
 
 // ── 可用性诊断（D-09-A）───────────────────────────────────────────────────────
@@ -111,7 +129,8 @@ function linuxSandboxStatus(opts = {}) {
   const platform = opts.platform || process.platform;
   const probe = opts.probe !== false;
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : PROBE_TIMEOUT_MS;
-  const finder = typeof opts.findBwrap === 'function' ? opts.findBwrap : findBwrap;
+  // 默认查找走 defaultBwrapFinder（MJCODE_BWRAP_BIN 优先于候选目录搜索）
+  const finder = typeof opts.findBwrap === 'function' ? opts.findBwrap : defaultBwrapFinder;
 
   if (platform !== 'linux') {
     return {
@@ -139,7 +158,8 @@ function linuxSandboxStatus(opts = {}) {
     };
   }
 
-  // 静态判定到此为止（linuxSandboxAvailable 用这个口径，保持历史语义与零子进程开销）
+  // 静态判定到此为止：只回答「装了吗」，**不**回答「能用吗」。
+  // 仅供诊断页区分 missing/broken 与 linuxSandboxStatusCached 不缓存该口径（见下）。
   if (!probe) {
     return {
       available: true,
@@ -193,15 +213,99 @@ function linuxSandboxStatus(opts = {}) {
   };
 }
 
-// 可用性（历史口径，**行为保持不变**）：只看「平台 + 二进制存在」，**不做运行时探测**。
+// ── 探测结果缓存：B3-#11「fail-open 收口」──────────────────────────────────────
+// 被治理的缺陷：上一版把 linuxSandboxAvailable() 做成 probe:false 的静态口径（只看
+// 「平台 + 二进制存在」），于是 **bwrap 装了但坏了**（内核禁 userns / AppArmor 拦 /
+// 容器未放开 seccomp）时既有调用方仍看到 available:true —— 沙箱根本没生效，系统却
+// 以为生效。这是 fail-open：安全能力谎报为已具备，比「没有沙箱」更危险，因为调用方
+// 据此关掉了命令级兜底（见 sandbox.js checkCommandGuard）。
 //
-// 为什么不直接返回 linuxSandboxStatus().available：本函数是同步热路径
-// （sandbox.js:210 detectBackend ← osSandboxUsable ← 每次 exec 判定），在那里起子进程
-// 会让每次执行都多两次 fork+exec。而运行时失败本来就由 exec 的错误路径捕获并降级。
-// 因此这里显式走 probe:false 的静态口径，把「真可用吗」留给 linuxSandboxStatus()。
-// 该口径同时被 test/sandbox-crossplatform.test.js:44 与 test/sandbox-linux.test.mjs:131 钉死。
+// 为什么不能直接把热路径改成每次探测：linuxSandboxAvailable() 在**每次 exec** 的同步
+// 路径上（sandbox.js detectBackend ← osSandboxUsable），每次探测要多两次 fork+exec
+// （--version + 隔离验证），单次几毫秒到几十毫秒，且是把宿主机负载压进命令延迟。
+//
+// 采用的解：**启动探一次 + TTL 缓存**。探测开销被摊销到 TTL 周期（默认 60s），
+// 热路径命中的成本是一次字符串比较 + 一次 Date.now()。语义上由 fail-open 变为
+// fail-closed：探测失败期间系统如实上报不可用，宁可落到命令级兜底，也不谎报隔离。
+//
+// TTL 覆盖：MJCODE_SANDBOX_PROBE_TTL_MS（毫秒）。0 = 每次调用都探测（仅测试用）、
+// 非法值回落默认值（不静默降级为 0，否则会给热路径制造性能陷阱）。
+const PROBE_TTL_DEFAULT_MS = 60000;
+
+// 单条缓存（不是 Map）：探测输入只有「平台 + 二进制路径」两个变量，用 key 比对即可，
+// 免去 LRU 与内存增长问题。key 不匹配视为未命中，避免测试注入/换路径后串味。
+let statusCache = { key: null, at: 0, status: null };
+
+function resolveProbeTtlMs(explicit) {
+  if (Number.isFinite(explicit)) return explicit;
+  const raw = process.env.MJCODE_SANDBOX_PROBE_TTL_MS;
+  if (raw === undefined || raw === '') return PROBE_TTL_DEFAULT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : PROBE_TTL_DEFAULT_MS;
+}
+
+// 缓存键 = 探测输入的身份。非 linux 平台不依赖二进制（直接 not-linux），无需解析路径。
+function probeCacheKey(opts) {
+  const platform = opts.platform || process.platform;
+  if (platform !== 'linux') return `not-linux:${platform}`;
+  const finder = typeof opts.findBwrap === 'function' ? opts.findBwrap : defaultBwrapFinder;
+  let bin = null;
+  try {
+    bin = finder() || null;
+  } catch {
+    bin = null; // finder 抛错按「未找到」处理：宁可判 bwrap-missing，也不因异常报可用
+  }
+  return `linux:${bin || ''}`;
+}
+
+/**
+ * 带 TTL 缓存的可用性判定（**热路径唯一入口**）。
+ *
+ * 命中未过期缓存 → 直接返回上次探测结果（零子进程）；否则真探测一次并写缓存。
+ *
+ * @param {object} [opts] 同 linuxSandboxStatus，另加：
+ * @param {number} [opts.ttlMs] 覆盖 TTL（优先级高于环境变量）
+ * @param {boolean} [opts.force] 忽略缓存强制重探（预热 / 用户点「重新检测」用）
+ * @returns {{available: boolean, reason: string, detail: string, hint: string}}
+ */
+function linuxSandboxStatusCached(opts = {}) {
+  // 静态口径（probe:false）回答的是另一个问题（「装了吗」而非「能用吗」），
+  // 若让它读写真探测缓存，两种口径会互相污染，故直接透传不缓存。
+  if (opts.probe === false) return linuxSandboxStatus(opts);
+
+  const key = probeCacheKey(opts);
+  const ttlMs = resolveProbeTtlMs(opts.ttlMs);
+  const now = Date.now();
+  const fresh =
+    statusCache.status !== null && statusCache.key === key && !opts.force && ttlMs > 0 && now - statusCache.at < ttlMs;
+  if (fresh) return statusCache.status;
+
+  const status = linuxSandboxStatus(opts);
+  statusCache = { key, at: now, status };
+  return status;
+}
+
+/**
+ * 显式预热（宿主启动时调一次，把首次 exec 的探测开销提前到启动阶段）。
+ * 一律强制重探并写缓存，返回本次结果。
+ */
+function warmLinuxSandboxStatus(opts = {}) {
+  return linuxSandboxStatusCached({ ...opts, force: true });
+}
+
+// 清缓存：测试隔离用（生产无需调用——TTL 到期即自动重探）
+function resetLinuxSandboxStatusCache() {
+  statusCache = { key: null, at: 0, status: null };
+}
+
+// 可用性（**行为已修正**）：返回 TTL 缓存后的**真探测**结论。
+//
+// 历史版本返回 probe:false 的静态口径（`平台 + 二进制存在`），这正是 fail-open 的来源：
+// bwrap 装了但建不出命名空间时它仍返回 true。现改为读缓存后的真探测——热路径依旧零
+// 子进程开销（TTL 内），但语义从「装了就当能用」纠正为「真能隔离才算可用」。
+// 旧口径仍可从 linuxSandboxStatus({ probe: false }) 取到（诊断页区分「装没装」用）。
 function linuxSandboxAvailable() {
-  return linuxSandboxStatus({ probe: false }).available;
+  return linuxSandboxStatusCached().available;
 }
 
 /**
@@ -216,7 +320,7 @@ function buildBwrapArgv(policy, cwd, shell = '/bin/sh', bwrapPath = null, protec
   if (policy === 'full-access') {
     return { argv: [], backend: 'bubblewrap', reason: 'full-access 不沙箱' };
   }
-  const bwrap = bwrapPath || findBwrap();
+  const bwrap = bwrapPath || defaultBwrapFinder();
   if (!bwrap) {
     return { argv: [], backend: 'bubblewrap', reason: 'bwrap 未安装' };
   }
@@ -293,6 +397,11 @@ function buildBwrapExec(policy, cwd, command, shell = '/bin/sh', bwrapPath = nul
 module.exports = {
   findBwrap,
   linuxSandboxAvailable,
+  // B3-#11：带 TTL 缓存的真探测（热路径入口）+ 预热/清缓存
+  linuxSandboxStatusCached,
+  warmLinuxSandboxStatus,
+  resetLinuxSandboxStatusCache,
+  PROBE_TTL_DEFAULT_MS,
   linuxSandboxStatus,
   SANDBOX_STATUS_REASONS,
   buildBwrapArgv,

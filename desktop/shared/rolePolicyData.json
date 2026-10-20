@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "approval": {
+    "order": {
+      "never": 0,
+      "auto-safe": 1,
+      "on-request": 2,
+      "always": 3
+    },
+    "default": "on-request"
+  },
+  "sandbox": {
+    "order": {
+      "read-only": 0,
+      "workspace-write": 1,
+      "full-access": 2
+    },
+    "default": "workspace-write"
+  },
+  "snapshot": {
+    "withCwd": "workspace-write",
+    "withoutCwd": "read-only"
+  }
+}
