@@ -1,28 +1,27 @@
 #!/usr/bin/env node
 /**
  * harness-r7 事实核验断言集（只读检查器）
- * 用法: node check.mjs <ROOT>
- * 退出码: 0 = 全部通过（基线绿）; 1 = 至少一条 FAIL
+ * 用法: node check.mjs <ROOT> [--trace]
+ * 退出码: **0 = 全部断言成立**; 1 = 至少一条 FAIL（真问题）或 BLOCKED（没验成）
  * 只读：绝不写入被检查目录。
  *
- * 每条断言带类型标记（详见下方 TAG）：
- *   [invariant]   改前改后都必须 PASS。红了 = 真回归。
- *   [defect-Fxxx] 缺陷存在性断言：改前 PASS（缺陷真实存在），修复后 FAIL（缺陷已消失）。
- * 汇总按类型分组，读的人不必再从 `FAIL=N` 里猜「几条是修复证据、几条是坏」。
+ * ── 语义（本轮已统一，务必先读这段）────────────────────────────────────────
+ *   每条断言一句人话：**PASS = 它成立（好）；FAIL = 它不成立（坏）**。
+ *   没有"反向语义"：早期版本把一批断言写成「缺陷存在性」形态（FAIL 反而表示已修复），
+ *   结果 exit=1 成了"修好了"的信号，红变成噪声，读到末尾没人敢判断该不该高兴。
+ *   现在 exit=0 就是"全部契约成立"，exit=1 就是"有真问题"。颜色与字面同义。
+ *   溯源标记 `[F-xxx]` 只说明这条断言当初为哪个发现项而写，**不改变判定方向**。
  *
  * ══ 已知口径（读汇总前必看）════════════════════════════════════════════════
  *
- * 1) 结局有三类 + 一类跳过，不是两类：
- *      PASS     判定成立。
- *      FAIL     判定不成立。defect 类 FAIL = 修复证据；invariant 类 FAIL = 真回归。
- *      BLOCKED  前置断言失败 → 本条**无法验证**。它计入 FAIL 总数与失败清单（绝不让它消失），
- *               但**不计入** defect 的「已修复」统计 —— 否则「没验成」会被读成「缺陷已消失」。
- *      SKIP     显式跳过，不计入 PASS。
- *
- *    【SKIP 的语义】**无法验证，不等于通过**。一条断言之所以被 SKIP，是因为它的判据前提
- *    已被产品变更消灭（例：旧实现不存在，无从取样）；保留其编号是为了让总数稳定、
- *    防止将来新断言悄悄占用旧号。**凡 SKIP 或 BLOCKED 必须同时出现 `⚠ 未执行` 行**，
- *    否则等于静默跳过 —— 本文件因此不肯用「悄悄不执行」来变绿。
+ * 1) 四类结局：
+ *      PASS     判据成立。
+ *      FAIL     判据**不成立** —— 缺陷仍在 / 发生回归 / 契约被破坏。这是唯一需要动作的红。
+ *      BLOCKED  前置失败 → 本条**无法验证**。计入 FAIL 总数与清单（绝不让它消失），
+ *               但汇总里与"真缺陷"分行列出，避免把"没验成"读成"缺陷仍在"。
+ *      RETIRED  已退役（见下方 RETIRED 登记表与第 4 条台账）。**不进 PASS 也不进 FAIL**：
+ *               它的判据理由已消失或被裁决不该跟踪。退役必须留依据，不能只是"删掉"。
+ *      （SKIP 保留在工具函数里，当前无使用；其语义同 BLOCKED，出现时必须配 `⚠ 未执行` 行。）
  *
  * 2) 断言总数自检（T01）：`EXPECTED_ASSERTION_TOTAL` 是手写常量，与实际执行数不等即 FAIL。
  *    【该常量的语义】**= 已注册断言条数**，不是「期望通过条数」，也不是任何通过率目标。
@@ -33,57 +32,75 @@
  *    逐条修补挡不住将来新写的条件分支，总数对不上能一次抓住全部。增删断言后**必须同步
  *    本常量**，这是本脚本的强制纪律（SELF-2 证明该闸不是恒真）。
  *
- * 3) A09b / A10b 的「通过」**不代表缺陷仍在**。这两条的字面量在修复后仍然成立，因为修复走了
- *    另一条路径（setProtocolVersion 注入；schema「只判不截断」）。它们登记为 defect 类，会
- *    固定出现在 `[defect] 通过` 名单里 —— 那是**断言口径过期**，不是漏修。
- *    真证据是正向断言：A09e（版本确有到达传输层的路径）、A10e（三道闸在位）。
+ * 3) 退役判据（A02b/A02c/A09a/A09b/A10b —— 明细见 `RETIRED` 登记表，每条带依据）：
+ *    退役的三种正当理由：① 缺陷前提被上游变更消灭（无样本可测）；② 它测的是**代码事实**
+ *    而非缺陷（如"兜底行还在"，兜底本就该在）；③ 该项已被裁决为**设计**，不该继续按缺陷跟踪。
+ *    **不构成理由的**："它红着不好看""这样汇总能全绿" —— 那是弱化，不是退役。
+ *    **缺席的裁决不是批准**：只因"没人排期"就退役，等于退回"靠消失来变绿"的老路。
+ *
+ * 3b) 【当前真实未修清单】—— 汇总里 FAIL 的每一条都必须能在此查到**接手方式**，
+ *     否则它就是"没人管的红"，而不是待办。
+ *    · A16c（F-014 内圈）**真未修**：`mcpToolDefs` 未消费 `outputSchema` / `structuredContent` /
+ *      `execution.taskSupport` / `icons`。影响：依赖结构化输出的工具仍可调用，但返回结构被丢弃
+ *      （调用方拿不到可校验的 shape）。下一步：在 `toToolDefs` 保留 `outputSchema`，并在工具结果
+ *      落库/回传路径透传 `structuredContent`；**需先定「结构化结果如何进上下文预算」——与 D-03 同源**。
+ *      定性依据：它落在 tools 规范**之内**（`outputSchema`/`structuredContent` 是 `tools/call`
+ *      的返回结构），所以「声明为 tools profile」**覆盖不到**它 —— resources/prompts/tasks 在
+ *      tools 之外，声明可以覆盖；structuredContent 在 tools 之内，声明不能豁免。
+ *      （README 两份均已按此写成「按 open gap / 未修缺陷跟踪，不是范围之外」，与 A16a 交叉校验。）
  *
  * 4) 【契约变更台账】—— 断言口径的每一次变更都必须在此留痕，并注明触发提交。
- *    为什么：本项目吃过「口径过期后，后人把旧期望当回归、去改实现」的亏（A01b/A02a 就差点被
- *    当成缺陷继续修）。台账是唯一解药：让人先看到"这条为什么变了"，而不是先看到"它红了"。
+ *    为什么：本项目吃过「口径过期后，后人把旧期望当回归、去改实现」的亏。台账是唯一解药：
+ *    让人先看到"这条为什么变了"，而不是先看到"它红了"。
  *
  *      · B1-B-05（3af9093）MCP 工具名拼名/反解改为**可逆编码**：分隔符从裸 `__` 改为 `%5F%5F`。
- *        → A01b 的原字面量期望 `mcp__my__svc__x` **按设计作废**，退役为**行为断言**
- *          （`decodeToolName(toToolDefs(样本,'x')[0].name)` 必须还原 `{server: 样本, tool: 'x'}`）。
+ *        → A01b 的原字面量期望 `mcp__my__svc__x` **按设计作废**，改为**行为断言**
+ *          （`decodeToolName(toToolDefs(样本,'x')[0].name)` 必须还原 server/tool）。
  *          谁若把它改回"冻结某个具体字符串"，就是把守卫降级成记录现状。
- *        → 新增 A01d：「服务名片段不得含裸 `__`」= 分隔符唯一性的真守卫（比冻结字面量抗格式演进）。
- *        → A02a 由 `expect=true` 的**墓碑**（记的是修复前存在，永远只能红）反转为 `expect=false`
- *          的**护栏**（不得再出现手写 `split('__')`）。墓碑只能证明过去，护栏才能拦住回滚。
- *        → 原 A02e 与新的 A01b 是同一条行为断言，**已并入 A01b**，不再重复计数。
- *      · 断言总数（EXPECTED_ASSERTION_TOTAL）随上述增删同步：80 → 81。
+ *        → 新增 A01d：「服务名片段不得含裸 `__`」= 分隔符唯一性的真守卫。
+ *        → A02a 由 `expect=true` 的**墓碑**反转为 `expect=false` 的**护栏**（不得再出现手写 split）。
+ *        → 原 A02e 与新的 A01b 是同一条，**已并入 A01b**，不再重复计数。
+ *      · B1-B-01（F-002）矩阵逐工具覆盖 → A06 翻转（矩阵确已读 TOOL_LEVEL）；
+ *        A07 重写为「三覆盖 ⇒ `|| 'L2'` 兜底对模型工具不可达」（原断言测的是"兜底行还在"，
+ *        那是代码事实，不是缺陷 —— 兜底本来就该在，关键是它可达不可达）。
+ *      · B1-B-04（F-006）补协议版本头 → A08a 翻转为“头里有 MCP-Protocol-Version”；
+ *        A09a/A09b 退役（"版本被保存"是前置条件；"未进构造传参"因修复走 setProtocolVersion
+ *        注入而至今成立，属口径过期），实质要求由 A09e 正向断言。
+ *      · B1-B-06（F-007）定义侧三道闸 → A10a/A10c/A10d 翻转；A10b 退役（schema「只判不截断」
+ *        是设计决定，截断 schema = 非法 schema），schema 闸由 A10e 断言。
+ *      · B2-B-09（F-013）clientInfo 版本同源 → A15a 翻转。
+ *      · D-02-A / B2-B-10（40b24cf，F-014）裁决为「正式声明 MCP tools profile」，
+ *        **不是**"去接 resources/prompts"（那是 D-02-B 中期新增能力 B3-B-02）→
+ *        A16a 重写为「§5.5 声明在位 且 与实现一致（原语零命中）」；
+ *        A16c 保留缺陷形态并翻转（outputSchema/structuredContent/taskSupport 是否被消费）——
+ *        该项**没有**被任何裁决放过，故翻转后仍红 = **真实未修**。
+ *      · A02b/A02c 退役：前提被 B1-B-05 消灭（旧手写 split 已不存在，无样本可测），
+ *        缺陷不存在性由 A02a 直接断言。
+ *      · 断言总数随上述增删同步：81 → 76（删 5 条退役项；A07/A16a 为原地重写，不增减）。
  *
  * 5) 检索类断言一律在 `stripComments()` 后的**代码正文**上计数：注释里出现标识符既能让
- *    「应当不存在」的断言假红（谎报没修），也能让「应当存在」的断言假绿（注释喂饱）。
- *    当前**没有**任何断言刻意扫全文（A13 读的是 JSON 数据、A17d2 读的是 git 索引，都不属
- *    「代码文本」口径）；若将来确实要断言「注释里不得出现某措辞」，必须就地标注
- *    `[全文口径]` 并写明理由，否则下一个人会把它当漏改再扫一遍。
+ *    「应当成立」的断言假红，也能让「应当不成立」的断言假绿（注释喂饱）。
+ *    少数刻意扫全文的断言（如 A16a 读 Markdown 文档）已就地标注 `[全文口径]` 并写明理由。
  *
  * 6) `SIMULATE_DROPPED_ASSERTION` 仅用于**演示**「总数闸能红」，正常必须为 false。
  *    **CI 中禁止设置它为 true**：那等于静默关掉一条断言（A14b），而本脚本存在的意义正是
  *    不让断言被静默关掉。任何人提交时把它留成 true，就是在关掉自己的验收。
  *
- * 7) 【定位：本脚本是**审计报告**，不是门禁 —— 它**刻意**不进 `npm test`】
- *    `exit=1` 是本脚本的设计结果，**不是失败信号**：当前 FAIL 全部属于 [defect] 类，而 defect
- *    断言的语义是「FAIL = 缺陷已修复」，所以 exit=1 恰恰意味着「这些缺陷都修好了」。
- *    把一个 `exit=1` 表示成功的脚本挂进 `npm test`，等于把整套通过条件反过来 —— 那不叫接线，叫埋雷。
+ * 7) 【定位：语义反转后，它**可以**当门禁了 —— 但接线仍不归本脚本管】
+ *    旧版本是"审计报告不是门禁"，理由是 defect 语义反转（exit=1 表示修好）。本批反转完成后
+ *    那个理由**已经消失**：现在 exit=0 = 全部断言成立；有真实未修缺陷时 exit=1 是**正确行为**，
+ *    不是"不能当门禁"，而是"门禁现在是准的"。
  *    （事实补充：`run-all.mjs` 的发现范围是 `desktop/test/*.test.{js,mjs}` + 两个 smoke，
- *      `GATES` 只挂 `eval:check`，本文件不在其中。这是**有意保留**的现状，不是待修缺口。）
+ *      `GATES` 只挂 `eval:check`，本文件不在其中。要不要接线由 owner 决定，不在本批范围。）
  *
- *    **唯一可当门禁用的信号，是汇总第二行 `[invariant] 失败: 0`**：
- *      · 非 0 → 真回归 / 扫描器失效，必须立刻查代码（这是本脚本唯一需要人立即动作的输出）；
- *      · 其余 FAIL（defect = 修复证据）与 BLOCKED（无法验证）都属**预期**，不代表"改坏了"。
- *    因此本脚本的「常年红」不是噪声：红的是预期项，而真正要盯的那一行写在最显眼的位置。
- *
- *    若将来真要把它变成门禁，**前置条件是先把 defect 断言改成正常语义**（修好 = 通过）；
- *    否则接线只会让 `npm test` 永久红。这条**优先级高于**第 8 条列出的所有待办。
- *
- * 8) 【下批待办（台账，均未做）】
- *    ① **defect 断言语义改造**（优先级最高）：把「FAIL = 已修复」改为「修好 = PASS」的正常语义。
- *       这是第 7 条所述「本脚本有可能变成门禁」的**唯一前置条件**，会动到全部 defect 类断言。
- *    ② 「源码 `check(` 调用数自洽断言」：根治「有人删了断言又同步改常量」。需要设计，
+ * 8) 【下批待办（台账）】
+ *    ① ~~defect 断言语义改造~~ **本批已完成**（全部翻转/退役，见第 4 条台账；总数 81→76）。
+ *    ② 接入 `npm test`（run-all GATES 或 npm script）：语义已正，接线的**前置条件不再缺失**，
+ *       但需要 `desktop/` 写权限，由 owner 决定。
+ *    ③ 「源码 `check(` 调用数自洽断言」：根治「有人删了断言又同步改常量」。需要设计，
  *       因为用正则数自己源码里的断言调用时，会把该正则自身也算进去（自指）。
- *    ③ 「不得出现 X」类断言，必须配一条**能匹配 X 任意写法**的检测，否则它守的只是
- *       「上次那个写法」—— 本轮 A02a 就是这样假绿过一次（详见其就地注释）。
+ *    ④ 「不得出现 X」类断言，必须配一条**能匹配 X 任意写法**的检测，否则它守的只是
+ *       「上次那个写法」—— 上一轮 A02a 就是这样假绿过一次（详见其就地注释）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -91,52 +108,44 @@ import path from 'node:path';
 const ROOT = process.argv[2];
 if (!ROOT) { console.error('usage: node check.mjs <ROOT>'); process.exit(2); }
 
-// ── 断言类型登记（本轮新增：让脚本能自我解释「红的是什么」）─────────────────
+// ── 来源标记（provenance）与退役登记 ────────────────────────────────────────
 //
-// 每条断言属于且只属于两类之一：
+// 【语义已统一（本轮改造）】所有断言一律：**PASS = 成立（好），FAIL = 不成立（坏）**。
+// 不再有「defect 类 FAIL 表示已修复」这种反向语义 —— 那种设计让 exit=1 变成"修好了"的信号，
+// 红成了噪声，报告读到最后没人知道该不该高兴。现在 exit=0 = 全部断言成立；exit≠0 = 有真问题。
 //
-//   [invariant]     不变量 —— 改前改后都必须 PASS。阳性对照、结构性事实、契约常量属此类。
-//                   它红了 = **真回归**，必须去查代码，不能改断言。
-//   [defect-Fxxx]   缺陷存在性断言 —— 记录 HEAD `924909c` 时点的缺陷**事实**。
-//                   改前应 PASS（证明缺陷真实存在），修复后应 FAIL（证明缺陷已消失）。
-//                   它红了通常意味着「修好了」，不是「改坏了」。
-//
-// 为什么必须分开：原来的 67 条断言里两类混在一起，汇总只报 `FAIL=6`，读的人无法区分
-//   「6 条修复证据」与「6 条真回归」——上一轮就有人把预期反转误判成「改坏了」。
-//   分组后判读口径变成两句话：`[invariant] 失败` 必须为 0；`[defect] 失败` 越大说明修得越多。
-//
-// 缺省规则：未登记 → 按 [invariant] 处理。宁可让新写的缺陷断言以「回归」面貌出现（会被追），
-//   也不要让缺陷断言默认混进不变量里冒充绿灯。
-const TAG = {
-  'A02b': 'defect-F005', 'A02c': 'defect-F005',   // MCP 名称反解错服务
-  'A03': 'defect-F003', 'A04c': 'defect-F003',    // supportsToolCall 无执行层消费
-  'A06': 'defect-F002', 'A07': 'defect-F002',     // 工具矩阵未守审批/可补偿
-  'A08a': 'defect-F006', 'A09a': 'defect-F006', 'A09b': 'defect-F006', // Streamable HTTP 缺协议版本头
-  'A10a': 'defect-F007', 'A10b': 'defect-F007', // 定义侧无守卫
-  'A10c': 'defect-F007', 'A10d': 'defect-F007',
-  'A15a': 'defect-F013',                          // 握手自报版本 '1.0'
-  'A16a': 'defect-F014', 'A16c': 'defect-F014',   // resources/prompts/tasks 未接
+// PROV 只记录「这条断言当初是为哪个发现项写的」，**不参与判定方向**，仅用于溯源显示，
+// 让读报告的人能一句话追到缺陷编号（例：`[F-006]`）。
+const PROV = {
+  'A03': 'F-003', 'A04c': 'F-003',                 // supportsToolCall 无执行层消费
+  'A06': 'F-002', 'A07': 'F-002',                  // 工具矩阵未守审批/可补偿
+  'A08a': 'F-006',                                 // Streamable HTTP 缺协议版本头
+  'A10a': 'F-007', 'A10c': 'F-007', 'A10d': 'F-007', // 定义侧无守卫
+  'A15a': 'F-013',                                 // 握手自报版本 '1.0'
+  'A16a': 'F-014', 'A16c': 'F-014',                // resources/prompts/tasks 未接
+};
+// 退役登记：这些断言**不再存在**（连同其编号一起停用），此处留痕说明为什么，防止后人
+//   以为"漏写了"又把它们加回来，或在台账里查不到依据。退役 ≠ 通过，也 ≠ 失败 ——
+//   它是"这个判据的理由已经消失/被裁决不该跟踪"，故不进 PASS 也不进 FAIL。
+const RETIRED = {
+  'A02b': 'F-005 · 前提被 B1-B-05 消灭（旧手写 split 已不存在，无样本可测）；缺陷不存在性由 A02a 直接断言',
+  'A02c': 'F-005 · 同上（toolName 分支），由 A02a 覆盖',
+  'A09a': 'F-006 · 「版本被保存」是前置条件不是缺陷；"是否送达传输层"由 A09e 直接断言',
+  'A09b': 'F-006 · 修复走 setProtocolVersion 注入，字面量「未进构造传参」至今成立 → 口径过期，由 A09e 覆盖',
+  'A10b': 'F-007 · schema「只判不截断」是 B1-B-06 的**设计决定**（截断 schema = 非法 schema）；闸在位由 A10e 断言',
 };
 
 let pass = 0, fail = 0, skipped = 0, blocked = 0;
 const failures = [];   // 全部失败 id（含 BLOCKED）
-const invFailed = [];  // invariant 失败 → 真回归
-const defFailed = [];  // defect 失败 → 预期反转（修复证据）
-const defPassed = [];  // defect 通过 → 缺陷仍在（或是「修好了但断言口径已过期」，需人工核对）
-const blockedIds = []; // 前置断言失败 → 无法验证（既不是修复证据，也不是回归）
+const blockedIds = []; // 前置断言失败 → 无法验证（不是通过，也不是普通失败）
 let totalCheckOk = true; // T01 结论，供汇总的「判读」引用（T01 自己也算一条断言）
-const stats = { invariant: { pass: 0, fail: 0 }, defect: { pass: 0, fail: 0 }, blocked: 0 };
 
-function typeOf(id) { return (TAG[id] || 'invariant'); }
+/** 显示用来源标记：有溯源登记的显示 `[F-xxx]`，否则 `[invariant]`。**不参与判定方向**。 */
+function typeOf(id) { return PROV[id] ? PROV[id] : 'invariant'; }
 
 function tally(id, good) {
-  const t = typeOf(id);
-  const kind = t.startsWith('defect') ? 'defect' : 'invariant';
-  stats[kind][good ? 'pass' : 'fail']++;
   if (good) pass++; else { fail++; failures.push(id); }
-  if (kind === 'invariant') { if (!good) invFailed.push(id); }
-  else if (good) defPassed.push(`${id}(${t})`); else defFailed.push(`${id}(${t})`);
-  return t;
+  return typeOf(id);
 }
 
 function ok(id, desc, actual, expect) {
@@ -152,21 +161,25 @@ function okPresent(id, desc, n) { const g = n > 0; ok(id, desc, g, true); if (!g
 function skipAssert(id, desc, why) {
   skipped++;
   console.log(`[SKIP] ${id} [${typeOf(id)}] ${desc} | ${why}`);
+  // 文件头第 1 条：凡 SKIP/BLOCKED 必须同时出现 `⚠ 未执行` 行，否则等于静默跳过。
+  console.log(`⚠ 未执行：${id}（${desc}）—— ${why}；**不等于通过**`);
 }
 /**
- * 无法验证：前置断言失败（例：A02a 正则失配，导致 A02b/A02c 无从判定）。
+ * 无法验证：前置断言失败（例：读取目标丢失，导致某条判据无从取样）。
  *
  * 为什么不能「不出声」：条件分支里的断言一旦不执行，就**既不 PASS 也不 FAIL 也不 SKIP**，
- *   总数静默变少；读的人看到「PASS 从 66 变 64」只会以为是用例调整，而实际是两条检查
- *   被悄悄拿掉了。这是最坏的失效方式 —— 它替一次**没有发生**的检查背书。
- * 为什么也不能直接记成普通 FAIL：defect 类的 FAIL 语义是「缺陷已消失 = 修复证据」。
- *   「没验成」被算进修复证据，等于用没做的检查去证明修好了。故单列 BLOCKED：
- *   计入失败总数与清单，但不动 defect 的通过/失败统计。
+ *   总数静默变少；读的人看到「PASS 变少」只会以为是用例调整，而实际是检查被悄悄拿掉了。
+ *   这是最坏的失效方式 —— 它替一次**没有发生**的检查背书。
+ * 为什么也不能记成普通 FAIL：FAIL 现在统一表示「判据不成立 = 有真问题」；
+ *   「没验成」不是"有问题"，而是"没结论"。故单列 BLOCKED：计入失败总数与清单（不让它消失），
+ *   但在汇总里与「真缺陷」分行列出，避免把"未验证"读成"缺陷仍在"。
  */
 function blockedAssert(id, desc, why) {
-  blocked++; stats.blocked++;
+  blocked++;
   fail++; failures.push(`${id}(BLOCKED)`); blockedIds.push(id);
   console.log(`[FAIL] ${id} [${typeOf(id)}] ${desc} | BLOCKED: 前置断言失败，本条无法验证 → ${why}`);
+  // 文件头第 1 条：凡 SKIP/BLOCKED 必须同时出现 `⚠ 未执行` 行，否则等于静默跳过。
+  console.log(`⚠ 未执行：${id}（${desc}）—— ${why}；**不等于通过**`);
 }
 
 // ══ 顶层容错：跑不完也必须给出「执行中断」汇总，不许只吐一段栈 ══════════════════
@@ -314,7 +327,7 @@ console.log(`=== harness-r7 事实核验断言集 | ROOT=${ROOT} ===\n`);
 //   不算 PASS 也不算 SKIP）**无法靠逐条修补根治** —— 补完 A02、A17，下一个人还会写出新的
 //   条件分支。逐条盯着防不住，但「实际执行数 ≠ 登记数」能一次性抓住全部消失。
 // 纪律：增删断言后**必须**同步本常量。若你正想「改常量太麻烦，先放着」—— 那正是它要拦的人。
-const EXPECTED_ASSERTION_TOTAL = 81; // 实测回填：81 条（含 SKIP，不含 T01 自身）。80→81 = 新增 A01d/A01z、A02e 并入 A01b
+const EXPECTED_ASSERTION_TOTAL = 76; // 实测回填：76 条（含 SKIP，不含 T01 自身）。81→76 = 退役并删除 A02b/A02c/A09a/A09b/A10b 五条
 // 演示开关（正常跑必须 false）：设 true 则 A14b 不执行，用于实测 T01 真的会红。
 const SIMULATE_DROPPED_ASSERTION = false;
 /** 总数闸判定（抽成纯函数，SELF-2 才能证明它不是恒真表达式）。 */
@@ -390,26 +403,18 @@ okTrue('A01d', `服务名片段不得含裸 \`__\`：encodeServerSegment('${SAMP
     !legacyExpr && bareSplit.length === 0,
     `旧句式命中 = ${!!legacyExpr}；手写 .split('__') 命中 ${bareSplit.length} 处`
     + `${bareSplit.length ? `（${bareSplit.slice(0, 3).join(' , ')}）` : ''} —— 任一为真即回滚，先查 agent-core 最近改动`);
+  // A02b/A02c **已退役并删除**（见文件头 RETIRED）：它们取样的是"旧手写反解会解出什么"，
+  //   而旧实现已被 B1-B-05 消灭，正常态下永无样本可测。留着它只能二选一：
+  //     记 BLOCKED → 永久 FAIL → exit 永远非 0 → 报告不可能成为门禁（上次已证明"永久红=没人看"）；
+  //     记 SKIP    → 计数稳定但等于承认这条判据长期不产生信息。
+  //   两者都不如直接删掉：**缺陷不存在性已由 A02a 正向断言**（不得再出现手写 split('__')），
+  //   覆盖是完整的，且 A02a 在回滚时确实会红（已用变异验证过）。
   if (legacyExpr) {
-    // 只有回滚时才取样：此时旧实现确实在，可以展示它会把名字解成什么错值。
-    const m = legacyExpr;
+    // 回滚现场：A02a 已经会红（上面那条）。这里额外把"会解成什么错值"打出来，方便定位，
+    //   但**不再计入断言数** —— 它是诊断输出，不是判据（判据是 A02a）。
     const parts = 'mcp__my__svc__x'.split('__');
-    ok('A02b', '（历史）若手写反解回滚：server 被解成 my（工具被静默路由到另一服务）', eval(m[1]), 'my');
-    ok('A02c', '（历史）若手写反解回滚：toolName 被解成 svc__x', eval(m[2]), 'svc__x');
-  } else {
-    // 旧实现不存在 → 本条「无法验证」。
-    //   裁决落地记录：曾用 SKIP，但 SKIP 在当前接线下的**可见性为零**（见文件头第 7 条：
-    //   本脚本不在 run-all 基线内，没人会看到它的 SKIP）。按"宁可常年红，也不要静默跳"，
-    //   改回 BLOCKED：计入 FAIL 与失败清单，代价是脚本永远不可能全绿 —— 这是**故意**的，
-    //   它时刻提醒"有两条判据其实没验过"，而不是让它们消失在 SKIP 里。
-    blockedAssert('A02b', '（历史）手写反解取样 server',
-      '旧反解表达式已不存在（A02a 已断言其为禁止项）→ 无样本可测');
-    blockedAssert('A02c', '（历史）手写反解取样 toolName',
-      '旧反解表达式已不存在（A02a 已断言其为禁止项）→ 无样本可测');
-    // 额外打一行 `⚠ 未执行`：一旦本脚本被登记进 run-all 的 GATES，run-all 第 94 行的
-    //   `/⚠.*(跳过|未执行)/` 收集器就能把它收进「未执行」清单（格式现已对齐，接线未做）。
-    console.log('⚠ 未执行：A02b/A02c（手写反解取样）—— 判据前提已被产品变更消灭，'
-      + '本轮**未验证**，不等于通过；编号保留以稳住总数');
+    console.log(`[INFO] A02a' 回滚取样：server=${JSON.stringify(eval(legacyExpr[1]))}`
+      + ` toolName=${JSON.stringify(eval(legacyExpr[2]))}（正确应为 my__svc / x）`);
   }
 }
 
@@ -421,15 +426,17 @@ okTrue('A01d', `服务名片段不得含裸 \`__\`：encodeServerSegment('${SAMP
 //   被读成「已修复」。这正是用注释判定事实，必须去注释。
 {
   const ac = readGuarded('A03n', agentCore);   // 空/缺文件 → 前置 FAIL，A03 不再是「没匹配所以通过」
-  okAbsent('A03', '（改前）agent-core 未出现 supportsToolCall', countIn(ac, /supportsToolCall/g));
+  // 语义统一（本轮）：断言「缺陷已消失」。PASS = 修好了，FAIL = 缺陷仍在。
+  okPresent('A03', '已修复：agent-core 已消费 supportsToolCall（能力门真的接上了，不再是"只解析不消费"）',
+    countIn(ac, /supportsToolCall/g));
   okTrue('A04a', 'agent-core 仍构造 allTools', /let allTools\s*=/.test(ac));
   okTrue('A04b', 'agent-core 仍每轮发送 tools: allTools', /tools:\s*allTools/.test(ac));
   const pilot = [];
   for (const d of [P('desktop')]) for (const f of walk(d, ['.js', '.mjs', '.jsx', '.ts', '.tsx'])) {
     if (/supportsToolCall/.test(stripComments(read_(f)))) pilot.push(path.relative(ROOT, f));
   }
-  okTrue('A04c', '（改前）supportsToolCall 仅出现在 modelsFile/localData/UI/测试（非 agent-core）',
-    !pilot.some((x) => x.includes('agent-core')), `命中文件: ${pilot.join(' | ')}`);
+  okTrue('A04c', '已修复：supportsToolCall 已进入 agent-core（消费方在位）',
+    pilot.some((x) => x.includes('agent-core')), `命中文件: ${pilot.join(' | ') || '(无)'}`);
   console.log(`[INFO] A04c' supportsToolCall 命中文件（去注释口径） = ${pilot.join(' , ')}`);
 }
 
@@ -458,14 +465,39 @@ okTrue('A01d', `服务名片段不得含裸 \`__\`：encodeServerSegment('${SAMP
     /ipcMain\.handle\(\s*'ecosystem:employeeRuntime'/.test(stripComments(read('desktop/main/ipc/ecosystem.js'))));
 }
 
-// ── A06/A07  F-002 工具矩阵未守审批/可补偿 ───────────────────────────────
+// ── A06/A07  F-002 工具矩阵守审批/可补偿 ─────────────────────────────────
 {
   // 前置：矩阵文件存在且非空。否则 A06 会在空串上得 0 → 假绿（「没有匹配所以通过」）。
   const mx = readGuarded('A06n', matrixRel);
-  okAbsent('A06', '（改前）tool-registration-matrix 未读 TOOL_LEVEL/REVERSIBILITY/toolLevel',
+  okPresent('A06', '已修复：矩阵已读 TOOL_LEVEL/REVERSIBILITY/toolLevel（逐工具守审批分级，不再是只查孤儿的假闭环）',
     countIn(mx, /TOOL_LEVEL|REVERSIBILITY|toolLevel/g));
-  okTrue('A07', '（改前）approval.js 未登记一律默认 L2',
-    /TOOL_LEVEL\[tool\]\s*\|\|\s*'L2'/.test(stripComments(read('desktop/main/approval.js'))));
+  // A07 已**重写**（原「approval.js 未登记一律默认 L2」是**代码事实**，不是缺陷判据）：
+  //   F-002 的真缺陷是「漏登记 → 静默落 L2 → auto-safe 档直接放行」，其判据是**三覆盖**：
+  //   每个模型工具必须落在 TOOL_LEVEL ∪ SPECIAL_CASED_TOOLS ∪ READONLY_TOOLS 之一，
+  //   于是 toolLevel() 末行的 `TOOL_LEVEL[tool] || 'L2'` 对模型工具**不可达**。
+  //   测「兜底代码还在不在」没有意义（它就该在，作为兜底）；测「兜底是否可达」才是守卫。
+  let uncovered = null, covInfo = 'n/a';
+  try {
+    const { createRequire } = await import('node:module');
+    const rq = createRequire(import.meta.url);
+    const ap = rq(P('desktop/main/approval.js'));
+    const core = await import(P(agentCore));
+    const drive = [...new Set([
+      ...(core.BASE_TOOLS || []).map((t) => (t.function ? t.function.name : (t.name || t))),
+      ...Object.keys(core.TOOL_HANDLER_NAMES || {}),
+    ])];
+    const TL = ap.TOOL_LEVEL || {};
+    const SP = ap.SPECIAL_CASED_TOOLS || new Set();
+    const RO = ap.READONLY_TOOLS || new Set();
+    uncovered = drive.filter((t) => !(t in TL) && !SP.has(t) && !RO.has(t));
+    covInfo = `驱动集 ${drive.length} 个（TOOL_LEVEL ${Object.keys(TL).length} / 特判 ${SP.size} / 只读 ${RO.size}）`;
+  } catch (e) { uncovered = null; covInfo = `加载失败：${e.message.split('\n')[0]}`; }
+  if (uncovered === null) {
+    blockedAssert('A07', "已修复：零模型工具依赖 `|| 'L2'` 兜底（三覆盖）", covInfo);
+  } else {
+    ok('A07', "已修复：零模型工具依赖 `|| 'L2'` 兜底（TOOL_LEVEL ∪ 特判 ∪ 只读 三覆盖）", uncovered, []);
+    console.log(`[INFO] A07' ${covInfo}；未覆盖 ${uncovered.length} 个`);
+  }
   // 阳性对照也走代码口径：注释里写满 approval 字样同样能把这条喂绿。
   okPresent('A06p', '阳性对照：矩阵确实引用了 approval 相关（APPROVAL_TOOLS 等）',
     countIn(mx, /APPROVAL_TOOLS|approval/gi));
@@ -540,7 +572,6 @@ function httpHeaderSegments() {
 }
 
 {
-  const cli = read('desktop/main/mcpClient.js');
   const { hdrSeg, markerFiles, segFiles } = httpHeaderSegments();
   console.log(`[INFO] A08' HTTP 请求头组装段来源 = ${segFiles.join(' , ') || '(空)'}；片段 ${hdrSeg.length} 字符`);
 
@@ -551,27 +582,27 @@ function httpHeaderSegments() {
     markerFiles.length >= 1 && markerFiles.every((f) => segFiles.includes(f)),
     `含标记文件 ${markerFiles.length} 个，抽到 header 段 ${segFiles.length} 个`);
 
-  // 口径：抽出的 header 对象里可能夹注释，一律去注释后再判（A08a 是缺陷断言，
-  //   注释里写一句「这里不加 MCP-Protocol-Version」就会把它判成「已修复」）。
+  // 口径：抽出的 header 对象里可能夹注释，一律去注释后再判（注释里写一句
+  //   「这里不加 MCP-Protocol-Version」不该影响判定，两个方向都一样）。
   const hdrCode = stripComments(hdrSeg);
 
-  // [defect-F006] 缺陷存在性：改前「头里没有 MCP-Protocol-Version」为真；B1-B-04 修好后这里应 **FAIL**。
-  // 若它仍 PASS，只有两种可能：扫描又空过了（看 A08z），或这条头真的还没加。
-  okAbsent('A08a', '（改前）HTTP transport 请求头无 MCP-Protocol-Version',
+  // [F-006] 语义统一后的正向判据：请求头必须带 MCP-Protocol-Version（协商值）。
+  //   历史提醒（保留，防复发）：本条的**反面**写法（断言"头里没有该字段"）曾在扫描片段为空时
+  //   假绿 —— 空串上"没有"当然成立。现在的正向写法（必须 >0 命中）+ A08z 的片段非空自检
+  //   构成双保险：扫描失效时 A08z 先红，不会再伪装成本条绿灯。
+  okPresent('A08a', '已修复：HTTP transport 请求头带 MCP-Protocol-Version（协商值）',
     countIn(hdrCode, /MCP-Protocol-Version|Mcp-Protocol-Version/gi));
-  // [invariant] 阳性对照：A08a 必须"读到了真正的 header 区块"，否则 A08a 的 PASS 毫无意义。
+  // 阳性对照：A08a 必须"读到了真正的 header 区块"，否则它的 PASS 毫无意义。
   okTrue('A08b', '阳性对照：请求头确有 Mcp-Session-Id（证明读到的是 header 区块）', /Mcp-Session-Id/.test(hdrCode));
   okTrue('A08c', '阳性对照：请求头确有 Accept: application/json, text/event-stream',
     /Accept\s*:\s*['"`]?application\/json,\s*text\/event-stream/.test(hdrCode));
 
-  okTrue('A09a', '（改前）server.protocolVersion 被保存（有值可发但没发）', /server\.protocolVersion\s*=/.test(stripComments(cli)));
-  okTrue('A09b', '（改前）protocolVersion 未进入 createHttpTransport 传参',
-    !/createHttpTransport\(\{[^}]*protocolVersion/s.test(stripComments(cli)));
-  // F-006 修复的**正向**证据（必须补，否则 A09b 会误导：修复走的是 setProtocolVersion 注入，
-  //  于是 A09b 至今**仍然 PASS**，只看它的人会以为 F-006 没修）。扫描面取全 desktop/main，
-  //  不写死文件名 —— 握手逻辑若再搬家，这条仍然成立。
+  // A09a / A09b 已退役（见文件头 RETIRED）：
+  //   A09a「版本被保存」是**前置条件**不是缺陷；A09b「未进构造传参」在修复走 setProtocolVersion
+  //   注入后**依旧成立**，属口径过期。两者原本想表达的"版本是否真的送达传输层"，
+  //   由下面这条 A09e 用**正向**判据直接断言 —— 这才是 F-006 的实质要求。
   const main = mainSources();
-  okTrue('A09e', '协商版本确有到达 transport 的路径（构造传参 或 setProtocolVersion 注入）',
+  okTrue('A09e', '已修复（F-006）：协商版本确有到达 transport 的路径（构造传参 或 setProtocolVersion 注入）',
     main.some(({ code }) => /setProtocolVersion\s*\(\s*peerVersion\s*\)/.test(code)
       || /createHttpTransport\(\{[^}]*protocolVersion/s.test(code)),
     '两条路径都不存在 → 版本仍到不了传输层，F-006 未修');
@@ -584,13 +615,13 @@ function httpHeaderSegments() {
 {
   const defs = read('desktop/shared/mcpToolDefs.mjs');
   const defsCode = stripComments(defs);
-  // A10a/A10b 是**改前事实**（缺陷存在性）：
-  //   A10a 修好后转红（description 已截断，不再原样透传）；
-  //   A10b 修好后**仍然绿** —— B1-B-06 对 inputSchema 的设计是「只判不截断」（截断 schema
-  //        = 非法 schema = 调用必失败），所以字面量 `parameters: t.inputSchema` 保留了下来。
-  //   只看 A10b 会误判「F-007 没修」，故补 A10e 作正向证据（见下）。
-  okTrue('A10a', '（改前）definition 侧原样透传 description', /description:\s*t\.description/.test(defsCode));
-  okTrue('A10b', '（改前）definition 侧原样透传 inputSchema', /parameters:\s*t\.inputSchema/.test(defsCode));
+  // 语义统一（本轮）：断言「缺陷已消失」。
+  //   A10a → description 不再原样透传（截断/预算闸接管）；
+  //   A10b 已退役（见文件头 RETIRED）：schema「只判不截断」是 B1-B-06 的**设计决定**
+  //     （截断 schema = 非法 schema = 调用必失败），`parameters: t.inputSchema` 保留是**对的**；
+  //     把它当缺陷会让这条永远红 —— 那是墓碑不是守卫。schema 闸在位由 A10e 断言。
+  okTrue('A10a', '已修复：definition 侧 description 不再原样透传（改由截断/预算闸接管）',
+    !/description:\s*t\.description/.test(defsCode));
   // 判定面必须跟上**实现的实际命名**，否则闸加上了断言也不会红（上一轮就是这样假绿的）：
   //   旧正则只认 guardUntrusted|detectInjection|.slice(0,NNN)|maxLength|MAX_DESC；
   //   B1-B-06 用的是 detectPromptInjection / MAX_TOOL_DESCRIPTION_CHARS / MAX_INPUT_SCHEMA_BYTES /
@@ -606,9 +637,9 @@ function httpHeaderSegments() {
   //   实际是被 mcpToolDefs 段首那段「本段讨论 detectPromptInjection / __untrusted__ …」的
   //   注释喂成 FAIL 的 —— 结论碰巧对，理由完全错。现在真去注释：A10c 25→17、A10d 16→9，
   //   结论不变（F-007 确已修，真证据是 A10e）。
-  okAbsent('A10c', '（改前）definition 侧无守卫/长度闸/不可信标记', countCode(defs, GATE_RE));
+  okPresent('A10c', '已修复：definition 侧有守卫/长度闸/不可信标记', countCode(defs, GATE_RE));
   const cache = read('desktop/main/mcpToolCache.js');
-  okAbsent('A10d', '（改前）mcpToolCache 无不可信守卫 / 无定义预算闸', countCode(cache, GATE_RE));
+  okPresent('A10d', '已修复：mcpToolCache 有不可信守卫 / 定义预算闸', countCode(cache, GATE_RE));
   const ac = read(agentCore);
   okPresent('A11', '阳性对照：工具结果侧确有 detectInjection', countIn(stripComments(ac), /detectInjection/g));
   // F-007 修复的正向证据：三道闸（描述截断 / schema 只判不截断 / 不可信标记）都在位。
@@ -661,27 +692,67 @@ function httpHeaderSegments() {
 // ── A15  F-013 握手自报版本 ──────────────────────────────────────────────
 {
   const proto = stripComments(read('desktop/main/mcpProtocol.js'));
-  okTrue('A15a', "（改前）CLIENT_INFO version 硬编码 '1.0'",
-    /CLIENT_INFO\s*=\s*Object\.freeze\(\{[^}]*version:\s*'1\.0'/s.test(proto));
+  okTrue('A15a', "已修复：CLIENT_INFO version 不再硬编码 '1.0'（与 package.json 同源）",
+    !/CLIENT_INFO\s*=\s*Object\.freeze\(\{[^}]*version:\s*'1\.0'/s.test(proto));
   ok('A15b', 'desktop/package.json version', JSON.parse(read('desktop/package.json')).version, '0.6.1-beta');
   okTrue('A15c', 'mcpClient 每次 initialize 都发 clientInfo',
     /clientInfo:\s*\{\s*\.\.\.CLIENT_INFO\s*\}/.test(stripComments(read('desktop/main/mcpClient.js'))));
 }
 
-// ── A16  F-014 resources/prompts/tasks 未接（带阳性对照） ────────────────
+// ── A16  F-014 MCP 能力边界（裁决 D-02-A：声明 tools profile） ────────────
 {
   const reNeg = /resources\/list|resources\/read|prompts\/list|prompts\/get|tasks\/get/g;
   const scan1 = countMatches([MAIN, REND], reNeg);
-  // 前置：扫描面非空。目录改名/删掉时 n1=0 会让 A16a 直接 PASS —— 那是最典型的空过
+  // 前置：扫描面非空。目录改名/删掉时命中恒为 0，A16a 的"声明与实现一致"就会空过
   //   （「什么都没读到」被读成「什么都没命中」）。阳性对照 A16b 只能证明"读到了一些文件"，
   //   不能证明"扫的是该扫的地方"，所以这里单独把文件数钉成断言。
   okTrue('A16n', '前置：A16 扫描面非空（desktop/main + renderer/src 源文件 ≥ 100）',
-    scan1.files >= 100, `实际扫到 ${scan1.files} 个源文件；为 0 说明 A16a 的 0 命中毫无意义`);
-  okAbsent('A16a', '（改前）main+renderer 无 resources/prompts/tasks 原语', scan1.n);
+    scan1.files >= 100, `实际扫到 ${scan1.files} 个源文件；为 0 说明 A16a 的一致性判定毫无意义`);
+  // A16a 已**重写**：F-014 的裁决是 D-02-A「正式声明 tools profile」（B2-B-10，40b24cf），
+  //   不是"把 resources/prompts 接上"（那是 D-02-B 中期**新增能力** B3-B-02，不是缺陷）。
+  //   所以这里断言的是**声明在位 + 声明与实现一致**：
+  //     · 技术文档 §5.5 必须显式写明 MCP tools profile；
+  //     · 代码里确实仍未接 resources/prompts 原语（与声明一致）。
+  //   若将来 D-02-B 落地，本条会因"实现超前"而红 —— 那时应改成"只读面已接入且声明同步更新"，
+  //   而不是删断言（保持这条能提醒两处必须同步改）。
+  // 口径说明：这里是**文档全文口径**（Markdown 不是代码，不能过 stripComments —— 那会把
+  //   含 `//` 的 URL 当注释切掉），已按文件头第 5 条要求就地标注。
+  //
+  // A16a 已**重写 + 扩一条**（裁决 D-02-A / B2-B-10）：
+  //   ① 声明必须在**三处**都到位：技术文档 §5.5 + README.md + README.zh-CN.md。
+  //      为什么 README 也算：B2-B-10 的验收原文就是「README 与技术文档**均**命中」，
+  //      而当时只兑现了技术文档（两份 README 都是 0 命中）—— 那是**超额声称**。
+  //      技术文档的读者是维护者，README 的读者才是决定要不要装的人；只在技术文档里声明，
+  //      等于"对内部诚实、对外部不诚实"。
+  //   ② 交叉校验【当前真实未修清单】：README 必须把 structured output 写成
+  //      「open gap / 未修缺陷」，与 A16c 的红**状态一致**。理由：若哪天有人把 A16c 退役了
+  //      却没改 README 这句话，README 就变成谎话 —— 这条断言让两处无法各自漂移。
+  //      为了不造第四份 stripComments，这里就直接用两条窄正则检查那两句表述（文档不是代码，
+  //      本来也不需要去注释）。
+  const techDoc = read('MJcoder-技术流程功能文档.md');
+  const readmeEn = read('README.md');
+  const readmeZh = read('README.zh-CN.md');
+  const declConds = [
+    ['技术文档 §5.5 声明', /###\s*5\.5[^\n]*tools profile/.test(techDoc)],
+    ['README.md 声明', /tools profile/.test(readmeEn)],
+    ['README.zh-CN.md 声明', /tools profile/.test(readmeZh)],
+    ['实现与声明一致（resources/prompts 原语零命中）', scan1.n === 0],
+    ['README.md 把结构化输出写作 open gap（与 A16c 红态一致）',
+      /outputSchema/.test(readmeEn) && /open gap/i.test(readmeEn)],
+    ['README.zh-CN.md 把结构化输出写作未修缺陷（与 A16c 红态一致）',
+      /outputSchema/.test(readmeZh) && /未修缺陷|尚未消费/.test(readmeZh)],
+  ];
+  const declFailed = declConds.filter(([, good]) => !good).map(([name]) => name);
+  ok('A16a', '已修复（F-014/D-02-A）：MCP tools profile 声明到位（技术文档 §5.5 + 两份 README），'
+    + '实现与声明一致，且 README 的「结构化输出=open gap」表述与 A16c 红态一致',
+  declFailed, []);
   const scan2 = countMatches([MAIN, REND], /tools\/list|tools\/call/g);
   okPresent('A16b', '阳性对照：同一批文件确有 tools/list|tools/call', scan2.n);
   const defs = readGuarded('A16o', 'desktop/shared/mcpToolDefs.mjs');
-  okAbsent('A16c', '（改前）mcpToolDefs 未消费 outputSchema/structuredContent/taskSupport',
+  // A16c 保持"缺陷判据"形态并翻转为正向：**结构化输出/任务原语是否被消费**。
+  //   这一项 F-014 的裁决里**没有**放过（D-02 只处置 resources/prompts 的只读面），
+  //   也没有任何提交把它接上 → 当前应红，属**真实未修**，不得为了让报告变绿而放宽或退役。
+  okPresent('A16c', '已修复：mcpToolDefs 已消费 outputSchema/structuredContent/taskSupport/icons（结构化输出/任务原语）',
     countIn(defs, /outputSchema|structuredContent|taskSupport|icons/g));
 }
 
@@ -809,22 +880,21 @@ function httpHeaderSegments() {
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} SKIP=${skipped} BLOCKED=${blocked} `
   + `(断言 ${pass + fail + skipped - 1} 条 / 登记 ${EXPECTED_ASSERTION_TOTAL}；T01 自身不计入登记数) ===`);
-console.log(`[invariant] 失败: ${stats.invariant.fail}` +
-  (stats.invariant.fail ? `   ← **真回归，必须查代码**：${invFailed.join(', ')}`
-                        : '   ← 非 0 即为真回归，必须查'));
-console.log(`[defect]    失败: ${stats.defect.fail}   ← 修复后预期（N 越大说明修得越多）`);
-console.log(`[defect]    通过: ${stats.defect.pass}` +
-  (defPassed.length ? `   ← 仍通过 = 缺陷仍在，需核对是否漏修：${defPassed.join(', ')}` : '')
-  + '\n              （注：A09b/A10b 的通过是**口径过期**，修复走了绕开其字面量的路径，真证据是 A09e/A10e）');
-if (blocked) console.log(`[blocked]   无法验证: ${blocked}   ← 前置断言失败，**既不是回归也不是修复证据**：${blockedIds.join(', ')}`);
-if (failures.length) console.log(`失败项（全部）: ${failures.join(', ')}`);
-if (defFailed.length) console.log(`已消失的缺陷断言: ${defFailed.join(', ')}`);
-if (stats.blocked) {
-  console.log('[判读] 存在 BLOCKED：有前置断言失败导致后续无法验证。先修前置，别把这几条读成「已修复」。');
-} else if (!stats.invariant.fail && stats.defect.fail) {
-  console.log('[判读] 剩余 FAIL **全部属于 defect 类** = 预期反转（修复证据），不是回归。');
-} else if (stats.invariant.fail) {
-  console.log('[判读] 存在 invariant 失败 = 有真回归或扫描器再次失效，先查这一项再谈修复进度。');
+// 语义已统一：PASS = 成立，FAIL = 不成立。四类清单如下（不再有"反转读法"）。
+const realFails = failures.filter((id) => !id.endsWith('(BLOCKED)'));
+console.log(`[失败（真缺陷）] ${realFails.length}` +
+  (realFails.length ? `   ← 每条都指向一个**真实未修**的问题：${realFails.join(', ')}` : '   ← 全部断言成立'));
+if (blocked) console.log(`[无法验证]       ${blocked}   ← 前置断言失败，没结论（不是通过，也不是缺陷）：${blockedIds.join(', ')}`);
+console.log(`[通过]           ${pass}`);
+const retiredIds = Object.keys(RETIRED);
+console.log(`[退役]           ${retiredIds.length}   ← 判据理由已消失/被裁决不该跟踪，**不进 PASS 也不进 FAIL**：${retiredIds.join(', ')}`);
+if (failures.length) console.log(`失败项（全部，含无法验证）: ${failures.join(', ')}`);
+if (realFails.length) {
+  console.log('[判读] 有 FAIL = 有**真问题**（缺陷仍在 / 回归 / 判据不成立）。exit=1 是正确的，别把它读成"还不能发布"之外的东西。');
+} else if (blocked) {
+  console.log('[判读] 无 FAIL，但有 BLOCKED：有判据没验成。先修前置，别把"没验成"当"通过"。');
+} else {
+  console.log('[判读] exit=0：全部断言成立（退役项不计）。这份报告可作为发布前的契约基线。');
 }
 if (!totalCheckOk) {
   console.log('[判读] 另有 T01 红：断言总数与登记值不符，上面某条断言可能根本没执行。');
