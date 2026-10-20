@@ -40,14 +40,16 @@
  *
  * 3b) 【当前真实未修清单】—— 汇总里 FAIL 的每一条都必须能在此查到**接手方式**，
  *     否则它就是"没人管的红"，而不是待办。
- *    · A16c（F-014 内圈）**真未修**：`mcpToolDefs` 未消费 `outputSchema` / `structuredContent` /
- *      `execution.taskSupport` / `icons`。影响：依赖结构化输出的工具仍可调用，但返回结构被丢弃
- *      （调用方拿不到可校验的 shape）。下一步：在 `toToolDefs` 保留 `outputSchema`，并在工具结果
- *      落库/回传路径透传 `structuredContent`；**需先定「结构化结果如何进上下文预算」——与 D-03 同源**。
- *      定性依据：它落在 tools 规范**之内**（`outputSchema`/`structuredContent` 是 `tools/call`
- *      的返回结构），所以「声明为 tools profile」**覆盖不到**它 —— resources/prompts/tasks 在
- *      tools 之外，声明可以覆盖；structuredContent 在 tools 之内，声明不能豁免。
- *      （README 两份均已按此写成「按 open gap / 未修缺陷跟踪，不是范围之外」，与 A16a 交叉校验。）
+ *    · （2026-10-20 D-14 批起**为空**：在册多轮的 A16c 已由 b3-mcp 按用户裁决「第三条路：
+ *      校验走结构化、展示走文本」修好，接线在 `desktop/main/ipc/mcp.js` 的 callMcpTool，
+ *      详见第 4 条台账末条。）
+ *      修好的范围必须**如实收窄**，任何人不得因 A16c 转绿读成「MCP 能力已全接」：
+ *        · 已接 = **结构化输出**：`outputSchema` 校验 + `structuredContent` 按「有没有
+ *          文本版」剥离（有则剥、无则留）；
+ *        · 仍未接 = `execution.taskSupport`（属 D-02-A 中期 B3-B-02 范围）与 `icons`
+ *          （UI 元数据，非 tools 调用语义）；
+ *        · 程序化消费（结构化结果直接进下游工具/表格）仍未实现 —— 但它已与 D-03 **解耦**
+ *          （结构化数据不进上下文、不占预算），不再是 D-03 的前置阻塞。
  *
  * 4) 【契约变更台账】—— 断言口径的每一次变更都必须在此留痕，并注明触发提交。
  *    为什么：本项目吃过「口径过期后，后人把旧期望当回归、去改实现」的亏。台账是唯一解药：
@@ -73,10 +75,32 @@
  *        **不是**"去接 resources/prompts"（那是 D-02-B 中期新增能力 B3-B-02）→
  *        A16a 重写为「§5.5 声明在位 且 与实现一致（原语零命中）」；
  *        A16c 保留缺陷形态并翻转（outputSchema/structuredContent/taskSupport 是否被消费）——
- *        该项**没有**被任何裁决放过，故翻转后仍红 = **真实未修**。
+ *        该项**没有**被任何裁决放过，故翻转后仍红 = **真实未修**
+ *        （后于 2026-10-20 D-14 批修复并升级为行为断言，见本条台账末条）。
  *      · A02b/A02c 退役：前提被 B1-B-05 消灭（旧手写 split 已不存在，无样本可测），
  *        缺陷不存在性由 A02a 直接断言。
  *      · 断言总数随上述增删同步：81 → 76（删 5 条退役项；A07/A16a 为原地重写，不增减）。
+ *        D-14 批 A16a/A16c 亦为原地重写，总数仍 76。
+ *      · 2026-10-20 用户裁决 D-14/A16c「第三条路：校验走结构化、展示走文本」+
+ *        b3-mcp 落地（`mcpToolDefs.mjs` 新增 `validateStructuredOutput` /
+ *        `applyStructuredOutputPolicy`，接线 `main/ipc/mcp.js` 的 callMcpTool）→
+ *        A16c 由「字面命中」升级为**行为断言**（真实 import 模块 + 四场景真实调用）。
+ *        为什么必须行为化：旧判据 `countIn(defs, /outputSchema|structuredContent|…)` 只能
+ *        证明"这些词出现在代码正文里"—— 本仓注释密度极高，注释旁边挂个死变量就能骗过它，
+ *        那不是假想是上一轮 A02a 实际栽过的坑。四场景 = ①失配检出（ok===false 且带
+ *        path/reason）②匹配直通（有文本版 → 剥 structuredContent、无 note、文本一字未动）
+ *        ③失配有文本版（note 置最前 + 剥 structuredContent）④失配无文本版
+ *        （structuredContent **保留**—— note 伪装文本版 bug 的修复后语义，判定前移被它钉住）。
+ *      · 同期 A16a 条件 5/6 按 README **诚实新口径**重写：A16c 修好后两份 README 改为
+ *        「已消费但仅用于校验 / 结构化数据不进上下文 / 程序化消费仍未实现」，旧的
+ *        「open gap / 未修缺陷」表述失配（A16a 因此红过一轮，属**口径过期**而非回归）
+ *        → 改为断言新口径三件事，每份 README 两条窄正则（正向一条管「仅用于校验 +
+ *        不进上下文」且两句须按序同段出现，负向/未实现一条管「程序化消费仍未实现」）；
+ *        交叉绑定对象从「A16c 红态」改为「实现行为」—— A16c 已修，红态不再是可引用的
+ *        对象，而 README 的口径必须与实现行为一致这个要求没有消失。
+ *      · 同批汇总行展示口径：PASS/FAIL 计数剔除 T01 自身。全绿时原会打印
+ *        「PASS=77 / 断言 76 条」—— 通过数比登记数还大，读者反而要怀疑混进了未登记断言
+ *        （那恰是 T01 要防的东西）。仅改展示，判定与 exit 不变。
  *
  * 5) 检索类断言一律在 `stripComments()` 后的**代码正文**上计数：注释里出现标识符既能让
  *    「应当成立」的断言假红，也能让「应当不成立」的断言假绿（注释喂饱）。
@@ -122,7 +146,7 @@ const PROV = {
   'A08a': 'F-006',                                 // Streamable HTTP 缺协议版本头
   'A10a': 'F-007', 'A10c': 'F-007', 'A10d': 'F-007', // 定义侧无守卫
   'A15a': 'F-013',                                 // 握手自报版本 '1.0'
-  'A16a': 'F-014', 'A16c': 'F-014',                // resources/prompts/tasks 未接
+  'A16a': 'F-014', 'A16c': 'F-014',                // MCP 能力边界：tools profile 声明 + 结构化输出
 };
 // 退役登记：这些断言**不再存在**（连同其编号一起停用），此处留痕说明为什么，防止后人
 //   以为"漏写了"又把它们加回来，或在台账里查不到依据。退役 ≠ 通过，也 ≠ 失败 ——
@@ -724,11 +748,18 @@ function httpHeaderSegments() {
   //      而当时只兑现了技术文档（两份 README 都是 0 命中）—— 那是**超额声称**。
   //      技术文档的读者是维护者，README 的读者才是决定要不要装的人；只在技术文档里声明，
   //      等于"对内部诚实、对外部不诚实"。
-  //   ② 交叉校验【当前真实未修清单】：README 必须把 structured output 写成
-  //      「open gap / 未修缺陷」，与 A16c 的红**状态一致**。理由：若哪天有人把 A16c 退役了
-  //      却没改 README 这句话，README 就变成谎话 —— 这条断言让两处无法各自漂移。
-  //      为了不造第四份 stripComments，这里就直接用两条窄正则检查那两句表述（文档不是代码，
-  //      本来也不需要去注释）。
+  //   ② 交叉校验：README 的结构化输出口径必须与**实现行为**一致（2026-10-20 重写）。
+  //      历史形态（已作废）：曾要求 README 把 structured output 写成「open gap / 未修缺陷」，
+  //      与 A16c 的红**状态**绑定。A16c 已由 b3-mcp 按 D-14 裁决第三条路修好后，该表述失配
+  //      （README 改成诚实新口径，A16a 因此红过一轮 —— 口径过期，不是回归），且「红态」
+  //      不再是可引用的对象。但「README 口径 ↔ 实现行为不得各自漂移」这个要求没有消失，
+  //      故改绑**实现行为**：新口径三件事必须同时成立，每份 README 两条窄正则 ——
+  //        ① 已消费但仅用于校验 + ② 结构化数据本身不进上下文（一条正向正则，两句须按序
+  //           同段出现：拆散/改序/删任一句即红，防「留一句改两句」式漂移）；
+  //        ③ 程序化消费仍未实现（一条正则）。
+  //      为什么用窄正则而不是单个关键词：B2-B-10 的教训是「命中一个词」≠「口径没变」——
+  //      老 README 里 outputSchema 一词长期存在，说的却是 "not consumed yet"。
+  //      为了不造第四份 stripComments，这里直接读文档原文匹配（文档不是代码，不需去注释）。
   const techDoc = read('MJcoder-技术流程功能文档.md');
   const readmeEn = read('README.md');
   const readmeZh = read('README.zh-CN.md');
@@ -737,23 +768,83 @@ function httpHeaderSegments() {
     ['README.md 声明', /tools profile/.test(readmeEn)],
     ['README.zh-CN.md 声明', /tools profile/.test(readmeZh)],
     ['实现与声明一致（resources/prompts 原语零命中）', scan1.n === 0],
-    ['README.md 把结构化输出写作 open gap（与 A16c 红态一致）',
-      /outputSchema/.test(readmeEn) && /open gap/i.test(readmeEn)],
-    ['README.zh-CN.md 把结构化输出写作未修缺陷（与 A16c 红态一致）',
-      /outputSchema/.test(readmeZh) && /未修缺陷|尚未消费/.test(readmeZh)],
+    ['README.md 口径与实现行为一致：已消费但仅用于校验 + 结构化数据不进上下文',
+      /consumed for\s+validation only[\s\S]{1,600}?is \*\*not\*\* fed into the\s+context/i.test(readmeEn)],
+    ['README.md 口径与实现行为一致：程序化消费仍未实现',
+      /programmatic consumption[\s\S]{1,300}?still not implemented/i.test(readmeEn)],
+    ['README.zh-CN.md 口径与实现行为一致：已消费但仅用于校验 + 结构化数据不进上下文',
+      /已消费，但仅用于校验[\s\S]{1,600}?结构化数据本身\*\*不进上下文\*\*/.test(readmeZh)],
+    ['README.zh-CN.md 口径与实现行为一致：程序化消费仍未实现',
+      /程序化消费[\s\S]{1,300}?仍未实现/.test(readmeZh)],
   ];
   const declFailed = declConds.filter(([, good]) => !good).map(([name]) => name);
   ok('A16a', '已修复（F-014/D-02-A）：MCP tools profile 声明到位（技术文档 §5.5 + 两份 README），'
-    + '实现与声明一致，且 README 的「结构化输出=open gap」表述与 A16c 红态一致',
+    + '实现与声明一致，且两份 README 的结构化输出口径（仅用于校验 / 不进上下文 / '
+    + '程序化消费仍未实现）与实现行为一致',
   declFailed, []);
   const scan2 = countMatches([MAIN, REND], /tools\/list|tools\/call/g);
   okPresent('A16b', '阳性对照：同一批文件确有 tools/list|tools/call', scan2.n);
-  const defs = readGuarded('A16o', 'desktop/shared/mcpToolDefs.mjs');
-  // A16c 保持"缺陷判据"形态并翻转为正向：**结构化输出/任务原语是否被消费**。
-  //   这一项 F-014 的裁决里**没有**放过（D-02 只处置 resources/prompts 的只读面），
-  //   也没有任何提交把它接上 → 当前应红，属**真实未修**，不得为了让报告变绿而放宽或退役。
-  okPresent('A16c', '已修复：mcpToolDefs 已消费 outputSchema/structuredContent/taskSupport/icons（结构化输出/任务原语）',
-    countIn(defs, /outputSchema|structuredContent|taskSupport|icons/g));
+  readGuarded('A16o', 'desktop/shared/mcpToolDefs.mjs'); // 前置：行为断言的取样对象必须在
+  // A16c 升级为**行为断言**（2026-10-20，D-14 裁决第三条路 + b3-mcp 落地后）。
+  //   旧形态是字面命中：countIn(defs, /outputSchema|structuredContent|taskSupport|icons/g) > 0
+  //   —— 只能证明「这些词出现在代码正文里」。本仓注释密度极高，注释旁边挂个死变量就能骗过它；
+  //   那不是假想，是上一轮 A02a 实际栽过的坑（检测器只认历史句式，注入新写法仍绿）。
+  //   行为断言**真实 import 模块并调用**：懒校验 / 直通 / 判定前移被改回，都会立即转红。
+  //   接线事实（证明这是真消费而不是自嗨）：`desktop/main/ipc/mcp.js` 的 callMcpTool
+  //   （tools/call 的唯一执行路径）在结果落库/回传前调用
+  //   `policy.applyStructuredOutputPolicy(result, outputSchema)`（ipc/mcp.js:347）。
+  //   范围声明（标题如实收窄）：本条只覆盖**结构化输出**。`execution.taskSupport`
+  //   （D-02-A 中期 B3-B-02）与 `icons`（UI 元数据）**仍未接** —— 不得因本条绿读成
+  //   「MCP 能力已全接」（见文件头 3b 的范围边界）。
+  let structMod = null, structErr = null;
+  try {
+    structMod = await import(P('desktop/shared/mcpToolDefs.mjs'));
+  } catch (e) { structErr = e.message.split('\n')[0]; }
+  if (structErr || typeof structMod.validateStructuredOutput !== 'function'
+    || typeof structMod.applyStructuredOutputPolicy !== 'function') {
+    blockedAssert('A16c', '结构化输出消费四场景行为断言',
+      `mcpToolDefs.mjs import 失败或未导出 validateStructuredOutput/applyStructuredOutputPolicy：`
+      + `${structErr || `typeof=${typeof structMod.validateStructuredOutput}/${typeof structMod.applyStructuredOutputPolicy}`}`);
+  } else {
+    const { validateStructuredOutput, applyStructuredOutputPolicy } = structMod;
+    // 四场景共用一个 schema：required 数字属性 a。{a:'x'}/{a:'坏'} 失配，{a:1} 匹配。
+    const schema = { type: 'object', required: ['a'], properties: { a: { type: 'number' } } };
+    const NOTE = /^\[MJCode\] 结构化输出未通过/;
+    const scen = [];
+    const run = (fn) => { try { return { v: fn() }; } catch (e) { return { err: e.message.split('\n')[0] }; } };
+    // 场景① 失配必须被检出：ok===false 且带 path/reason。恒返回 {ok:true} 的懒校验在此转红。
+    const s1 = run(() => validateStructuredOutput(schema, { a: 'x' }));
+    if (s1.err || !(s1.v && s1.v.ok === false && typeof s1.v.path === 'string' && typeof s1.v.reason === 'string')) {
+      scen.push(`① validateStructuredOutput(schema,{a:'x'}) 应判失配并带 path/reason，实际 ${s1.err ? `抛错：${s1.err}` : JSON.stringify(s1.v)}`);
+    }
+    // 场景② 匹配 + 有文本版 → 剥 structuredContent、无 note、content 文本一字未动。
+    const src2 = { content: [{ type: 'text', text: 'rows: 2' }], structuredContent: { a: 1 } };
+    const s2 = run(() => applyStructuredOutputPolicy(src2, schema));
+    if (s2.err || !(s2.v && s2.v.structuredContent === undefined && Array.isArray(s2.v.content)
+      && s2.v.content.length === 1 && s2.v.content[0].type === 'text' && s2.v.content[0].text === 'rows: 2')) {
+      scen.push(`② 匹配且有文本版应剥 structuredContent 且 content 原样，实际 ${s2.err ? `抛错：${s2.err}` : JSON.stringify(s2.v)}`);
+    }
+    // 场景③ 失配 + 有文本版 → note 置最前、原文紧随其后、structuredContent 被剥。
+    const s3 = run(() => applyStructuredOutputPolicy({ content: [{ type: 'text', text: 'rows: 2' }], structuredContent: { a: '坏' } }, schema));
+    if (s3.err || !(s3.v && Array.isArray(s3.v.content) && s3.v.content.length === 2
+      && s3.v.content[0].type === 'text' && NOTE.test(s3.v.content[0].text)
+      && s3.v.content[1].text === 'rows: 2' && s3.v.structuredContent === undefined)) {
+      scen.push(`③ 失配且有文本版应 note 置前 + 剥 structuredContent，实际 ${s3.err ? `抛错：${s3.err}` : JSON.stringify(s3.v)}`);
+    }
+    // 场景④ 失配 + **无文本版** → structuredContent **保留**（fail-open 朝向可用性）。
+    //   这是 note 伪装文本版 bug 的修复后语义：判定前移到插 note 之前。若判定被改回插入后，
+    //   我们自己的 note 会伪装成「有文本版」→ 数据被剥 → 模型只剩一句提示，场景④转红。
+    const s4 = run(() => applyStructuredOutputPolicy({ structuredContent: { a: '坏' } }, schema));
+    if (s4.err || !(s4.v && JSON.stringify(s4.v.structuredContent) === JSON.stringify({ a: '坏' })
+      && Array.isArray(s4.v.content) && s4.v.content.length === 1
+      && s4.v.content[0].type === 'text' && NOTE.test(s4.v.content[0].text))) {
+      scen.push(`④ 失配且无文本版应保留 structuredContent（bug 修复后语义），实际 ${s4.err ? `抛错：${s4.err}` : JSON.stringify(s4.v)}`);
+    }
+    okTrue('A16c', '结构化输出按裁决第三条路消费（行为断言四场景）：outputSchema 真校验；'
+      + 'structuredContent 有文本版则剥、无文本版则留；失配时 note 置前'
+      + '（execution.taskSupport / icons 仍未接，本条不覆盖，见文件头 3b）',
+      scen.length === 0, scen.join('；'));
+  }
 }
 
 // ── A17  §1.2 契约数量 ───────────────────────────────────────────────────
@@ -878,14 +969,21 @@ function httpHeaderSegments() {
     + ' 有断言被静默跳过，或新增了未登记的断言；若确实增删，请同步 EXPECTED_ASSERTION_TOTAL（这是强制纪律）');
 }
 
-console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} SKIP=${skipped} BLOCKED=${blocked} `
-  + `(断言 ${pass + fail + skipped - 1} 条 / 登记 ${EXPECTED_ASSERTION_TOTAL}；T01 自身不计入登记数) ===`);
+// 汇总口径：T01 是总数闸**自身**（元检查），上面已用「T01 计时前」的 executed 完成判定，
+//   这里把它从 PASS/FAIL 展示里剔除 —— 否则全绿时会打印「PASS=77 / 断言 76 条」，
+//   通过数比登记数还大，读的人反而要怀疑是不是混进了一条未登记断言（那正是 T01 要防的
+//   东西）。仅影响展示，不动任何判定与 exit。
+const t01InPass = totalCheckOk;                 // T01 绿 → 它被 okTrue 计进了 pass
+const sumPass = pass - (t01InPass ? 1 : 0);
+const sumFail = fail - (t01InPass ? 0 : 1);     // T01 红 → 它被计进了 fail
+console.log(`\n=== 汇总: PASS=${sumPass} FAIL=${sumFail} SKIP=${skipped} BLOCKED=${blocked} `
+  + `(断言 ${sumPass + sumFail + skipped} 条 / 登记 ${EXPECTED_ASSERTION_TOTAL}；T01 自身不计入) ===`);
 // 语义已统一：PASS = 成立，FAIL = 不成立。四类清单如下（不再有"反转读法"）。
 const realFails = failures.filter((id) => !id.endsWith('(BLOCKED)'));
 console.log(`[失败（真缺陷）] ${realFails.length}` +
   (realFails.length ? `   ← 每条都指向一个**真实未修**的问题：${realFails.join(', ')}` : '   ← 全部断言成立'));
 if (blocked) console.log(`[无法验证]       ${blocked}   ← 前置断言失败，没结论（不是通过，也不是缺陷）：${blockedIds.join(', ')}`);
-console.log(`[通过]           ${pass}`);
+console.log(`[通过]           ${sumPass}`);
 const retiredIds = Object.keys(RETIRED);
 console.log(`[退役]           ${retiredIds.length}   ← 判据理由已消失/被裁决不该跟踪，**不进 PASS 也不进 FAIL**：${retiredIds.join(', ')}`);
 if (failures.length) console.log(`失败项（全部，含无法验证）: ${failures.join(', ')}`);

@@ -42,10 +42,15 @@ primitives, and reverse sampling (`sampling` / `elicitation`) are **not supporte
 with `-32601` where the protocol expects an answer. **None of these may be implied as available** in
 documentation, UI copy, or marketing material.
 
-Structured output (`outputSchema` / `structuredContent` on `tools/call`) is **also not consumed yet**.
-Unlike the list above, this sits *inside* the tools spec rather than outside the tools profile, so it
-is tracked as an **open gap**, not declared out of scope: a tool that relies on it will still be
-callable, but the structured shape of its result is dropped.
+Structured output (`outputSchema` / `structuredContent` on `tools/call`) is **consumed for
+validation only**. When a server declares an `outputSchema` and the call returns a
+`structuredContent`, the payload is validated against that schema; on a mismatch the model
+receives an explicit note at the front of the tool result telling it to trust the text content
+and not rely on the structured fields. The structured payload itself is **not** fed into the
+context — showing the model the same data twice (text version + JSON version) would be pure
+context-budget waste, and the text version is what the server is required to provide by spec.
+**Programmatic consumption** — feeding structured results directly into downstream tools or
+tables — is **still not implemented**.
 
 ### Sandbox capability by platform
 
@@ -3237,4 +3242,48 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - **Grok Bot 的 Bot 间通信细节不透明**：官方未公开协议层细节，本方案的消息契约是按 DS Bot 的「session + 共享记忆 + 交接摘要」反推的**设计推测**，需在实现前用真实交互验证。
 - **团队记忆 scope 的落地方式待定**：是新增 `team` 枚举，还是复用 `project` + `teamId` 维度，需在 T5-4 立项时对齐既有三层记忆的晋升链与容量闸，避免出现第二事实源。
 - **推荐下一步**：① 评审本方案并确认 M5 立项与路线选择；② 若批准，按 T5-1 → T5-5 顺序推进（每任务过 `typecheck / lint / 全量测试 / 渲染层构建` 门禁）；③ 团队群聊视图需遵守既有视觉纪律（无 emoji、图标白底黑字、无蓝色、性冷淡配色、固定头部 `shrink-0`）。
+
+---
+
+## 会话总结：MJ 军团（团队层）设计逻辑 v1 · 2026-10-20（第三轮）
+
+### 会话背景
+上一轮确认以 **DS Bots 团队协同架构**（主管中心化调度 + 共享任务看板 + 点对点消息 + 事件驱动）作为 MJCode 的参考实现蓝本。用户三个决策已锁定（团队**项目级** / 协作含**真·群聊** / 角色创建**统一招募+自定义**），本轮把蓝本落成**字段级设计逻辑**，仍**不改业务代码**。
+
+### 会话的主要目的
+把「三个决策 + 五道护栏 + 八个构件 + 五张表」写成可评审、可开工的设计稿；并显式暴露未决项，避免把推测当结论。
+
+### 完成的主要任务
+- 核对两处源码事实：① `buildEmployeeRuntimePreset`（[ecosystem.js](file:///Users/jianma/Desktop/MJCode/desktop/main/ecosystem.js#L162-L181)）返回的六字段为 `systemPrompt / toolNames / allowMcp / approvalMode / sandboxPolicy / skillNames`——**不含 `model`**，故「per-Bot 独立模型」是新增项；② grep 确认 worker 池**当前无 waiting/blocked 任务状态**，故「等待任务完成」会造成信号量槽位死锁，是必须解决的真难点。
+- 采纳 DS Bots 蓝本对前两轮结论的两处**修正**：把"自主认领"改为**看板被动认领**（与既有 `claimNext` 语义一致，砍掉一个构件）；把"真·群聊"重新定义为**看板事件驱动的点对点消息**，从而把上下文爆炸风险由最高降为可控。
+- 产出设计稿：五道护栏（G1 仲裁枚举收敛 / G2 双重终止 / G3 收敛信号仅主管 / G4 消息体积闸 / G5 权限不降级）、八构件（T5-1…T5-8）、**五张表字段级设计**（`teams` / `team_members` / `team_messages` / **扩展既有任务表**加 `waiting` 等五列 / `team_turns`）、团队记忆**扩 scope 枚举而非新建存储**、四条流程（组建 / 派活 / 执行 / 收尾）、防死锁两方案对比、`team_*` 六工具的审批档与 8 环节接线清单、M5 任务表与门禁。
+
+### 会话中主要使用的技术栈
+`Read`（ecosystem.js `buildEmployeeRuntimePreset` 字段取证）、`Grep`（`waiting|blocked|claimNext|interrupt|abort` 全局检索、README 锚点定位）、`Write`（新建设计稿）、`Edit`（追加本 README 总结）。
+
+### 关键决策和解决方案
+1. **归属键用 `project_path`**，对齐既有记忆归档惯例；团队记忆**扩 `scope` 枚举为四值**（session/project/team/global）+ `team_id`/`agent_id` 两列，**不建第二套存储**。
+2. **`lead_member_id` 是否为 NULL 作为"缺统筹"的单一判据**；且强校验**只在派活时触发**，列表页仅温和状态标签，避免持续报错焦虑。
+3. **`waiting` 态是本次对既有 worker 池唯一的侵入点**，也是防死锁全部关键；附四条硬规则（等待图无环 / 等待必须超时 / 等待不叠加 / 唤醒幂等）。
+4. **协同工具先按公开的 6 个落地**，蓝本声称的另外 3 个**无一手来源则不做推测补全**，留扩展位。
+5. **权限不降级**：采纳蓝本的看板/消息/记忆三层共享，**不采纳**其"共享 VM"，成员仍走 per-agent worktree + 组内审批快照 + 角色只能收紧。
+
+### 会话中主要使用的工具
+`Read`、`Grep`、`Write`、`Edit`。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | **新增** | 11 章设计稿：三个决策 / 五道护栏 / 复用vs新增架构图与对照表 / 八构件 / 五张表字段级 / 四条流程（含时序图）/ 防死锁设计 / `team_*` 工具与 8 环节 / 差异对照 / M5 任务表与门禁 / 风险与未决项 | 用户要求「按照建议的内容先出设计逻辑」，并确认以 DS Bots 为蓝本 |
+| `README.md` | 修改 | 文末累积追加本节「设计逻辑 v1」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`**：新建。核心取证引用：`rolePreset` 六字段无 `model`（`ecosystem.js#L162-L181`）、worker 池信号量与认领（`workerPool.js#L54-L108` / `#L169-L385`）、DAG 环检测（`dag.js#L23-L91`）、权限钳制（`roleClamp.mjs#L65-L83`）。**本轮不改任何业务代码。**
+- **`README.md`**：Append 上表结构化总结（背景 / 目的 / 任务 / 技术栈 / 决策 / 工具 / 文件 / 详细内容 / 未决项与下一步）。
+
+### 尚存问题与推荐下一步
+- **U1 未决（需用户拍板）**：防死锁走**方案 A**（新增 `waiting` 态并释放信号量，推荐）还是**方案 B**（零改动、降级为轮询查询，代价是空转烧 token 且仍有饿死风险）。
+- 其余未决：U2 运行中增删成员语义、U3 `team_interrupt` 的"谁能中断谁"、U4 蓝本未公开的 3 个协同工具（缺一手来源，不推测）。
+- **推荐下一步**：① 用户确认 U1 后，按 T5-1（编制）→ T5-2（消息总线）→ T5-7（per-agent 模型）→ T5-3（看板认领+防死锁）→ T5-4（Lead）→ T5-5（团队记忆）→ T5-6（群聊视图）→ T5-8（协同工具）顺序推进；② 每任务过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 门禁；③ 群聊视图遵守既有视觉纪律（无 emoji、图标白底黑字、无蓝色、性冷淡配色、固定头部 `shrink-0`）。
 

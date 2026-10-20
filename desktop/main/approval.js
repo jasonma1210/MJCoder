@@ -236,7 +236,8 @@ const TOOL_LEVEL = {
   // chrome_connect 由 chromeRelay 恒逐次弹卡（授权只对当次连接有效，不经规则豁免）；
   // chrome_click/fill 由 chromeTools 层恒逐次确认——操作对象是用户真实浏览器（含登录态），
   // 风险高于 T4-1 的受控沙箱浏览器；tabs/navigate/screenshot/extract 走 L3 可规则豁免。
-  // chrome_status 只读连接状态，不在审批面内。
+  // chrome_status 不进审批面由 toolLevel() 的 chrome_status 特判承担（与 notify/todo_write 同纪律）：
+  // 本表刻意不含该条目——特判早返回之后表项不可达，见下方同名注释块。
   chrome_connect: 'L3',
   chrome_tabs: 'L3', chrome_navigate: 'L3', chrome_screenshot: 'L3', chrome_extract: 'L3',
   chrome_click: 'L3', chrome_fill: 'L3',
@@ -286,7 +287,12 @@ const TOOL_LEVEL = {
   web_search: 'L2', // 读取外部内容且外发查询词 → 留 L2；后续收紧应与 web_fetch 统一评估
   web_fetch: 'L2', // 可拉任意 URL（SSRF 风险由 webTools 侧守卫承担）→ 分级保持 L2 维持现状
   deep_research: 'L2', // 多轮外部检索（web_search 的上层聚合）→ 与 web_search/web_fetch 同档
-  chrome_status: 'L2', // 只读连接状态；TODO(B2)：是否像 notify 那样移出审批面（当前 L2 会弹卡，疑似过严）
+  // chrome_status：2026-10-20 产品裁决（D-14）「退出审批面」——判据在 toolLevel() 的特判分支
+  // （早返回 null）。此处**刻意不留条目**，理由同 todo_write：特判提前 return 后该条目永不被末行
+  // 读到，属「不可达配置」，与门禁「TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅」直接冲突。
+  // 顺带纠正一处失实登记：本行的 'L2' 从未驱动过弹卡——chrome_status 既不在 agent-core 的
+  // APPROVAL_TOOLS（:1011），其 handler（chromeTools.toolChromeStatus）也不经 needsApproval。
+  // 删掉它让「登记值」与「实现行为」一致；真正起保护作用的是 toolLevel 特判（见下）。
   // todo_write：2026-10-20 产品裁决「退出审批面」——判据在 toolLevel() 的特判分支（早返回 null）。
   // 此处**刻意不留 'L2' 条目**：特判会提前 return，条目永不被末行读到 ⇒ 属「不可达配置」，
   // 与门禁「TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅」直接冲突（读者会以为改表能改分级）。
@@ -315,7 +321,7 @@ const READONLY_TOOLS = new Set([
 //   `READONLY_TOOLS.has(tool)`）。两表刻意**不重叠**，否则「三选一」覆盖断言失效、无法区分谁在生效。
 // 也没有 mcp__：它是前缀通配（toolLevel 用 startsWith 判），不是可枚举的工具名。
 const SPECIAL_CASED_TOOLS = new Set([
-  'notify', 'todo_write', 'clipboard', 'http_request', 'sqlite',
+  'notify', 'todo_write', 'chrome_status', 'clipboard', 'http_request', 'sqlite',
   'shell', 'code_exec', 'cua_action', 'latex_compile',
 ]);
 
@@ -363,6 +369,12 @@ function toolLevel(tool, args = {}) {
   // 其次才是无害性：它是引擎内纯状态工具，只更新本应用自己的会话清单并经 onTodos 推给 UI，
   // 不出网、不触盘、不出项目目录、无持久副作用，与 notify 同纪律（notify 已于期 3 退出审批面）。
   if (tool === 'todo_write') return null;
+  // 2026-10-20 产品裁决（D-14）：chrome_status 退出审批面。动机是**审批脱敏**而非无害性——一次
+  // 浏览器任务里模型会反复确认连接状态 2–5 次，这些零后果卡与「允许写文件 / 执行命令」同形，
+  // 用户点习惯后会把真正危险的那张也顺手点过。返回字段只有 {connected, relayListening, relayPort,
+  // relayError, connectedSince, browser}，**不含任何页面信息**（无 URL/标题/标签页），拿不到浏览内容。
+  // 反转条件：若将来给它加「顺便重连」等有副作用语义，必须重新评估并移回审批面。
+  if (tool === 'chrome_status') return null;
   // 期 3：clipboard 读只读（不询问）；写覆盖用户剪贴板原内容 → L2。
   if (tool === 'clipboard') return String(args.action || 'read') === 'write' ? 'L2' : null;
   // 期 3：http_request——GET/HEAD 只读；其余方法改动外部系统状态，判 L3（可经规则豁免，

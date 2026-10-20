@@ -2,7 +2,9 @@
 // 与 T4-1 browserTools 同纪律（风控沿用），差异在执行面：操作对象是用户真实 Chrome
 // （登录态/已开标签页），经 chromeRelay 中继转发给扩展（CDP），本模块不直接碰浏览器。
 // 审批设计：
-//   · chrome_status：只读连接状态，不弹卡（无任何页面信息）；
+//   · chrome_status：不进审批面的权威在 approval.js 的 toolLevel() 特判（2026-10-20 产品裁决 D-14，
+//     与 notify/todo_write 同纪律），本文件**不自我豁免**——它和 toolChromeStatus 都不调用
+//     needsApproval，故「不弹卡」靠的是上游分级判定，不是本层漏接；
 //   · chrome_tabs / navigate / screenshot / extract：L3，可经规则豁免（粒度=URL 前缀/选择器）；
 //   · chrome_click / chrome_fill：恒逐次确认——用户浏览器带真实登录态，
 //     点击/输入可能直接触发支付、发送等不可逆操作，任何规则不可静默放行。

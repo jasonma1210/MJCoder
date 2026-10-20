@@ -303,6 +303,24 @@ await check('chrome_status 只读：不弹卡直接回连接状态', async () =>
   assert.equal(st.asked.length, 0, '状态查询不得弹审批卡');
 });
 
+// D-14（2026-10-20 产品裁决）：handler 层零弹卡**不等于**退出了审批面——上面那条断言只证明
+// 本 handler 自己不 requestApproval，而审批判定发生在更上游的 toolLevel/needsApproval。
+// 故此处补审批层断言：特判早返回 null（退出审批面），且豁免连最严档 always 都不动。
+await check('审批层：chrome_status 退出审批面（toolLevel → null，always 档也不询问）', () => {
+  assert.equal(approval.toolLevel('chrome_status'), null, 'toolLevel 应早返回 null');
+  assert.equal(
+    approval.needsApproval({ tool: 'chrome_status', args: {}, approvalMode: 'always', alwaysRules: [], conversationRules: [] }).need,
+    false, '工具级豁免是绝对的：always 档也不得询问',
+  );
+});
+await check('审批层：chrome_tabs 仍是 L3（D-14 只豁免 chrome_status，未波及页面操作工具）', () => {
+  assert.equal(approval.toolLevel('chrome_tabs'), 'L3');
+  assert.equal(
+    approval.needsApproval({ tool: 'chrome_tabs', args: {}, approvalMode: 'on-request', alwaysRules: [], conversationRules: [] }).need,
+    true,
+  );
+});
+
 // ── 15. 审批文案与分级 ──
 await check('审批摘要：chrome_connect 说明接管面；click/fill L3；敏感 URL 警示', () => {
   const s = approval.approvalSummary('chrome_connect', { extension: 'fake', version: '1', userAgent: 'FakeChrome/1.0' });

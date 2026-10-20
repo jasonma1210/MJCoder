@@ -33,6 +33,7 @@ import {
   MAX_INPUT_SCHEMA_DEPTH,
   TOOL_DESCRIPTION_TRUNCATION_SUFFIX,
   inspectToolDefinition,
+  schemaByteSize,
   truncateDescription,
 } from './contextBudget.mjs';
 import { detectPromptInjection } from './untrustedContent.mjs';
@@ -78,7 +79,11 @@ export function isBlockedToolDef(def) {
  *   · `__untrusted__: true`  —— 所有 MCP 工具恒有（第三方来源）；
  *   · `__blocked__: '<原因>'` —— 仅 schema 超限的工具（调用方应过滤掉）；
  *   · `__injection__: [规则id]` —— 描述命中注入特征的规则清单（只留痕，不阻断：
- *     定义侧阻断会因误报把正常工具整块下架，处置权留给调用方/审计）。
+ *     定义侧阻断会因误报把正常工具整块下架，处置权留给调用方/审计）；
+ *   · `__outputSchema__: <schema>` —— 服务端在 `tools/list` 里声明的 outputSchema（F-014/A16c，
+ *     仅当服务端提供时挂载）。同样不可枚举：它对模型不可见（线上报文不含它），唯一用途是
+ *     `tools/call` 结果侧校验 `structuredContent` 是否符合服务端自己声明的 shape
+ *     （见本文件末节 applyStructuredOutputPolicy）。
  *
  * 不抛异常：单个坏工具只影响它自己。
  */
@@ -125,6 +130,10 @@ export function toToolDefs(server, tools) {
       } catch {
         // 扫描失败不影响工具可用性（守卫是增益，不是前置条件）
       }
+      // ④ outputSchema（F-014 / A16c）：服务端声明的结构化输出 shape。不可枚举的理由与上面
+      //    三个标记完全相同（可枚举会进每一次模型请求的 tool schema）；它的唯一消费者是
+      //    tools/call 结果侧的 applyStructuredOutputPolicy（见本文件末节）。
+      if (t.outputSchema) defineHidden(def, '__outputSchema__', t.outputSchema);
       return def;
     });
 }
@@ -172,3 +181,251 @@ export function mergeToolDefs(base = [], additions = []) {
 
 /** 后缀再导出：测试与调用方断言「截断后长度」时必须与实现同源，不得二次硬编码。 */
 export { TOOL_DESCRIPTION_TRUNCATION_SUFFIX };
+
+// ════════════════════════════════════════════════════════════════════════════
+// F-014 / A16c：结构化输出的**结果侧**策略（用户裁决第三条路：「校验走结构化，展示走文本」）
+// ════════════════════════════════════════════════════════════════════════════
+// 背景：MCP `tools/call` 的返回除 `content`（文本块数组，规范要求必须给）外，还可带
+//   `structuredContent`（结构化数据，其 shape 由服务端在 `tools/list` 的 `outputSchema`
+//   里声明）。此前 MJCode 把整个 result 交给 agent-core 的 truncateToolResult
+//   （`agent-core/index.js:1977`，直接 JSON.stringify 进模型上下文）：结构化数据其实
+//   **已经在进上下文**，却没有任何一方校验过它是否真的符合服务端自己声明的 shape。
+//
+// 裁决口径（第三条路，2026-10-20）：
+//   · **校验走结构化**：服务端声明了 outputSchema 且返回了 structuredContent，就按 schema 校验；
+//   · **展示走文本**：校验只用于给模型发提示；结构化数据本身**不进上下文** —— 同一个数据
+//     模型让模型看两遍（文本版 + JSON 版）是纯预算浪费，而文本版是服务端按规范必须给的；
+//   · 校验不匹配 → 在 `content` 最前面插入一条明确提示，让模型以文本内容为准。
+//
+// 铁律（与定义侧三道闸同构）：**策略是增益，不是前置条件**。校验/剥离任何一步出错
+//   （含循环引用、超大输入）都不得把一次成功的工具调用变成失败 —— 一律 fail-open。
+
+/** 校验遍历时 value 的深度硬顶（超过即跳过校验：病态深嵌套不是该判失败的对象）。 */
+const MAX_STRUCTURED_VALUE_DEPTH = 32;
+/**
+ * value 深度**测量**的递归硬顶。必须显著大于 MAX_STRUCTURED_VALUE_DEPTH：测量函数若在
+ * MAX 处就停住并返回 MAX，深度永远「不超过 MAX」，硬上限判定会静默失效（与
+ * contextBudget.mjs 的 DEPTH_RECURSION_CAP 同一思路）。
+ */
+const STRUCTURED_DEPTH_RECURSION_CAP = 64;
+/** 校验遍历的访问节点数硬顶（超过即跳过校验：防病态巨型值把校验本身变成 DoS）。 */
+const MAX_STRUCTURED_VALIDATE_NODES = 20000;
+
+/** 结构化数据失配提示的前缀（完整文案上限 STRUCTURED_NOTE_MAX_CHARS 字符）。 */
+const STRUCTURED_NOTE_PREFIX = '[MJCode] 结构化输出未通过服务端声明的 outputSchema 校验';
+/** 提示文案硬上限（超长 reason 截断，绝不无限长地占用上下文）。 */
+const STRUCTURED_NOTE_MAX_CHARS = 300;
+
+/** JSON 值的中文类型名（用于人话原因）。undefined/function 不可能来自 JSON，兜底为 unknown。 */
+function jsonTypeName(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  const t = typeof value;
+  return t === 'object' ? 'object' : t; // string / number / boolean
+}
+
+/**
+ * 单类型匹配（JSON Schema 子集）。
+ * 不认识的 `type` 取值一律返回 true（fail-open）——见 validateStructuredOutput 的 JSDoc。
+ * `type` 为数组（联合类型，如 ['string','null']）时任一命中即过。
+ */
+function matchesJsonType(value, type) {
+  if (Array.isArray(type)) return type.some((t) => matchesJsonType(value, t));
+  switch (type) {
+    case 'string': return typeof value === 'string';
+    case 'number': return typeof value === 'number' && Number.isFinite(value);
+    case 'integer': return typeof value === 'number' && Number.isInteger(value);
+    case 'boolean': return typeof value === 'boolean';
+    case 'object': return value !== null && typeof value === 'object' && !Array.isArray(value);
+    case 'array': return Array.isArray(value);
+    case 'null': return value === null;
+    default: return true;
+  }
+}
+
+/** enum 成员的深比较（enum 可能含对象/数组成员，不能用 ===）。 */
+function jsonEquals(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+/** value 的嵌套深度（循环引用就地停住，不抛；仅用于硬上限判定）。 */
+function structuredValueDepth(value, _depth = 0, _seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object') return _depth;
+  if (_seen.has(value)) return _depth;
+  if (_depth >= STRUCTURED_DEPTH_RECURSION_CAP) return _depth;
+  _seen.add(value);
+  let deepest = _depth;
+  const entries = Array.isArray(value) ? value.map((v) => [0, v]) : Object.entries(value);
+  for (const [, v] of entries) {
+    const d = structuredValueDepth(v, _depth + 1, _seen);
+    if (d > deepest) deepest = d;
+  }
+  _seen.delete(value); // 同一子对象被多处引用不重复计入
+  return deepest;
+}
+
+/**
+ * 遍历校验的核心。返回 null = 通过；返回 { path, reason } = 第一个不匹配点；
+ * 返回 { skipped: true } = 触到访问节点硬顶，调用方按「跳过校验」处理。
+ */
+function walkStructured(schema, value, path, ctx) {
+  ctx.nodes += 1;
+  if (ctx.nodes > MAX_STRUCTURED_VALIDATE_NODES) return { skipped: true };
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null; // 非对象 schema：无约束可判
+
+  // type（不认识的关键字取值不判失败，见函数头注释）
+  if (schema.type !== undefined && !matchesJsonType(value, schema.type)) {
+    const want = Array.isArray(schema.type) ? schema.type.join('|') : String(schema.type);
+    return { path, reason: `期望 ${want}，实际 ${jsonTypeName(value)}` };
+  }
+
+  // enum
+  if (Array.isArray(schema.enum)) {
+    const hit = schema.enum.some((c) => jsonEquals(c, value));
+    if (!hit) {
+      const shown = schema.enum.map((c) => JSON.stringify(c)).join(' / ');
+      return { path, reason: `取值 ${JSON.stringify(value)} 不在 enum 允许集合内（${shown.length > 80 ? `${shown.slice(0, 80)}…` : shown}）` };
+    }
+  }
+
+  // object：required + properties
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    if (Array.isArray(schema.required)) {
+      for (const key of schema.required) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) {
+          return { path: `${path}.${key}`, reason: '缺少 required 属性' };
+        }
+      }
+    }
+    if (schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) {
+      for (const [key, sub] of Object.entries(schema.properties)) {
+        // 缺属性交给 required 判（JSON Schema 语义：properties 不强制存在）
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        const bad = walkStructured(sub, value[key], `${path}.${key}`, ctx);
+        if (bad) return bad;
+      }
+    }
+  }
+
+  // array：items（对象形式校验所有元素；数组形式按位置做元组校验）
+  if (Array.isArray(value) && schema.items !== undefined) {
+    if (Array.isArray(schema.items)) {
+      for (let i = 0; i < value.length && i < schema.items.length; i += 1) {
+        const bad = walkStructured(schema.items[i], value[i], `${path}[${i}]`, ctx);
+        if (bad) return bad;
+      }
+    } else {
+      for (let i = 0; i < value.length; i += 1) {
+        const bad = walkStructured(schema.items, value[i], `${path}[${i}]`, ctx);
+        if (bad) return bad;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 按服务端声明的 outputSchema 校验 structuredContent（**JSON Schema 子集**）。
+ *
+ * 支持关键字：`type`（string/number/integer/boolean/object/array/null，含联合类型数组）、
+ * `required`、`properties`、`items`（对象或元组形式）、`enum`。
+ *
+ * **不支持的关键字一律忽略（fail-open）**，为什么这是刻意设计：第三方的 outputSchema 会
+ * 大量用到我们不懂的关键字（`minLength` / `pattern` / `oneOf` / `$ref` / `format` …）。
+ * 为不懂的部分判失败 = 误报泛滥 = 校验结论被整体无视，比不校验更坏。宁可放过，不可错杀。
+ *
+ * 硬上限（超过即**跳过校验**，不是判失败）：schema 字节数 > MAX_INPUT_SCHEMA_BYTES
+ * （import 自 contextBudget.mjs，不在这里写第二个数字）、value 深度 > 32、访问节点 > 20000。
+ *
+ * **绝不抛异常**：内部错误（含循环引用的 schema/value）一律 try/catch 兜住。
+ * 校验是增益，不是前置条件。
+ *
+ * @param {unknown} schema 服务端声明的 outputSchema
+ * @param {unknown} value 工具返回的 structuredContent
+ * @returns {{ ok: true, skipped?: 'limit'|'error' } | { ok: false, path: string, reason: string }}
+ */
+export function validateStructuredOutput(schema, value) {
+  try {
+    // 空 schema / 非对象 schema：没有任何可判的约束 → 通过
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return { ok: true };
+    // 硬上限一：schema 体积（与定义侧字节闸同一份常量）
+    if (schemaByteSize(schema) > MAX_INPUT_SCHEMA_BYTES) return { ok: true, skipped: 'limit' };
+    // 硬上限二：value 深度
+    if (structuredValueDepth(value) > MAX_STRUCTURED_VALUE_DEPTH) return { ok: true, skipped: 'limit' };
+    const bad = walkStructured(schema, value, '$', { nodes: 0 });
+    if (bad && bad.skipped) return { ok: true, skipped: 'limit' }; // 硬上限三：访问节点
+    if (bad) return { ok: false, path: bad.path, reason: bad.reason };
+    return { ok: true };
+  } catch {
+    return { ok: true, skipped: 'error' };
+  }
+}
+
+/** 构造失配提示（超长截断到 STRUCTURED_NOTE_MAX_CHARS）。 */
+function buildStructuredNote(verdict) {
+  const where = `${verdict && verdict.path ? verdict.path : '$'}: ${verdict && verdict.reason ? verdict.reason : '未知原因'}`;
+  const note = `${STRUCTURED_NOTE_PREFIX}（${where}）。请以文本内容为准，不要依赖结构化字段。`;
+  return note.length <= STRUCTURED_NOTE_MAX_CHARS ? note : `${note.slice(0, STRUCTURED_NOTE_MAX_CHARS - 1)}…`;
+}
+
+/** content 里是否存在至少一个**非空** text 块（服务端按规范必须给的文本版）。 */
+function hasNonEmptyTextBlock(content) {
+  return Array.isArray(content)
+    && content.some((b) => b && b.type === 'text' && typeof b.text === 'string' && b.text.length > 0);
+}
+
+/**
+ * 结构化输出的结果侧策略（F-014 / A16c，裁决第三条路「校验走结构化，展示走文本」）。
+ *
+ * 行为（按优先级）：
+ *   ① 无 outputSchema / 无 structuredContent → 原样返回（**不改入参**）；
+ *   ② 有则按 outputSchema 校验；**不匹配** → 在 `content` 最前面插入一条 text 提示
+ *      （`[MJCode] 结构化输出未通过服务端声明的 outputSchema 校验（<path>: <reason>）。
+ *      请以文本内容为准，不要依赖结构化字段。`，≤300 字符）。content 非数组（不合规服务端）
+ *      时先把**原文包装成 text 块**再插 note —— 绝不把原文静默丢弃；
+ *   ③ **无论校验是否匹配**，只要 `content` 里存在至少一个非空 text 块，就从返回对象里
+ *      **删掉 structuredContent** —— 同一个数据模型让模型看两遍（文本版 + JSON 版）是纯
+ *      预算浪费，而文本版是服务端按规范必须给的。`content` 为空/没有 text 块时**保留**
+ *      structuredContent（fail-open 朝向可用性：宁可给模型看数据，也不让它什么都没有）。
+ *      **「有没有文本版」在插入 note 之前判定**：note 自身也是一个非空 text 块，若在插入
+ *      后判定，「无文本版」的结果会被我们自己的提示伪装成「有文本版」，进而剥掉
+ *      structuredContent —— 模型最终只剩一句「未通过校验」，眼前没有文本内容、也拿不到
+ *      任何数据，与 fail-open 朝向可用性正好相反；
+ *   ④ 保留 `isError` 等其余字段；返回浅拷贝。
+ *
+ * **绝不让策略把一次成功的工具调用变成失败**：任何一步出错 → 返回原 result。
+ *
+ * @param {object} result tools/call 的原始返回
+ * @param {unknown} outputSchema 服务端为该工具声明的 outputSchema（没有就不传/传假值）
+ * @returns {object} 新对象（或原引用；入参永不被修改）
+ */
+export function applyStructuredOutputPolicy(result, outputSchema) {
+  try {
+    if (!outputSchema || typeof outputSchema !== 'object') return result;
+    if (!result || typeof result !== 'object') return result;
+    if (result.structuredContent === undefined || result.structuredContent === null) return result;
+
+    const verdict = validateStructuredOutput(outputSchema, result.structuredContent);
+    // 「有没有文本版」必须在插 note **之前**判定：note 自己也是 text 块，若在插入后判定，
+    // 「无文本版」的结果会被我们自己的提示伪装成「有文本版」，进而剥掉 structuredContent ——
+    // 模型最终只剩一句「未通过校验」，眼前没有文本内容、也拿不到数据。这与 fail-open 朝向
+    // 可用性（宁可给模型看数据，也不让它什么都没有）正好相反。
+    const hasTextVersion = hasNonEmptyTextBlock(result.content);
+    const out = { ...result };
+    if (verdict.ok !== true) {
+      // content 非数组（不合规服务端）时先包装成 text 块，绝不丢弃原文：把原文直接替换成
+      // 「只有一条 note」会让模型连服务端给的文本都看不到。
+      const content = Array.isArray(out.content)
+        ? [...out.content]
+        : (out.content === undefined || out.content === null ? [] : [{ type: 'text', text: String(out.content) }]);
+      content.unshift({ type: 'text', text: buildStructuredNote(verdict) });
+      out.content = content;
+    }
+    if (hasTextVersion) delete out.structuredContent;
+    return out;
+  } catch {
+    return result; // 策略出错：原样返回，工具结果不受影响
+  }
+}

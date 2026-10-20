@@ -38,9 +38,9 @@ MJ Coder 是**只实现 tools profile 的 MCP 客户端**——只消费 `tools/
 **均不支持**，在协议要求作答处以 `-32601` 显式拒绝。**上述能力不得在文档、UI 文案与市场材料里被
 暗示为已实现。**
 
-结构化输出（`tools/call` 的 `outputSchema` / `structuredContent`）**同样尚未消费**。与上段不同，
-它落在 tools 规范**之内**而非 tools profile 之外，因此按**未修缺陷**跟踪，而不是声明为范围之外：
-依赖它的工具仍可调用，但其返回结果的结构化形态会被丢弃。
+结构化输出（`tools/call` 的 `outputSchema` / `structuredContent`）**已消费，但仅用于校验**：服务端声明了
+`outputSchema` 且返回了 `structuredContent` 时按该 schema 校验，不匹配时模型会在工具结果最前面收到提示（以
+文本内容为准）。结构化数据本身**不进上下文**；**程序化消费**（把结构化结果直接用于下游工具/表格）**仍未实现**。
 
 ### 沙箱能力按平台分档
 

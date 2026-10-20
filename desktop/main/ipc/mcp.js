@@ -46,6 +46,16 @@ function loadMcpNameCodec() {
   return _mcpNameCodecMod;
 }
 
+// F-014 / A16c（结构化输出消费）：结果侧策略模块（ESM）的模块级缓存动态 import —— 与上面
+// loadMcpNameCodec / intentMcpPrewarm.loadMcpToolDefs 同一写法：shared 是 ESM、本文件是 CJS，
+// 纯函数零 electron 依赖，首调后缓存。刻意**不在文件顶层 await**：那会让整个 ipc/mcp 域
+// （含全部 IPC 注册）的加载被一次动态 import 拖住。
+let _structuredOutputMod = null;
+function loadStructuredOutputPolicy() {
+  if (!_structuredOutputMod) _structuredOutputMod = import('../../shared/mcpToolDefs.mjs');
+  return _structuredOutputMod;
+}
+
 // 期 1：工具清单缓存（落 userData/mcp-tool-manifests.json，0600）。懒建——app 就绪后才可 getPath。
 let toolCache = null;
 function getToolCache() {
@@ -317,15 +327,37 @@ async function callMcpTool({ server, tool, arguments: args, approvalMode = 'on-r
     const realTool = mcp.resolveToolName(s, tool);
     // P1-8：走带会话恢复的 RPC（HTTP 会话 404 → 重新 initialize 后重试一次，H-4 要求）
     const result = await mcp.mcpRpcWithSessionRetry(s, 'tools/call', { name: realTool, arguments: args || {} });
+    // F-014 / A16c（结构化输出消费，用户裁决第三条路「校验走结构化，展示走文本」）：
+    //   结构化数据（structuredContent）此前会经 agent-core 的 truncateToolResult
+    //   （agent-core/index.js:1977 直接 JSON.stringify）**原样进模型上下文**，却没有任何一方
+    //   校验它是否符合服务端自己声明的 outputSchema。这里在结果出口统一过策略：
+    //     · 校验不匹配 → content 最前插入提示，模型以文本内容为准；
+    //     · 只要 content 有非空文本块就剥掉 structuredContent（同一数据看两遍是纯预算浪费，
+    //       文本版是服务端按规范必须给的）。
+    //   为什么接在**这里**：callMcpTool 是 tools/call 的唯一执行路径（IPC mcp:callTool 与
+    //   后续任何调度通道都经它），一处接线即全覆盖。
+    //   fail-open：取不到 outputSchema / 策略模块加载失败 / 策略内部出错，一律用原 result——
+    //   辅助逻辑绝不允许把一次成功的工具调用变成失败。
+    let finalResult = result;
+    try {
+      const toolDef = (Array.isArray(s.tools) ? s.tools : []).find((t) => t && t.name === realTool);
+      const outputSchema = toolDef ? toolDef.outputSchema : undefined;
+      if (outputSchema) {
+        const policy = await loadStructuredOutputPolicy();
+        finalResult = policy.applyStructuredOutputPolicy(result, outputSchema);
+      }
+    } catch (e) {
+      console.warn('[mcp] 结构化输出策略跳过（不影响工具结果）:', e && e.message);
+    }
     // H-4：结果必须二分——JSON-RPC `error`（协议错，走 catch）与 `result.isError:true`（工具**执行**失败）。
     // 后者是合法工具结果：原样回喂模型自纠（内容不动、不抛错、不改写成 error 字段——
     // 改写成 error 会被引擎的 isToolFailure 计入「重复失败熔断」，同参重试语义过重）。
-    const toolErr = !!(result && result.isError === true);
+    const toolErr = !!(finalResult && finalResult.isError === true);
     deps.audit(`mcp:${server}`, tool,
-      `${toolErr ? 'isError: 工具执行失败' : (result?.error ? `error: ${result.error}` : 'ok')} rule=${verdict.matched || 'none'}`,
+      `${toolErr ? 'isError: 工具执行失败' : (finalResult?.error ? `error: ${finalResult.error}` : 'ok')} rule=${verdict.matched || 'none'}`,
       verdict.need ? 'approved' : 'auto');
     noticeOk = !toolErr;
-    return toolErr ? { ...result, toolError: true } : result;
+    return toolErr ? { ...finalResult, toolError: true } : finalResult;
   } catch (err) {
     noticeError = err && err.message ? err.message : String(err);
     deps.audit(`mcp:${server}`, tool, `error: ${err.message}`, 'error');
