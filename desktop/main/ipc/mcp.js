@@ -36,6 +36,16 @@ const GOVERNANCE_PREF_KEY = 'mcp_governance';
 
 const mcpServers = { get: (n) => mcp.getMcpServer(n), names: () => mcp.listMcpServers() };
 
+// 第八轮 F-005 / B1-B-05：工具名编解码器（ESM，主进程经动态 import 加载，与
+// intentMcpPrewarm.loadMcpToolDefs 同一写法：纯函数、零 electron 依赖，首调后缓存）。
+// 用途：连接前先验证「本服务名产出的工具名能被唯一反解回该服务名」，
+// 避免一个拼不出可逆名字的服务被写入配置、之后每一次工具调用都打到错的服务上。
+let _mcpNameCodecMod = null;
+function loadMcpNameCodec() {
+  if (!_mcpNameCodecMod) _mcpNameCodecMod = import('../../shared/mcpNameCodec.mjs');
+  return _mcpNameCodecMod;
+}
+
 // 期 1：工具清单缓存（落 userData/mcp-tool-manifests.json，0600）。懒建——app 就绪后才可 getPath。
 let toolCache = null;
 function getToolCache() {
@@ -388,6 +398,24 @@ function register() {
       guard.assertStrings(payload, { name: 120, command: { max: 2000, optional: true }, url: { max: 2000, optional: true } });
     } catch (e) {
       return { ok: false, error: e.message };
+    }
+    // 第八轮 F-005 / B1-B-05：name 会成为工具名的一部分（`mcp__<name>__<tool>`），必须保证
+    // 拼出来的名字能被 agent-core **唯一反解**回这个 name。改前只校验长度 ≤120：
+    // name 含 `__` / 控制字符 / 非法 Unicode 时，拼名与反解不互逆 → 后续每次工具调用
+    // 都会静默路由到另一个服务（或被编码成 U+FFFD 而不可逆）。这里 fail-closed：
+    // 拒在连接前，而不是让一个「名字坏掉」的服务被写进 mcp-servers.json 后长期错路由。
+    try {
+      const codec = await loadMcpNameCodec();
+      const back = codec.decodeToolName(codec.buildToolName(payload.name, 'probe'));
+      if (!back || back.server !== payload.name || back.tool !== 'probe') {
+        return {
+          ok: false,
+          error: `服务名不可用作工具名前缀：「${payload.name}」经编码后无法被唯一反解回原名`
+            + '（可能含非法 Unicode 字符）；请改用字母/数字/连字符或中文等常规字符命名后重试',
+        };
+      }
+    } catch (e) {
+      return { ok: false, error: `服务名校验失败：${e && e.message ? e.message : String(e)}` };
     }
     const r = await connectMcpServer(payload);
     // P1-3：用户手动连上了，撤掉该服务可能存在的自动重连在途链（人工优先，不再自动覆盖）

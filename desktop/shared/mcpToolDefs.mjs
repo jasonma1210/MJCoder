@@ -36,6 +36,10 @@ import {
   truncateDescription,
 } from './contextBudget.mjs';
 import { detectPromptInjection } from './untrustedContent.mjs';
+// 第八轮 F-005 / B1-B-05：工具名**拼名**收敛到 codec（与 agent-core 的反解严格互逆）。
+// 改前这里是内联 `` `mcp__${s}__${t.name}` ``，而 agent-core 反解时把名字按 `__` 切分取服务名 ——
+// 二者不互逆，server 名含 `__` 时调用会静默打到另一个服务上。详见 shared/mcpNameCodec.mjs 文件头。
+import { buildToolName } from './mcpNameCodec.mjs';
 
 export { MAX_TOOL_DESCRIPTION_CHARS, MAX_INPUT_SCHEMA_BYTES, MAX_INPUT_SCHEMA_DEPTH };
 
@@ -101,7 +105,8 @@ export function toToolDefs(server, tools) {
       const def = {
         type: 'function',
         function: {
-          name: `mcp__${s}__${t.name}`,
+          // F-005：唯一拼名入口（server 段编码后不含 `_`，反解无歧义）；不在此手写模板字符串
+          name: buildToolName(s, t.name),
           description,
           parameters: t.inputSchema || { type: 'object', properties: {} },
         },

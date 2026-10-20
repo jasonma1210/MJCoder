@@ -23,6 +23,9 @@ import Composer from './Composer'; // T2-2：输入区拆分
 import WorktreeBar from './WorktreeBar';
 import ToolTrace, { ToolTraceGroup } from './tools/ToolTrace'; // T1-1/T1-2：语义化工具轨迹 + 轮次折叠分组
 import { useVoice } from '../hooks/useVoice';
+// F-005：MCP 工具名 → 服务名的反解。与 agent-core / mcpToolDefs 共用 shared/mcpNameCodec.mjs
+//（零 Node 内置依赖，渲染层可直接静态 import；与 lib/mcpTools.js 引 shared/mcpToolDefs.mjs 同一模式）
+import { decodeToolName } from '../../../shared/mcpNameCodec.mjs';
 import { IconArrowUp, IconBot, IconCopy, IconCpu, IconFile, IconFolder, IconGitBranch, IconHammer, IconMic, IconPlus, IconPlug, IconRefresh, IconSearch, IconSpinner, IconSquare, IconWrench, IconX, IconZap } from './icons';
 
 
@@ -458,7 +461,10 @@ export default function ChatArea({
     // 附件 chips：图片 hover 预览 / 文档点击 → onOpenFile（右栏预览，App.openFileInPane）
     attachments, onRemoveAttachment: (path) => setAttachments((a) => a.filter((x) => x.path !== path)),
     onOpenAttachment: onOpenFile,
-    connectedServers: [...new Set((mcpTools || []).map((t) => String(t.function?.name || '').split('__')[1]).filter(Boolean))],
+    // F-005：服务名从工具名反解（shared/mcpNameCodec.mjs，与 agent-core 同一份实现）。
+    // 改前按 `__` 裸切：服务名含 `__`/空格/中文时得到 `my` 或 `my%5F%5Fsvc` 这类**不存在的服务名**，
+    // UI 上就显示成一个用户没配置过的服务。反解与拼名同源 → 显示名永远等于真实服务名。
+    connectedServers: [...new Set((mcpTools || []).map((t) => decodeToolName(t?.function?.name)?.server).filter(Boolean))],
   };
 
   // 欢迎页

@@ -1450,6 +1450,13 @@ import {
   wrapUntrusted,
 } from '../shared/untrustedContent.mjs';
 
+// 第八轮 F-005 / B1-B-05：MCP 工具名的**反解**与拼名必须严格互逆。
+// 改前此处把工具名按 `__` 做 split → 取第 2 段当 server、其余拼回当 tool，
+// 与拼名 `` `mcp__${server}__${tool}` `` 并非逆函数：server=`my__svc`、tool=`x` 时
+// `mcp__my__svc__x` 被解成 server=`my` / tool=`svc__x` —— 工具调用被**静默路由到另一个服务**。
+// 现在唯一编解码实现来自 shared/mcpNameCodec.mjs（服务名片段编码后不含 `_`，分隔符唯一）。
+import { decodeToolName } from '../shared/mcpNameCodec.mjs';
+
 // P2-8 / V-L1（N1/N3）：工具执行事实台账的构造器与规则引擎——与 shared/untrustedContent.mjs
 // 同一「跨宿主共享单一事实来源」模式：桌面端/CLI/eval 都从这里取同一份判定与同一种记录形状。
 // verifier.js 零依赖（不 import 任何 node: 内建），可安全被渲染层打包。
@@ -3360,8 +3367,20 @@ export async function runAgent({
           }
           default: {
             if (tc.function.name.startsWith('mcp__')) {
-              const parts = tc.function.name.split('__');
-              const server = parts[1], toolName = parts.slice(2).join('__');
+              // F-005：反解改走 codec（与拼名同一事实来源）。旧实现把工具名按 `__` 切分后
+              // 取第 2 段当 server，对含 `__` 的服务名必然解错（例：`mcp__my__svc__x` 被解成
+              // server=`my` / tool=`svc__x`），且静默继续 —— 工具明明存在却说「未连接」或打到别的服务上。
+              // 解不出（null）必须**显式失败**：宁可让模型看到一条带原始工具名的错误，
+              // 也不能拿错误的 server/tool 继续往下走。
+              const parsed = decodeToolName(tc.function.name);
+              if (!parsed) {
+                throw new Error(
+                  `MCP 工具名无法反解：${tc.function.name}`
+                  + '（期望形状 mcp__<编码后的服务名>__<工具名>；'
+                  + '服务名含非法字符/未按 shared/mcpNameCodec.mjs 编码时会出现此错误）',
+                );
+              }
+              const { server, tool: toolName } = parsed;
               const mcpChannel = resolveChannel(toolHandlers, 'mcpCallTool');
               if (!mcpChannel) throw new Error(`MCP 调用通道不可用（server=${server}）`);
               toolResult = await mcpChannel({ server, tool: toolName, arguments: args, approvalMode, conversationId: conversationId || '' });

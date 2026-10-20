@@ -114,6 +114,15 @@ function withTimeout(promise, ms) {
 //   · 只连用户**已保存**的连接器（本模块不新建任何 MCP 服务）；已在本轮 mcpTools 中的服务不重复连；
 //   · fail-open——任一连接失败/超时都只告警，绝不影响本轮运行（工具缺失可经 connect-on-demand 后续补上）；
 //   · 有界并发 + 单服务超时，保证本轮启动不被 MCP 冷启动拖住。
+
+// F-005（第八轮）：工具名 ↔ 服务名的反解与拼名共用 shared/mcpNameCodec.mjs（主进程 CJS 经动态
+// import 加载，与 intentMcpPrewarm.loadMcpToolDefs 同一写法：纯函数、零 electron 依赖，首调后缓存）。
+let _mcpNameCodecMod = null;
+function loadMcpNameCodec() {
+  if (!_mcpNameCodecMod) _mcpNameCodecMod = import('../shared/mcpNameCodec.mjs');
+  return _mcpNameCodecMod;
+}
+
 async function intentPrewarmToolDefs(payload) {
   const md = deps && deps.mcpDynamic;
   if (!md || typeof md.reconnectSaved !== 'function' || typeof md.loadConfig !== 'function') return [];
@@ -136,8 +145,13 @@ async function intentPrewarmToolDefs(payload) {
   governanceStats.incr('intentPrewarm', 'runs');
   governanceStats.incr('intentPrewarm', 'capabilities', plan.capabilities.length);
   // 已在本轮 mcpTools 中的服务（渲染层已重建）无需重复连接——只补「有意图但未连接」的落差。
-  const already = new Set((payload.mcpTools || [])
-    .map((t) => String((t && t.function && t.function.name) || '').split('__')[1])
+  // F-005：服务名必须从工具名**反解**（shared/mcpNameCodec.mjs），不能按 `__` 裸切。
+  //   裸切后果（改前）：服务名含 `__`/空格/中文时得到 `my` / `my%5F%5Fsvc` 这类**非法服务名**，
+  //   `already` 永远匹配不上 plan.servers 里的真实名字 → 每次命中意图都重复发起连接
+  //   （多一次握手，并可能重复建会话）。反解与拼名同源，才是唯一正确的还原方式。
+  const { decodeToolName } = await loadMcpNameCodec();
+  const already = new Set((Array.isArray(payload.mcpTools) ? payload.mcpTools : [])
+    .map((t) => decodeToolName(t && t.function && t.function.name)?.server)
     .filter(Boolean));
   const targets = plan.servers.filter((n) => !already.has(n));
   // 命中的连接器已全部在场 → 本轮无需新连（与「没有匹配的连接器」不同，单独计数）。
@@ -657,4 +671,7 @@ module.exports = {
   // 无人值守/编排快照用：取「发起该 run 时用户选的档」，run 结束后返回 null（调用方回落设置）
   getApprovalModeFor: (runId) => runApprovalModes.get(runId) || null,
   startAgentRunWhenReady,
+  // F-005 测试接缝：意图预热的「已在本轮 mcpTools 中的服务不重复连」判定需要被直接驱动
+  //（真实链路要跑完整 run 才能到达）。只暴露纯读函数，不改任何行为。
+  intentPrewarmToolDefs,
 };
