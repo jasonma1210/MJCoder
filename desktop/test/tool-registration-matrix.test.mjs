@@ -82,10 +82,12 @@ const MUST_ADVERTISE = ['shell', 'read_file', 'write_file', 'edit_file', 'apply_
 const TL = approval.TOOL_LEVEL;                       // 显式登记的「工具 → 默认分级」
 const RO = approval.READONLY_TOOLS;                   // 只读工具（任何档位不询问）
 const SP = approval.SPECIAL_CASED_TOOLS;              // toolLevel 在兜底前按工具名特判的工具
-// 既在 TOOL_LEVEL 又有特判分支的工具：TOOL_LEVEL 条目**对 toolLevel 不可达**（分支先 return）。
-// 这是刻意保留的「默认分级表可读性」冗余（见 approval.js 注释），不是漏登记。
-// 钉成常量而不是动态推导：新增重叠必须显式改这里并交代理由，防止冗余悄悄扩散。
-const SHADOWED = ['code_exec', 'latex_compile', 'shell'];
+// B2-B-14 交接项（本轮）：原先这里有一个 SHADOWED 白名单，钉住 3 条
+// 「TOOL_LEVEL 里有、但被特判遮蔽（对 toolLevel 不可达）」的条目：shell / code_exec / latex_compile。
+// 那种「登记了却不可达」的冗余本身就是缺陷：改表不生效、排查时先怀疑表、读者无法判断谁在生效。
+// 本轮已把这 3 条彻底移出 TOOL_LEVEL（判据改记在 approval.js 的注释块里），
+// 于是**白名单不再需要**，门禁也从严为「交集必须为空」——不允许任何新的遮蔽条目出现。
+// 详见下方 ⑤反 断言：TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅。
 // TOOL_LEVEL 中「非模型工具」的合法登记（UI/IPC 驱动，模型不可直接调用，故不在 53 个驱动集里）。
 //   · chrome_connect：扩展侧连接授权（IPC，非模型工具）
 //   · unconfined_exec：沙箱不可用时 exec.js 的**内部**审批通道名，非模型工具
@@ -156,10 +158,9 @@ for (const t of ALL_TOOLS) {
   if (CWD.has(t)) regs.push('cwd');
   if (APPR.has(t)) regs.push('approval');
   const okReg = true;
-  // ⑤ 审批分级（本轮核心）：不得依赖 `|| 'L2'` 兜底
+  // ⑤ 审批分级（本轮核心）：不得依赖 `|| 'L2'` 兜底，且必须**恰居其一**
   const cov = levelCoverage(t);
-  const shadowed = SHADOWED.includes(t);
-  const okLevel = cov.covered && (shadowed ? cov.hits.length === 2 : cov.exactlyOne);
+  const okLevel = cov.covered && cov.exactlyOne;
   // ⑥ BASE_PROMPT 承诺（仅 MUST_ADVERTISE 成员有义务）
   const needPrompt = MUST_ADVERTISE.includes(t);
   const okPrompt = !needPrompt || PROMPT.includes(t);
@@ -179,8 +180,7 @@ for (const t of ALL_TOOLS) {
 // 这条与第 1 节的 ⑤ 列重复计数是**刻意**的：它是本卡的核心风险面，必须能单独被数出来。
 for (const t of ALL_TOOLS) {
   const cov = levelCoverage(t);
-  const shadowed = SHADOWED.includes(t);
-  const ok = cov.covered && (shadowed ? cov.hits.length === 2 : cov.exactlyOne);
+  const ok = cov.covered && cov.exactlyOne;
   checkQuiet(`⑤ ${t}：审批分级不依赖 || 'L2' 兜底（显式登记 / 特判 / 只读，恰居其一）`, ok,
     cov.covered ? `命中 ${cov.hits.join('+')}（${cov.hits.length} 个，应为 1）` : '三处均未登记 → 级别由兜底 L2 提供');
 }
@@ -238,13 +238,15 @@ console.log('');
     uncovered.length ? `未登记：${uncovered.join(', ')}` : `${ALL_TOOLS.length} 个工具全部有显式依据`);
 
   // ⑤-b 聚合：三处恰居其一（防「两处都登记」导致读者无法判断谁生效）
-  const multi = ALL_TOOLS.filter((t) => !SHADOWED.includes(t) && levelCoverage(t).hits.length > 1);
-  check('⑤ 审批分级：同一工具在 TOOL_LEVEL / 特判 / 只读中恰居其一（除已固定化的 SHADOWED 冗余）',
+  // 加严（B2-B-14）：本轮起**不再有任何豁免名单**——SHADOWED 白名单已随 3 条死条目一并移除，
+  // 因此 53 个工具逐一都必须是单点登记。任何「两处都登记」即红，不再区分是否为「历史冗余」。
+  const multi = ALL_TOOLS.filter((t) => levelCoverage(t).hits.length > 1);
+  check('⑤ 审批分级：同一工具在 TOOL_LEVEL / 特判 / 只读中恰居其一（零豁免名单）',
     multi.length === 0,
-    multi.length ? `多处登记：${multi.map((t) => `${t}(${levelCoverage(t).hits.join('+')})`).join(', ')}` : `非 SHADOWED 工具均为单点登记`);
+    multi.length ? `多处登记：${multi.map((t) => `${t}(${levelCoverage(t).hits.join('+')})`).join(', ')}` : `${ALL_TOOLS.length} 个工具均为单点登记`);
 
   // ⑤-c 聚合：显式登记的级别必须就是**生效**级别（防「登记了 A 档、实际走 B 档」的假登记）
-  const registeredInTable = ALL_TOOLS.filter((t) => hasOwn(TL, t) && !SHADOWED.includes(t) && !SP.has(t));
+  const registeredInTable = ALL_TOOLS.filter((t) => hasOwn(TL, t) && !SP.has(t));
   const mismatch = registeredInTable.filter((t) => approval.toolLevel(t, {}) !== TL[t]);
   check('⑤ 审批分级：TOOL_LEVEL 登记值 === toolLevel() 实际生效值（登记即生效，无架空）',
     mismatch.length === 0,
@@ -300,12 +302,23 @@ console.log('');
   check('⑤反 READONLY_TOOLS：成员必须都是真实模型工具', roNotInTools.length === 0,
     roNotInTools.length ? `幻影：${roNotInTools.join(', ')}` : `${RO.size} 个只读工具全部真实`);
 
-  // SHADOWED 钉死：这 3 个必须仍然「两处登记」（TOOL_LEVEL 条目不可达但保留可读性）。
-  // 有人把条目删掉 → 本断言红（需同步改 SHADOWED 常量与注释，避免冗余无声消失或扩散）。
-  const shadowActual = ALL_TOOLS.filter((t) => hasOwn(TL, t) && SP.has(t)).sort();
-  check('⑤反 SHADOWED 冗余集合固定为 code_exec / latex_compile / shell（新增重叠必须显式交代）',
-    JSON.stringify(shadowActual) === JSON.stringify([...SHADOWED].sort()),
-    `实际：${shadowActual.join(', ')}`);
+  // ⑤反 遮蔽条目：TOOL_LEVEL 的 key 集合与 SPECIAL_CASED_TOOLS **必须完全不相交**。
+  //
+  // 这条取代了上一版「SHADOWED 钉死」的断言，方向反过来：
+  //   旧版（已废）：允许 shell / code_exec / latex_compile 三处「两处都登记」，只要白名单固定即可。
+  //   新版（本断言）：**一个都不允许**。原因——TOOL_LEVEL 条目的唯一用途就是让 toolLevel()
+  //     末行 `TOOL_LEVEL[tool] || 'L2'` 读到它。一旦某工具被特判分支提前 return，该条目就永远
+  //     读不到，它不是「文档」而是**误导**：读者会以为改表能改分级，实际改了不生效；
+  //     排查分级问题时也会先去怀疑一张其实无关的表。判据信息改由 approval.js 的注释块承担
+  //     （注释不会被误认为可执行配置）。
+  // 反过来也守：这条同时防止「有人把某工具从 TOOL_LEVEL 删掉、却没在 toolLevel() 里补特判」——
+  // 那种情况下它会掉进 SPECIAL_CASED_TOOLS 缺失 + TOOL_LEVEL 缺失 = 上方 53 条「恰居其一」直接红。
+  const shadowedEntries = Object.keys(TL).filter((k) => SP.has(k)).sort();
+  check('⑤反 TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅（禁止「登记了却被特判遮蔽」的不可达条目）',
+    shadowedEntries.length === 0,
+    shadowedEntries.length
+      ? `不可达条目：${shadowedEntries.map((k) => `${k}(${TL[k]})`).join(', ')} —— 请从 TOOL_LEVEL 删除，判据写进注释块`
+      : `TOOL_LEVEL=${Object.keys(TL).length} 条 / SPECIAL=${SP.size} 条，交集为空`);
 }
 
 // ── 5. 自检（防「恒绿」假闸）──

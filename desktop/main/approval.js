@@ -207,8 +207,17 @@ const NON_REMEMBERABLE = new Set(['unconfined_exec', 'scheduled_create', 'comput
 const isRememberable = (tool) => !NON_REMEMBERABLE.has(tool);
 
 // 工具 → 默认分级
+// ── 以下 3 个工具**不走本表**，分级由 toolLevel() 特判分支决定 ──────────────────────
+// 它们曾以「文档性条目」留在本表，但对 toolLevel() **不可达**：特判分支在末行 `|| 'L2'`
+// 之前就 return，表里的值永远不会被读到 → 只制造「登记了以为生效」的错觉（改表不生效）。
+// 门禁 test/tool-registration-matrix.test.mjs 断言 TOOL_LEVEL ∩ SPECIAL_CASED_TOOLS === ∅。
+//   · shell         由 DANGEROUS_PATTERNS 判定：命中危险模式 L1（才实际询问，见 needsApproval），否则 null
+//   · code_exec     由 isDangerousCode 判定：危险代码 L1，否则 L3
+//                   T4-7：普通代码 L3（可规则豁免，代码全文进审批卡摘要）；危险代码（child_process /
+//                   危险 shell 命令内嵌）L1，恒逐次确认不可豁免——与 shell 危险命令同纪律
+//   · latex_compile 由 args.probeOnly 判定：探测 null（不进审批面），否则 L2
+//                   G-latex：实际编译产出**本机 PDF 文件**，对齐「文件写类」；probeOnly 不写文件
 const TOOL_LEVEL = {
-  shell: 'L1', // 命中危险模式才实际询问（见 needsApproval）
   git_commit: 'L2', git_add: 'L2', apply_patch: 'L2',
   write_file: 'L2', edit_file: 'L2',
   mcp__: 'L3',
@@ -231,10 +240,7 @@ const TOOL_LEVEL = {
   chrome_connect: 'L3',
   chrome_tabs: 'L3', chrome_navigate: 'L3', chrome_screenshot: 'L3', chrome_extract: 'L3',
   chrome_click: 'L3', chrome_fill: 'L3',
-  // T4-7 Code Mode：普通代码 L3（可规则豁免，代码全文进审批卡摘要）；
-  // 命中危险模式（child_process / 危险 shell 命令内嵌）的代码由 toolLevel 特判为 L1，
-  // 恒逐次确认且不可豁免——与 shell 危险命令同纪律，宁可多问不可漏问。
-  code_exec: 'L3',
+  // T4-7 Code Mode：见上方「不走本表」块（code_exec 分级由 toolLevel 特判 isDangerousCode 决定）
   // V03（2026-10-16）：受限沙箱不可用时的单次非沙箱执行审批（显式逃生口，非隔离能力）。
   // L1：任何档位、任何规则都不可豁免；该审批只取 'once' 决策，从不进入 always/conversation 规则库。
   unconfined_exec: 'L1',
@@ -260,9 +266,7 @@ const TOOL_LEVEL = {
   // （auto-safe 档下自动放行，on-request/always 逐次确认；写路径白名单外的目标另由
   //  main/docTools.js 的写闸强制弹一次且不落地规则，与本表的分级正交）。
   doc_create: 'L2', xlsx_create: 'L2', pptx_create: 'L2', pdf_generate: 'L2',
-  // G-latex：LaTeX 编译产出的是**本机 PDF 文件**，分级对齐「文件写类」→ L2。
-  // probeOnly 体检模式不写文件、无副作用，由 toolLevel 特判为不进审批面（null）。
-  latex_compile: 'L2',
+  // G-latex：见上方「不走本表」块（latex_compile 分级由 toolLevel 特判 args.probeOnly 决定）
   // G-CUA：模型侧桌面自动化顶层调用（computer_use）——启动一整段 GUI 任务、可执行任意多步
   // 点击/输入/按键（含支付/删除/发送类真实副作用），判 L1：任何审批档都逐次弹卡。
   // 与 unconfined_exec 同纪律：L1 硬地板不可经规则豁免，且（见 NON_REMEMBERABLE）不落规则库；
@@ -287,12 +291,6 @@ const TOOL_LEVEL = {
   spawn_subagent: 'L2', // 间接执行：子代理只用只读工具集，但消耗预算且可多轮循环 → 保留 L2 而非 null
   orchestrate_task: 'L2', // 间接执行：Worker 池内每次工具调用另有独立审批，本层不重复拦截；
   //   TODO(B2)：复核是否应按「最危险可达子工具」升到 L3 —— 升档会改 on-request 弹卡频率，本轮不做
-  // ⚠ 本表另有 3 条**被特判遮蔽（shadowed）、对 toolLevel() 不可达**的条目：
-  //   shell / code_exec / latex_compile —— 它们的特判分支在 `|| 'L2'` 之前就 return 了，
-  //   故这三行的值**永远不会被读到**，保留仅为让「默认分级表」可读（文档性条目，删了反而丢信息）。
-  //   实际分级由特判决定，不看本行：shell → DANGEROUS_PATTERNS 命中与否（命中 L1 / 否则 null）；
-  //   code_exec → isDangerousCode（危险 L1 / 否则 L3）；latex_compile → args.probeOnly（探测 null / 否则 L2）。
-  //   门禁用硬编码 SHADOWED 白名单把这 3 个钉死（新增重叠即红），避免「登记了以为生效」的错觉。
 };
 
 // 只读工具：任何档位都不询问

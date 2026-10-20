@@ -1,0 +1,365 @@
+{
+  "schemaVersion": 1,
+  "generator": "desktop/scripts/gen-legacy-ledger.mjs",
+  "note": "生成式台账：只记「分组 + 计数 + 处置状态」，不枚举明细。任何计数变化（增或减）都必须同步本文件并说明处置，由 test/legacy-ledger.test.mjs 强制。",
+  "metrics": {
+    "deadBridgeMethods": {
+      "source": "desktop/main/preload.js − desktop/renderer/src（口径同 test/bridge-parity.test.mjs）",
+      "unit": "method",
+      "total": 202,
+      "referenced": 156,
+      "dead": 46,
+      "ratio": 0.2277,
+      "groups": [
+        {
+          "prefix": "market",
+          "count": 9,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "collab",
+          "count": 7,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "cua",
+          "count": 5,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "git",
+          "count": 4,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "on",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "tasks",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "ecosystem",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "mcp",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "apply",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "diag",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "edit",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "get",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "governance",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "grep",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "list",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "resolve",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "server",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "web",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "write",
+          "count": 1,
+          "disposition": "pending"
+        }
+      ]
+    },
+    "rawButtons": {
+      "source": "desktop/renderer/src（排除 components/ui/ 与 styles/，口径同 test/ui-conventions.test.js）",
+      "unit": "button",
+      "total": 258,
+      "scannedFiles": 108,
+      "groups": [
+        {
+          "file": "components/Onboarding.jsx",
+          "count": 31,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/Composer.tsx",
+          "count": 20,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/settings/ModelsTab.tsx",
+          "count": 16,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/DiffReviewPanel.jsx",
+          "count": 13,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/MessageStream.tsx",
+          "count": 12,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ThreadList.jsx",
+          "count": 12,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ScheduledTasks.jsx",
+          "count": 11,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/MarketModal.jsx",
+          "count": 10,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/PlusMenu.jsx",
+          "count": 10,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/EcosystemModal.jsx",
+          "count": 8,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/FilePreview.jsx",
+          "count": 8,
+          "disposition": "pending"
+        },
+        {
+          "file": "App.jsx",
+          "count": 7,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/AgentDock.jsx",
+          "count": 6,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ModelSelector.jsx",
+          "count": 6,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/TeamSpace.jsx",
+          "count": 6,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/tools/ToolTrace.tsx",
+          "count": 6,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/LocalMcpSection.tsx",
+          "count": 5,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/RightPane.jsx",
+          "count": 5,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/SettingsModal.jsx",
+          "count": 5,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/BrowserPanel.tsx",
+          "count": 4,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ArchiveModal.jsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/CreateProjectForm.jsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/CustomConnectorForm.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/FileViewerPane.jsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/HooksSection.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/MemorySection.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/RecordReplayPanel.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/SideChatPanel.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/WelcomePage.tsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/WorktreeBar.jsx",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ConnectorConfigDialog.tsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ErrorBoundary.jsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/feedback.jsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/FilesPanel.tsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ProjectPicker.jsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/settings/NetworkTab.tsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/Sidebar.jsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/WindowsSandboxSetup.tsx",
+          "count": 2,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ApprovalCard.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/CommandPalette.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ContextMenu.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/ContextRing.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/FileTree.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/InlineAlert.jsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/LocalSkillsSection.tsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/settings/shared.tsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/TerminalPanel.tsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/tools/SubtaskTree.tsx",
+          "count": 1,
+          "disposition": "pending"
+        },
+        {
+          "file": "components/UpdateSection.tsx",
+          "count": 1,
+          "disposition": "pending"
+        }
+      ]
+    }
+  }
+}
