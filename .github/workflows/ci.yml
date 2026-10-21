@@ -5,6 +5,10 @@ on:
     branches: [main, develop]
     tags: ['v*']
   pull_request:
+  # 2026-10-21：补手动触发入口。此前本工作流只能靠 push/PR 触发，
+  # 而仓库历史上有过「push 已成功但 Actions 未产生运行记录」的窗口（L-1 的不可验证项），
+  # 没有 workflow_dispatch 就无法在不制造空提交的前提下重跑或诊断。
+  workflow_dispatch:
 
 jobs:
   verify:
