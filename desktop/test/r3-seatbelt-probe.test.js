@@ -18,7 +18,7 @@ function check(name, ok, detail = '') {
   check('探测返回结构完整', typeof p1.ok === 'boolean' && typeof p1.reason === 'string');
   if (!p1.ok) {
     check('嵌套沙箱环境：诚实上报 ok=false', p1.ok === false);
-    check('原因可行动（指明嵌套沙箱/不可用缘由）', /嵌套沙箱|不存在|探测失败/.test(p1.reason), p1.reason.slice(0, 120));
+    check('原因可行动（指明嵌套沙箱/不可用缘由）', /嵌套沙箱|不存在|探测失败|非 darwin|平台/.test(p1.reason), p1.reason.slice(0, 120));
   } else {
     check('非嵌套环境：Seatbelt 真实可用', p1.ok === true);
   }

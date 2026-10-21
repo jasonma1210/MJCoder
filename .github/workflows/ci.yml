@@ -86,6 +86,15 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      # ── 渲染层依赖必须先装：Desktop tests 里有 11 个套件会 require
+      #    `renderer/node_modules/{esbuild,typescript}`（smoke-load / render-smoke /
+      #    props-contract / undef-ident / thread-models …）。
+      #    2026-10-21 首次真实 CI 运行暴露的**顺序缺陷**：原先 renderer 的 npm ci 放在
+      #    Desktop tests **之后**，导致这 11 个套件在干净 runner 上必然 MODULE_NOT_FOUND。
+      - name: Renderer install (desktop tests import renderer deps)
+        working-directory: desktop/renderer
+        run: npm ci
+
       # ── 桌面端：静态检查门禁（P1-6 新增；第六轮 N2 收紧）──
       # ESLint：0 error 硬门禁 + warning 棘轮（--max-warnings=161 = 2026-10-19 实测基线，只降不升）。
       # 原为 --max-warnings=9999（等于只 gate error，warning 无感）；现新增 warning 即红，
@@ -98,11 +107,10 @@ jobs:
         working-directory: desktop
         run: npm test
 
-      # ── 渲染层：类型门禁 + 构建 ──
+      # ── 渲染层：类型门禁 + 构建（依赖已在 Desktop tests 之前安装）──
       - name: Renderer typecheck & build
         working-directory: desktop/renderer
         run: |
-          npm ci
           npm run typecheck
           npm run build
 
