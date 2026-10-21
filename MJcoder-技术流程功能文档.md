@@ -1225,7 +1225,7 @@ flowchart TB
 | TL-1 | 编排形态（orchestrator-worker，非 swarm / 非部门流水线） | **已完成**（本轮判定「做得最正确的一处架构决策」） | `ipc/teams.js` 的 `teams:dispatch` → `orchestrator.planGoal` → `workerPool.runGroup`；团队语义全部落 `dag_json`，`planWaves` 钩子零侵入。报告 §0 正面结论 2 |
 | TL-2 | 编制持久化（`teams` / `team_members`）+ 消息总线（`team_messages`） | **已完成（已入库）** | `teamStore.js` 实现完整（枚举 fail-closed 归一 + G4 体积闸）；v8–v12 五个迁移已随提交 `9de20ca` 入库，`MIGRATIONS` 长度 = **12** ⇒ 冷检出即可建表（原 `C-01` 闭合） |
 | TL-3 | 消息总线的双向性 | **已完成**（D-810 写 + B-04 读，第八轮收口） | `MESSAGE_KINDS` 6 / `MODEL_MESSAGE_KINDS` 5，G4 体积闸 fail-closed。**写半边（D-810）**：`payload` 必须是可序列化普通对象且 ≤4 层、`refs` ≤20 条且每条 ≤512 字符，形状不对直接拒、零总线写入。**读半边（B-04）**：新增 `team_read_messages` —— 作用域恒为本团队本次 run（模型传 runId/teamId 无效）、归档团队可读（只读语义）、默认取最近 N 条 + `afterSeq` 增量读、payload 正文不回传只给 `hasPayload` 与键名。两端取舍刻意不同：读取端 `normalizeTeamMessage` 对历史脏数据保持容忍（新数据不放过、老数据不丢）。守护测试 `team-tools.test.mjs` 已增至 85 条：D-810 写入段 11 条（含「更严≠全拒」正样本）+ B-04 读取段 21 条（越界 / 尾部语义 / 增量 / kind 过滤 / payload 不回传 / 归档可读 / 四处登记） |
-| TL-4 | 波次调度与探活撤员 | **已完成** | `teamWaves.js` / `waveEngine.js`；`MAX_ACTIVE_MEMBERS=10` / `MAX_PER_TYPE_IN_RUN=2` / `MAX_WAVES=3` / `WAVE_PROBE_INTERVAL_MS=5000` × `WAVE_PROBE_MAX_MISSES=3` |
+| TL-4 | 波次调度与探活撤员 | **已完成（含端到端覆盖）** | `teamWaves.js` / `waveEngine.js`；`MAX_ACTIVE_MEMBERS=10` / `MAX_PER_TYPE_IN_RUN=2` / `MAX_WAVES=3` / `WAVE_PROBE_INTERVAL_MS=5000` × `WAVE_PROBE_MAX_MISSES=3` / `WAVE_PROBE_IDLE_MS=120000`。撤员链（采样→判停滞→挑备用→记意图→收尾消费）有**端到端**覆盖：引擎支持注入时钟与 `autoTimer:false`，测试手动 `probeOnce()` 推进，不必真等 2 分钟；并断言 `consumeStall` 在 `runWorkerTask` 内早于失败分支 |
 | TL-5 | 三主体中断矩阵 | **部分** | `teamInterrupt.checkInterruptPermit` 逻辑完整；但生产唯一入口 `main.js` 硬编码 `actorKind:'user'` ⇒ lead / member 两分支不可达，`reason` / `confirmed` 成为惰性参数（`B-07`） |
 | TL-6 | 成员运行时配置（`model` / `toolNames` / `systemPrompt` / `approvalMode` / `sandboxPolicy` / `skillNames`） | **已完成**（第八轮 D-808 收口） | `snapshotRoster` 存六项 → `workerPool` 的 `runOpts` 装配末尾调 `applyMemberRuntimeConfig` → `rolePresetApply.js`（唯一事实来源，主会话与 Worker 共用）。人格走引擎 `guardUntrusted`，工具集走交集裁剪 + 空交集 fail-closed，治理档**只取更严**。守护测试 `member-runtime-config.test.js`（12 条，直接断言引擎收到的 runOpts） |
 | TL-7 | G2 三键预算（`max_rounds` / `max_tokens` / `max_wall_ms`）落到运行期 | **已完成**（第八轮 D-809 收口） | 预算随 `planWaves` 的 `runMeta.budget` 落进 `dag_json`（编排器不解释、只透传），`workerPool` 由 `main/groupBudget.js` 强制：`max_rounds` → 引擎 `maxRounds`（替换硬编码 20）、`max_wall_ms` → 每个在途任务的超时**夹到剩余额度**、`max_tokens` → 起新任务前结算、越界即把未开始任务**确定性置 skipped** 并写明原因。守护测试 `group-budget.test.js`（14 条） |
@@ -1262,10 +1262,10 @@ flowchart TB
 
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
-| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 252 个测试文件 + 2 smoke = 254 suite + 5 GATES = **259** 检查项；实测 **EXIT=0 / 259 全绿 / 0 红**（报告 §1.3、§8.1） |
+| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 254 个测试文件 + 2 smoke = 256 suite + 5 GATES = **261** 检查项；实测 **EXIT=0 · 通过 258 · 失败 0 · 跳过 3**（跳过项见 GL-4，不再计入通过） |
 | GL-2 | 前置外部门禁 `GATES` | **已完成** | **5 项**：`eval:check` / `doc-fact-check` / `harness-r7:check` / `i18n-scan` / `i18n-modcheck` |
 | GL-3 | i18n 扫描进入门禁 | **已完成**（第八轮 D-807② 收口） | 两条同时接入：`i18n-scan` 扫 `renderer/src`（注释剥离后的裸中文，当前 0 残留）、`i18n-modcheck` 查 42 个语言包模块的中英键集与 `{var}` 插值一致性。两条都**自证会红**（无参 exit 2、有残留或缺键 exit 1），并有变异验证：裸中文必红、**只出现在注释里的中文必绿**、不存在的模块必红 |
-| GL-4 | 汇总口径把「跳过」计入「通过」 | **已知偏差（P3）** | 汇总公式未减 skipped；darwin 本机 3 个沙箱套件未真跑却计绿（`C-04`） |
+| GL-4 | 汇总口径把「跳过」计入「通过」 | **已完成**（第八轮 C-04 收口） | 汇总改为三数齐全：`通过 = 总计 − 失败 − 仅跳过`，口径落在 `test/helpers/summary.mjs` 纯函数。跳过**不影响退出码**（平台限制不是缺陷），但已从「通过」里扣出；一项目既失败又跳过只计失败（否则等式会破）。守护 18 条，含「旧公式已删除」反向断言 |
 | GL-5 | lint 警告棘轮 | **已完成** | 阈值 161，配套棘轮守护单元测试，不得反弹 |
 | GL-6 | 行数软档白名单「只减不增」 | **已完成（张力已缓解）** | `BASELINE_800` 保持 3 条不变；`ipc/teams.js` 由 799 → **783 行**（余量 17），靠拆模块而非加白名单解决（D-811） |
 | GL-7 | 冷检出可复现性（新） | **部分** | 已修「`CHANGELOG.md` 被 `*.md` 排除导致冷检出必红」（提交 `bf423fa`）；但**仅在本机用 `git worktree` 复核过**，CI 运行历史仍未查（`L-1`）。复核方法：干净 worktree + 两个 `node_modules` 软链 + `NODE_OPTIONS=--preserve-symlinks`（报告 §8.4） |
@@ -1303,12 +1303,18 @@ flowchart TB
 > 两件事必须分开记，否则下次复用这套材料时会误以为已经齐了。
 > 逐条的判定依据与复现命令在报告 `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 的 **§8.2 / §8.7**。
 >
-> **2026-10-21 收尾更新**：原 11 行已销账 **6 行**（涉及 7 项）——取消信号穿透（D-805）、i18n 进 `GATES`（D-807②）、
+> **2026-10-21 二次收尾更新**：原 11 行已销账 **8 行**（涉及 9 项）——取消信号穿透（D-805）、i18n 进 `GATES`（D-807②）、
 > 生态数字单一事实源（D-812）、MCP 双栈（D-804）、D-806 的两条（Worker 分层召回 B-11 + 团队记忆解耦 B-12）、
-> 模型侧读消息（B-04）。下表是**剩下的 4 行 + 1 行记账项**。
+> 模型侧读消息（B-04）、汇总口径把跳过计绿（C-04）、探活撤员端到端。
+> **第八轮已无「不做就无法发布」的遗留项**；下表是剩下的 2 行 + 1 行记账项。
 
 | 优先级 | 没做完的事 | 一句话说明为什么现在还不行 |
 |---|---|---|
+| **发布前必做** | 推送远端 | 改动只在本地。不 push，打包出来的制品还是旧代码，前面做的全白费 |
+| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
+| P3 | 未核项（要么核、要么明确不核） | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核；MCP 新版的附加能力（MRTR / 可缓存 list / 正式扩展框架）未实现 |
+
+---|---|---|
 | **发布前必做** | 推送远端 | 改动只在本地。不 push，打包出来的制品还是旧代码，前面做的全白费 |
 | P2 | 探活撤员只有单模块测试 | 端到端跑一次要 ≥15 秒（5 秒 × 3 次探活），不适合逐次提交都跑；要覆盖得先给波次引擎开时序注入点 |
 | P3 | 汇总公式把「跳过」算成「通过」 | 本机有 3 个沙箱套件没真跑却显示绿；Linux 真机隔离要以 CI 的 ubuntu 为准，不能拿这个绿当结论 |

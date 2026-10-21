@@ -17,6 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { summarize } from './helpers/summary.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const TEST_DIR = path.join(ROOT, 'test');
@@ -137,7 +138,19 @@ for (const [i, suite] of suites.entries()) {
 }
 
 console.log('\n──────── 测试基线汇总 ────────');
-console.log(`总计 ${suites.length + GATES.length} · 通过 ${suites.length + GATES.length - failed.length} · 失败 ${failed.length}`);
+// C-04（2026-10-21）：口径由 `通过 = 总计 − 失败` 改为**三数齐全** —— 跳过从「通过」里扣掉。
+// 旧口径把 darwin 上从未真跑的 3 个沙箱套件算成「通过」，属于用「没验」冒充「验过」。
+// 跳过不影响退出码（平台限制不是缺陷），但读数时不能再被当成已验证。判定逻辑见 test/helpers/summary.mjs。
+const summary = summarize({
+  total: suites.length + GATES.length,
+  failed,
+  skipLines: skipped,
+});
+if (!summary.ok) {
+  console.error(`❌ 汇总等式自洽校验失败：总计=${summary.total} 通过=${summary.passed} 失败=${summary.failed} 跳过=${summary.skipped}`);
+  process.exitCode = 1;
+}
+console.log(`总计 ${summary.total} · 通过 ${summary.passed} · 失败 ${summary.failed} · 跳过 ${summary.skipped}`);
 if (failed.length > 0) {
   console.log(`\n失败套件（${failed.length}）：`);
   for (const s of failed) console.log(`  ✗ ${s}`);

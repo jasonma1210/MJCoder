@@ -22,10 +22,20 @@ const teamWaves = require('./teamWaves');
  *   · schedule: () => void（撤员后推进调度）
  *   · broadcastWoken / discardIso: 撤员收尾复用池侧既有实现（避免本文件重复实现等待唤醒/isolation 清理）
  *   · getMaxConcurrent / setMaxConcurrent：并发档读写（撤员时降档、全部批次收尾后还原）
+ *   · **时序注入（2026-10-21 新增，为探活撤员的端到端测试）**：
+ *       - `now: () => number`：时钟（默认 `Date.now`）。撤员的判据含「真实静默超窗
+ *         `WAVE_PROBE_IDLE_MS=120000`」，测试不可能真等 2 分钟。
+ *       - `autoTimer: boolean`：是否自建 `setInterval`（默认 true）。测试传 false，
+ *         改用返回的 `probeOnce()` 手动推进——真实定时器在 unref 后还可能因进程退出而不触发，
+ *         靠真实等待来测这类逻辑既慢又不稳。
+ *       - `probeIntervalMs`：探活间隔（默认 `WAVE_PROBE_INTERVAL_MS=5000`）。
  */
 function createWaveEngine(host) {
   const {
     getDeps, activeRuns, emit, schedule, broadcastWoken, discardIso, getMaxConcurrent, setMaxConcurrent,
+    now = () => Date.now(),
+    autoTimer = true,
+    probeIntervalMs = teamWaves.WAVE_PROBE_INTERVAL_MS,
   } = host;
 
   // groupId -> { waves, probe, traceSeq, lastActivityAt, reassign:Map, lowered, retired, pendingReassign }
@@ -42,7 +52,7 @@ function createWaveEngine(host) {
     if (!rt) return;
     rt.traceSeq += 1;
     // 任何任务事件（工具调用 / 状态推进 / 消息）都算「活着」，刷新静止窗口基准。
-    rt.lastActivityAt = Date.now();
+    rt.lastActivityAt = now();
   }
 
   // 探活第三通道：子任务状态签名
@@ -58,7 +68,7 @@ function createWaveEngine(host) {
     try { messageSeq = Number(getDeps()?.getTeamMessageSeq?.(groupId)) || 0; } catch { messageSeq = 0; }
     // 静止时长：距本组最后一次 task_* 事件（含工具调用）的毫秒数。
     // 无运行时（未装配）时给 0 —— 探活器只在有运行时才会被调用。
-    const idleMs = rt ? Math.max(0, Date.now() - (Number(rt.lastActivityAt) || 0)) : 0;
+    const idleMs = rt ? Math.max(0, now() - (Number(rt.lastActivityAt) || 0)) : 0;
     return { traceSeq: rt ? rt.traceSeq : 0, messageSeq, statusSignature: statusSignature(groupId), idleMs };
   }
 
@@ -124,20 +134,30 @@ function createWaveEngine(host) {
     return true;
   }
 
+  // 单拍探活：对每个在跑的团队组各采样一次，命中停滞即撤员。
+  // 抽成独立函数（2026-10-21）：定时器只是它的驱动方式之一 —— 测试用注入时钟 + 手动
+  // `probeOnce()` 推进，既能精确构造「静默超窗 + 连续三拍无变化」，又不必真等 15s~2min。
+  // 正文逻辑与原 setInterval 回调**逐字等价**（不是重写），保证测试验的就是生产路径。
+  function probeOnce() {
+    const stalledGroups = [];
+    for (const gid of [...runtimes.keys()]) {
+      const rt = runtimes.get(gid);
+      if (!rt) continue;
+      let r = null;
+      try { r = rt.probe.sample(sampleSignals(gid)); } catch { continue; }
+      if (!r.stalled) continue;
+      rt.probe.reset(); // 先复位：撤员动作本身可能不被三通道捕捉，避免下一拍连杀
+      try { if (handleStall(gid)) stalledGroups.push(gid); }
+      catch (e) { console.warn('[waveEngine] 探活撤员失败:', e?.message || e); }
+    }
+    return stalledGroups;
+  }
+
   // 单一定时器覆盖所有在跑的团队组（每组各自采样）
   function ensureTimer() {
+    if (!autoTimer) return; // 测试模式：由调用方手动 probeOnce()
     if (timer || typeof setInterval !== 'function') return;
-    timer = setInterval(() => {
-      for (const gid of [...runtimes.keys()]) {
-        const rt = runtimes.get(gid);
-        if (!rt) continue;
-        let r = null;
-        try { r = rt.probe.sample(sampleSignals(gid)); } catch { continue; }
-        if (!r.stalled) continue;
-        rt.probe.reset(); // 先复位：撤员动作本身可能不被三通道捕捉，避免下一拍连杀
-        try { handleStall(gid); } catch (e) { console.warn('[waveEngine] 探活撤员失败:', e?.message || e); }
-      }
-    }, teamWaves.WAVE_PROBE_INTERVAL_MS);
+    timer = setInterval(probeOnce, probeIntervalMs);
     if (typeof timer.unref === 'function') timer.unref();
   }
 
@@ -160,7 +180,7 @@ function createWaveEngine(host) {
       // 探活：连续 3 拍签名不变 **且** 真实静默超过 WAVE_PROBE_IDLE_MS 才判停滞。
       probe: teamWaves.createWaveProbe({ idleWindow: teamWaves.WAVE_PROBE_IDLE_MS }),
       traceSeq: 0,
-      lastActivityAt: Date.now(),
+      lastActivityAt: now(),
       reassign: new Map(), // taskId -> 已被探活撤员的次数（上限 MAX_REASSIGN_PER_TASK）
       lowered: false, // 本组是否已降过并发档（每组只降一次）
       retired: new Set(),
@@ -251,6 +271,8 @@ function createWaveEngine(host) {
 
   return {
     countTrace, attach, detach, detachAll, waveCount, allowOf, preferredOwnerOf, eligibleRoster, takeStall, consumeStall,
+    // 时序注入配套：手动推进一拍探活（生产由 setInterval 驱动，测试传 autoTimer:false 后用它）
+    probeOnce,
   };
 }
 
