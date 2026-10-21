@@ -109,6 +109,18 @@ jobs:
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           bwrap --version
 
+      # 显式打一条「真机隔离可用」证据到 CI 日志：测试套件通过时 run-all 不打印内部断言，
+      # 只靠「某个套件绿了」无法证明 bwrap 真跑过。这一步失败即 L-1 不能销账。
+      - name: Linux sandbox smoke (real bwrap isolation)
+        working-directory: desktop
+        run: |
+          node -e "
+          const l = require('./main/sandboxLinux');
+          const s = l.linuxSandboxStatus();
+          console.log('linuxSandboxStatus =', JSON.stringify(s));
+          if (!s.available) { console.error('bwrap 真机隔离不可用，L-1 不能销账'); process.exit(1); }
+          "
+
       # ── 桌面端：静态检查门禁（P1-6 新增；第六轮 N2 收紧）──
       # ESLint：0 error 硬门禁 + warning 棘轮（--max-warnings=161 = 2026-10-19 实测基线，只降不升）。
       # 原为 --max-warnings=9999（等于只 gate error，warning 无感）；现新增 warning 即红，
