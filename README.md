@@ -4664,3 +4664,54 @@ Electron 主进程 / agent-core 工具表组装 · MCP 三层 tier（auto-start 
 ### 尚存问题与推荐下一步
 - 无新增问题；A-04 维持「默认原生、MCP 按需」策略。
 - **推荐下一步**：保持现有改动，按上一轮计划提交并触发 CI 首次运行（关闭 L-1）。
+
+## 会话总结：提交改动 + 首次 CI 运行转绿 · 2026-10-21（第二十四轮）
+
+### 会话的背景
+用户要求提交上一轮 14 条遗留项修复，并触发 CI。此前仓库历史上没有任何 CI 运行记录（L-1 不可验证），而仓库曾有「push 成功但 Actions 无运行记录」的窗口。
+
+### 会话的主要目的
+把改动落到远端并让 CI 真实跑起来，顺带把首次运行暴露的干净环境缺陷修掉。
+
+### 完成的主要任务
+- **提交并推送主体修复**：`62f4a6f fix(r8): 一次性收口 14 条审查遗留项（A-04~C-05）`（38 文件，+1074/−204）。
+- **补 CI 手动触发**：`d897fa5 ci: 补 workflow_dispatch`（此前只能 push/PR 触发，无法在不造空提交的前提下重跑）。
+- **CI 第一轮（run 39550690141）失败**：12 套件红。定位为干净环境缺陷：
+  - 11 个套件 require `renderer/node_modules/{esbuild,typescript}`，而 renderer 的 `npm ci` 排在 Desktop tests **之后**；
+  - `r3-seatbelt-probe` 在 Linux 的 reason 是「非 darwin 平台」，可行动性正则未覆盖。
+- **CI 第二轮（run 39551789158）失败**：仅剩 `injection-precision`——测试写死 `/Users/...` 绝对路径，runner `ERR_MODULE_NOT_FOUND`。
+- **CI 第三轮（run 39552272076）全绿**：verify 成功；266 中 263 通过 / 0 失败 / 2 跳过（Linux 缺 bwrap）。
+- **补可移植性门禁**：`untracked-deps` 新增「源码不得写死用户主目录绝对路径」断言。
+- **本地与远端对齐**：`HEAD 01bbbae`、工作区 0 dirty、ahead 0。
+
+### 会话中主要使用的技术栈
+GitHub Actions（push / workflow_dispatch、ubuntu-latest、Node 22）· Electron 桌面测试门禁（`run-all.mjs` 266 项）· 渲染层依赖（esbuild / typescript）· GitHub REST API（git/blobs、git/trees、git/commits、refs PATCH）。
+
+### 关键决策和解决方案
+1. **用 workflow_dispatch 兜底**：push 事件在此仓库未产生运行记录，手动触发是可复现的验证通道。
+2. **先装 renderer 依赖再跑 Desktop tests**：修正 CI 步骤顺序，根治 11 个 MODULE_NOT_FOUND。
+3. **测试必须可移植**：绝对路径改为 `import.meta.dirname` 相对定位，并加机器门禁防复发。
+4. **网络故障时的推送路径**：`git push` 三次超时（github.com:443 不可达）后，改用 `gh api` 创建 blob/tree/commit 并快进更新 `refs/heads/main`（非 force），随后 `git fetch` + `git reset` 对齐本地，内容零差异。
+
+### 会话中主要使用的工具
+`Shell`（git / gh / curl / node）/ `Read` / `Grep` / `Edit`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `.github/workflows/ci.yml` | 修改 | 加 `workflow_dispatch`；renderer `npm ci` 前移到 Desktop tests 之前；typecheck 步骤去掉重复 `npm ci` | CI 可手动触发 + 修依赖顺序缺陷 |
+| `desktop/test/r3-seatbelt-probe.test.js` | 修改 | 可行动性正则补 `非 darwin|平台` | Linux runner 误红 |
+| `desktop/test/injection-precision.test.mjs` | 修改 | 写死 `/Users/...` 改为 `import.meta.dirname` 相对定位 | 跨机器/CI 可移植 |
+| `desktop/test/untracked-deps.test.mjs` | 修改 | 新增用户主目录绝对路径扫描门禁 | 防同类复发 |
+| `docs/MJCode-AgentHarness第八轮…md` | 修改 | 附录 D 记录 L-1 首次绿色运行与三次 CI 实录 | 报告闭环 |
+| `README.md` | 修改 | 追加本节总结 | 用户固定规则 |
+
+### 文件修改的详细内容
+- `.github/workflows/ci.yml`：新增 `workflow_dispatch:`；在 Desktop tests 前插入 `Renderer install`；后续 typecheck 步骤只保留 `typecheck + build`。
+- `injection-precision.test.mjs`：`path.resolve('/Users/jianma/...')` → `path.resolve(import.meta.dirname, '..', 'shared', 'untrustedContent.mjs')`。
+- `untracked-deps.test.mjs`：新增检查，扫描 `main/agent-core/renderer/src/test/shared/scripts`，命中 `path.resolve('/Users|/home/...')` 或 `file:///Users|/home/` 即红。
+
+### 尚存问题与推荐下一步
+- **L-1 部分销账**：CI 已有绿色运行，但 Linux 真实命名空间隔离仍未验证（runner 缺 `bwrap`）；需在 CI 安装 bubblewrap 后重跑两个沙箱套件。
+- **push 事件未触发运行**：本仓库 push 后仍无运行记录（本轮均为 workflow_dispatch）；建议后续排查仓库 Webhook/Actions 触发配置。
+- **推荐下一步**：在 CI 增加 `apt-get install -y bubblewrap` 并重跑，关闭 L-1 的最后一格。

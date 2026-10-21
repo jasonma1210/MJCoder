@@ -1123,4 +1123,10 @@ node scripts/gen-ecosystem-counts.mjs --json   # 生态口径（skills/mcp/emplo
 | **B-19** | 指派算法收敛为唯一入口 `resolveOwnerMember`（计划优先 → seq 兜底仅用于计划缺失） | `main/workerSession.js`、`workerPool.js` | `worker-session.test.js`（+4 条） |
 | **C-05** | 死桥接从「占比上限」改为显式台账 `test/bridge-dead-allowlist.json`：新增死方法红 / 台账腐烂红 / 台账幽灵红 | `test/bridge-parity.test.mjs`、台账 | `bridge-parity` 7/7；`legacy-ledger` 20/20（改为断言门禁引用同一台账） |
 
-**遗留**：L-1（CI 真实运行）仍不可销账；需在 Ubuntu runner 跑完 3 个沙箱套件后关闭。
+**遗留**：L-1 已由「无任何运行记录」转为**有首次绿色运行**（`workflow_dispatch`，run `39552272076`，HEAD `01bbbae`，verify 成功），但 Linux 真实命名空间隔离仍**未验证**——ubuntu runner 缺 `bwrap`，`sandbox-crossplatform` / `sandbox.test` 仍按设计跳过；需在 runner 安装 bubblewrap 后才能销账。
+
+> **首次 CI 实录（2026-10-21）**：三次运行才转绿，暴露的都是「干净环境」缺陷，不是业务逻辑缺陷：
+> ① 第 1 次（run `39550690141`）：12 个套件失败——11 个因 renderer 依赖未安装（`npm ci` 排在 Desktop tests 之后）+ `r3-seatbelt-probe` 的 Linux 判据未覆盖「非 darwin 平台」；
+> ② 第 2 次（run `39551789158`）：仅剩 `injection-precision`——测试里写死 `/Users/...` 绝对路径（本机绿、runner `ERR_MODULE_NOT_FOUND`）；
+> ③ 第 3 次（run `39552272076`）：**verify 全绿**，266 中 263 通过 / 0 失败 / 2 跳过（跳过的两个是 Linux 缺 bwrap）。
+> 同时补充：`workflow_dispatch` 已加入 CI（此前只能靠 push/PR），`untracked-deps` 新增「源码不得写死用户主目录绝对路径」门禁。
