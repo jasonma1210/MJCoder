@@ -1220,15 +1220,15 @@ flowchart TB
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
 | TL-1 | 编排形态（orchestrator-worker，非 swarm / 非部门流水线） | **已完成**（本轮判定「做得最正确的一处架构决策」） | `ipc/teams.js` 的 `teams:dispatch` → `orchestrator.planGoal` → `workerPool.runGroup`；团队语义全部落 `dag_json`，`planWaves` 钩子零侵入。报告 §0 正面结论 2 |
-| TL-2 | 编制持久化（`teams` / `team_members`）+ 消息总线（`team_messages`） | **部分** | `teamStore.js` 实现完整（枚举 fail-closed 归一 + G4 体积闸）；但 v8–v12 五个迁移只在未提交工作区（`C-01`） |
+| TL-2 | 编制持久化（`teams` / `team_members`）+ 消息总线（`team_messages`） | **已完成（已入库）** | `teamStore.js` 实现完整（枚举 fail-closed 归一 + G4 体积闸）；v8–v12 五个迁移已随提交 `9de20ca` 入库，`MIGRATIONS` 长度 = **12** ⇒ 冷检出即可建表（原 `C-01` 闭合） |
 | TL-3 | 消息总线的双向性 | **部分（载荷已类型化）** | `MESSAGE_KINDS` 6 / `MODEL_MESSAGE_KINDS` 5，G4 体积闸 fail-closed；模型侧仍无读消息工具 ⇒ `question` / `handoff` 是死语义（`B-04`）。**第八轮 D-810 已补写入端类型化**：`payload` 必须是可序列化普通对象且 ≤4 层、`refs` 必须是 ≤20 条且每条 ≤512 字符的字符串数组，形状不对**直接拒**（失败即 `ok:false`，不产生任何总线写入）；读取端 `normalizeTeamMessage` 对历史脏数据保持容忍（新数据不放过、老数据不丢）。守护测试 `team-tools.test.mjs` 的 D-810 段（11 条，含「更严≠全拒」正样本） |
 | TL-4 | 波次调度与探活撤员 | **已完成** | `teamWaves.js` / `waveEngine.js`；`MAX_ACTIVE_MEMBERS=10` / `MAX_PER_TYPE_IN_RUN=2` / `MAX_WAVES=3` / `WAVE_PROBE_INTERVAL_MS=5000` × `WAVE_PROBE_MAX_MISSES=3` |
 | TL-5 | 三主体中断矩阵 | **部分** | `teamInterrupt.checkInterruptPermit` 逻辑完整；但生产唯一入口 `main.js` 硬编码 `actorKind:'user'` ⇒ lead / member 两分支不可达，`reason` / `confirmed` 成为惰性参数（`B-07`） |
 | TL-6 | 成员运行时配置（`model` / `toolNames` / `systemPrompt` / `approvalMode` / `sandboxPolicy` / `skillNames`） | **已完成**（第八轮 D-808 收口） | `snapshotRoster` 存六项 → `workerPool` 的 `runOpts` 装配末尾调 `applyMemberRuntimeConfig` → `rolePresetApply.js`（唯一事实来源，主会话与 Worker 共用）。人格走引擎 `guardUntrusted`，工具集走交集裁剪 + 空交集 fail-closed，治理档**只取更严**。守护测试 `member-runtime-config.test.js`（12 条，直接断言引擎收到的 runOpts） |
 | TL-7 | G2 三键预算（`max_rounds` / `max_tokens` / `max_wall_ms`）落到运行期 | **已完成**（第八轮 D-809 收口） | 预算随 `planWaves` 的 `runMeta.budget` 落进 `dag_json`（编排器不解释、只透传），`workerPool` 由 `main/groupBudget.js` 强制：`max_rounds` → 引擎 `maxRounds`（替换硬编码 20）、`max_wall_ms` → 每个在途任务的超时**夹到剩余额度**、`max_tokens` → 起新任务前结算、越界即把未开始任务**确定性置 skipped** 并写明原因。守护测试 `group-budget.test.js`（14 条） |
 | TL-8 | 团队层端到端 eval | **已完成**（第八轮 D-807① 收口） | 新增 `team-e2e-invariants.test.js`（14 条），走真实 `runGroup` → 真实 `finalizeGroup`，覆盖三条**顺序敏感**不变量：① team_wait 的 defer 分支必须先于失败分支（挂起不判 failed）；② 等待超时清扫先于派发（到点判 failed 并级联唤醒）；③ 全部终态才收尾（等待中不得收尾；关键失败 → 下游 skipped + 组 failed）。此前 `runGroup`/`finalizeGroup` 在全部团队测试中命中 0 次 |
-| TL-9 | 持久化层进入版本 | **待提交（P1）** | `MIGRATIONS` HEAD 最大 = **7** / 工作区 = **12**；v8–v12 五个迁移 153 行未提交（`C-01`，报告 §1.6 E-07） |
-| TL-10 | `ipc/teams.js` 行数余量 | **有张力** | raw **799** 行，不在 `BASELINE_800` 白名单，**余量 2 行**（报告 §1.4） |
+| TL-9 | 持久化层进入版本 | **已完成（第八轮 D-803 收口）** | `MIGRATIONS` 长度 = **12**（v8–v12 已入库，提交 `9de20ca`）。落地形态与计划有偏差：原计划拆「团队层 / 平台治理」两条提交，实测三种切法都被门禁否掉（审批表、工具注册、文档数字三者互锁），最终以**一条集成提交**落库；偏差与证据见报告 §8.3 |
+| TL-10 | `ipc/teams.js` 行数余量 | **已缓解（D-811）** | 抽出 `teamRoster.js` 后 **783 行**（`split('\n')` 口径；`wc -l` 782），距 800 软档余量 **17 行**；`BASELINE_800` 仍为 **3** 条，未加白名单 |
 
 > 关于 TL-6 的一句话提醒（报告 §4 `D-808`）：现状是**最危险的一种形态**——用户在界面上配了限制，系统也把限制存了下来，
 > 但执行的时候根本不看它。这比「不做」更糟，因为它**制造了一个虚假的安全保证**。
@@ -1259,12 +1259,13 @@ flowchart TB
 
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
-| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 241 文件 + 2 smoke = 243 suite + 3 GATES = **246** 检查项；实测 **EXIT=0 / 246 全绿 / 0 红**（报告 §1.3 C-01 ~ C-08） |
+| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 247 个测试文件 + 2 smoke = 249 suite + 3 GATES = **252** 检查项；实测 **EXIT=0 / 252 全绿 / 0 红**（报告 §1.3、§8.1） |
 | GL-2 | 前置外部门禁 `GATES` | **已完成** | 3 项：`eval:check` / `doc-fact-check` / `harness-r7:check` |
 | GL-3 | i18n 扫描进入门禁 | **待办（P2）** | `scripts/i18n-scan.mjs` / `i18n-modcheck.mjs` 存在但不在 GATES，`test/` 下无独立套件（`C-03`） |
 | GL-4 | 汇总口径把「跳过」计入「通过」 | **已知偏差（P3）** | 汇总公式未减 skipped；darwin 本机 3 个沙箱套件未真跑却计绿（`C-04`） |
 | GL-5 | lint 警告棘轮 | **已完成** | 阈值 161，配套棘轮守护单元测试，不得反弹 |
-| GL-6 | 行数软档白名单「只减不增」 | **已完成（有张力）** | `BASELINE_800` 保持 3 条不变；`ipc/teams.js` 余量 2 行，靠拆模块而非加白名单解决 |
+| GL-6 | 行数软档白名单「只减不增」 | **已完成（张力已缓解）** | `BASELINE_800` 保持 3 条不变；`ipc/teams.js` 由 799 → **783 行**（余量 17），靠拆模块而非加白名单解决（D-811） |
+| GL-7 | 冷检出可复现性（新） | **部分** | 已修「`CHANGELOG.md` 被 `*.md` 排除导致冷检出必红」（提交 `bf423fa`）；但**仅在本机用 `git worktree` 复核过**，CI 运行历史仍未查（`L-1`）。复核方法：干净 worktree + 两个 `node_modules` 软链 + `NODE_OPTIONS=--preserve-symlinks`（报告 §8.4） |
 
 ### 13.6 上下文工程
 
@@ -1284,6 +1285,26 @@ flowchart TB
 - 生态四组数字（员工 51 / 连接器 291 / `skills.json` 219 / 磁盘 `SKILL.md` 154）与既有文档落差：**未裁定**（报告 §7.2 L-2）。
 - 幂等键、工具定义钉定、审计不可改写：**未核**（报告 §7.2 L-3）。
 - CI 历史绿红：第八轮只跑了本机，**未查 CI 运行历史**（报告 §7.2 L-1）。
+
+### 13.8 第八轮落地后仍未完成的事（按优先级，别当已做完）
+
+> **大白话**：上一节说的是「本来就不打算做」，这一节说的是「打算做、但**这一轮没做完**」。
+> 两件事必须分开记，否则下次复用这套材料时会误以为已经齐了。
+> 逐条的判定依据与复现命令在报告 `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 的 **§8.2 / §8.7**。
+
+| 优先级 | 没做完的事 | 一句话说明为什么现在还不行 |
+|---|---|---|
+| **发布前必做** | 推送远端 | 改动只在本地（`ahead 2`）。不 push，打包出来的制品还是旧代码，前面做的全白费 |
+| **P1** | 取消信号还没穿透到「Worker / 定时任务」两条通道 | 交互式对话能「点停止立刻停」，但后台 Worker 停不下来——已经开始的那次模型请求要等它自己超时（最长 15 分钟）。这是**漏接**，不是设计取舍：同一个函数在交互式通道里是接了的 |
+| P2 | Worker 侧「分层召回」没启用 | 主对话会按会话/项目/团队分层捞记忆，Worker 派出去的任务不会 → 派出去的成员相当于「失忆上岗」 |
+| P2 | 团队记忆链默认不生效 | 写入仍挂在一个默认关闭的总开关（`memory.autoCapture`）下 → 默认配置下这条链是空转的 |
+| P2 | 模型没有「读消息」的工具 | 只有 4 个协同工具（看名册 / 看看板 / 发消息 / 登记等待），**没有读消息**的 → 别人发来的 `question` / `handoff` 模型收不到，等于发了个寂寞 |
+| P2 | i18n 扫描还没进门禁 | 脚本有，但没人自动跑它 → 又是一个「靠人记得」的假绿 |
+| P2 | MCP 新协议只做了「记账」没做「实现」 | 现在只把「下一代协议 + 到期日」写成状态字段并加门禁双向锁住；真正切过去（无状态路径 / 双栈协商 / 能力声明分叉）是排期项 |
+| P2 | 探活撤员只有单模块测试 | 端到端跑一次要 ≥15 秒（5 秒 × 3 次探活），不适合逐次提交都跑；要覆盖得先给波次引擎开时序注入点 |
+| P3 | 汇总公式把「跳过」算成「通过」 | 本机有 3 个沙箱套件没真跑却显示绿；Linux 真机隔离要以 CI 的 ubuntu 为准，不能拿这个绿当结论 |
+| P3 | 生态四组数字没有单一来源 | 51 / 291 / 219 / 154 四组数与既有文档对不上，尚未裁定谁对 |
+| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
 
 ---
 
