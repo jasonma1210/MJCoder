@@ -95,6 +95,20 @@ jobs:
         working-directory: desktop/renderer
         run: npm ci
 
+      # ── Linux 真机沙箱依赖（L-1 收口）──
+      # `sandbox-crossplatform` 的真机段只在「Linux 且 bwrap 存在」时执行；此前 runner 没装
+      # bubblewrap，于是长期以「⚠ 跳过」记账，Linux 隔离能力从未被真实验证。
+      # 另：Ubuntu 24.04 默认用 AppArmor 限制非特权 user namespace，装了 bwrap 也建不出隔离
+      # 命名空间（会被真探测判为 bwrap-broken）。这里显式放开后再跑——若仍失败，门禁会**如实红**，
+      # 不会退回「环境限制」的静默跳过。
+      - name: Install Linux sandbox deps (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          bwrap --version
+
       # ── 桌面端：静态检查门禁（P1-6 新增；第六轮 N2 收紧）──
       # ESLint：0 error 硬门禁 + warning 棘轮（--max-warnings=161 = 2026-10-19 实测基线，只降不升）。
       # 原为 --max-warnings=9999（等于只 gate error，warning 无感）；现新增 warning 即红，
