@@ -223,12 +223,17 @@ if (process.platform === 'linux' && linux.findBwrap()) {
     const built = linux.buildBwrapExec('workspace-write', repo, 'echo ok > inside.txt', '/bin/sh');
     require('child_process').execFileSync(built.argv[0], built.argv.slice(1), { cwd: repo, timeout: 15000 });
     check('bwrap 内项目目录写入成功', fs.existsSync(path.join(repo, 'inside.txt')));
-    let blocked = false;
+    // 项目目录外写入：`--tmpfs /tmp` 让沙箱内的 /tmp 是**私有 tmpfs**，
+    // 因此「沙箱内写 /tmp 成功」是设计内行为（工具需要临时文件），真正要断言的是
+    // **写入不落到宿主 /tmp**（宿主侧不存在该文件）。
+    // 2026-10-21（L-1 收口）：原断言「命令必须非零退出」是错的——它把 tmpfs 隔离误判为拒绝，
+    // 在装了 bubblewrap 的 CI 上必然变红（此前长期跳过，所以一直没暴露）。
     try {
       const b2 = linux.buildBwrapExec('workspace-write', repo, 'echo x > /tmp/mjcode-bwrap-escape', '/bin/sh');
       require('child_process').execFileSync(b2.argv[0], b2.argv.slice(1), { cwd: repo, timeout: 15000 });
-    } catch (e) { blocked = true; }
-    check('bwrap 拒绝项目目录外写入', blocked);
+    } catch (e) { /* 命令在沙箱内失败也可接受：同样说明未落到宿主 */ }
+    check('bwrap 内项目目录外写入不落到宿主（/tmp 为沙箱私有 tmpfs）',
+      !fs.existsSync('/tmp/mjcode-bwrap-escape'));
     if (fs.existsSync('/tmp/mjcode-bwrap-escape')) fs.rmSync('/tmp/mjcode-bwrap-escape');
   } catch (err) {
     // P0 修复（2026-10-16）：此前此处是宽泛 catch，把「bwrap 真的失败」与「环境没有 bwrap」
