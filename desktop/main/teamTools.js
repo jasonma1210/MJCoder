@@ -122,6 +122,15 @@ function err(error) {
   return { ok: false, error };
 }
 
+// 本地整数钳制（B-04）：只服务 team_read_messages 的 limit 参数。
+// 不复用 teamStore 的 clampInt 是为了不把「库层内部工具」变成跨模块契约——
+// 这里需要的是「非法输入回落默认」而库层需要的是「越界即钳到边界」，语义并不相同。
+function clampIntLocal(v, min, max, dflt) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(Math.max(Math.trunc(n), min), max);
+}
+
 /**
  * @param {object} opts
  * @param {{teamId:string, runId:string, taskId:string, memberId:string}|null} opts.teamContext
@@ -261,7 +270,68 @@ function createTeamToolHandlers({
     };
   }
 
-  return { teamListMembers, teamSendMessage, teamBoard, teamWait };
+  // ── team_read_messages：模型侧读消息（B-04，2026-10-21）──
+  // 为什么必须有它：此前总线是「模型只写、UI 只读」的单向通道——成员发得出去、收不回来，
+  // 于是 `kind=question` / `handoff` 全是死语义（问了没人答、交接了对方不知道）。
+  // 读语义的三条边界（都在 handler 内闭环，模型参数不可伪造）：
+  //   · 作用域恒为 **本团队的本次 run**（runId 取自 teamContext，模型传 runId 一律忽略）——
+  //     跨 run / 跨团队读消息会让成员看到不属于它的上下文；
+  //   · **归档团队允许读**（归档 = 只读，不是「不可访问」），故这里不走 loadTeam 的归档拒绝；
+  //   · 默认返回**最近** limit 条（后加入的成员不该被最早的寒暄刷屏），给了 afterSeq 才按游标向后读。
+  function teamReadMessages(args = {}) {
+    const bad = requireContext();
+    if (bad) return bad;
+    const store = typeof getTeamStore === 'function' ? getTeamStore() : null;
+    if (!store || typeof store.listMessages !== 'function') return err('消息总线不可用');
+    const limit = clampIntLocal(args.limit, 1, 50, 20);
+    const afterSeq = Number(args.afterSeq ?? args.after_seq);
+    const kindFilter = trimStr(args.kind);
+    if (kindFilter && !MODEL_MESSAGE_KINDS.includes(kindFilter) && kindFilter !== 'system') {
+      return err(`kind 过滤值非法：「${kindFilter}」（可用：${MODEL_MESSAGE_KINDS.join(' / ')} / system）`);
+    }
+    let rows = [];
+    try {
+      // 先按上限取一段（团队单 run 的消息量级很小；200 是 teamStore 的既有上限口径），
+      // 未给游标时取尾部 limit 条，给了游标则从游标之后顺序读——两种语义都返回 seq 升序。
+      const hasCursor = Number.isFinite(afterSeq);
+      rows = store.listMessages({
+        teamId: ctx.teamId,
+        runId: ctx.runId,
+        ...(hasCursor ? { afterSeq: Math.trunc(afterSeq) } : {}),
+        limit: hasCursor ? limit : 200,
+      }) || [];
+      if (!hasCursor && rows.length > limit) rows = rows.slice(-limit);
+    } catch (e) {
+      return err(`读取消息失败：${e.message}`);
+    }
+    const messages = rows
+      .filter((m) => !kindFilter || m.kind === kindFilter)
+      .map((m) => ({
+        seq: m.seq,
+        id: m.id,
+        from: m.fromMemberId || null,
+        to: m.toMemberId || null,
+        kind: m.kind,
+        summary: m.summary,
+        refs: Array.isArray(m.refs) ? m.refs : [],
+        // payload 只给「有没有 + 有哪些键」：正文体积不可控，取值该走 refs 指向的文件
+        hasPayload: m.payload != null,
+        payloadKeys: (m.payload && typeof m.payload === 'object' && !Array.isArray(m.payload)) ? Object.keys(m.payload) : [],
+        createdAt: m.createdAt || null,
+      }));
+    const cursor = messages.length ? messages[messages.length - 1].seq : (Number.isFinite(afterSeq) ? Math.trunc(afterSeq) : null);
+    return {
+      ok: true,
+      runId: ctx.runId,
+      me: ctx.memberId || null,
+      count: messages.length,
+      cursor,
+      messages,
+      ...(messages.length === 0 ? { note: '游标之后没有新消息' } : {}),
+    };
+  }
+
+  return { teamListMembers, teamSendMessage, teamBoard, teamWait, teamReadMessages };
 }
 
 module.exports = { createTeamToolHandlers, MODEL_MESSAGE_KINDS };

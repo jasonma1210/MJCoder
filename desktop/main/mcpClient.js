@@ -17,8 +17,10 @@
 // 各自超时；握手完成后的进程退出/SSE 断开才算「运行期崩溃」并回报上层。
 
 // P1-8：协议版本/客户端能力的单一事实来源（mcpAuth.js 的 401 探测也引用同一份）
+// D-804：双栈后新增 NEXT_PROTOCOL_VERSION / clientCapabilitiesFor（能力声明按版本分叉）
 const {
   PROTOCOL_VERSION, MIN_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
+  NEXT_PROTOCOL_VERSION, clientCapabilitiesFor,
   CLIENT_CAPABILITIES, CLIENT_INFO, isSupportedProtocolVersion,
 } = require('./mcpProtocol');
 const { answerServerRequest } = require('./mcpServerRequests'); // P2-4：已声明能力的请求应答（ping/roots/completion）
@@ -185,6 +187,52 @@ function handleServerMessage(server, msg, { onLog } = {}) {
 }
 
 // ── P1-8：握手 / 工具列表（initialize → notifications/initialized → tools/list 分页）──
+
+// ── D-804 S2/S3（2026-10-21）：无状态栈探测 ──────────────────────────────────
+// 做什么：向 http 传输先发一次 `server/discover`（2026-07-28 用以取代 initialize 的方法），
+//   成功即采用无状态语义（不发 initialize、不带 session id、能力声明走新版分叉）。
+// 为什么用 server/discover 做判别器：它在**老服务端必然失败**（方法不存在 / 400），
+//   因此「成功=新服务端、失败=老服务端」是可靠二分；反过来先发 initialize 到新服务端同样必失败，
+//   但会把「服务端已升级」误判成「连不上」，且无法区分「服务端坏了」与「我们落后」。
+// 失败必须复位：`setStateless(false)` 同时清掉协议版本头与 session id，
+//   否则随后的握手会带着无状态版本号发 initialize（严格服务端直接 400）。
+// 只对 http 传输生效：stdio 没有会话概念，「无状态」在那里没有可观测差异。
+async function tryStatelessDiscovery(server) {
+  const t = server && server.transport;
+  if (!t || t.kind !== 'http' || typeof t.setStateless !== 'function') return false;
+  t.setStateless(true, NEXT_PROTOCOL_VERSION);
+  try {
+    const res = await mcpRpc(server, 'server/discover', {
+      clientInfo: CLIENT_INFO,
+      // S4：按版本分叉的能力声明（无状态栈不声明 roots / logging —— 二者已在新版弃用）
+      capabilities: clientCapabilitiesFor(NEXT_PROTOCOL_VERSION),
+    });
+    const peer = res && typeof res.protocolVersion === 'string' ? res.protocolVersion : NEXT_PROTOCOL_VERSION;
+    if (!isSupportedProtocolVersion(peer) || peer !== NEXT_PROTOCOL_VERSION) {
+      // 服务端声称了一个我们没实现的无状态版本 → 不硬撑（与「回不支持的版本即 disconnect」同纪律）
+      t.setStateless(false);
+      if (server.log) server.log(`[MCP ${server.name}] server/discover 回了未实现的版本 ${peer}，回落到握手栈`);
+      return false;
+    }
+    // 一次性写入（不用逐个 `server.x =`）：逐个赋值会各触发一次 require-atomic-updates
+    // （await 之后按旧状态赋值），把「本批新增 lint 警告」推高，而 lint 警告是只减不增的棘轮。
+    Object.assign(server, {
+      stateless: true,
+      protocolVersion: peer,
+      proposedProtocolVersion: NEXT_PROTOCOL_VERSION,
+      capabilities: (res && res.capabilities) || {},
+      serverInfo: (res && res.serverInfo) || null,
+      legacy: false,
+    });
+    if (server.log) server.log(`[MCP ${server.name}] 采用无状态栈（${peer}）`);
+    return true;
+  } catch (e) {
+    // 老服务端走到这里：复位后由调用方走握手栈。**不打 error 级日志** —— 这是预期路径。
+    t.setStateless(false);
+    if (server.log) server.log(`[MCP ${server.name}] 无状态栈不可用（${String(e && e.message || e).slice(0, 120)}），改用握手栈`);
+    return false;
+  }
+}
 
 async function notifyInitialized(server) {
   // 2026-10-17：streamableHttp 与 stdio 一样，initialize 之后必须发 initialized 通知。
@@ -543,14 +591,18 @@ async function connectMcpServer({
   servers.set(name, server);
 
   try {
-    // 1. initialize（采纳服务端返回的版本/能力/自述；被拒时最多一次 legacy 降级）→ 2. initialized → 3. tools/list
-    await negotiateHandshake(server);
+    // D-804 S3（2026-10-21）：双栈协商的落点——**先试无状态栈，失败再握手**。
+    // 两条栈的产物一致（server.protocolVersion / capabilities / tools），故下游 refreshTools、
+    // 工具登记、会话恢复都不需要分叉；差异只在传输层（是否有 session id）与能力声明（S4）。
+    const usedStateless = await tryStatelessDiscovery(server);
+    if (!usedStateless) await negotiateHandshake(server); // 1. initialize（被拒时最多一次 legacy 降级）
     await refreshTools(server);
     server.handshakeDone = true;
     markServerReady(true);
     return {
       ok: true, server: name, kind: server.kind, toolCount: server.tools.length, tools: server.tools,
       protocolVersion: server.protocolVersion, proposedProtocolVersion: server.proposedProtocolVersion,
+      stateless: !!server.stateless,
       legacy: server.legacy, serverInfo: server.serverInfo, capabilities: server.capabilities,
     };
   } catch (err) {

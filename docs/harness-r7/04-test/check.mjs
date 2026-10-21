@@ -118,6 +118,12 @@
  *          team_board / team_wait 四个映射）。
  *        → BASE_TOOLS 不变（A18a 仍 52）：协同工具属**运行时条件追加**（仅成员任务注入 teamContext
  *          时出现），与 computer_use / load_skill 同纪律，不进静态清单。
+ *      · 第八轮收尾批（2026-10-21，含 D-804 / B-04 / B-12）—— 三条等位数字**原地重写**：
+ *        → A17a：TOOL_CHANNELS 56 → **57**（B-04 新增 teamReadMessages：模型侧读消息）；
+ *        → A18b：TOOL_HANDLER_NAMES 55 → **56**（新增 team_read_messages → teamReadMessages）；
+ *        → A18g：LINT_WARNINGS_BASELINE 161 → **159**（棘轮只降不升：D-804 的赋值改用
+ *          Object.assign 不再触发 require-atomic-updates，团队记忆开关改用 ui/Button 原语）。
+ *        → BASE_TOOLS 仍 52（新工具同样属运行时条件追加，不进静态清单）。
  *
  * 5) 检索类断言一律在 `stripComments()` 后的**代码正文**上计数：注释里出现标识符既能让
  *    「应当成立」的断言假红，也能让「应当不成立」的断言假绿（注释喂饱）。
@@ -876,11 +882,11 @@ function httpHeaderSegments() {
   // 清扫记录（本轮）：原先 else 分支只补了一条 A17a —— registry require 失败时
   //   A17b/A17c **既不出现也不计 SKIP**，总数静默少 2。同样的病，同样的治法：BLOCKED 出声。
   if (!regErr) {
-    ok('A17a', 'TOOL_CHANNELS = 56', TOOL_CHANNELS.length, 56);
+    ok('A17a', 'TOOL_CHANNELS = 57', TOOL_CHANNELS.length, 57);
     ok('A17b', 'NOTIFY_CBS = 8', NOTIFY_CBS.length, 8);
     ok('A17c', 'REQUEST_CBS = 1', REQUEST_CBS.length, 1);
   } else {
-    ok('A17a', 'registry.js 可 require（=56 的值因此无从判定）', `ERR: ${regErr}`, 56);
+    ok('A17a', 'registry.js 可 require（=57 的值因此无从判定）', `ERR: ${regErr}`, 57);
     blockedAssert('A17b', 'NOTIFY_CBS = 8', `registry require 失败：${regErr}`);
     blockedAssert('A17c', 'REQUEST_CBS = 1', `registry require 失败：${regErr}`);
   }
@@ -935,8 +941,8 @@ function httpHeaderSegments() {
   } catch (e) { /* ignore */ }
   if (baseTools) ok('A18a', 'BASE_TOOLS = 52（真实 ESM import）', baseTools.length, 52);
   else ok('A18a', 'BASE_TOOLS 可导入', 'IMPORT_FAILED', 52);
-  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 55', Object.keys(handlerNames).length, 55);
-  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 55);
+  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 56', Object.keys(handlerNames).length, 56);
+  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 56);
 
   // A18c~g 全是「常量是否按契约写」的**代码**事实：注释里抄一遍同样的字面量
   //   就能把任何一条喂绿，故统一去注释。
@@ -955,7 +961,7 @@ function httpHeaderSegments() {
   ok('A18f', '审批四档齐全',
     ['never', 'auto-safe', 'on-request', 'always'].filter((x) => new RegExp(`'${x}'`).test(ap)).length, 4);
   const lr = stripComments(read('desktop/test/lint-ratchet.test.mjs'));
-  okTrue('A18g', 'LINT_WARNINGS_BASELINE = 161', /LINT_WARNINGS_BASELINE\s*=\s*161/.test(lr));
+  okTrue('A18g', 'LINT_WARNINGS_BASELINE = 159', /LINT_WARNINGS_BASELINE\s*=\s*159/.test(lr));
 }
 
 // ══ 结构性加固：自检 + 断言总数闸 ═══════════════════════════════════════════

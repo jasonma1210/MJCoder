@@ -96,5 +96,6 @@
   "teamSendMessage": "Team message",
   "teamBoard": "Team board",
   "teamWait": "Team wait",
+  "teamReadMessages": "Read team messages",
   "teamWaitCount": "Waiting on {n} task(s)"
 }

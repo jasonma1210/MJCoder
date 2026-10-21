@@ -7,22 +7,36 @@
 //   本文件无模块依赖（唯一的 require 是同目录上层的 package.json 数据文件，见 readClientVersion），
 //   两侧都可以安全引用。
 //
-// 版本策略（H-4 核实）：
-//   · 客户端在 initialize 里**提议** PROTOCOL_VERSION（2025-11-25 = 握手时代的最后一版，
-//     相对 2025-06-18 增加 OIDC Discovery / icons / 增量 scope / URL mode elicitation /
-//     sampling tool calling / 实验性 tasks；当前最新的 2026-07-28 取消了 initialize 握手，
-//     属架构级改造，不在本批范围）；
-//   · 服务端在 initialize 结果里**回自己的版本**，客户端按规范采纳；
-//   · 服务端回一个我们不在支持集里的版本 → 客户端 SHOULD disconnect（**不自行降级重试**）。
+// 版本策略（H-4 核实；D-804 于 2026-10-21 升级为双栈）：
+//   · 握手栈：客户端在 initialize 里**提议** PROTOCOL_VERSION（2025-11-25 = 握手时代的最后一版），
+//     服务端在结果里**回自己的版本**，客户端按规范采纳；服务端回一个我们不在支持集里的版本 →
+//     SHOULD disconnect（**不自行降级重试**）。
+//   · 无状态栈：2026-07-28 取消了 initialize 握手与 Mcp-Session-Id。客户端先用
+//     `server/discover` 探测；成功即采用无状态语义（能力声明同步按版本分叉），失败回落握手栈。
 //
-// 支持集 = 本客户端实现过/兼容握手的版本。四条都共享同一套 initialize →
-// notifications/initialized → tools/list 会话流程，差异（icons/tasks 等）我们只透传不解释。
+// 支持集 = 本客户端实现过/兼容的版本。握手四代共享同一套 initialize →
+// notifications/initialized → tools/list 会话流程，差异（icons/tasks 等）我们只透传不解释；
+// 无状态栈只认 2026-07-28 一版（规范未定义中间态）。
 
 const PROTOCOL_VERSION = '2025-11-25';
 // 最低可接受版本：MIN_PROTOCOL_VERSION 是 SSE 时代（旧 HTTP+SSE 传输）的协议版本，
 // 仓库在用的 mock / 真实服务端大多回这一版，属于必须能连的底线。
 const MIN_PROTOCOL_VERSION = '2024-11-05';
-const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', MIN_PROTOCOL_VERSION];
+
+// ── 双栈的另一栈（D-804 S2–S5，2026-10-21 实现）─────────────────────────────
+// 2026-07-28 是**断裂式升级**：取消 initialize 握手与 Mcp-Session-Id，改无状态请求/响应，
+// 新增 `server/discover` 取代 initialize，并用 `Mcp-Method` / `Mcp-Name` 头做路由。
+// 本客户端现在**两条栈都实现**：
+//   · 无状态栈：`server/discover` 探测成功即采用（不发 initialize、不带 session id）；
+//   · 有状态栈：探测失败（老服务端不认 discover / 声明了未实现的版本）→ 走原握手流程。
+// 顺序刻意是「先新后旧」：新增的 server/discover 在老服务端必然失败（方法不存在/400），
+// 是可靠的判别器；反过来先发 initialize 到新服务端同样必失败，但会把「服务端已升级」
+// 误判成「连不上」，且无法区分「服务端坏了」与「我们落后」。
+const NEXT_PROTOCOL_VERSION = '2026-07-28';
+// 支持集 = 两条栈可连的版本。无状态栈只认 NEXT 一版（规范未定义中间态的无状态版本）。
+const SUPPORTED_PROTOCOL_VERSIONS = [NEXT_PROTOCOL_VERSION, '2025-11-25', '2025-06-18', '2025-03-26', MIN_PROTOCOL_VERSION];
+// 「握手栈」支持集：initialize 提议与 ④ 断言用的子集（PROTOCOL_VERSION 必须是它的最新一版）
+const HANDSHAKE_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', MIN_PROTOCOL_VERSION];
 
 // ── D-804：MCP 代际路线（第八轮审查，2026-10-21）──────────────────────────────
 //
@@ -44,15 +58,19 @@ const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', M
 // 无法与已升级的服务端互通，届时 `MIN` 一侧的 legacy HTTP+SSE 也会一并退场。
 const MCP_PROTOCOL_ROADMAP = Object.freeze({
   current: PROTOCOL_VERSION,
-  next: '2026-07-28',
+  next: NEXT_PROTOCOL_VERSION,
   // 'not-implemented' | 'implemented'  —— 只有真做出无状态路径并通过互通测试，才允许改这个值
-  nextStatus: 'not-implemented',
+  // 2026-10-21（D-804 S2–S5）：**无状态路径已实现并通过互通测试**，故改为 implemented。
+  // 改这个值会让门禁 ② 从「支持集不得含 next」翻成「支持集必须含 next」，形成双向锁。
+  nextStatus: 'implemented',
   dueBy: '2027-07-28',
   // 迁移形态：**双栈协商**，不是硬切。理由：大量现实 MCP 服务端仍停在 2025-11-25，
   // 官方规范本身给了 12 个月窗口；按版本协商 + 显式降级路径是规范认可的对齐方式。
   strategy: 'dual-stack-negotiation',
   trackedIn: 'docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md（§4 D-804）',
-  // 在 2026-07-28 中被弃用、届时必须停止声明的能力（现在仍需声明：当前只与旧版握手）
+  // 在 2026-07-28 中被弃用、届时必须停止声明的能力。
+  // 现在**只在无状态栈上不声明**（见 STATELESS_CLIENT_CAPABILITIES），握手栈仍要声明——
+  // 老服务端要靠 roots 做文件系统协商。这就是 S4「能力声明按版本分叉」。
   deprecatedInNext: Object.freeze(['roots', 'logging']),
 });
 
@@ -76,6 +94,24 @@ const CLIENT_CAPABILITIES = Object.freeze({
   completion: Object.freeze({}),
   logging: Object.freeze({}),
 });
+
+// ── S4（D-804）：能力声明按协议版本分叉 ───────────────────────────────────────
+// 无状态栈（2026-07-28）里 roots / logging 已被弃用，声明它们等于自称支持一个已退场的
+// 交互模型；而 completion 仍在新版中，且应答实现（SERVER_REQUEST_HANDLERS）没有版本差异。
+// 刻意**不删** CLIENT_CAPABILITIES 里的两项：握手栈还要用它们与老服务端协商。
+const STATELESS_CLIENT_CAPABILITIES = Object.freeze({
+  completion: Object.freeze({}),
+});
+
+/** 协商到某版本后应声明哪些客户端能力（单一事实来源；不要在各调用点各自拼）。 */
+function clientCapabilitiesFor(version) {
+  return version === NEXT_PROTOCOL_VERSION ? STATELESS_CLIENT_CAPABILITIES : CLIENT_CAPABILITIES;
+}
+
+/** 该版本是否走无状态栈（无 initialize / 无 Mcp-Session-Id）。 */
+function isStatelessVersion(version) {
+  return version === NEXT_PROTOCOL_VERSION;
+}
 // ── 客户端自述版本：必须与应用版本同源（F-013） ──────────────────────────────
 //
 // 改前写死 `version: '1.0'`：initialize / 401 探针都会把它发给服务端，于是服务端日志、
@@ -109,9 +145,14 @@ function isSupportedProtocolVersion(v) {
 module.exports = {
   PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
+  NEXT_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
+  HANDSHAKE_PROTOCOL_VERSIONS,
   MCP_PROTOCOL_ROADMAP,
   CLIENT_CAPABILITIES,
+  STATELESS_CLIENT_CAPABILITIES,
+  clientCapabilitiesFor,
+  isStatelessVersion,
   CLIENT_INFO,
   isSupportedProtocolVersion,
 };

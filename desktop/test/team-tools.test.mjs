@@ -340,5 +340,124 @@ const prStub = { prView() {}, prDiff() {}, prReview() {}, prComment() {} };
   }
 }
 
+// ── ⑤ B-04（2026-10-21）：模型侧读消息 ──
+// 缺陷形态：总线此前是「模型只写、UI 只读」的单向通道 ⇒ 成员发得出去、收不回来，
+// `kind=question` / `handoff` 全是死语义（问了没人答、交接了对方不知道）。
+// 这一节锁读语义的五条边界 + 四处登记，都是「读源码看不出、跑起来才错」的判据。
+{
+  const MSGS = [
+    { seq: 1, id: 'm1', teamId: 'team-1', runId: 'run-1', fromMemberId: 'm-lead', toMemberId: null, kind: 'assign', summary: '你负责 A 模块', refs: [], payload: null, createdAt: 100 },
+    { seq: 2, id: 'm2', teamId: 'team-1', runId: 'run-1', fromMemberId: 'm-dev', toMemberId: 'm-lead', kind: 'question', summary: '接口字段叫什么？', refs: [], payload: null, createdAt: 200 },
+    { seq: 3, id: 'm3', teamId: 'team-1', runId: 'run-1', fromMemberId: 'm-lead', toMemberId: 'm-dev', kind: 'handoff', summary: '交接：用 camelCase', refs: ['docs/api.md'], payload: { note: 'big', n: 1 }, createdAt: 300 },
+    // 别的 run / 别的团队的消息：任何情况下都不该被读到
+    { seq: 4, id: 'm4', teamId: 'team-1', runId: 'run-2', fromMemberId: 'm-x', kind: 'report', summary: '别的 run', refs: [], payload: null, createdAt: 400 },
+    { seq: 5, id: 'm5', teamId: 'team-2', runId: 'run-1', fromMemberId: 'm-y', kind: 'report', summary: '别的团队', refs: [], payload: null, createdAt: 500 },
+  ];
+  const listCalls = [];
+  function makeReadDeps({ archived = false } = {}) {
+    const team = makeTeam(archived ? { archivedAt: '2026-10-21T00:00:00.000Z' } : {});
+    return {
+      getTeamStore: () => ({
+        getTeam: () => team,
+        listMessages({ teamId, runId, afterSeq, limit } = {}) {
+          listCalls.push({ teamId, runId, afterSeq, limit });
+          let rows = MSGS.filter((m) => m.teamId === teamId && (!runId || m.runId === runId));
+          if (Number.isFinite(Number(afterSeq))) rows = rows.filter((m) => m.seq > Number(afterSeq));
+          return rows.slice(0, limit);
+        },
+      }),
+      getTaskStore: () => ({ listTasks: () => [] }),
+      postMessage: () => ({ message: { id: 'x', seq: 9 }, gated: false }),
+      waitTask: () => ({ ok: true, waiting: false }),
+    };
+  }
+  const read = (args = {}, ctx = CTX, opts = {}) =>
+    createTeamToolHandlers({ teamContext: ctx, ...makeReadDeps(opts) }).teamReadMessages(args);
+
+  // 边界 1：作用域恒为本团队本次 run —— 模型传 runId/teamId 一律无效
+  {
+    listCalls.length = 0;
+    const r = read({ runId: 'run-2', teamId: 'team-2' });
+    check('⑤ 读消息只用上下文的 teamId/runId（模型传参不可越界）',
+      listCalls.length === 1 && listCalls[0].teamId === 'team-1' && listCalls[0].runId === 'run-1',
+      JSON.stringify(listCalls[0] || {}));
+    check('⑤ 返回里不含别的 run / 别的团队的消息',
+      r.ok && r.messages.every((m) => m.summary !== '别的 run' && m.summary !== '别的团队'),
+      `${r.count} 条`);
+  }
+
+  // 边界 2：默认取尾部（后加入的成员不该被最早的消息刷屏）
+  {
+    const r = read({ limit: 2 });
+    check('⑤ 默认取最近 limit 条（尾部语义）', r.ok && r.count === 2
+      && r.messages.map((m) => m.seq).join(',') === '2,3', r.messages.map((m) => m.seq).join(','));
+    check('⑤ 返回 cursor = 最后一条 seq（增量读的锚点）', r.ok && r.cursor === 3, String(r.cursor));
+  }
+
+  // 边界 3：给 afterSeq 走增量读
+  {
+    const r = read({ afterSeq: 1 });
+    check('⑤ afterSeq 增量读：只返回 seq 更大的', r.ok && r.messages.every((m) => m.seq > 1),
+      r.messages.map((m) => m.seq).join(','));
+    const empty = read({ afterSeq: 999 });
+    check('⑤ 游标之后无新消息时返回空数组 + 可读提示', empty.ok && empty.count === 0 && !!empty.note);
+  }
+
+  // 边界 4：kind 过滤 + 非法 kind 拒绝
+  {
+    const q = read({ kind: 'question' });
+    check('⑤ kind 过滤生效（只返回该类型）', q.ok && q.count === 1 && q.messages[0].kind === 'question');
+    const bad = read({ kind: 'shout' });
+    check('⑤ 非法 kind 被拒（不回落到「全都返回」）', bad.ok === false && /kind/.test(bad.error));
+  }
+
+  // 边界 5：payload 正文不回传（体积不可控），只报 hasPayload 与键名
+  {
+    const r = read({ kind: 'handoff' });
+    const m = r.messages[0] || {};
+    check('⑤ payload 正文不进入返回值（防把大对象塞回上下文）', m.payload === undefined);
+    check('⑤ 用 hasPayload + payloadKeys 告知「有内容」', m.hasPayload === true
+      && Array.isArray(m.payloadKeys) && m.payloadKeys.join(',') === 'note,n');
+    check('⑤ refs 透传（取内容走引用）', Array.isArray(m.refs) && m.refs[0] === 'docs/api.md');
+  }
+
+  // 边界 6：归档团队**允许读**（归档 = 只读，不是不可访问）——与写操作相反
+  {
+    const r = read({}, CTX, { archived: true });
+    check('⑤ 归档团队仍可读消息（只读语义，与 teamSendMessage 的拒绝相反）', r.ok === true, r.ok ? '' : r.error);
+    const w = createTeamToolHandlers({ teamContext: CTX, ...makeReadDeps({ archived: true }) }).teamSendMessage({ summary: 's' });
+    check('⑤ 归档团队写消息仍被拒（读放行、写拒绝，方向不能反）', w.ok === false && /归档/.test(w.error));
+  }
+
+  // 边界 7：无团队上下文 / 总线不可用 ⇒ 结构化错误
+  {
+    const noCtx = createTeamToolHandlers({ teamContext: null, ...makeReadDeps() }).teamReadMessages({});
+    check('⑤ 无团队上下文时返回结构化错误（不抛异常）', noCtx.ok === false && !!noCtx.error);
+    const noStore = createTeamToolHandlers({ teamContext: CTX, getTeamStore: () => null }).teamReadMessages({});
+    check('⑤ 总线不可用时返回结构化错误', noStore.ok === false && /不可用/.test(noStore.error));
+  }
+
+  // 四处登记：schema / 通道 / handler 字面量 / 免审批
+  {
+    const core = require(path.join(DESKTOP, 'agent-core/index.js'));
+    const schemaNames = (core.TEAM_TOOLS || []).map((t) => t.function && t.function.name).filter(Boolean);
+    check('⑤ schema：TEAM_TOOLS 含 team_read_messages', schemaNames.includes('team_read_messages'),
+      schemaNames.join(','));
+    check('⑤ 通道：TOOL_HANDLER_NAMES 映射到 teamReadMessages',
+      core.TOOL_HANDLER_NAMES.team_read_messages === 'teamReadMessages');
+    check('⑤ 通道白名单：registry.TOOL_CHANNELS 含 teamReadMessages',
+      TOOL_CHANNELS.includes('teamReadMessages'));
+    const withTeam = scheduledToolHandlers({ prTools: prStub, teamTools: build().h });
+    check('⑤ handler 字面量键：scheduledToolHandlers 透传 teamReadMessages',
+      typeof withTeam.teamReadMessages === 'function');
+    // 只读工具的 toolLevel 返回 **null**（= 不询问、不进审批面），不是字符串 'readonly'
+    check('⑤ 免审批：team_read_messages 在 READONLY_TOOLS 内，且不依赖兜底',
+      READONLY_TOOLS.has('team_read_messages') && toolLevel('team_read_messages') === null,
+      `level=${JSON.stringify(toolLevel('team_read_messages'))}`);
+    check('⑤ 可逆性登记：只读 ⇒ reversible=true',
+      reversibilityOf('team_read_messages', 'readonly').reversible === true);
+  }
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'} team-tools：${pass} 通过 / ${fail} 失败`);
 if (fail > 0) process.exit(1);

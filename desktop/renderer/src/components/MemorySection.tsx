@@ -103,6 +103,9 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
   const [tasks, setTasks] = useState<BgTaskRow[]>([]);
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [autoCapture, setAutoCapture] = useState(false);
+  // D-806 / B-12：团队记忆沉淀开关（`memory.teamAutoCapture`，**默认开**，与 autoCapture 解耦）。
+  // 初值取 true 与主进程侧一致（主进程只在显式 false 时才不写）。
+  const [teamAutoCapture, setTeamAutoCapture] = useState(true);
   // 三层记忆 M3：作用域筛选（默认全部）与团队共享开关
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
   const [teamSharing, setTeamSharing] = useState(false);
@@ -131,6 +134,8 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
       if (list?.ok) setItems(list.items || []);
       setAutoCapture(pref === true);
       setTeamSharing(teamPref === true);
+      // B-12：团队沉淀开关未设置 = 默认开（只在显式 false 时显示为关，与主进程判据同口径）
+      setTeamAutoCapture((await window.mjcode?.localGetPreference?.({ key: 'memory.teamAutoCapture' }) as unknown) !== false);
       if (cand?.ok) setCandidates(cand.items || []);
     } catch (err) {
       console.warn('[settings] memory section load failed:', err);
@@ -155,6 +160,18 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
       setNotice(next ? t('settings.memoryAutoOn') : t('settings.memoryAutoOff'));
     } catch (err) {
       console.warn('[settings] memory autoCapture toggle failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  async function toggleTeamAutoCapture() {
+    const next = !teamAutoCapture;
+    try {
+      await window.mjcode?.localSetPreference?.({ key: 'memory.teamAutoCapture', value: next });
+      setTeamAutoCapture(next);
+      setNotice(next ? t('settings.memoryTeamAutoOn') : t('settings.memoryTeamAutoOff'));
+    } catch (err) {
+      console.warn('[settings] memory teamAutoCapture toggle failed:', err);
       setNotice(t('settings.memoryOpFailed'));
     }
   }
@@ -264,7 +281,19 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
             </button>
           </div>
 
-          {/* ② 统计 + 后台任务（接上零消费的 memory:stats / memory:bgTasks） */}
+          {/* ② 团队记忆沉淀开关（D-806 / B-12：与上面那把总闸**解耦**，默认开） */}
+          <div className="py-4 border-t border-border flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{t('settings.memoryTeamAutoLabel')}</div>
+              <p className="text-xs text-text2 mt-1">{t('settings.memoryTeamAutoDesc')}</p>
+            </div>
+            <Button variant={teamAutoCapture ? 'primary' : 'secondary'} size="sm"
+              onClick={toggleTeamAutoCapture} className="shrink-0">
+              {teamAutoCapture ? t('settings.memoryAutoOn') : t('settings.memoryAutoOff')}
+            </Button>
+          </div>
+
+          {/* ③ 统计 + 后台任务（接上零消费的 memory:stats / memory:bgTasks） */}
           <div className="py-4 border-t border-border">
             <div className="text-sm font-medium mb-2">{t('settings.memoryStatsTitle')}</div>
             {unavailable ? (

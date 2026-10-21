@@ -96,5 +96,6 @@
   "teamSendMessage": "团队消息",
   "teamBoard": "团队看板",
   "teamWait": "团队等待",
+  "teamReadMessages": "读取团队消息",
   "teamWaitCount": "等待 {n} 个任务"
 }

@@ -53,20 +53,48 @@ function createHttpTransport({
   // 本处是「2026 双栈」的唯一改造点（D-01 退路）：将来若要做 2026-07-28（取消 initialize 握手）
   // 的并行双栈，也在这里按协商结果切换，不扩散到调用方。
   let protocolVersion = '';
+  // ── D-804 S2（2026-10-21）：无状态栈开关 ──────────────────────────────────
+  // 2026-07-28 取消 initialize 与 Mcp-Session-Id：每个请求自带版本与路由头，服务端不建会话。
+  // 打开后：① 不发送也不接收 Mcp-Session-Id；② 每个 POST 带 `MCP-Protocol-Version`（从第一
+  // 个请求就带，因为没有 initialize 可等）；③ 按新规范带 `Mcp-Method`（+ 有名字的方法带 `Mcp-Name`）。
+  // 关掉必须把 protocolVersion 复位为空：否则回落握手栈时会把无状态版本当作「已协商版本」发出去。
+  let stateless = false;
   const transport = {
     kind: 'http',
     // 由 performHandshake 在拿到服务端协议版本后调用；传空串表示「不发该头」。
     setProtocolVersion(v) { protocolVersion = typeof v === 'string' ? v : ''; },
+    /** 切换无状态栈（D-804）。enabled=false 时同时清掉协议版本头，避免污染握手栈。 */
+    setStateless(enabled, version = '') {
+      stateless = !!enabled;
+      protocolVersion = stateless ? String(version || '') : '';
+      if (stateless) sessionId = '';
+    },
+    isStateless() { return stateless; },
     async send(payload, requestId) {
+      // 新规范的路由头：从请求体里取 method（与 params.name），取不到就只带版本。
+      // 解析失败不能阻断发送——头是路由器提示，不是鉴权凭据。
+      let routeHeaders = {};
+      if (stateless) {
+        try {
+          const j = JSON.parse(payload);
+          if (j && typeof j.method === 'string') {
+            routeHeaders = { 'Mcp-Method': j.method };
+            const nm = j.params && (j.params.name || j.params.uri);
+            if (typeof nm === 'string' && nm) routeHeaders['Mcp-Name'] = nm;
+          }
+        } catch { /* 非 JSON 载荷极少见；无头也能发 */ }
+      }
       const call = (bearer) => fetch(base, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
-          ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
+          // 无状态栈按规范不建会话，也就不回带（见上方 setStateless 注释）
+          ...(!stateless && sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
           // initialize 本身不带（此时协商值还是空）；之后的每个 POST 都带。
           // 放在自定义 headers 之前：用户若显式配了同名 header，以用户的为准。
           ...(protocolVersion ? { 'MCP-Protocol-Version': protocolVersion } : {}),
+          ...routeHeaders,
           ...headers,
           ...(bearer ? { Authorization: bearer } : {}),
         },
@@ -86,8 +114,9 @@ function createHttpTransport({
         }
       }
       // 会话建立：initialize 的响应头带 Mcp-Session-Id，后续请求必须回带
+      // D-804：无状态栈下服务端**不该**给 session id；给了也不采用（采用就会退回有状态语义）
       const sid = res.headers.get('mcp-session-id');
-      if (sid) sessionId = sid;
+      if (!stateless && sid) sessionId = sid;
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         // H-4：会话失效（服务端已丢弃 Mcp-Session-Id，常见于服务重启/会话超时）→ 404。

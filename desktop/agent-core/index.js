@@ -710,6 +710,8 @@ const TEAM_PROMPT_SECTION = '\n\n## 军团协同（团队协作）\n'
   + '你是本次团队派活中的一名成员。除本职工作外，可用以下协同工具：\n'
   + '- team_list_members：查看本团队名册（成员 id / 名称 / 职责 / 统筹）。\n'
   + '- team_board：查看本 run 的任务看板（任务状态、认领人、依赖），用来判断该等谁、谁在做什么。\n'
+  + '- team_read_messages：读本 run 的团队消息（只读，按 seq 升序，可用 afterSeq 增量读）。'
+  + '开始新一轮工作前、或收到 question/handoff 时先读一次，别凭猜。\n'
   + '- team_send_message：向团队总线发消息（kind=assign/handoff/question/report/artifact_ref）。'
   + '只传结论摘要与文件引用（refs），不要粘贴大段原文；跨成员交接必须留一条 report 或 handoff。\n'
   + '- team_wait：确有未完成的跨成员依赖时登记等待（taskIds 取自 team_board），'
@@ -852,6 +854,18 @@ export const TEAM_TOOLS = [
     description: '查看当前团队 run 的任务看板（只读）：每个子任务的状态、认领成员、依赖与是否关键。'
       + '用于判断谁在做什么、某个依赖是否已完成；不含任务正文与结果全文。',
     parameters: { type: 'object', properties: {}, required: [] },
+  } },
+  { type: 'function', function: {
+    name: 'team_read_messages',
+    description: '读本团队 run 的消息总线（只读）。默认返回最近若干条（seq 升序）；'
+      + '传 afterSeq=上次返回的 cursor 可增量读新消息。成员之间用 question/handoff 提问与交接后，'
+      + '对方要能读到才算送达——开始新一轮工作前先读一次。payload 正文不回传，只给 hasPayload 与键名，'
+      + '需要内容请按 refs 里的路径去取。',
+    parameters: { type: 'object', properties: {
+      afterSeq: { type: 'number', description: '增量游标：只取 seq 大于它的消息（用上次返回的 cursor）' },
+      limit: { type: 'number', description: '本次最多返回条数（默认 20，上限 50）' },
+      kind: { type: 'string', enum: ['assign', 'handoff', 'question', 'report', 'artifact_ref', 'system'], description: '只读某一类消息（可选）' },
+    }, required: [] },
   } },
   { type: 'function', function: {
     name: 'team_send_message',
@@ -1141,12 +1155,14 @@ const TOOL_HANDLER_NAMES = {
   computer_use: 'computerUse',
   // G-latex：LaTeX 编译原生工具通道
   latex_compile: 'latexCompile',
-  // M5 / T5-8：军团协同四工具（成员任务才注入；通道名须同步登记到 engineProcess/registry.js，
+  // M5 / T5-8：军团协同工具（成员任务才注入；通道名须同步登记到 engineProcess/registry.js，
   // 否则子进程路径会报「未知工具: team_*」）
   team_list_members: 'teamListMembers',
   team_send_message: 'teamSendMessage',
   team_board: 'teamBoard',
   team_wait: 'teamWait',
+  // B-04（2026-10-21）：模型侧读消息——补上总线的「读」半边，question/handoff 才不是死语义
+  team_read_messages: 'teamReadMessages',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -2022,6 +2038,8 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   team_list_members: 30000,
   team_board: 30000,
   team_send_message: 30000,
+  // B-04：读消息同样是主进程内的短查询（一次 SQLite SELECT）
+  team_read_messages: 30000,
   team_wait: 60000,
 };
 

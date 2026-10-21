@@ -146,7 +146,7 @@ flowchart TB
 
 > 关键点：引擎侧**不认识任何具体工具**，只按 `TOOL_HANDLER_NAMES` 映射出的**通道名**向宿主发起 `toolReq`；
 > 宿主侧 `TOOL_CHANNELS` 静态白名单是唯一的准入闸——**漏登记会让引擎报「未知工具」甚至重启也无法修复**。
-> 第八轮实测：`TOOL_CHANNELS` **56 条**（HEAD 为 52 条，工作区新增四条团队层通道），
+> 第八轮实测：`TOOL_CHANNELS` **57 条**（第七轮 HEAD 为 52 条，之后新增四条团队层通道，B-04 又补 `teamReadMessages`），
 > 回调桥为 **8 notify + 1 request = 9** 个。详见第四章。
 
 ### 1.4 系统总览（六大子系统全景）
@@ -239,7 +239,7 @@ flowchart TB
 - `main/engineProcess/host.js`：生产环境经 `utilityProcess.fork` 启动引擎子进程并设置 V8 堆上限；主进程作为**工具执行端**处理 `toolReq`，在本进程内执行审批 / 流式推送 / 凭证解析，再把结果经 `toolRes` 回传子进程。
   > 口径澄清：`--max-old-space-size=2048` 约束的是 **V8 堆**，不等价于「进程 RSS ≤ 2GB」（`A-09`）。崩溃半径隔离本身是有效的：子进程 OOM 只杀自己，`tr.onExit` 收敛为 `engineExited`。
 - `main/engineProcess/childEntry.js`：子进程侧为 `TOOL_CHANNELS` 中每个通道生成 RPC 工具代理，等待 `toolRes`——这实现了「引擎调用主进程能力」的反向依赖。
-- `main/engineProcess/registry.js`：**工具通道静态白名单** `TOOL_CHANNELS`。子进程只能回调登记在其中的句柄；**漏登记会导致 `resolveChannel` 返回 `null`、引擎报「未知工具」**（重启应用也无法修复）。新增原生工具必须同步更新此白名单。第八轮实测 56 条（详见第四章）。
+- `main/engineProcess/registry.js`：**工具通道静态白名单** `TOOL_CHANNELS`。子进程只能回调登记在其中的句柄；**漏登记会导致 `resolveChannel` 返回 `null`、引擎报「未知工具」**（重启应用也无法修复）。新增原生工具必须同步更新此白名单。第八轮实测 57 条（详见第四章）。
 - `main/engineProcess/transport.js`：传输适配层，兼容 Electron `utilityProcess`（`parentPort`）与 Node `child_process.fork`（`process.send`），统一 `send/onMessage/onExit/kill`。
 
 ### 2.3 回调分类
@@ -607,11 +607,11 @@ flowchart TB
 | 项 | 实测值 | 判定 |
 |---|---|---|
 | `PROTOCOL_VERSION` | `2025-11-25` | 默认提议版本 |
-| `SUPPORTED_PROTOCOL_VERSIONS` | `['2025-11-25','2025-06-18','2025-03-26','2024-11-05']` | **不含现行规范 `2026-07-28`** |
-| 降级方向 | 只向**更旧**版本退（`MIN = 2024-11-05`），不向更新版本 | 无向上兼容路径 |
+| `SUPPORTED_PROTOCOL_VERSIONS` | `['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05']` | **已含现行规范 `2026-07-28`**（D-804 S2–S5 后）；另有 `HANDSHAKE_PROTOCOL_VERSIONS` 单独记录握手栈四代 |
+| 降级方向 | 先试**无状态**（`server/discover`）→ 失败回落握手 → 握手内仍只向更旧退（`MIN = 2024-11-05`） | 两条栈都在；无状态失败是**预期路径**，不打 error 日志 |
 | `MCP-Protocol-Version` 请求头 | **有**——`mcpHttpTransport.js` 的 `send()` 中 `...(protocolVersion ? { 'MCP-Protocol-Version': protocolVersion } : {})`，initialize 之后每个 POST 都带协商值 | 这一项是对齐的（报告 §0.1 R-1 已裁定） |
-| 对 `initialize` + `Mcp-Session-Id` 的依赖 | **硬依赖，无无状态路径** | `mcpHttpTransport.js` 从 initialize 响应头捕获 `mcp-session-id` 并在后续请求回带；`mcpAuth.js` 的 401 探针也发 `initialize` |
-| `CLIENT_CAPABILITIES` | `{ roots, completion, logging }` | 其中 **`roots` 与 `logging` 已在 `2026-07-28` 弃用清单内**（12 个月窗口） |
+| 对 `initialize` + `Mcp-Session-Id` 的依赖 | **不再是硬依赖**：`setStateless()` 打开后两者都不用 | 无状态栈：首请求即带版本头 + `Mcp-Method` 路由头，不发也不收 `Mcp-Session-Id`；握手栈保持原行为（`mcpAuth.js` 的 401 探针仍发 `initialize`，属握手栈） |
+| `CLIENT_CAPABILITIES` | 握手栈 `{ roots, completion, logging }` / 无状态栈 `{ completion }` | S4 已按版本分叉：`roots` 与 `logging` 只在握手栈声明 |
 | 支持的最低版本 | `2024-11-05` 对应 legacy HTTP+SSE 传输 | 同样**在弃用清单内** |
 
 **为什么选择「双栈协商 + 明确到期日」而不是硬切**（报告 §4 `D-804`）：MJCode 是**桌面客户端**，
@@ -626,16 +626,18 @@ flowchart TB
 |---|---|---|
 | `current` | `2025-11-25` | 当前默认提议版本 |
 | `next` | `2026-07-28` | 下一代（断裂式升级） |
-| `nextStatus` | **`not-implemented`** | 只有真做出无状态路径并通过互通测试，才允许改为 `implemented` |
+| `nextStatus` | **`implemented`** | 无状态路径已实现并通过互通测试（真起两个本地服务端跑通两代），S5 已收口 |
 | `dueBy` | **`2027-07-28`** | 口径 = 规范自带的 12 个月弃用窗口（`2026-07-28` + 12 月），不是拍脑袋定的 |
 | `strategy` | `dual-stack-negotiation` | 双栈协商，不硬切 |
 | `deprecatedInNext` | `['roots', 'logging']` | 到下一代必须停止声明的能力 |
 
-**门禁做双向断言**（`test/mcp-protocol-roadmap.test.mjs`，10 条）：
+**门禁做双向断言**（`test/mcp-protocol-roadmap.test.mjs`，**15 条**）：
 
 - `nextStatus === 'not-implemented'` ⇒ 支持集**不得**包含 `2026-07-28`（防「声明了却连不上」）；
 - `nextStatus === 'implemented'` ⇒ 支持集**必须**包含它（防「改了状态忘了接线」）；
-- `PROTOCOL_VERSION` 必须是支持集里最新的一版；弃用清单必须非空且 ⊆ 当前声明能力；到期日必须在未来。
+- `PROTOCOL_VERSION` 必须是**握手栈**里最新的一版（无状态栈不提议 initialize，故不参与此判据）；
+- 弃用清单必须非空、⊆ 握手栈声明、**且已从无状态栈移除**（防「纸面弃用、实际仍宣告」）；
+- **支持集 = 握手栈 ∪ {next}**（防两份清单各自漂移）；到期日必须在未来。
 
 > **这套设计的价值在「会红」**：实测把它变异成「把 `2026-07-28` 塞进支持集但仍标 not-implemented」，
 > 立刻红 2 条。纯注释做不到这一点。
@@ -644,14 +646,15 @@ flowchart TB
 
 | 阶段 | 内容 | 验收判据 |
 |---|---|---|
-| S1（已做） | 代际事实与状态入代码 + 双向门禁 | 门禁 10/10；变异后必红 |
-| S2 | `mcpHttpTransport.js` 增加**无状态路径**（去掉 initialize 依赖，改发协议头 + 能力元数据） | 关掉握手后仍能完成 `tools/list` + 一次 `tools/call` |
-| S3 | 版本协商双栈：服务端回 `2026-07-28` 走无状态、回旧版走握手 | 两条路径各有互通用例（mock server 覆盖两代） |
-| S4 | 下一代不再声明 `roots` / `logging`；`2024-11-05` legacy SSE 设退出口径 | 能力声明按协商版本分叉，且有断言 |
-| S5 | `nextStatus` 改 `implemented` | 门禁 ①② 自动翻转，支持集必须同步加入 |
+| S1（已做） | 代际事实与状态入代码 + 双向门禁 | 门禁通过；变异后必红 |
+| **S2（已做）** | `mcpHttpTransport.js` 的 `setStateless()`：不发/不收 `Mcp-Session-Id`、首请求即带版本头、按新规范带 `Mcp-Method`/`Mcp-Name` | 无状态模式下 `server/discover` + `tools/list` 跑通，且**一次 initialize 都没发**（真连本地服务端断言） |
+| **S3（已做）** | `tryStatelessDiscovery()`：先发 `server/discover`，成功即无状态；失败**复位后**走原握手 | 两条路径各有真实互通用例（两个本地服务端分别覆盖两代） |
+| **S4（已做）** | `clientCapabilitiesFor(version)`：无状态栈不声明 `roots` / `logging`，握手栈三项全留 | 集合等式断言：`无状态能力 = 握手能力 − deprecatedInNext`；legacy SSE 的退出口径仍记在 `MIN` 一侧 |
+| **S5（已做）** | `nextStatus` 改 `implemented`，支持集加入 `2026-07-28` | 门禁 ② 已翻转（支持集**必须**含 next）并通过 |
 
-> **到期硬线**：`2027-07-28`。到那天仍不支持无状态路径，就意味着无法与已升级的服务端互通；
-> 门禁 ⑤ 会在到期后变红，强制重新排期而不是静默拖延。
+> **到期硬线**：`2027-07-28`。门禁 ⑤ 在到期后变红，强制重新排期而不是静默拖延。
+> **明确非目标**：MRTR 多轮往返、可缓存 list、正式扩展框架**未实现**——它们是新版的附加能力，
+> 基础请求/响应（discover / tools/list / tools/call）已经跑通，故不影响「支持 2026-07-28」这个声明。
 
 > **诚实标注**：生态目录里的连接器有多少能在当前代际下真正连通，**第八轮未核**（建议单独立项抽样）。
 
@@ -1213,7 +1216,7 @@ flowchart TB
 | **M2** | 三层记忆晋升链（会话删除 salvage + 后台 promote-scope） | 已完成 | `SALVAGE_MIN_HITS=3` / `PROMOTE_L1_MIN_HITS=3` / `PROMOTE_L2_MIN_HITS=5`；`memory-salvage.test.mjs` |
 | **M3** | 管理 UI + 文件双通道 + 分层召回注入 | 已完成 | `memory-file-channel.test.mjs`；`memory/memoryFile.js` 的 `onChange` 防抖导出 + `importItems` 幂等回灌 |
 | **M4** | 半衰期按 scope 差异化 + L3 全局层独立容量闸 | 已完成 | `memory/scorer.js` 的 `HALF_LIFE_DAYS_BY_SCOPE`（session 7 / team 30 / project 30 / global 90）；`MAX_GLOBAL_MEMORIES=300`；`memory-m4-hardening.test.mjs` |
-| **M5（扩展）** | 团队记忆族（`scope:'team'`） | **部分** | 容量闸 `MAX_TEAM_MEMORIES=200`、`recallTeamMemories`、`listTeamPromotionCandidates`、`promoteTeamMemoryToProject` 均已实现（`memory/team.js`），但写入侧受 `memory.autoCapture`（与主对话共用、**默认关闭**）总闸控制 ⇒ 默认配置下整条链空转（`B-12`） |
+| **M5（扩展）** | 团队记忆族（`scope:'team'`） | **已完成**（第八轮 B-12 收口） | 容量闸 `MAX_TEAM_MEMORIES=200`、`recallTeamMemories`、`listTeamPromotionCandidates`、`promoteTeamMemoryToProject` 均在 `memory/team.js`；写入侧的闸已从 `memory.autoCapture` **解耦**为独立开关 `memory.teamAutoCapture`（**默认开**，只有显式 false 才关），判据落在 `main/teamMemoryGate.js` 的纯函数 `teamCaptureEnabled`，设置页有独立开关 |
 
 ### 13.2 团队层（MJ 军团）
 
@@ -1221,7 +1224,7 @@ flowchart TB
 |---|---|---|---|
 | TL-1 | 编排形态（orchestrator-worker，非 swarm / 非部门流水线） | **已完成**（本轮判定「做得最正确的一处架构决策」） | `ipc/teams.js` 的 `teams:dispatch` → `orchestrator.planGoal` → `workerPool.runGroup`；团队语义全部落 `dag_json`，`planWaves` 钩子零侵入。报告 §0 正面结论 2 |
 | TL-2 | 编制持久化（`teams` / `team_members`）+ 消息总线（`team_messages`） | **已完成（已入库）** | `teamStore.js` 实现完整（枚举 fail-closed 归一 + G4 体积闸）；v8–v12 五个迁移已随提交 `9de20ca` 入库，`MIGRATIONS` 长度 = **12** ⇒ 冷检出即可建表（原 `C-01` 闭合） |
-| TL-3 | 消息总线的双向性 | **部分（载荷已类型化）** | `MESSAGE_KINDS` 6 / `MODEL_MESSAGE_KINDS` 5，G4 体积闸 fail-closed；模型侧仍无读消息工具 ⇒ `question` / `handoff` 是死语义（`B-04`）。**第八轮 D-810 已补写入端类型化**：`payload` 必须是可序列化普通对象且 ≤4 层、`refs` 必须是 ≤20 条且每条 ≤512 字符的字符串数组，形状不对**直接拒**（失败即 `ok:false`，不产生任何总线写入）；读取端 `normalizeTeamMessage` 对历史脏数据保持容忍（新数据不放过、老数据不丢）。守护测试 `team-tools.test.mjs` 的 D-810 段（11 条，含「更严≠全拒」正样本） |
+| TL-3 | 消息总线的双向性 | **已完成**（D-810 写 + B-04 读，第八轮收口） | `MESSAGE_KINDS` 6 / `MODEL_MESSAGE_KINDS` 5，G4 体积闸 fail-closed。**写半边（D-810）**：`payload` 必须是可序列化普通对象且 ≤4 层、`refs` ≤20 条且每条 ≤512 字符，形状不对直接拒、零总线写入。**读半边（B-04）**：新增 `team_read_messages` —— 作用域恒为本团队本次 run（模型传 runId/teamId 无效）、归档团队可读（只读语义）、默认取最近 N 条 + `afterSeq` 增量读、payload 正文不回传只给 `hasPayload` 与键名。两端取舍刻意不同：读取端 `normalizeTeamMessage` 对历史脏数据保持容忍（新数据不放过、老数据不丢）。守护测试 `team-tools.test.mjs` 已增至 85 条：D-810 写入段 11 条（含「更严≠全拒」正样本）+ B-04 读取段 21 条（越界 / 尾部语义 / 增量 / kind 过滤 / payload 不回传 / 归档可读 / 四处登记） |
 | TL-4 | 波次调度与探活撤员 | **已完成** | `teamWaves.js` / `waveEngine.js`；`MAX_ACTIVE_MEMBERS=10` / `MAX_PER_TYPE_IN_RUN=2` / `MAX_WAVES=3` / `WAVE_PROBE_INTERVAL_MS=5000` × `WAVE_PROBE_MAX_MISSES=3` |
 | TL-5 | 三主体中断矩阵 | **部分** | `teamInterrupt.checkInterruptPermit` 逻辑完整；但生产唯一入口 `main.js` 硬编码 `actorKind:'user'` ⇒ lead / member 两分支不可达，`reason` / `confirmed` 成为惰性参数（`B-07`） |
 | TL-6 | 成员运行时配置（`model` / `toolNames` / `systemPrompt` / `approvalMode` / `sandboxPolicy` / `skillNames`） | **已完成**（第八轮 D-808 收口） | `snapshotRoster` 存六项 → `workerPool` 的 `runOpts` 装配末尾调 `applyMemberRuntimeConfig` → `rolePresetApply.js`（唯一事实来源，主会话与 Worker 共用）。人格走引擎 `guardUntrusted`，工具集走交集裁剪 + 空交集 fail-closed，治理档**只取更严**。守护测试 `member-runtime-config.test.js`（12 条，直接断言引擎收到的 runOpts） |
@@ -1240,8 +1243,8 @@ flowchart TB
 | ML-1 | 三层 tier 治理 + 意图预热 | **已完成** | `mcpPrewarm.js` / `intentMcpPrewarm.js`；`mcp-lazy-prewarm.test.mjs` / `mcp-governance.test.mjs` 在 246 项全绿内 |
 | ML-2 | `MCP-Protocol-Version` 请求头 | **已完成** | `mcpHttpTransport.js` 的 `send()` 中 initialize 后每个 POST 带协商值（报告 §0.1 R-1 已更正为对齐） |
 | ML-3 | tools profile 能力面与显式缺口声明 | **已完成** | 见 5.5 节（`sampling` / `elicitation` 显式拒绝并回 `-32601`） |
-| ML-4 | 协议代际对齐到 `2026-07-28` | **进行中（有意推迟，须补到期日）** | `SUPPORTED_PROTOCOL_VERSIONS` 不含 `2026-07-28`；`mcpProtocol.js` 文件头注释明写「属架构级改造，不在本批范围」（`A-10`，报告 §4 `D-804`） |
-| ML-5 | 能力声明去弃用项（`roots` / `logging`） | **待排期** | `CLIENT_CAPABILITIES = { roots, completion, logging }`，二者已在 `2026-07-28` 弃用清单内（`A-10`） |
+| ML-4 | 协议代际对齐到 `2026-07-28` | **已完成**（第八轮 D-804 S2–S5 收口，双栈） | 支持集已含 `2026-07-28`；`nextStatus` 改 `implemented`。**无状态栈**：`mcpHttpTransport.setStateless()` 不发/不收 `Mcp-Session-Id`、首请求即带版本头、按新规范带 `Mcp-Method`；**协商**：`tryStatelessDiscovery()` 先发 `server/discover`，失败复位后走原握手（`discover` 在老服务端必失败，是可靠判别器）。守护：真起两个本地服务端跑通两条栈，断言新栈「一次 initialize 都没发」、老栈「会话头与 2025-11-25 版本头正确」 |
+| ML-5 | 能力声明去弃用项（`roots` / `logging`） | **已完成**（第八轮 S4 收口） | 能力声明按版本分叉：`clientCapabilitiesFor(version)` —— 无状态栈只声明 `completion`，握手栈三项全留（老服务端要靠 `roots` 协商文件系统）。门禁用**集合等式**守：`无状态能力 = 握手能力 − deprecatedInNext` |
 | ML-6 | `filesystem` MCP 与原生工具同框 | **待决策** | `PREWARM_NAMES` 含 `filesystem`，而「原生优先」下架规则只作用于意图预热新增的连接（`A-04` / `DA-04`） |
 
 ### 13.4 审批、沙箱与安全收口
@@ -1259,7 +1262,7 @@ flowchart TB
 
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
-| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 249 个测试文件 + 2 smoke = 251 suite + 5 GATES = **256** 检查项；实测 **EXIT=0 / 256 全绿 / 0 红**（报告 §1.3、§8.1） |
+| GL-1 | 发现式全量测试 | **已完成（实测通过）** | 252 个测试文件 + 2 smoke = 254 suite + 5 GATES = **259** 检查项；实测 **EXIT=0 / 259 全绿 / 0 红**（报告 §1.3、§8.1） |
 | GL-2 | 前置外部门禁 `GATES` | **已完成** | **5 项**：`eval:check` / `doc-fact-check` / `harness-r7:check` / `i18n-scan` / `i18n-modcheck` |
 | GL-3 | i18n 扫描进入门禁 | **已完成**（第八轮 D-807② 收口） | 两条同时接入：`i18n-scan` 扫 `renderer/src`（注释剥离后的裸中文，当前 0 残留）、`i18n-modcheck` 查 42 个语言包模块的中英键集与 `{var}` 插值一致性。两条都**自证会红**（无参 exit 2、有残留或缺键 exit 1），并有变异验证：裸中文必红、**只出现在注释里的中文必绿**、不存在的模块必红 |
 | GL-4 | 汇总口径把「跳过」计入「通过」 | **已知偏差（P3）** | 汇总公式未减 skipped；darwin 本机 3 个沙箱套件未真跑却计绿（`C-04`） |
@@ -1273,7 +1276,7 @@ flowchart TB
 |---|---|---|---|
 | CL-1 | 三级降级压缩 + offload 可取回 | **已完成** | `compactHistory` → `trimHistoryForRun` / `splitFixedHead` → `new-window`；`bigPayload.offloadToolCall` + `bigPayload:fetch` 分页取回；顺序正确（先 offload 再 summarize） |
 | CL-2 | offload 落盘的可恢复性 | **部分（P2）** | 落盘目录为 `${TMPDIR}/mjcode-tool-outputs/`，会话内可被系统回收且无清理 ⇒ 「会话内可失效」与「磁盘泄漏」两面（`B-13`） |
-| CL-3 | 分层召回覆盖全部模型入口 | **部分（P2）** | 主对话管理面（`ipc/localData.js`）传 `scopes`；Worker 通道（`main.js` 的 `buildTaskPrompt`）未传（`B-11`） |
+| CL-3 | 分层召回覆盖全部模型入口 | **已完成**（第八轮 B-11 收口） | `buildTaskPrompt` 现按 `group.thread_id` 传 `scopes`（有会话 `session/project/global`，无会话 `project/global`）与 `conversationId`。此前不传 `scopes` ⇒ 走单空间全量旧路径：**没有 scope 过滤**，别的会话的 session 记忆会漏进无人值守 Worker（已用行为对照断言钉死：旧路径 5 条含他人会话、分层路径 4 条不含） |
 | CL-4 | 派生深度硬上限 | **已完成（结构性）** | `SUBAGENT_TOOL_NAMES` 7 个只读工具不含 `spawn_subagent`；`scheduledToolHandlers` 亦不含 `orchestrate_task` ⇒ 深度**恒为 1**，由工具集而非计数保证 |
 | CL-5 | 子代理结论回传的截断与取回 | **已完成**（第八轮 D-806 收口） | 回传**有** 15000 字符硬截（`TOOL_RESULT_MAX_CHARS`，`truncateToolResult` 在工具分派 switch 之后无条件执行），并非「未截断」；此前 `summarizeToolOutput` 的字段白名单只认 `stdout` / `content`，子代理回传键 `result` 因此**不走头尾保留、不落盘**，尾部永久丢失。**修法是把 `result` 纳入摘要化（阈值取 `TOOL_RESULT_MAX_CHARS`，8k~15k 段保持无损）**，超阈值即头尾保留 + 原文落盘并给出可读路径，模型用 `read_file` 取回尾部。守护测试 `subagent-result-offload.test.mjs`（11 条，含「落盘内容 = 原文全文」的实证） |
 
@@ -1300,11 +1303,19 @@ flowchart TB
 > 两件事必须分开记，否则下次复用这套材料时会误以为已经齐了。
 > 逐条的判定依据与复现命令在报告 `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 的 **§8.2 / §8.7**。
 >
-> **2026-10-21 晚更新**：原 11 条里 **3 条已销账**——取消信号穿透（D-805）、i18n 进 `GATES`（D-807②）、
-> 生态数字单一事实源（D-812）。下表是销账后的 **8 条**。
+> **2026-10-21 收尾更新**：原 11 行已销账 **6 行**（涉及 7 项）——取消信号穿透（D-805）、i18n 进 `GATES`（D-807②）、
+> 生态数字单一事实源（D-812）、MCP 双栈（D-804）、D-806 的两条（Worker 分层召回 B-11 + 团队记忆解耦 B-12）、
+> 模型侧读消息（B-04）。下表是**剩下的 4 行 + 1 行记账项**。
 
 | 优先级 | 没做完的事 | 一句话说明为什么现在还不行 |
 |---|---|---|
+| **发布前必做** | 推送远端 | 改动只在本地。不 push，打包出来的制品还是旧代码，前面做的全白费 |
+| P2 | 探活撤员只有单模块测试 | 端到端跑一次要 ≥15 秒（5 秒 × 3 次探活），不适合逐次提交都跑；要覆盖得先给波次引擎开时序注入点 |
+| P3 | 汇总公式把「跳过」算成「通过」 | 本机有 3 个沙箱套件没真跑却显示绿；Linux 真机隔离要以 CI 的 ubuntu 为准，不能拿这个绿当结论 |
+| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
+| P3 | 未核项（要么核、要么明确不核） | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核；MCP 新版的附加能力（MRTR / 可缓存 list / 正式扩展框架）未实现 |
+
+---|---|---|
 | **发布前必做** | 推送远端 | 改动只在本地（多轮提交未推送）。不 push，打包出来的制品还是旧代码，前面做的全白费 |
 | P2 | Worker 侧「分层召回」没启用 | 主对话会按会话/项目/团队分层捞记忆，Worker 派出去的任务不会 → 派出去的成员相当于「失忆上岗」 |
 | P2 | 团队记忆链默认不生效 | 写入仍挂在一个默认关闭的总开关（`memory.autoCapture`）下 → 默认配置下这条链是空转的 |

@@ -1187,6 +1187,8 @@ const { TaskStore } = require('./taskStore');
 // M5 / T5-1：MJ 军团团队层——团队编制（与任务编排共用同一 SQLite 底座）
 const { TeamStore } = require('./teamStore');
 const { MemoryManager } = require('./memory');
+// D-806 / B-12：团队记忆沉淀闸（默认开的独立开关，与 memory.autoCapture 解耦）
+const { teamCaptureEnabled } = require('./teamMemoryGate');
 const { MemoryBgScheduler } = require('./memory/bgScheduler');
 // 三层记忆 M3：记忆文件双通道（SQLite 唯一事实来源，文件为导出视图）
 const { MemoryFileSync } = require('./memory/memoryFile');
@@ -1420,9 +1422,22 @@ function setupTaskOrchestration(db) {
         try {
           const blocks = [];
           if (memoryManager && recallSpace) {
+            // D-806 / B-11（2026-10-21）：**必须传 scopes 才走分层召回**。
+            // 此前只传 spaceId + query，recall() 判定「没有 scopes」→ 走单空间全量旧路径：
+            // 没有每层配额、没有跨层同内容去重，session/project/global 混在一起按 tier+时间取 Top-3，
+            // 于是「刚说过的工作现场」可能被更久但 tier 更高的项目条目挤掉。
+            // 分层口径与主对话（ipc/localData 的 manage 面）同源：session 2 / project 3 / global 2。
+            // session 层只在有会话归属时才收——Worker 的会话归属 = 建组时写入的 thread_id
+            // （T5-11 已把 threadId 贯穿到建组，`task_groups.thread_id` 是唯一判据）。
+            // team 层**不在此列**：它在下面有专用块（独立 label 与 untrusted 包装），并进来会出双份。
+            const groupThreadId = group.thread_id || null;
+            const scopes = groupThreadId
+              ? ['session', 'project', 'global']
+              : ['project', 'global'];
             const hits = memoryManager.recallContents({
               spaceId: recallSpace, query: `${group.goal} ${task.title}`, topK: 3,
               domains: ['global_knowledge', 'entity', 'reflection'],
+              scopes, conversationId: groupThreadId,
             });
             if (hits.length) {
               const { wrapUntrusted } = await import('../shared/untrustedContent.mjs');
@@ -1455,14 +1470,23 @@ function setupTaskOrchestration(db) {
         ].filter(Boolean).join('\n\n');
       },
       // M5 / T5-5：子任务成功结论 → 团队记忆沉淀（宿主侧收口，worker 只透传事实）。
-      //   三道闸：① 与主对话沉淀共用 memory.autoCapture 开关（默认关，无人值守 Worker 内容
-      //   无门槛进记忆会污染）；② 团队归档不写（归档团队记忆只读不参与召回）；
+      //   三道闸：① **团队记忆专属开关 `memory.teamAutoCapture`（D-806 / B-12，2026-10-21 解耦）**；
+      //   ② 团队归档不写（归档团队记忆只读不参与召回）；
       //   ③ 归属键由 findTeamByRun 反查——认领成员存在则写成员私有，否则写团队共享。
       //   只收成功结论（worker 侧仅对 status=done 调用）；fail-open，绝不阻塞任务收尾。
+      //
+      //   为什么从 `memory.autoCapture` 解耦出去（原实现与主对话沉淀共用一把闸）：
+      //   那把闸默认关，而「团队记忆」是军团的关键卖点之一——默认配置下整条链空转，
+      //   等于功能不存在（B-12 的原话是「默认关闭 = 该能力默认不生效」）。
+      //   解耦后默认**开**，风险由四处约束兜住：团队内可见（跨团队严格隔离）、
+      //   `MAX_TEAM_MEMORIES=200` 硬上限、`source=model_conclusion`（trust 0.6，排位靠后）、
+      //   归档团队只读。担心无人值守内容污染的用户可在设置页单独关闭它，而不必连坐全局沉淀。
       rememberTeamMemory: ({ runId, ownerMemberId, title, text, cwd } = {}) => {
         try {
           if (!memoryManager) return;
-          if (!localStore?.getPreference('memory.autoCapture')) return;
+          // 只有显式 false 才关；未设置 = 默认开（与全局 autoCapture 彻底解耦，互不影响）
+          // 判据抽在 main/teamMemoryGate.js（纯函数，可行为测试）
+          if (!teamCaptureEnabled((k) => localStore?.getPreference(k))) return;
           const content = String(text || '').trim();
           if (!content) return;
           const team = teamStore?.findTeamByRun?.(runId);

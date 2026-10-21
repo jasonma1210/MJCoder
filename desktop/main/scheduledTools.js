@@ -92,13 +92,15 @@ function scheduledToolHandlers(deps = {}) {
     prDiff: withCtx(prTools.prDiff),
     prReview: withCtx(prTools.prReview),
     prComment: withCtx(prTools.prComment),
-    // M5 / T5-8：军团协同四工具（仅当宿主注入 teamTools 时出现——即成员任务）。
-    // 非成员任务（普通编排 Worker / 定时任务 / 主会话）不注册，模型也就看不到这四个 schema。
+    // M5 / T5-8：军团协同工具（仅当宿主注入 teamTools 时出现——即成员任务）。
+    // 非成员任务（普通编排 Worker / 定时任务 / 主会话）不注册，模型也就看不到这些 schema。
+    // B-04（2026-10-21）加入 teamReadMessages：补齐总线的「读」半边。
     ...(teamTools ? {
       teamListMembers: teamTools.teamListMembers,
       teamSendMessage: teamTools.teamSendMessage,
       teamBoard: teamTools.teamBoard,
       teamWait: teamTools.teamWait,
+      teamReadMessages: teamTools.teamReadMessages,
     } : {}),
   };
 }

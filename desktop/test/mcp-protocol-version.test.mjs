@@ -149,13 +149,22 @@ check('③ 换成协商到 2025-03-26 → 头跟着变（证明值取自协商�
 });
 
 // ── ④ 老服务端未声明版本 → 不发该头（不能把我们提议的值硬塞过去） ──
+// D-804（2026-10-21）双栈之后有一处**必须排除**的例外：无状态栈的探测请求 `server/discover`
+// 天生就要带版本头——新版取消了 initialize，没有别的机会声明自己说的是哪一代。
+// 所以判据改成「唯一允许带头的是那次探测，其余一律不许带」——比原判据更严格（原来只要求全不带）。
 const legacy = await roundTrip('pv-undeclared', '');
-check('④ 服务端未声明 protocolVersion → 其后请求也不带该头（旧服务端兼容）', () => {
+check('④ 服务端未声明 protocolVersion → 其后请求不带该头（探测请求除外，见注释）', () => {
   eq(legacy.r.ok, true, `连接失败：${legacy.r.error || ''}`);
   eq(legacy.r.protocolVersion, '', '未声明时应保持空，不得用提议值冒充');
-  for (const x of legacy.seen) {
-    ok(x.header === undefined, `${x.method} 竟然带了该头：${x.header}`);
-  }
+  const withHeader = legacy.seen.filter((x) => x.header !== undefined);
+  const offenders = withHeader.filter((x) => x.method !== 'server/discover');
+  ok(offenders.length === 0,
+    `除探测外仍有请求带了该头：${offenders.map((x) => `${x.method}=${x.header}`).join(', ')}`);
+  ok(withHeader.every((x) => x.header === '2026-07-28'),
+    `探测请求的头应为无状态版本，实际：${withHeader.map((x) => `${x.method}=${x.header}`).join(', ')}`);
+  // 反向：握手与后续业务请求必须**没有**该头（服务端没声明版本，就不能硬塞）
+  ok(legacy.seen.some((x) => x.method === 'initialize' && x.header === undefined),
+    'initialize 不应带该头');
 });
 
 console.log(`\n结果：${pass}/${total} 通过`);

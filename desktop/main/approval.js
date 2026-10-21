@@ -93,6 +93,8 @@ const REVERSIBILITY = {
   // 本机无法「撤回对方已看到的信息」⇒ 不可逆；等待边可被依赖完成/超时自然消解 ⇒ 可逆。
   team_list_members: { reversible: true, note: '只读查询，无任何副作用' },
   team_board: { reversible: true, note: '只读查询，无任何副作用' },
+  // B-04（2026-10-21）：模型侧读消息工具——纯读取，无副作用
+  team_read_messages: { reversible: true, note: '只读查询，无任何副作用' },
   team_send_message: { reversible: false, note: '消息已进入团队总线，其它成员可能已读取并据此行动' },
   team_wait: { reversible: true, note: '仅登记本任务的等待边，依赖完成或超时后自动消解' },
 };
@@ -331,6 +333,8 @@ const READONLY_TOOLS = new Set([
   'git_status', 'git_diff', 'git_log', 'git_branch',
   // M5 / T5-8：军团协同——列表查询是只读，不触发审批询问
   'team_list_members', 'team_board',
+  // B-04（2026-10-21）：模型侧读消息同样是只读（读总线不改变任何状态）
+  'team_read_messages',
 ]);
 
 // toolLevel() 在 `|| 'L2'` 兜底**之前**按工具名特判的工具（对应 toolLevel 里逐个 if 分支）。

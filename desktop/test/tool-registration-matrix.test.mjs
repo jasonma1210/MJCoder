@@ -65,8 +65,9 @@ const ALL_TOOLS = Array.from(new Set([...BASE_NAMES, ...TH_KEYS])).sort();
 const TOOL_SET = new Set(ALL_TOOLS);
 
 // 允许的「非静态 schema」工具：运行时条件追加，不进 BASE_TOOLS（其条数被基线条数测试钉死）。
-// M5 / T5-8：team_* 四工具仅在成员任务（宿主注入 teamContext）时追加，故同属运行时 schema。
-const RUNTIME_SCHEMA_TOOLS = ['computer_use', 'team_list_members', 'team_send_message', 'team_board', 'team_wait'];
+// M5 / T5-8：team_* 只在成员任务（宿主注入 teamContext）时追加，故同属运行时 schema。
+// B-04（2026-10-21）新增 team_read_messages：模型侧读消息。
+const RUNTIME_SCHEMA_TOOLS = ['computer_use', 'team_list_members', 'team_send_message', 'team_board', 'team_wait', 'team_read_messages'];
 // 「无 UI 轨迹标签」允许清单：编排/插件/定时/PR 类工具在其它视图展示，无 toolTrace.* 条目。
 const NO_LABEL_TOOLS = ['orchestrate_task', 'search_plugins', 'install_plugin', 'scheduled_create',
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment'];

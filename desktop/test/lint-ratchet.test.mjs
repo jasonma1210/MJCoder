@@ -16,7 +16,9 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 
 // 单一事实来源：2026-10-19 实测 161 条（no-unused-vars 122 / require-atomic-updates 32 /
 // react-hooks/exhaustive-deps 5 / 其它 2）。**只允许下调**：清理一批后同步把这里与 package.json 一起改小。
-const LINT_WARNINGS_BASELINE = 161;
+// 2026-10-21（第八轮收尾）实测 159：D-804 双栈那批赋值改用 Object.assign 后不再触发
+// require-atomic-updates，团队记忆开关改用 ui/Button 原语也不再新增 unused 告警 ⇒ 161 → 159。
+const LINT_WARNINGS_BASELINE = 159;
 
 let pass = 0;
 let fail = 0;
