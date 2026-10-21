@@ -766,12 +766,25 @@ cd /Users/jianma/Desktop/MJCode/desktop && node test/run-all.mjs
 | `31bd245` | `feat(r8)` 收口 **D-804 双栈 / D-806（B-11+B-12）/ B-04 读消息** | 29 文件 | **259 / 259 / 0 红**；新增 3 套件（21 / 10 / 15 条），team-tools 64 → 85 条 |
 | `5dfaf7e` | `feat(r8)` 收口 **C-04 汇总口径 / 探活撤员端到端** | 12 文件 | **261 项 · 通过 258 · 失败 0 · 跳过 3**；新增 2 套件（18 / 26 条） |
 | `07debfb` | `docs(r8)` 补提交锚点与收尾基线复算命令 | 1 文件 | 仅文档 |
+| `4bdf52b` | `feat(r8)` 收口 **七条 P2/P3 小账 + 三项未核**（B-05/07/08/09/13、A-03/04、L-3） | 27 文件 / +1695 / −91 | **266 项 · 通过 263 · 失败 0 · 跳过 3**；lint 159/159；renderer `tsc --noEmit` 0 error；矩阵 143 → **150**，新增 4 条按调用形态的聚合断言 |
 
 > `7375a9b` 这条值得单独记：它修的是 `7ebba4d` 里的**虚报**——当时只在 Worker 接了取消信号，
 > 定时任务那条仍是裸单参，而守护测试也只断言了 Worker（实现与测试一起漏）。
 > 接线类修复的正确守护形态是**数点位数**，不是「能匹配到一次」。详见 §4 D-805 的「自己抓到的漏修」。
 
-推送状态：本批开始前已推过一次（`24acc15..60100bb`）；`31bd245` 与 `5dfaf7e` 两批已再次推送，`main` 与 `origin/main` 齐平。
+推送状态：`24acc15..60100bb`（含 `31bd245` / `5dfaf7e` / `b504fbe`）已推送，`main` 与 `origin/main` 曾齐平于 `b504fbe`。
+**`4bdf52b` 推送失败（网络原因，非仓库问题）**：连续三次报
+`Error in the HTTP2 framing layer`（`http.version=HTTP/1.1` 时为 `CONNECT tunnel failed, response 502`），
+直连（清空 `*_PROXY`）则 `Failed to connect to github.com port 443`。三条命令都可复跑：
+
+```bash
+git push origin main                                   # HTTP2 framing layer 错误
+git -c http.version=HTTP/1.1 push origin main          # CONNECT tunnel failed, response 502
+env -u HTTP_PROXY -u HTTPS_PROXY git push origin main   # Couldn't connect to server
+```
+
+处置：**提交已落本地（`4bdf52b`），推送待网络恢复后重试**；恢复后先 `git log --oneline -1 origin/main`
+确认是否仍是 `b504fbe`，再 push。这一项在推送成功前**不能被当成已完成**——制品会按旧 HEAD 构建。
 
 ### 8.2 §5 批次表的执行状态（逐项对账，不按计划口径写）
 
@@ -895,11 +908,15 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 
 > 口径：**只列有明确落点的事**，每条都能指到文件/常量。不含「待讨论」。
 > 销账轨迹：11 条 → 8 条（D-805 / D-807② / D-812）→ 5 条（D-804 / D-806 / B-04）→
-> 3 条（C-04 + 探活撤员端到端）→ **0 条（本轮：#1 推送已在每批后完成；#2 七条小账全闭；#3 三项未核已核清并落地两处加固）**。
+> 3 条（C-04 + 探活撤员端到端）→ **0 条待处置**（本轮：#2 七条小账全闭；#3 三项未核已核清并落地两处加固）。
+>
+> ⚠ **唯一未闭环的是一条外部条件，不是处置缺失**：#1 推送 `4bdf52b` 因本机网络故障失败
+> （HTTP2 framing / CONNECT 502 / 直连 443 不通，三条复跑命令见 §8.1）。提交已在本地，
+> **网络恢复后只需一条 `git push`**；在此之前制品仍会按旧 HEAD（`b504fbe`）构建。
 
 | # | 事项 | 级别 | 落点 | 收口证据 |
 | --- | --- | --- | --- | --- |
-| 1 | 推送 `origin/main` | 发布阻塞 | `git push` | 已在每批提交后执行；`main` 与 `origin/main` 齐平（见 §8.1） |
+| 1 | 推送 `origin/main` | 发布阻塞 | `git push` | `24acc15..b504fbe` 已推送；**`4bdf52b` 因网络故障未推送**（HTTP2 framing / CONNECT 502 / 直连 443 不通，三条命令见 §8.1），需在恢复后重试 |
 | 2 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §8.9 | 七条各自的落点与守护测试见 §8.9（新增 5 个套件） |
 | 3 | **L-1 / L-3 未核项** | P3 | 见 §8.10 | L-1 结论为「CI 从未运行」，如实标注为**不可验证项**；L-3 三项已核清，两项加固、一项明确不做 |
 
