@@ -4757,3 +4757,62 @@ Git tag / branch / bundle · GitHub 远端引用 · CI 运行记录（run `39556
 ### 尚存问题与推荐下一步
 - 备份已完成；升级前建议先在 `feat/electron-45` 分支操作，并按风险清单逐项验收。
 - **推荐下一步**：先升 electron-builder 25 → 26（单独验证 33 仍可打包），再升 Electron 45 并补 `ELECTRON_RUN_AS_NODE` 门禁。
+
+## 会话总结：Electron 33 → 45 运行时升级 · 2026-10-21（第二十六轮）
+
+### 会话的背景
+上一轮已把 Electron 33 基线固化为可回退快照（tag `v0.6.1-beta-e33-backup` / branch `backup/electron33` / 离线 bundle）。用户确认「开始升级」，要求按「先验证、再升级」的顺序推进，避免一次性变更所有依赖导致问题无法归因。
+
+### 会话的主要目的
+把桌面端运行时从 Electron 33.4.11 升到 45.0.0，同时把打包器从 electron-builder 25 升到 26.15.3；在不改变业务行为的前提下，用门禁与真机冒烟验证升级后的启动、引擎子进程、凭证解密、webview、数据库与打包链路。
+
+### 完成的主要任务
+- **建分支**：从 `8441c8d` 创建 `feat/electron45`，全程在该分支操作，不合并 main。
+- **第一步（打包器单独升级）**：安装 electron-builder `26.15.3`，在 Electron 仍为 33.4.11 时执行 `renderer build + electron-builder --dir`，确认 `release/mac-arm64/MJ Coder.app` 正常产出。
+- **第二步（运行时升级）**：安装 Electron `45.0.0`（精确版本），确认内置 Node `24.22.0`、Chromium `156.0.8078.48`、ABI `150`，产物最低系统版本为 macOS `13.0`。
+- **静态与单元门禁**：`npm run typecheck` 0 error；`npm run lint` 159 warning / 0 error；`npm test` 266 总 / 263 通过 / 0 失败 / 3 跳过，与升级前基线一致。
+- **运行时专项验证**：
+  - 用 Electron 45 的内置 Node 24 复跑 7 个关键套件（agent-engine、engine-process、localStore、credentialCrypto、memory、taskStore、checkpointStore），全部通过。
+  - 实测 `utilityProcess` + `transport`：Electron 45 中引擎子进程成功动态 import `agent-core`（ESM），协议握手与回包正常。
+  - 实测 `safeStorage` 跨版本：Electron 33 写入的 2 条 `v10` 密文在 Electron 45 打包应用中解密成功。
+  - 实测 `<webview>`：Electron 45 下 `dom-ready` 触发正常。
+  - 实测打包应用启动：日志 `electron 45.0.0 · node 24.22.0`，sql.js、MCP tier 分级、调度器、任务编排均正常。
+  - 实测开发模式：旧 ABI 的 `better-sqlite3` 金丝雀探测失败后自动降级 sql.js，符合 fail-safe 设计。
+
+### 会话中主要使用的技术栈
+Electron 45 / Chromium 156 / Node 24.22.0 · electron-builder 26 · Electron `utilityProcess` + 自定义 RPC transport · `safeStorage`（macOS Keychain v10 密文）· `<webview>` · sql.js / better-sqlite3 金丝雀探测 · CDP（远程调试端口）· macOS 截屏与 AppleScript。
+
+### 关键决策和解决方案
+1. **两阶段升级**：先升 electron-builder 并用 Electron 33 验证打包，再升 Electron。这样若打包失败可确定是 builder 问题，若运行时失败可确定是 Electron 问题。
+2. **精确版本而非 `^`**：`electron` 固定为 `45.0.0`，避免 CI 与本地因次版本漂移产生不同运行时。
+3. **不重编原生模块**：沿用 `npmRebuild: false` + 打包固定 sql.js；旧 ABI 的 better-sqlite3 由既有金丝雀探测自动降级，不引入新的构建依赖。
+4. **引擎隔离验证方式**：不依赖真实模型调用，直接用 `runEngine` 触发参数校验错误，证明子进程已完成 agent-core ESM 加载与 RPC 通路；避免消耗用户额度与污染会话数据。
+5. **凭证兼容验证方式**：先读取真实 `local-data.json` 中的 `keyEncrypted`（`v10` 前缀），再在 Electron 45 打包应用中解密；首次需用户在 macOS 钥匙串弹窗授权，授权后解密成功。
+6. **不顺手改代码**：本轮只改依赖与文档；`safeStorage` 同步 API 的 deprecated 迁移、首启黑屏的强制重绘都属独立改动，先记录风险不在本轮混入。
+
+### 会话中主要使用的工具
+`Shell`（npm / npx / git / curl / lsof / screencapture / osascript / plutil）· `Read` / `Write` / `Edit` · `Grep` · `AskUserQuestion`（钥匙串授权）· CDP WebSocket 探针脚本。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/package.json` | 修改 | `electron` `^33.0.0` → `45.0.0`；`electron-builder` `^25.0.0` → `^26.15.3` | 运行时与打包器升级 |
+| `desktop/package-lock.json` | 修改 | 依赖树随之重算（+64 / -122 / 变更 19 个包） | 锁定新依赖 |
+| `CHANGELOG.md` | 修改 | `[未发布]` 顶部新增升级条目与验收证据、已知风险 | 记录变更事实 |
+| `docs/打包与安装指南.md` | 修改 | 头部版本改为 Electron 45 / builder 26；前置条件补 Node 要求与 macOS 13+ | 文档与新运行时一致 |
+| `README.zh-CN.md` | 修改 | 技术栈 `Electron 33` → `Electron 45` | 文档与新运行时一致 |
+| `README.md` | 修改 | 追加本节会话总结 | 用户固定规则 |
+
+### 文件修改的详细内容
+- `desktop/package.json`：仅两行 devDependencies 变更，未改 scripts / build / dependencies / optionalDependencies。
+- `desktop/package-lock.json`：全部由 `npm install` 生成，无手工编辑。
+- `docs/打包与安装指南.md`：新增「目标 macOS 13.0+」一行，并把「低于 18 会因 Electron 33 报错」改为 builder 26 的 Node ≥ 20 说明。
+- `README.zh-CN.md`：技术栈行版本号同步。
+- 源码零改动：`main/`、`agent-core/`、`renderer/` 均未修改。
+
+### 尚存问题与推荐下一步
+- **`safeStorage` 同步 API 已被 deprecated**：45 仍可用但会持续告警，后续需迁移 `isAsyncEncryptionAvailable` / `encryptStringAsync` / `decryptStringAsync`（涉及调用链异步化，单独排期）。
+- **升级后首启黑屏（一次性）**：首次启动时钥匙串授权弹窗阻塞主进程，曾观察到窗口纯黑，CDP 重载后恢复、二次启动正常。建议在发布说明中提示用户首次启动输入密码并选择「始终允许」；若后续复现，再评估在 `show` 后加一次 `webContents.invalidate()`。
+- **macOS 12 及更早不再支持**：`LSMinimumSystemVersion=13.0`。发布前需确认更新分发策略，避免老系统用户收到无法启动的更新。
+- **回退口径**：`electron-updater` 不支持降级；如需回退，发一个版本号更高的 Electron 33 构建（基线见 tag `v0.6.1-beta-e33-backup`）。
+- **推荐下一步**：在 `feat/electron45` 上跑一次 CI（workflow_dispatch），确认三平台打包与 Linux 沙箱门禁；通过后再决定合并与发版。

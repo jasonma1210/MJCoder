@@ -117,7 +117,7 @@ workspace-write 档把**整个项目目录**设为可写，但其中有两处即
 
 ## 技术栈
 
-- **桌面端**：Electron 33 · React 18 · Vite · Tailwind CSS；UI 组件层为 JavaScript（JSX），**IPC / Agent 边界契约为 TypeScript + zod 运行时校验**（渐进迁移中，新边界文件强制 `.ts`）
+- **桌面端**：Electron 45 · React 18 · Vite · Tailwind CSS；UI 组件层为 JavaScript（JSX），**IPC / Agent 边界契约为 TypeScript + zod 运行时校验**（渐进迁移中，新边界文件强制 `.ts`）
 - **引擎**：原生 JavaScript（零框架、零运行时依赖的 headless Agent 引擎，独立子进程驻留改造见开发计划 T3-7）
 - **服务端**（可选）：Node.js · Express · PostgreSQL · Yjs
 - **测试**：Node 内置 test runner。三个数字含义不同，不可混用：**218** 个 `*.test.{js,mjs}` 文件 + **2** 个 smoke

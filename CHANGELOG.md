@@ -6,6 +6,23 @@ desktop / server / renderer 三个 package.json 的 version 必须保持一致�
 
 ## [未发布]
 
+### 变更（运行时升级：Electron 33.4.11 → 45.0.0 + electron-builder 25 → 26.15.3，2026-10-21）
+- **运行时**：Electron `45.0.0`（Chromium `156.0.8078.48` / 内置 Node `24.22.0` / ABI `150`）；产物 `LSMinimumSystemVersion=13.0`，macOS 12 及更早不再支持
+- **打包**：electron-builder `26.15.3`。按「先升打包器、再升运行时」分两步：先用 Electron 33 跑 `--dir` 确认打包链未坏，再升 Electron，避免两个变量同时变化无法归因
+- **验收证据**：
+  - `npm run typecheck` 0 error；`npm run lint` **159 warning / 0 error**（棘轮 161 内）
+  - `npm test` 总计 **266** · 通过 **263** · 失败 **0** · 跳过 **3**（跳过项与升级前一致：Linux bwrap / macOS sandbox-exec 环境限制）
+  - Electron 45 内置 Node 24.22.0 下复跑 `agent-engine` / `engine-process` / `localStore` / `credentialCrypto` / `memory` / `taskStore` / `checkpointStore` 关键套件，全部通过
+  - `utilityProcess` 实测：Electron 45 中 `runEngine` 成功动态 import `agent-core`（ESM），返回参数校验错误而非 `ERR_REQUIRE_ESM`
+  - `safeStorage` 跨版本：Electron 33 写入的 2 条 `v10` 密文在 Electron 45 打包应用中解密成功（`[local] 加密轨：safeStorage`）；首次需在 macOS 钥匙串弹窗输入登录密码授权
+  - `<webview>` 在 45 下 `dom-ready` 正常；打包应用启动日志 `electron 45.0.0 · node 24.22.0`，sql.js、MCP tier 分级、调度器、任务编排均正常
+  - 开发模式：旧 ABI 的 `better-sqlite3` 金丝雀探测失败后自动降级 `sql.js`，符合既有 fail-safe 设计
+- **已知风险 / 待办**：
+  - `safeStorage` 同步 API（`isEncryptionAvailable` / `encryptString` / `decryptString`）在 45 标记 deprecated，需后续迁移 async 变体
+  - 升级后首次启动会触发钥匙串重新授权；授权弹窗阻塞主进程期间曾出现一次黑屏，重载/二次启动恢复。发布说明需提示用户输入密码并选择「始终允许」
+  - macOS 12 及更早用户无法运行新版本；`electron-updater` 不支持降级，回退需发布更高版本号的 33 构建（见备份 tag `v0.6.1-beta-e33-backup`）
+  - electron-builder 26 在 CI 环境会打印「Implicit publishing triggered by CI detection」提示；发布流程已显式传 `--publish always/never`，无需处理（v27 将改为硬错误）
+
 ### 变更（M5/T5-5 团队记忆模块：scope=team + per-agent 私有 + 提名制晋升，2026-10-20）
 - **数据层（迁移 v11，`main/db/index.js`）**：`memories` 表新增 `team_id` / `agent_id` 两列 + `idx_memories_team` 索引；`_ensureScopeColumns` 惰性列补齐同步登记，**不新建存储**
 - **归属判定（单一事实来源）**：团队共享 = `scope='team' AND team_id=X AND agent_id IS NULL`；成员私有 = `scope='team' AND team_id=X AND agent_id=Y`；可见范围 = 团队共享 ∪ 自身私有，跨团队严格隔离
