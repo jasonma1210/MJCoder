@@ -17,6 +17,7 @@ desktop / server / renderer 三个 package.json 的 version 必须保持一致�
   - `safeStorage` 跨版本：Electron 33 写入的 2 条 `v10` 密文在 Electron 45 打包应用中解密成功（`[local] 加密轨：safeStorage`）；首次需在 macOS 钥匙串弹窗输入登录密码授权
   - `<webview>` 在 45 下 `dom-ready` 正常；打包应用启动日志 `electron 45.0.0 · node 24.22.0`，sql.js、MCP tier 分级、调度器、任务编排均正常
   - 开发模式：旧 ABI 的 `better-sqlite3` 金丝雀探测失败后自动降级 `sql.js`，符合既有 fail-safe 设计
+  - **CI 门禁**：首跑暴露 `team-store` / `memory-salvage` 在 Linux runner 上退出期 sql.js flush 卡死 180s（升级前 main 同样复现，非本次引入）；两个套件改为退出前显式 `close()`，复跑 CI `266 总 / 265 通过 / 0 失败 / 1 跳过`，两个套件耗时降至 208ms / 214ms
 - **已知风险 / 待办**：
   - `safeStorage` 同步 API（`isEncryptionAvailable` / `encryptString` / `decryptString`）在 45 标记 deprecated，需后续迁移 async 变体
   - 升级后首次启动会触发钥匙串重新授权；授权弹窗阻塞主进程期间曾出现一次黑屏，重载/二次启动恢复。发布说明需提示用户输入密码并选择「始终允许」

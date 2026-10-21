@@ -4816,3 +4816,11 @@ Electron 45 / Chromium 156 / Node 24.22.0 · electron-builder 26 · Electron `ut
 - **macOS 12 及更早不再支持**：`LSMinimumSystemVersion=13.0`。发布前需确认更新分发策略，避免老系统用户收到无法启动的更新。
 - **回退口径**：`electron-updater` 不支持降级；如需回退，发一个版本号更高的 Electron 33 构建（基线见 tag `v0.6.1-beta-e33-backup`）。
 - **推荐下一步**：在 `feat/electron45` 上跑一次 CI（workflow_dispatch），确认三平台打包与 Linux 沙箱门禁；通过后再决定合并与发版。
+
+### 补充：CI 首跑与「退出期 flush」超时修复 · 2026-10-21
+- **CI 首跑（run `39571361785`）**：`verify` 失败，唯一红项是 `test/team-store.test.js` 超时 `180043ms`；日志显示 41 条断言全部通过、停在进程退出阶段。
+- **归因（非本次升级引入）**：同一套件在升级前的 `main`（Electron 33）上曾以 `180043ms` 完全相同的方式超时；`memory-salvage.test.mjs` 也出现过 `180073ms` 超时。共同点是两个套件都在退出时留下**脏 sql.js 连接**，依赖 `sqljsDb` 的 `process 'exit'` 兜底 flush；而已经显式 `db2.close()` 的 `taskStore.test.js` 从未超时。
+- **修复**：`team-store.test.js` / `memory-salvage.test.mjs` 在 `process.exit()` 前显式 `db.close(); db2.close();`，与 `taskStore.test.js` 既有纪律对齐；退出路径不再有 flush/fsync。
+- **复跑验证（run `39575512467`，commit `931f937`）**：CI **全绿**，`总计 266 · 通过 265 · 失败 0 · 跳过 1`；`team-store` 由 `180043ms` 降至 **208ms**，`memory-salvage` 降至 **214ms**。
+- **修改文件**：`desktop/test/team-store.test.js`、`desktop/test/memory-salvage.test.mjs`（各 6 行，仅退出前关闭连接 + 注释）。
+- **遗留**：首次 CI 触发的旧 run 仍在 GitHub 队列中（`head_sha=8080f42`），不影响新提交的绿色结论；GitHub runner 队列与 `github.com:443` 连通性本轮出现过短暂异常，已恢复。
