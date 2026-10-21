@@ -199,7 +199,7 @@ flowchart TB
 | ② 编排层 · 任务与 Worker 池（宿主） | `main/orchestrator/index.js`、`main/orchestrator/dag.js`、`main/workerPool.js`、`main/workerIsolation.js`、`main/worktree.js`、`main/aggregator/merge.js`、`main/taskStore.js` | `MIN_TASKS = 2` / `MAX_TASKS = 8`（提示词与 DAG 校验**共用同一常量**）；迁移 v7 `task_groups.project_path`；召回键 `group.project_path \|\| group.cwd`；建组即快照 `approvalMode` / `sandboxPolicy` | `orchestrator.test.js`（拆解 / DAG / 规模常量）、`workerPool.test.js`（派发 / 组收尾）、`tasks-ipc-wiring.test.mjs`（`tasks:*` deps 契约 + 治理快照接线） | 改动 `main/orchestrator/**`、`workerPool.js`、`taskStore.js`，或 `tasks:*` IPC 通道契约时 | 总览图 ② · 图 5 |
 | ③ 引擎层 · Agent Harness（utilityProcess 子进程） | `agent-core/index.js`、`main/agentRunner.js`、`main/engineProcess/{host.js,childEntry.js,registry.js,transport.js}`、`main/modelShape.js`、`main/runTrace.js`、`main/streamGuard.js`、`main/bigPayload.js` | `BASE_TOOLS` 52 / `TOOL_HANDLER_NAMES` 56 / **两者并集 58** / `TOOL_CHANNELS` **57**（均为第八轮工作区实测）；`TOOL_TIMEOUT_OVERRIDES`（引擎侧超时）；`runAgent(...)`；`NOTIFY_CBS` 8 条 / `REQUEST_CBS` 1 条（`onSuspend`）；`runId` + `AsyncLocalStorage runScope` | `engine-process.test.mjs`（子进程 RPC / 通道白名单）、`tool-registration-matrix.test.mjs`（**8 环节双向差集断言**，实跑 150/150；第三环节按调用形态求值，条件注册也在判据内，见 A-03） | 改动 `agent-core/**` 或 `main/engineProcess/**`，尤其**新增 / 改名任一原生工具**时（须同步 8 环节接线 + 白名单登记） | 总览图 ③ · 图 1 · 图 2 |
 | ④ 闸门层 · 审批 / 沙箱（宿主） | `main/approval.js`、`main/approvalChannel.js`、`main/approvalPolicy.js`、`main/approvalSettings.js`、`main/sandbox.js`、`main/sandboxLinux.js`、`main/sandboxWindows.js`、`main/dangerousPatterns.js`、`main/computerUse.js`、`main/cuaProcess/` | `LEVELS = { L1: danger-command, L2: file-write, L3: mcp-tool }`；`APPROVAL_MODES = { never, auto-safe, on-request（默认）, always }`；**L1 不可豁免** + 非法决策 / 超时 **fail-closed → deny**；`TOOL_LEVEL` 43 / `READONLY_TOOLS` 10 / `SPECIAL_CASED_TOOLS` 10（三对交集全空，死条目 0 条）；沙箱三档 `read-only / workspace-write / full-access`；规则库 `userData/approval-rules.json`（可撤销） | `approval.test.js`（分级 / `needsApproval` / 可补偿性）、`approvalChannel.test.js` / `approval-queue.test.js`（按 `approvalId` 分发 / fail-closed）、`exec-governance.test.mjs`（载荷只能收紧不能放宽）、`computer-use-wiring.test.mjs`（CUA 强门控） | 改动审批档位 / 分级 / `needsApproval` / 沙箱策略，或新增「可被审批」的工具时 | 总览图 ④ · 图 6 |
-| ⑤ 能力层 · 原生工具 + MCP tier（宿主） | `main/nativeTools.js`、`main/codeTools.js`、`main/codeProcess/`、`main/nativeSandbox/`、`main/webTools.js`、`main/docTools.js`、`main/latexTools.js`、`main/mcpPrewarm.js`、`main/intentMcpPrewarm.js`、`main/mcpClient.js`、`main/mcpHttpTransport.js`、`main/mcpProtocol.js`、`main/mcpAutoReconnect.js`、`main/mcpToolCache.js`、`main/tools/timeouts.js` | `TIER = { auto-start, whitelist, manual }`；`PREWARM_NAMES = { filesystem, time, fetch }`；`DEVELOPER_AUTO_START_NAMES = { git, git-mcp }`；`MANUAL_NAMES`；灰度开关 `MJCODE_MCP_LAZY`；`PROTOCOL_VERSION = '2025-11-25'`；`SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05']`（**不含 `2026-07-28`**）；`SHELL_DEFAULT_TIMEOUT_MS = 480000` / `SHELL_WATCHDOG_TIMEOUT_MS = 600000` | `mcp-lazy-prewarm.test.mjs`（tier 判定 / 懒启动）、`mcp-governance.test.mjs`（三层治理）、`timeouts-contract.test.mjs`（超时常量契约）、`native-tools-p3.test.mjs` / `native-doc-tools.test.mjs` / `native-latex-tools.test.mjs`（原生工具接线）、`code-mode.test.mjs`（Code Mode） | 改动原生工具实现、超时常量、MCP tier 判定 / 懒启动灰度开关 / 协议版本与时 | 总览图 ⑤ · 图 3 |
+| ⑤ 能力层 · 原生工具 + MCP tier（宿主） | `main/nativeTools.js`、`main/codeTools.js`、`main/codeProcess/`、`main/nativeSandbox/`、`main/webTools.js`、`main/docTools.js`、`main/latexTools.js`、`main/mcpPrewarm.js`、`main/intentMcpPrewarm.js`、`main/mcpClient.js`、`main/mcpHttpTransport.js`、`main/mcpProtocol.js`、`main/mcpAutoReconnect.js`、`main/mcpToolCache.js`、`main/tools/timeouts.js` | `TIER = { auto-start, whitelist, manual }`；`PREWARM_NAMES = { time, fetch }`；`DEVELOPER_AUTO_START_NAMES = { git, git-mcp }`；`MANUAL_NAMES`；灰度开关 `MJCODE_MCP_LAZY`；`PROTOCOL_VERSION = '2025-11-25'`；`SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05']`（**不含 `2026-07-28`**）；`SHELL_DEFAULT_TIMEOUT_MS = 480000` / `SHELL_WATCHDOG_TIMEOUT_MS = 600000` | `mcp-lazy-prewarm.test.mjs`（tier 判定 / 懒启动）、`mcp-governance.test.mjs`（三层治理）、`timeouts-contract.test.mjs`（超时常量契约）、`native-tools-p3.test.mjs` / `native-doc-tools.test.mjs` / `native-latex-tools.test.mjs`（原生工具接线）、`code-mode.test.mjs`（Code Mode） | 改动原生工具实现、超时常量、MCP tier 判定 / 懒启动灰度开关 / 协议版本与时 | 总览图 ⑤ · 图 3 |
 | ⑥ 记忆层 · 四作用域记忆（SQLite 唯一事实源） | `main/memory/index.js`、`main/memory/scorer.js`、`main/memory/recall.js`、`main/memory/team.js`、`main/memory/memoryFile.js`、`main/memory/bgScheduler.js`、`main/db/index.js` | `SCOPES = ['session','team','project','global']`；`SOURCE_DEFAULT_SCOPE`（来源 → 默认作用域，`resolveScope` 为唯一事实来源，`team` 需归属键 `teamId`）；`LAYER_QUOTA = { session: 2, team: 3, project: 3, global: 2 }`（合计 10）；半衰期 session 7 / team 30 / project 30 / global 90 天（未知回落 14）；`SALVAGE_MIN_HITS = 3` / `PROMOTE_L1_MIN_HITS = 3` / `PROMOTE_L2_MIN_HITS = 5` / `PROMOTE_TEAM_MIN_HITS = 3`（团队提名制阈值）；`MAX_MEMORIES_PER_SPACE = 500` / `MAX_GLOBAL_MEMORIES = 300` / `MAX_TEAM_MEMORIES = 200` / `RECALL_TOP_K_MAX = 50` | `memory.test.js`（写入 / 去重 / 容量闸）、`memory-scope.test.mjs`（`resolveScope` 分流）、`memory-salvage.test.mjs`（salvage + 晋升阈值）、`memory-m4-hardening.test.mjs`（半衰期 / 全局硬闸）、`memory-file-channel.test.mjs`（文件只读双通道）、`memory-mem-command.test.mjs`（`/mem` 分流）、`memory-team.test.mjs`（团队记忆共享/私有/提名制门禁） | 改动记忆写入 / 召回装配 / 晋升阈值 / 半衰期 / 容量闸，或 `/mem` 分流规则时 | 总览图 ⑥ · 图 4 |
 | ⑦ 团队层 · MJ 军团（编排层之上的增量，非独立泳道） | `main/teamStore.js`、`main/ipc/teams.js`、`main/teamWaves.js`、`main/waveEngine.js`、`main/teamInterrupt.js`、`main/teamTools.js`、`main/workerSession.js`、`main/memory/team.js`、`main/memory/recall.js` | `TEAM_MODES = { lead, select }`；`MAX_MEMBERS_PER_TEAM = 20` / `MAX_ACTIVE_MEMBERS = 10` / `MAX_PER_TYPE_IN_RUN = 2` / `MAX_WAVES = 3`；探活 `WAVE_PROBE_INTERVAL_MS = 5000` × `WAVE_PROBE_MAX_MISSES = 3`；`MESSAGE_KINDS` 6 / `MODEL_MESSAGE_KINDS` 5；`MESSAGE_SUMMARY_MAX = 600` 字符 / `MESSAGE_TOTAL_MAX = 4000` 字节；`BUDGET_DEFAULTS = { max_rounds: 8, max_tokens: 200000, max_wall_ms: 1800000 }`（**运行期零强制点，见 B-02**）；`MAX_TOOLS`（成员工具子集，当前未被 Worker 消费，见 B-01） | `team-waves.test.js`、`team-store.test.js`、`team-tools.test.mjs`、`team-interrupt.test.js`、`team-message-bus.test.js`、`team-lead-dispatch.test.js`、`team-dag-wait.test.js`、`team-stream.test.mjs`、`member-model.test.js`、`worker-session.test.js`、`memory-team.test.mjs` | 改动 `main/team*.js`、`main/waveEngine.js`、`main/workerSession.js`、`ipc/teams.js`，或成员模型 / 工具集 / 消息总线契约时 | 总览图 ② · 图 5 |
 
@@ -493,7 +493,9 @@ sequenceDiagram
 | **whitelist** | 中风险 / 无需外部密钥但非刚需 | 默认**不**拉起，按需懒启动 |
 | **manual** | 高危 / 付费 / 第三方 / 带外部密钥 | 绝不默认自启，仅用户手动显式授权添加 |
 
-**默认自启集合**（`PREWARM_NAMES`）：`filesystem`（工作区沙盒读写）、`time`（时区与日期计算）、`fetch`（已知 URL 只读抓取）；
+**默认自启集合**（`PREWARM_NAMES`）：`time`（时区与日期计算）、`fetch`（已知 URL 只读抓取）；
+（`filesystem` 已于 A-04 收口时移出：原生文件工具已完整覆盖其能力，继续常驻只会在同一 run 内造成两套同名能力同框；
+移出后它按 `whitelist` 档懒启动，用户仍可手动启用。）
 另有包名兜底 `PREWARM_PKGS`，防止用户重命名后白名单失效。
 
 `whitelist` 例：`git`、`playwright`（浏览器自动化）、`desktop-commander`（宿主 shell）、`memory`、`context7`、`deepwiki`。
@@ -510,7 +512,7 @@ sequenceDiagram
 flowchart TB
     U["用户已保存的 MCP 连接器（本地配置）"]
     T["三层 tier 判定<br/>main/mcpPrewarm.js"]
-    A["auto-start 档<br/>filesystem · time · fetch"]
+    A["auto-start 档<br/>time · fetch"]
     W["whitelist 档<br/>git · playwright · desktop-commander · memory…"]
     M["manual 档<br/>aws/azure/k8s · slack/gmail · stripe · github…"]
     P["意图预热（离线规则词典 · 不调模型 / 不出网）<br/>detectCapabilities → nonNativeCapabilities 过滤"]
@@ -542,11 +544,10 @@ flowchart TB
 此前存在的「已保存但未连接服务的缓存清单兜底」循环**已移除**——该兜底会把全部已保存 MCP 工具注入每一条对话，违反「MCP 默认全关、仅自选或意图判定加载」的架构约束。
 未连接服务的工具改由**意图预热**在命中意图时按需连接后纳入本轮。
 
-> **已知的反向缺口（`A-04`，待决策）**：「原生优先」的下架规则只作用于**意图预热新增的连接**，不作用于**已连接**的服务。
-> 于是默认自启、常驻已连接的 `filesystem` MCP，其 read/write/list 类工具每轮都在工具表里，
-> 与原生 `read_file / write_file / edit_file / apply_patch / list_dir / grep / glob` **功能重叠、同一 run 内同框**——
-> 恰恰是 `intentMcpPrewarm.js` 文件头声称要避免的情况。代价有二：① 重复能力常驻工具表，每轮都占 prompt 前缀字节；
-> ② 模型可能一半用原生写、一半用 MCP 写，写入台账口径是否同源本轮**未验证**。方案见报告 §4 `DA-04`。
+> **A-04 已收口（2026-10-21）**：`filesystem` 已移出 `PREWARM_NAMES`，auto-start 只剩 `time` / `fetch`。
+> 原生文件工具（`read_file / write_file / edit_file / apply_patch / list_dir / grep / glob`）已完整覆盖其能力，
+> 因此默认不再常驻 `filesystem` MCP；它回落 `whitelist` 档，意图命中时懒启动、也可由用户手动启用。
+> 原先「一半原生写、一半 MCP 写，台账口径不同源」的风险随之消失（默认 run 内只剩一套文件能力）。
 
 ### 5.4 MCP 连接与运维
 
@@ -1245,7 +1246,7 @@ flowchart TB
 | ML-3 | tools profile 能力面与显式缺口声明 | **已完成** | 见 5.5 节（`sampling` / `elicitation` 显式拒绝并回 `-32601`） |
 | ML-4 | 协议代际对齐到 `2026-07-28` | **已完成**（第八轮 D-804 S2–S5 收口，双栈） | 支持集已含 `2026-07-28`；`nextStatus` 改 `implemented`。**无状态栈**：`mcpHttpTransport.setStateless()` 不发/不收 `Mcp-Session-Id`、首请求即带版本头、按新规范带 `Mcp-Method`；**协商**：`tryStatelessDiscovery()` 先发 `server/discover`，失败复位后走原握手（`discover` 在老服务端必失败，是可靠判别器）。守护：真起两个本地服务端跑通两条栈，断言新栈「一次 initialize 都没发」、老栈「会话头与 2025-11-25 版本头正确」 |
 | ML-5 | 能力声明去弃用项（`roots` / `logging`） | **已完成**（第八轮 S4 收口） | 能力声明按版本分叉：`clientCapabilitiesFor(version)` —— 无状态栈只声明 `completion`，握手栈三项全留（老服务端要靠 `roots` 协商文件系统）。门禁用**集合等式**守：`无状态能力 = 握手能力 − deprecatedInNext` |
-| ML-6 | `filesystem` MCP 与原生工具同框 | **待决策** | `PREWARM_NAMES` 含 `filesystem`，而「原生优先」下架规则只作用于意图预热新增的连接（`A-04` / `DA-04`） |
+| ML-6 | `filesystem` MCP 与原生工具同框 | **已完成**（A-04 收口） | `filesystem` 已移出 `PREWARM_NAMES`，回落 `whitelist` 懒启动；默认 run 内不再与原生文件工具同框。守护：`mcp-governance.test.mjs` / `mcp-lazy-prewarm.test.mjs` 断言 auto-start = `time/fetch` |
 
 ### 13.4 审批、沙箱与安全收口
 

@@ -73,6 +73,21 @@ const NO_LABEL_TOOLS = ['orchestrate_task', 'search_plugins', 'install_plugin', 
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment'];
 // 引擎内部工具（引擎显式 case 处理，无宿主通道）：不出网不触盘，仅状态/子代理/编排。
 const ENGINE_INTERNAL_TOOLS = ['todo_write', 'spawn_subagent', 'deep_research'];
+// A-08：引擎内置工具必须是**机器可读事实**（此前只存在于 agent-core 的注释里）。
+// 三方对齐：agent-core 导出 → 宿主 registry 标注 → 本矩阵的引擎内部清单。
+{
+  const fromEngine = core.ENGINE_BUILTIN_TOOL_NAMES || [];
+  const fromHost = registry.ENGINE_BUILTIN_TOOLS || [];
+  check('A-08 引擎内置工具标注与引擎导出完全一致',
+    JSON.stringify([...fromEngine].sort()) === JSON.stringify([...fromHost].sort()),
+    `engine=${fromEngine.join(',')} host=${fromHost.join(',')}`);
+  check('A-08 引擎内置工具不得同时登记宿主通道',
+    fromHost.every((n) => !registry.TOOL_CHANNELS.includes(n)),
+    fromHost.filter((n) => registry.TOOL_CHANNELS.includes(n)).join(','));
+  check('A-08 矩阵的引擎内部清单必须包含全部引擎内置工具',
+    fromEngine.every((n) => ENGINE_INTERNAL_TOOLS.includes(n)),
+    fromEngine.filter((n) => !ENGINE_INTERNAL_TOOLS.includes(n)).join(','));
+}
 // TOOL_CHANNELS 中非「模型工具名→通道」映射产物的通道（模型调用通道 / mcp__* 统一入口）。
 const NON_TOOL_CHANNELS = ['chat', 'mcpCallTool'];
 

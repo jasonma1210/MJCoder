@@ -35,7 +35,7 @@ const check = (name, ok, detail = '') => {
 
 // ── 夹具 ──
 const GID = 'g1';
-function makeWorld() {
+function makeWorld(extraHost = {}) {
   const world = {
     t: 0,
     arbs: [],           // aborts 记录
@@ -83,6 +83,7 @@ function makeWorld() {
     setMaxConcurrent: (n) => { world.maxConc = n; world.concHistory.push(n); },
     now: () => world.t,
     autoTimer: false, // 手动 probeOnce 推进
+    ...extraHost,
   });
   world.attach = () => world.engine.attach(GID, [{ index: 0, taskIds: ['t1', 't2'] }]);
   return world;
@@ -210,5 +211,29 @@ function makeWorld() {
 }
 
 void assert;
+
+// ── ⑦ B-15：组级降档回调存在时，不动全局并发 ──
+{
+  const lowered = [];
+  const restored = [];
+  const world = makeWorld({
+    lowerGroupConcurrency: (gid) => { lowered.push(gid); return 2; },
+    restoreGroupConcurrency: (gid) => { restored.push(gid); },
+  });
+  world.attach();
+  world.engine.countTrace({ type: 'task_activity', groupId: GID, taskId: 't1', kind: 'tool' });
+  world.t = teamWaves.WAVE_PROBE_IDLE_MS + 1000;
+  for (let i = 0; i < 4; i++) world.engine.probeOnce();
+  check('⑦ B-15 撤员只降本组并发档（回调收到 groupId）',
+    lowered.length === 1 && lowered[0] === GID, JSON.stringify(lowered));
+  check('⑦ B-15 不再修改全局并发档',
+    world.concHistory.length === 0 && world.maxConc === 4,
+    `history=${JSON.stringify(world.concHistory)} max=${world.maxConc}`);
+  world.engine.detach(GID);
+  check('⑦ B-15 组收尾还原本组并发档',
+    restored.length === 1 && restored[0] === GID, JSON.stringify(restored));
+  check('⑦ B-15 还原不触碰全局并发档', world.concHistory.length === 0 && world.maxConc === 4);
+}
+
 console.log(`\nteam-stall-e2e: ${pass}/${pass + fail} 通过`);
 if (fail > 0) process.exitCode = 1;

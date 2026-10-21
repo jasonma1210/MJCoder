@@ -137,6 +137,30 @@ function check(name, ok, detail = '') {
   check('重启后 seq 从既有最大值续增',
     nextSeq.message.seq === reloaded[reloaded.length - 1].seq + 1, `seq=${nextSeq.message.seq}`);
 
+  // ── B-14：容量闸 + 保留期（写入即维护，无需独立定时器）──
+  {
+    const { TEAM_MESSAGES_MAX_PER_TEAM, TEAM_MESSAGES_TTL_MS } = require('../main/teamStore');
+    // 直接批量灌入（避免 1000 次 append 的 O(n²) 清理开销），再由一次 append 触发维护。
+    const ins = store2.db.prepare(`INSERT INTO team_messages
+      (id, team_id, run_id, seq, from_member_id, to_member_id, kind, summary, refs_json, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (let i = 0; i < TEAM_MESSAGES_MAX_PER_TEAM + 5; i++) {
+      ins.run(`bulk-${i}`, team.id, 'run-bulk', 1000 + i, null, null, 'system', `s${i}`, '[]', null, Date.now());
+    }
+    store2.appendMessage({ teamId: team.id, kind: 'system', summary: 'triggers-prune' });
+    const cnt = Number(store2.db.prepare('SELECT COUNT(*) AS n FROM team_messages WHERE team_id = ?').get(team.id)?.n);
+    check('B-14 每团队消息数不超过容量上限', cnt === TEAM_MESSAGES_MAX_PER_TEAM, `count=${cnt}`);
+    const maxSeq = Number(store2.db.prepare('SELECT MAX(seq) AS n FROM team_messages WHERE team_id = ?').get(team.id)?.n);
+    check('B-14 淘汰最旧而非最新（seq 最大值保留）', maxSeq >= 1000 + TEAM_MESSAGES_MAX_PER_TEAM - 1, `maxSeq=${maxSeq}`);
+
+    // TTL：把一条消息改成 31 天前，再 append 一次即被清理
+    store2.db.prepare('UPDATE team_messages SET created_at = ? WHERE id = ?')
+      .run(Date.now() - TEAM_MESSAGES_TTL_MS - 1000, 'bulk-1000');
+    store2.appendMessage({ teamId: team.id, kind: 'system', summary: 'triggers-ttl' });
+    const stale = store2.db.prepare('SELECT id FROM team_messages WHERE id = ?').get('bulk-1000');
+    check('B-14 超过保留期的消息被清理', !stale);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -4,7 +4,7 @@
 //   其余服务按需唤起。直接前提是**工具清单缓存**——否则懒启动后未连接服务的工具对模型不可见。
 //
 // 本套件锁四件事：
-//   ① 预热白名单只含 filesystem / time / fetch；git / playwright / desktop-commander / 付费检索一律排除；
+//   ① 预热白名单只含 time / fetch（A-04：filesystem 已移出）；git / playwright / desktop-commander / 付费检索一律排除；
 //   ② tier 分级开关默认**开启**（G2+N8：懒启动不再依赖 MJCODE_MCP_LAZY，仅显式 0/false/off 关闭）；
 //   ③ 工具清单缓存读写闭环 + 损坏时 fail-open（不阻塞启动）；
 //   ④ 源码门禁：reconnectMcpServers 必须经 isLazyMode/selectPrewarm 分流；
@@ -29,12 +29,13 @@ function check(name, ok, detail = '') {
 // ── ① 预热白名单：入选与排除 ──
 {
   const inside = [
-    { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] },
     { name: 'time', command: 'uvx', args: ['mcp-server-time'] },
     { name: 'fetch', command: 'uvx', args: ['mcp-server-fetch'] },
   ];
   for (const c of inside) check(`白名单入选：${c.name}`, isPrewarmTarget(c) === true);
   const outside = [
+    // A-04 收口：filesystem 移出 auto-start（原生文件工具已覆盖），回落 whitelist
+    { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] },
     { name: 'git', command: 'uvx', args: ['mcp-server-git', '--repository', '/x'] },
     { name: 'git-mcp', transport: 'http', url: 'https://gitmcp.io/docs' },
     { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp'] },
@@ -50,7 +51,7 @@ function check(name, ok, detail = '') {
 // ── ①b 重命名兜底：按启动包名判定，白名单不因自定义 name 失效 ──
 {
   check('重命名兜底（npm 包名）',
-    isPrewarmTarget({ name: 'my-fs', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] }) === true);
+    isPrewarmTarget({ name: 'my-fs', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] }) === false);
   check('重命名兜底（uvx 包名）',
     isPrewarmTarget({ name: '本地时间', command: 'uvx', args: ['mcp-server-time'] }) === true);
 }
@@ -65,7 +66,7 @@ function check(name, ok, detail = '') {
     { name: 'fetch', command: 'uvx', args: ['mcp-server-fetch'] },
   ];
   const picked = selectPrewarm(all).map((c) => c.name);
-  check('selectPrewarm 结果 = filesystem/time/fetch', JSON.stringify(picked) === JSON.stringify(['filesystem', 'time', 'fetch']), picked.join(','));
+  check('selectPrewarm 结果 = time/fetch（A-04：filesystem 已移出）', JSON.stringify(picked) === JSON.stringify(['time', 'fetch']), picked.join(','));
   check('selectPrewarm 非数组入参安全', Array.isArray(selectPrewarm(null)) && selectPrewarm(null).length === 0);
 }
 

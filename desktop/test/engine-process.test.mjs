@@ -195,5 +195,30 @@ await check('主进程接线：main.js 注入 engineHost / agentRunner 双路径
   assert.match(runnerSrc, /engineHost\?\.abortEngine\?\.\(/);
 });
 
+// ── A-05 / A-06 / A-09 收口断言（2026-10-21）──
+await check('A-05 onSuspend 返回值可信：引擎 await 通知钩子 + 子进程有回执超时兜底', async () => {
+  const coreSrc = fs.readFileSync(path.join(DESKTOP, 'agent-core', 'index.js'), 'utf8');
+  assert.match(coreSrc, /await noticeSuspend\(/, '引擎必须 await 真实返回值（不再用 !!Promise）');
+  const childSrc = fs.readFileSync(path.join(DESKTOP, 'main', 'engineProcess', 'childEntry.js'), 'utf8');
+  assert.match(childSrc, /SUSPEND_ACK_TIMEOUT_MS/, '子进程必须有回执超时兜底（避免 await 永久挂起）');
+  assert.match(childSrc, /resolve\(v === true\)/, '非 true 回执按「未保存」处理（fail-closed 文案）');
+});
+
+await check('A-06 整任务墙钟显式下发：Worker 与交互路径都用同一参数名', () => {
+  const poolSrc = fs.readFileSync(path.join(DESKTOP, 'main', 'workerPool.js'), 'utf8');
+  assert.match(poolSrc, /runWallClockMs:\s*budgetPlan\.timeoutMs/, 'Worker 必须显式下发 budgetPlan.timeoutMs');
+  const runnerSrc = fs.readFileSync(path.join(DESKTOP, 'main', 'agentRunner.js'), 'utf8');
+  assert.match(runnerSrc, /runWallClockMs:\s*Number\(payload\.runWallClockMs\)/, '交互路径必须显式放行 runWallClockMs');
+});
+
+await check('A-09 内存护栏两层：V8 堆上限 + 子进程 RSS 看门狗', () => {
+  const hostSrc = fs.readFileSync(path.join(DESKTOP, 'main', 'engineProcess', 'host.js'), 'utf8');
+  assert.match(hostSrc, /HEAP_LIMIT_MB/, '堆上限必须命名明确（只约束 V8 堆）');
+  assert.doesNotMatch(hostSrc, /MEM_LIMIT_MB/, '旧的「MEM_LIMIT」命名会误导为 RSS 上限');
+  const childSrc = fs.readFileSync(path.join(DESKTOP, 'main', 'engineProcess', 'childEntry.js'), 'utf8');
+  assert.match(childSrc, /RSS_LIMIT_MB[\s\S]{0,200}process\.exit\(137\)/, '必须有 RSS 看门狗主动退出');
+  assert.match(childSrc, /MJCODE_ENGINE_RSS_LIMIT_MB/, 'RSS 上限必须可配置（排障/兼容）');
+});
+
 console.log(`\nengine-process: ${pass}/${total} 通过`);
 process.exit(pass === total ? 0 : 1);

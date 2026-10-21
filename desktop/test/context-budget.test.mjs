@@ -19,6 +19,8 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(import.meta.dirname, '..');
+// A-07：工具面下限的唯一数字来源（精确清单由 tool-registration-matrix 守）
+const { BASE_TOOLS_FLOOR } = require(path.join(ROOT, 'main/toolBaseline.js'));
 
 const budget = await import(path.join(ROOT, 'shared/contextBudget.mjs'));
 const {
@@ -439,7 +441,8 @@ check('③c mcpServerCount 走 shared/mcpNameCodec.mjs 的 decodeToolName（不�
 
 // ── ④ 实测基线量级仍成立（阈值取值依据的有效性检查）──
 check('④ 实测基线量级未失效：52 个静态工具整表 20–60 KB，且远小于整表上限', () => {
-  eq(BASE_TOOLS.length, 52, `静态工具条数变了（${BASE_TOOLS.length}），阈值取值依据需重算`);
+  ok(BASE_TOOLS.length >= BASE_TOOLS_FLOOR,
+    `静态工具条数 ${BASE_TOOLS.length} 低于基线下限 ${BASE_TOOLS_FLOOR}，阈值取值依据需重算`);
   const bytes = toolTableByteSize(BASE_TOOLS);
   ok(bytes > 20000 && bytes < 60000, `静态工具表 ${bytes} 字节不在实测基线量级（20–60 KB）`);
   ok(bytes < MAX_TOOL_SCHEMA_TOTAL_BYTES, `静态工具表 ${bytes} 已超整表上限 ${MAX_TOOL_SCHEMA_TOTAL_BYTES}`);

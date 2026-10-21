@@ -19,6 +19,11 @@ const path = require('path');
 const { writeFileDurableWithMode } = require('./data/durableWrite');
 
 const MAX_ENTRIES = 50;
+// B-18 收口（2026-10-21）：成员会话断点（`agent:{memberId}`）需要**跨 run 稳定保留**，
+// 但原先与普通会话断点共用同一个 50 条 LRU —— 活跃用户很容易把成员断点挤出去，
+// 于是「跨 run 复用」只是概率性成立。现在带 `pinned` 标记的条目不参与普通淘汰；
+// 全部条目都 pinned 的极端情况下才淘汰最旧的 pinned（仍然有界）。
+const MAX_PINNED_ENTRIES = 200;
 
 let file = null; // userData/agent-checkpoints.json
 let loadError = null; // P1-15：最近一次加载损坏的错误态（null = 正常；UI/诊断可查询）
@@ -79,15 +84,26 @@ function saveAll(map) {
 }
 
 // 保存断点；返回是否成功。同 threadKey 重复熔断时覆盖（只留最近一次）。
-function saveCheckpoint(threadKey, data) {
+// opts.pinned=true：成员会话断点，普通 LRU 淘汰会跳过它（B-18）。
+function saveCheckpoint(threadKey, data, opts = {}) {
   const key = String(threadKey || 'local');
   const map = loadAll();
-  // LRU 淘汰：超过容量删最早的条目（保存顺序即插入顺序）
+  const pinned = opts && opts.pinned === true;
+  // LRU 淘汰：**非 pinned** 条目达到 50 条时淘汰最早的一条；pinned 条目单独受 MAX_PINNED_ENTRIES 约束。
   const keys = Object.keys(map);
-  if (!map[key] && keys.length >= MAX_ENTRIES) {
-    delete map[keys[0]];
+  const unpinned = keys.filter((k) => !map[k] || map[k].pinned !== true);
+  if (!map[key] && unpinned.length >= MAX_ENTRIES) {
+    delete map[unpinned[0]];
   }
-  map[key] = { ...data, savedAt: Date.now() };
+  map[key] = { ...data, ...(pinned ? { pinned: true } : {}), savedAt: Date.now() };
+  // pinned 子集自身的上限（防止成员数量失控时文件无限膨胀）
+  const pinnedKeys = Object.keys(map).filter((k) => map[k] && map[k].pinned === true);
+  if (pinnedKeys.length > MAX_PINNED_ENTRIES) {
+    pinnedKeys
+      .sort((a, b) => Number(map[a].savedAt || 0) - Number(map[b].savedAt || 0))
+      .slice(0, pinnedKeys.length - MAX_PINNED_ENTRIES)
+      .forEach((k) => { delete map[k]; });
+  }
   return saveAll(map);
 }
 

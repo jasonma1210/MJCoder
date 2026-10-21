@@ -4440,3 +4440,227 @@ Electron 主进程 + IPC（`teams:interrupt` / `teams:listThreadRuns` / `teams:e
 - **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **246/246** · doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · max-lines **3/3** · layout-tokens **2/2** · 渲染层构建成功。
 - **已知边界**：`team_interrupt` 刻意不接给模型，成员 run 无法自主中断他人任务；Lead 中断必须在界面逐次确认，不做批量豁免；`task_events` 只记录任务节点，不含模型流式 token。
 - **推荐下一步**：重启应用后真机验收——① 军团派活观察是否仍有「反复派发/撤下」与超长首字节；② 每个任务展开确认能看到工具调用轨迹与产物；③ 看板中断走两步确认并确认留痕消息出现在时间轴；④ 再进入 T5-11/T5-12 的剩余体验项（批次串行可视化、成员超时提示文案）。
+
+## 会话总结：第八轮审查问题独立复核（Harness 同口径） · 2026-10-21
+
+### 会话的背景
+`docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 列出 37 条编号问题，并声称已完成多轮修复。用户要求由「腾讯 harness agent 团队」再次审查、核实问题是否属实。本次不冒用外部团队身份，按同等 harness 审查口径（证据链 + git 历史对照 + 实测）做独立复核，只读取证、不改业务代码。
+
+### 会话的主要目的
+逐条核验报告问题在**审查时点**是否真实存在、当前是否闭环，并识别报告自身的证据与统计口径问题。
+
+### 完成的主要任务
+- 以三段口径对照：审查时点快照 `24acc15`、修复提交 `9de20ca`、当前 HEAD `9c4de09`（领先 `origin/main` 2 个提交、工作区干净）。
+- 完成 37 条编号的逐条取证（P0/P1 全量、P2 全量、P3 13 条补核），并核验遗留项 L-1。
+- 实测门禁：全量 266 · 通过 263 · 失败 0 · 跳过 3；`tool-registration-matrix` 150/150；`bridge-parity` 4/4（桥面 224、未引用 50、22.3%，低于 40% 门禁）；迁移 13 条；未知工具 `toolLevel` = `L3`；MCP 支持集含 `2026-07-28` 且 `nextStatus='implemented'`。
+- 识别报告 3 类内部不一致：B-03 证据不准确、C-06 摘要与 D-802 自纠冲突、§3.2~§3.4 严重度构成与 §3.1/角度源文件不一致。
+
+### 会话中主要使用的技术栈
+Electron 三进程（主进程 / 渲染层 / agent-core utilityProcess）· Node 内置测试 · SQLite（sql.js）迁移与索引 · git 历史取证（`git show` / `git diff`）· MCP 双栈协议 · SSRF/DNS resolve-then-validate · Worker 池与军团编排（`workerPool` / `teamWaves` / `waveEngine`）。
+
+### 关键决策和解决方案
+1. **三段对照而非只看当前代码**：避免「当前已修复」掩盖「审查时点确实成立」，也避免把历史问题误判为虚构。
+2. **B-03 以源码实证推翻表述**：`9de20ca:desktop/test/worker-session.test.js` 实际 `require('../main/workerPool').runGroup`，并 `await runGroup('s1')`/`runGroup('s2')`、断言组状态 `done`；因此「11 个测试 100% 单模块、`runGroup` 0 命中」不成立，但其「三条顺序敏感不变量缺专项覆盖」的实质结论仍成立（后续已补 `team-e2e-invariants.test.js`）。
+3. **C-06 以其自纠为准**：报告 §0/§3.3 的「5 种写法可绕过」被 §4 D-802 推翻——十进制/十六进制/八进制经 `new URL()` 归一为 `127.0.0.1`，真实缺陷仅 IPv6 方括号一族；当前 `ssrfGuard.js` + `guardedLookup` 实测全拦截。
+4. **B-10 数值按上限复算**：`SYSTEM_PROMPT_MAX=12000` 字符 × 单团队最多 20 人 ≈ 240KB（中文 UTF-8 实际更大），机制属实、数值为量级估算。
+5. **L-1 维持不可验证**：`.github/workflows/ci.yml` 存在，但 `gh run list` 无任何记录且退出码 0，无法据此确认「CI 从未运行」。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Shell`（`git show`、`git diff`、`git rev-parse`、`node` 探针、`node test/run-all.mjs`、`node test/bridge-parity.test.mjs`、`gh run list`）/ `TodoWrite`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `README.md` | 修改 | 文末累积追加本节总结 | 用户固定规则（Append，不覆盖） |
+
+（未修改任何源码、测试与审查报告文档。）
+
+### 文件修改的详细内容
+- 文件名：`README.md`
+  - 修改内容：追加「第八轮审查问题独立复核（Harness 同口径）」一节，含背景、目的、任务、技术栈、决策、工具、文件清单、问题与建议。
+  - 修改原因：用户要求每次会话结束做结构化总结并累积追加到 README。
+
+### 尚存问题与推荐下一步
+- **报告需更正 3 处**：① B-03 的「0 命中 / 100%」表述；② C-06 摘要统一为「IPv6 方括号一族为真」；③ §3.2~§3.4 的 P1/P2/P3 条目按 §3.1 与角度源文件重排（当前总数 37 自洽，但分节有挪档与重复计数）。
+- **仍开放的实质问题**：B-06（`ipc/teams.js` 790 行，仍在 800 软档边缘）、B-10（`systemPrompt` 进 `dag_json`）、B-14（`team_messages` 无容量闸/TTL）、B-15（并发降档为全局副作用）、B-16（重置成员会话最多 200 次 UPDATE 且降权不可逆）、B-18（断点 50 条 LRU）、B-19（同 run 两套指派算法）、A-05/A-06/A-08/A-09（已文档化的边界）、C-05（50/224 死桥，受门禁控制）、A-04（filesystem MCP 仍自启，但重叠工具已下架）。
+- **数字漂移**：测试总数 246→261→266、工具矩阵 143→150、死桥 22/208→50/224，引用时需注明口径时点。
+- **推荐下一步**：按上述三处修订报告口径；对仍开放项按 P2→P3 顺序排期，优先 B-14（消息表无界增长）与 B-06（文件行数）。
+
+## 会话总结：第八轮审查剩余项验证 + 报告口径回写 · 2026-10-21（第二十一轮）
+
+### 会话的背景
+承接上一轮「第八轮审查问题独立复核」。上一轮已完成 37 条编号的主体验证并发现报告存在 3 类口径问题，但仍有遗留项未核：§7.2 的 L-2（生态四组数字）、L-3（SSRF resolve-then-validate / 工具定义钉定 / 审计不可改写 / 幂等键）、L-4（工作区是否仍在被写入），以及部分 P3 抽核。用户要求继续验证剩余项，并把复核结论与口径更正写进审查报告。
+
+### 会话的主要目的
+把剩余未核项全部核清，并将复核结论、口径更正、当前基线实测落进报告文档，使报告自身不再自相矛盾。
+
+### 完成的主要任务
+- **L-2 核清（非矛盾）**：执行 `node desktop/scripts/gen-ecosystem-counts.mjs` 现算 —— `skills=100`（随包实体）、`skillsCatalog=219`、`mcp connectors=77`、`digital employees=51`、合计 228；另有 `workbuddyRaw=214`（与精选零重叠、不合并）、`workspaceSkills=154`（`~/.mjcode/skills` 本机已安装）。四组数字是四个不同口径，**本来就不该相等**，原「与既有文档全部对不上」为假冲突。
+- **L-3 核清**：`guardedLookup` DNS 钩子（resolve-then-validate）已实装；`mcpToolCache.fingerprintOf` + `mcp_tool_defs_changed` 漂移审计已实装；审计哈希链 `seq/prev/hash` + `verifyAuditChain()` 已实装；幂等键全仓检索确认不存在，按 §8.10 明确不做并留「确认不存在」断言。
+- **L-4 核清**：`HEAD 9c4de09`，领先 `origin/main` 2 个提交；复核取证阶段工作区 0 dirty（现仅本报告与 README 两处文档修订）。
+- **P3 抽核**：`memberSessionKey=agent:{memberId}` 与 `seq % list.length` 兜底并存（B-19 属实）；`checkpointStore MAX_ENTRIES=50`（B-18 属实）；`MEM_LIMIT_MB=2048` 仅 V8 堆（A-09 属实）；`tool-registration-matrix` 注释自述正则可从注释文本命中（A-08 属实）；`BASE_TOOLS.length=52` 硬断言（A-07 属实）。
+- **B-03 闭环证据补强**：`team-e2e-invariants.test.js`（14 条）与 `team-stall-e2e.test.mjs`（探活撤员端到端）已覆盖三条顺序敏感不变量。
+- **报告口径回写（8 处）**：§0 第 6 行 C-06、§0 第 7 行 B-03、§2 第六行生态数字、§3.2~§3.4 严重度重排、§4 D-812「现状 / 推荐理由」、§6.6 第 1 条、§7.2 L-2/L-3/L-4、§8.10 收口表第 3 行 L-1 表述。
+- **新增附录 C**：C.1 总体判定（35 属实 + 2 表述不准确）、C.2 四处口径更正、C.3 闭环状态（23 已闭环 / 1 部分 / 13 开放）、C.4 当前基线实测、C.5 不可验证项。
+- **自洽校验**：§3.2 P1=6、§3.3 P2=19、§3.4 P3=10，与 §3.1「P0 2 + P1 6 + P2 19 + P3 10 = 37」及三个角度源文件分布（A 10 / B 20 / C 7）逐条对齐。
+
+### 会话中主要使用的技术栈
+Electron 三进程（主进程 / 渲染层 / agent-core utilityProcess）· Node 内置测试与门禁（`run-all.mjs`）· SQLite（sql.js）迁移 v1~v13 · MCP 双栈（`2025-11-25` 握手 / `2026-07-28` 无状态）· 军团编排（`teamWaves` / `waveEngine` / `workerPool`）· SSRF `isPrivateHost` + `guardedLookup` · 审计哈希链 · 生态计数脚本。
+
+### 关键决策和解决方案
+1. **四口径不互相校验**：`skills.json` 219（目录条目）、随包 `SKILL.md` 100（发布实体）、本机 `~/.mjcode/skills` 154（已安装）量的是三件事；219≠100≠154 是正确形态，互相校验才是错的。
+2. **B-03 以源码实证定稿**：`worker-session.test.js` 已 `await runGroup('s1')/('s2')` 并断言组 `done`，推翻「0 命中 / 100% 单模块」，但保留「缺三条顺序敏感不变量」的实质结论，并补上后续专项套件证据。
+3. **C-06 以报告 §4 D-802 自纠为准**：「5 种写法可绕过」不成立，仅 IPv6 方括号一族为真（十进制/十六进制/八进制被 `new URL()` 归一）。
+4. **L-1 不断言「从未运行」**：`gh run list` 为空只能推出「无运行记录」，不能推出绝对「从未运行」，统一改为「不可验证」并保留现算命令。
+5. **D-812 回写时保留决策史**：把「现状」改为实测四口径，同时在「推荐理由」注明立项判断已被复核推翻，但「口径未集中声明」仍成立 —— 不掩盖原判断错误，也不抹掉立项价值。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Shell`（`git rev-parse`、`git status`、`git rev-list`、`node gen-ecosystem-counts.mjs`）/ `Edit` / `TodoWrite`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` | 修改 | 8 处口径更正 + 文末新增附录 C | 使报告自身口径自洽、可复核 |
+| `README.md` | 修改 | 文末累积追加本节总结 | 用户固定规则（Append，不覆盖） |
+
+（未修改任何源码与测试。）
+
+### 文件修改的详细内容
+- 文件名：`docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md`
+  - 修改内容：① §0 第 6 行 C-06 改为「仅 IPv6 方括号一族成立」；② §0 第 7 行 B-03 改为「10 个单模块 + `worker-session` 已调用 `runGroup`」；③ §2 第六行生态数字改为四口径并给出 51 / 77+214=291 / 219 / 100 / 154；④ §3.2 重排为 A-01、B-03、B-04、B-05、B-06、C-01；⑤ §3.3 重排为 19 条；⑥ §3.4 改为 10 条显式表；⑦ §4 D-812「现状 / 推荐理由」与实施结果对齐；⑧ §6.6 第 1 条同步 B-03 更正；⑨ §7.2 L-2/L-3/L-4 改为「已核清 / 已收敛」；⑩ §8.10 收口表 L-1 改为「无运行记录、不可验证」；⑪ 新增「附录 C · 独立复核（2026-10-21）」含 C.1~C.5。
+  - 修改原因：消除报告内部矛盾（摘要与自纠冲突、严重度分节与 §3.1 不一致、生态数字假冲突），并固化复核证据与当前基线。
+- 文件名：`README.md`
+  - 修改内容：追加「第八轮审查剩余项验证 + 报告口径回写」会话总结。
+  - 修改原因：用户要求每次会话结束做结构化总结并累积追加。
+
+### 尚存问题与推荐下一步
+- **报告已自洽，但仍有 13 条开放项**：A-05/A-06/A-07/A-08/A-09、B-06/B-10/B-14/B-15/B-16/B-18/B-19、C-05；A-04 为部分闭环。
+- **优先排期建议**：B-14（`team_messages` 无容量闸/TTL，长会话无界增长）→ B-06（`ipc/teams.js` 790 行，距 800 软档 10 行）→ B-10（编制快照 `systemPrompt` 进 `dag_json` 无整体体积闸）。
+- **不可销账项**：L-1 需 CI 首次真实运行（Ubuntu runner）后才能关闭 3 个沙箱套件的「本机跳过」状态。
+- **数字漂移提醒**：全量 246→266、矩阵 143→150、死桥 22/208→50/224，引用时必须注明口径时点。
+
+## 会话总结：第八轮遗留项一次性收口 + 全量回归 · 2026-10-21（第二十二轮）
+
+### 会话的背景
+上一轮复核确认第八轮审查报告仍有 13 条开放项（A-05~A-09、B-06/B-10/B-14/B-15/B-16/B-18/B-19、C-05）与 1 条部分闭环（A-04）。用户要求「一次性全部修复完成后，做整体测试」。
+
+### 会话的主要目的
+把上述 14 条全部落地为可验证的代码改动（含守护断言），并跑通 typecheck / lint / 全量测试门禁。
+
+### 完成的主要任务
+- **A-04**：`filesystem` 移出 `PREWARM_NAMES`（原生文件工具已完整覆盖），回落 whitelist 懒启动；同步治理测试与双语文档。
+- **A-05**：引擎四处 `!!onSuspend(...)` 改为 `await noticeSuspend(...)`；子进程侧加 5s 回执超时，非 true 回执按「未保存」收尾。
+- **A-06**：Worker 显式下发 `runWallClockMs: budgetPlan.timeoutMs`；交互路径放行 `payload.runWallClockMs`。
+- **A-07**：新增 `main/toolBaseline.js` 作为工具面下限唯一数字来源，替换两处硬编码 52。
+- **A-08**：`ENGINE_BUILTIN_TOOL_NAMES`（引擎导出）↔ `registry.ENGINE_BUILTIN_TOOLS` ↔ 矩阵清单三方机器可读对齐，并断言不登记宿主通道。
+- **A-09**：`MEM_LIMIT_MB` → `HEAP_LIMIT_MB`（只约束 V8 堆）；子进程新增 RSS 看门狗（默认 3072MB，超限 exit 137）。
+- **B-06**：控制面 handler 抽至 `main/ipc/teamControl.js`，`ipc/teams.js` 790 → 715 行。
+- **B-10**：`snapshotRoster` 增加 160KB 提示词总预算，超限按成员均分截断 + `systemPromptTruncated/systemPromptChars` 标记。
+- **B-14**：`team_messages` 写入即维护：每团队保留最近 1000 条 + 30 天保留期。
+- **B-15**：新增 `main/groupConcurrency.js`，撤员降档改为组级，全局 `maxConcurrent` 不再被改写，组收尾还原。
+- **B-16**：`memory.demoteImportance` 单条 SQL 批量降权（只命中 `importance > floor`，幂等）。
+- **B-18**：成员断点 `pinned`，不参与普通 50 条 LRU（pinned 子集另有 200 条上限）。
+- **B-19**：指派收敛为唯一入口 `resolveOwnerMember`（计划优先，seq 取模仅用于计划缺失）。
+- **C-05**：死桥接改为显式台账 `test/bridge-dead-allowlist.json`（新增死方法红 / 台账腐烂红 / 幽灵项红）。
+- **整体回归**：全量 266 · 通过 263 · 失败 0 · 跳过 3；矩阵 153/153；bridge-parity 7/7；harness-r7 76/76；doc-fact-check 通过；lint 159 / 0 error；`tsc --noEmit` 0 error。
+
+### 会话中主要使用的技术栈
+Electron 三进程（主进程 / 渲染层 / agent-core utilityProcess）· Node 内置测试与门禁（`run-all.mjs` 的 5 项 GATES）· sql.js · MCP 三层 tier · 军团编排（`workerPool` / `waveEngine` / `teamWaves`）· SSRF/审批/审计体系 · ESLint / tsc。
+
+### 关键决策和解决方案
+1. **A-04 以「原生优先」裁决**：移除 filesystem 自启，避免同一 run 两套文件能力同框；保留 whitelist 懒启动通道，能力不丢失。
+2. **A-05 用 await + 超时兜底**：跨进程无法同步取回，但异步回执可以；超时按 false 收尾，杜绝「Promise 恒真说已保存」。
+3. **组级并发而非全局**：B-15 的根因是「一个组故障拖慢所有 run」，因此新增组级档位，旧全局回调仅作兼容回退。
+4. **B-14 写入即维护**：不新增定时器，append 事务内完成 TTL + 容量淘汰，seq 单调性不受影响。
+5. **C-05 台账而非删除**：50 个死桥接可能是外部兼容面，先显式登记 + 双向门禁，删除留待逐项确认。
+6. **测试口径修正**：`legacy-ledger` 改为断言 bridge-parity 引用同一台账；`docs-consistency` 文档数字 159→163；harness-r7 A18d 同步为 time/fetch。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Shell`（`node --check`、`node test/*`、`node test/run-all.mjs`、`npm run lint`、`npm run typecheck`、`git add`）/ `Edit` / `Write` / `TodoWrite`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/toolBaseline.js` | 新增 | 工具面下限唯一来源 | A-07 |
+| `desktop/main/groupConcurrency.js` | 新增 | 组级并发档纯函数 | B-15 |
+| `desktop/main/workerCritical.js` | 新增 | 关键失败暂停策略 | B-15 腾行数 |
+| `desktop/main/ipc/teamControl.js` | 新增 | 重置成员会话 / 中断控制面 | B-06 / B-16 |
+| `desktop/test/bridge-dead-allowlist.json` | 新增 | 死桥接显式台账 | C-05 |
+| `desktop/main/mcpPrewarm.js` | 修改 | filesystem 移出 auto-start | A-04 |
+| `desktop/agent-core/index.js` | 修改 | await noticeSuspend + ENGINE_BUILTIN_TOOL_NAMES | A-05 / A-08 |
+| `desktop/main/engineProcess/childEntry.js` | 修改 | onSuspend 回执超时 + RSS 看门狗 | A-05 / A-09 |
+| `desktop/main/engineProcess/host.js` | 修改 | HEAP_LIMIT_MB 更名与注释 | A-09 |
+| `desktop/main/engineProcess/registry.js` | 修改 | 内置工具模型名标注 | A-08 |
+| `desktop/main/agentRunner.js` | 修改 | 显式放行 runWallClockMs | A-06 |
+| `desktop/main/workerPool.js` | 修改 | runWallClockMs + 组级并发 + 统一指派 + 抽走关键失败 | A-06 / B-15 / B-19 |
+| `desktop/main/waveEngine.js` | 修改 | 组级降档/还原回调 | B-15 |
+| `desktop/main/teamRoster.js` | 修改 | 编制快照整体体积闸 | B-10 |
+| `desktop/main/teamStore.js` | 修改 | 消息容量 + TTL | B-14 |
+| `desktop/main/checkpointStore.js` | 修改 | pinned 断点保留 | B-18 |
+| `desktop/main/workerSession.js` | 修改 | pinned 保存 + resolveOwnerMember | B-18 / B-19 |
+| `desktop/main/memory/index.js` | 修改 | demoteImportance 批量降权 | B-16 |
+| `desktop/main/ipc/teams.js` | 修改 | 控制面抽出 | B-06 |
+| `desktop/test/*`（9 个） | 修改 | 新增 B-10/B-14/B-15/B-16/B-18/B-19/A-05/A-06/A-09 守护断言 | 回归门禁 |
+| `MJcoder-技术流程功能文档.md` | 修改 | PREWARM_NAMES / 主进程模块 163 / A-04 收口说明 | 文档同步 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 主进程模块 159→163 + 新增模块说明 | doc-fact-check |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A18d 判据同步 | 契约同步 |
+| `docs/MJCode-AgentHarness第八轮…md` | 修改 | 新增附录 D 收口记录 | 报告闭环 |
+| `README.md` | 修改 | 追加本节总结 | 用户固定规则 |
+
+（新增源文件已 `git add` 入库以满足「干净 clone」门禁，**未提交**。）
+
+### 文件修改的详细内容
+- 关键源码改动见上表「修改内容」列；每条均在附录 D 记录落点与守护证据。
+- 测试口径修正：`legacy-ledger.test.mjs` 的 4b 断言由「解析占比上限」改为「断言 bridge-parity 引用同一台账」；`docs-consistency` 的文档数字与源码同步；`team-stall-e2e` 新增 ⑦ B-15 组级降档用例。
+
+### 尚存问题与推荐下一步
+- **L-1 仍不可销账**：3 个沙箱套件在 darwin 跳过，需 CI Ubuntu runner 真跑后关闭。
+- **C-05 仅台账化**：50 个死桥接未删除；建议按台账 disposition 逐批确认外部兼容面后 retire。
+- **A-04 属策略变更**：`filesystem` 不再默认常驻；若用户依赖其 MCP 工具，可在设置中手动启用或授权意图懒启动。
+- **推荐下一步**：提交当前变更 → 触发 CI 首次绿色运行（同时关闭 L-1）→ 按台账分批清理死桥接。
+
+## 会话总结：A-04 决策答疑与确认 · 2026-10-21（第二十三轮）
+
+### 会话的背景
+上一轮把 `filesystem` MCP 移出默认常驻（A-04）后，用户提出疑问：「大部分场景都要读写文件，为什么不默认常驻？」需要给出依据并确认是否回滚。
+
+### 会话的主要目的
+解释 A-04 的真实影响面，消除「移除 MCP = 失去文件读写能力」的误解，并确认最终策略。
+
+### 完成的主要任务
+- **澄清能力边界**：文件读写由原生工具 `read_file / write_file / edit_file / apply_patch / list_dir / grep / glob` 常驻提供（`agent-core/index.js`），不依赖 MCP。
+- **给出关键证据**：官方 filesystem server 的 13 个工具全部登记在 `shared/mcpNativeOverlap.mjs` 的「原生已覆盖」表中，默认 run 里实际被下架，常驻连接贡献 0 个工具。
+- **列出常驻成本**：上下文税与前缀缓存、模型二选一与写入台账漏计、启动 spawn 开销、`${ALLOWED_DIR}` 未填时静默不健康、第三方进程访问工作区的安全面。
+- **确认能力不丢失**：`filesystem` 回落 `whitelist`，可手动启用或意图懒启动；唯一特例 `move_file` 无原生一对一替代，需手动启用。
+- **用户决策**：保持现状（不恢复默认常驻）。
+
+### 会话中主要使用的技术栈
+Electron 主进程 / agent-core 工具表组装 · MCP 三层 tier（auto-start / whitelist / manual）· `mcpNativeOverlap` 原生重叠下架 · 提示词工具表预算。
+
+### 关键决策和解决方案
+1. **区分「服务常驻」与「能力可用」**：A-04 只改默认连接策略，文件读写能力零变化。
+2. **以源码事实而非偏好裁决**：覆盖表证明 filesystem MCP 工具默认已被去重，保留常驻是纯成本。
+3. **保留回退通道**：用户仍可在设置中手动启用，或按意图懒启动；不引入新的能力缺口。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Edit`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/mcpPrewarm.js` | 修改（仅注释） | `autoStartConfigs` 注释由 `filesystem/time/fetch` 更正为 `time/fetch` | 与 A-04 实际实现保持一致，避免注释误导 |
+| `README.md` | 修改 | 追加本节总结 | 用户固定规则 |
+
+（无行为变更，未新增/删除源文件。）
+
+### 文件修改的详细内容
+- 文件名：`desktop/main/mcpPrewarm.js`
+  - 修改内容：JSDoc 中 normal 档说明去掉 `filesystem`。
+  - 修改原因：A-04 已把它移出 auto-start，旧注释与新事实矛盾。
+- 文件名：`README.md`
+  - 修改内容：追加「A-04 决策答疑与确认」会话总结。
+  - 修改原因：每次会话结束累积追加总结。
+
+### 尚存问题与推荐下一步
+- 无新增问题；A-04 维持「默认原生、MCP 按需」策略。
+- **推荐下一步**：保持现有改动，按上一轮计划提交并触发 CI 首次运行（关闭 L-1）。

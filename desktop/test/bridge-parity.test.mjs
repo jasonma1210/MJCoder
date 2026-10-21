@@ -104,12 +104,39 @@ check('渲染层调用的每个桥方法都真实存在于 preload', () => {
   }
 });
 
-check('桥面里的死方法占比受控（暴露但从未被调用）', () => {
+// ── C-05 收口（2026-10-21）：死方法从「比例阈值」改为**显式台账** ──
+// 旧判据只看占比 ≤40%：新增 5 个死方法不会变红（只要总量够大），于是「往 bridge 上堆没人用的方法」
+// 只能靠人肉发现。现在两个方向都锁：
+//   ① 桥面里的死方法必须全部在台账中（新增死方法 = 红）；
+//   ② 台账里的条目必须**仍然是死的**（被启用后必须删台账项 = 红，防止台账腐烂成免责清单）。
+const LEDGER_PATH = path.join(DESKTOP, 'test/bridge-dead-allowlist.json');
+const ledger = JSON.parse(fs.readFileSync(LEDGER_PATH, 'utf8'));
+const ledgerDead = new Set(Array.isArray(ledger.dead) ? ledger.dead : []);
+
+check('C-05 桥面死方法台账存在且已复核（reviewedAt）', () => {
+  if (!ledger.reviewedAt || !/^\d{4}-\d{2}-\d{2}$/.test(ledger.reviewedAt)) {
+    throw new Error('台账缺少 reviewedAt（YYYY-MM-DD）');
+  }
+});
+
+check('C-05 桥面里的死方法全部已登记（新增死方法必须显式决策）', () => {
   const dead = [...bridgeNames].filter((n) => !used.has(n));
-  // 当前实测：约 40 个（diag:preview 这类历史遗留）。占比超过 40% 说明要么扫描逻辑失效，
-  // 要么有人在往 bridge 上堆没人用的方法。
-  const ratio = dead.length / bridgeNames.size;
-  if (ratio > 0.4) throw new Error(`死方法 ${dead.length}/${bridgeNames.size} = ${(ratio * 100).toFixed(0)}%，超过 40% 上限`);
+  const unledgered = dead.filter((n) => !ledgerDead.has(n));
+  if (unledgered.length) {
+    throw new Error(`未登记的死方法：${unledgered.join(', ')}（请删除该桥方法，或在 bridge-dead-allowlist.json 中登记）`);
+  }
+});
+
+check('C-05 台账不得腐烂（登记项必须仍然未被引用）', () => {
+  const revived = [...ledgerDead].filter((n) => used.has(n));
+  if (revived.length) {
+    throw new Error(`台账里的方法已被渲染层启用，请从台账删除：${revived.join(', ')}`);
+  }
+});
+
+check('C-05 台账条目必须真实存在于 preload（防拼写错误）', () => {
+  const ghost = [...ledgerDead].filter((n) => !bridgeNames.has(n));
+  if (ghost.length) throw new Error(`台账里有 preload 不存在的方法：${ghost.join(', ')}`);
 });
 
 console.log(`\nbridge-parity: ${pass}/${total} 通过（桥面 ${bridgeNames.size} 个方法，渲染层引用 ${used.size} 个）`);

@@ -30,13 +30,14 @@ function check(name, ok, detail = '') {
 // ── ① classifyTier：三层分级 ──
 {
   const autoStart = [
-    { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] },
     { name: 'time', command: 'uvx', args: ['mcp-server-time'] },
     { name: 'fetch', command: 'uvx', args: ['mcp-server-fetch'] },
   ];
   for (const c of autoStart) check(`auto-start：${c.name}`, classifyTier(c) === TIER.AUTO_START, classifyTier(c));
 
   const whitelist = [
+    // A-04 收口：filesystem 移出 auto-start，回落 whitelist（懒启动 + 可手动启用）
+    { name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/x'] },
     { name: 'git', command: 'uvx', args: ['mcp-server-git'] },
     { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp'] },
     { name: 'desktop-commander', command: 'npx', args: ['-y', '@wonderwhy-er/desktop-commander'] },
@@ -81,10 +82,10 @@ function check(name, ok, detail = '') {
     { name: 'slack', command: 'npx', args: ['-y', 'server-slack'] },
   ];
   const normal = autoStartConfigs(all, { profile: PROFILES.NORMAL }).map((c) => c.name);
-  check('normal 档 = filesystem/time/fetch', JSON.stringify(normal) === JSON.stringify(['filesystem', 'time', 'fetch']), normal.join(','));
+  check('normal 档 = time/fetch（A-04：filesystem 已移出）', JSON.stringify(normal) === JSON.stringify(['time', 'fetch']), normal.join(','));
 
   const dev = autoStartConfigs(all, { profile: PROFILES.DEVELOPER }).map((c) => c.name);
-  check('developer 档额外纳入 git', JSON.stringify(dev) === JSON.stringify(['filesystem', 'time', 'fetch', 'git']), dev.join(','));
+  check('developer 档额外纳入 git', JSON.stringify(dev) === JSON.stringify(['time', 'fetch', 'git']), dev.join(','));
   check('developer 档不含 playwright（非 git 白名单项）', !dev.includes('playwright'));
   check('manual（aws/slack）永不自动启动', !dev.includes('aws') && !dev.includes('slack'));
   check('缺省 profile 回落 normal', JSON.stringify(autoStartConfigs(all).map((c) => c.name)) === JSON.stringify(normal));

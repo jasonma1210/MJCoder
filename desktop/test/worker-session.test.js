@@ -51,6 +51,22 @@ function makeCheckpointStore(seed = {}) {
   const db = await openDbAsync(dir, { driver: 'sqljs' });
   const store = new TaskStore(db);
 
+  // ── B-19：指派算法单一入口（计划优先，计划缺失才回 seq 取模）──
+  {
+    const ws = require('../main/workerSession');
+    const roster0 = [{ id: 'm1' }, { id: 'm2' }];
+    const plannedGroup = { dag: { assignments: { n1: 'm2' } } };
+    check('B-19 有计划时按计划指派',
+      ws.resolveOwnerMember(plannedGroup, { taskId: 'n1', seq: 1 }, roster0, null) === 'm2');
+    check('B-19 运行期计划（preferredOwnerOf）优先于 dag 计划',
+      ws.resolveOwnerMember(plannedGroup, { taskId: 'n1', seq: 1 }, roster0, 'm1') === 'm1');
+    check('B-19 计划缺失时回落 seq 取模（确定性）',
+      ws.resolveOwnerMember({ dag: {} }, { taskId: 'x', seq: 1 }, roster0, null) === 'm2'
+      && ws.resolveOwnerMember({ dag: {} }, { taskId: 'x', seq: 1 }, roster0, null) === 'm2');
+    check('B-19 无可用名册返回 null（不发明成员）',
+      ws.resolveOwnerMember({ dag: {} }, { taskId: 'x', seq: 1 }, [], null) === null);
+  }
+
   // ── 场景 1/2/3/4：军团组（有成员名册 + 有断点）──
   const roster = [{ id: 'm1', name: '架构师' }, { id: 'm2', name: '测试员' }];
   const cps = makeCheckpointStore({

@@ -2,8 +2,9 @@
 // 期 1 / 期 2（2026-10-18）：MCP 预热白名单 + 懒启动灰度开关 + 三层权限分级（纯函数，无 electron 依赖）
 //
 // 三层权限模型落地：
-//   ① auto-start —— 开箱即用刚需、低风险、无外部强鉴权、稳定通用：filesystem（工作区沙盒读写）/
-//      time（时区与日期计算）/ fetch（已知 URL 只读抓取）。随启动拉起。
+//   ① auto-start —— 开箱即用刚需、低风险、无外部强鉴权、稳定通用：time（时区与日期计算）/
+//      fetch（已知 URL 只读抓取）。随启动拉起。
+//      （filesystem 已于 A-04 收口时移出：原生文件工具已完整覆盖，避免同 run 同框）
 //   ② whitelist —— 中风险/无需外部密钥但非刚需：git、playwright（浏览器自动化）、desktop-commander
 //      （宿主 shell）、memory、context7、deepwiki… 默认**不**随启动拉起，按需懒启动；
 //      「开发者档（profile=developer）」可额外把 git 类纳入自动启动。
@@ -28,10 +29,13 @@ const TIER = Object.freeze({
 });
 
 // ── auto-start：预热白名单（随启动拉起）──
-const PREWARM_NAMES = new Set(['filesystem', 'time', 'fetch']);
+// A-04 收口（2026-10-21）：`filesystem` 已移出 auto-start。
+//   理由：原生文件工具（read_file / write_file / edit_file / apply_patch / list_dir / grep / glob）
+//   已完整覆盖其能力；继续常驻只会让同一 run 内出现两套同名能力（prompt 前缀白占字节，
+//   模型还要二选一）。移出后它按 `whitelist` 档在意图命中时懒启动，用户仍可手动启用。
+const PREWARM_NAMES = new Set(['time', 'fetch']);
 // 兜底匹配：用户可能把服务重命名（自定义 name），此时按启动包名判定，避免白名单在该场景失效。
 const PREWARM_PKGS = [
-  '@modelcontextprotocol/server-filesystem',
   'mcp-server-time',
   'mcp-server-fetch',
 ];
@@ -144,7 +148,7 @@ function classifyTier(cfg) {
 
 /**
  * 依据 profile 选出「启动时应自动拉起」的服务子集。
- *   · normal：仅 auto-start 档（filesystem/time/fetch）
+ *   · normal：仅 auto-start 档（time/fetch；filesystem 已于 A-04 移出）
  *   · developer：auto-start 档 + git 类（额外纳入）
  * manual 档**永不**自动拉起（架构红线）。
  */

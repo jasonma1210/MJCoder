@@ -122,6 +122,25 @@ function check(name, ok, detail = '') {
     && snap[0].toolNames[0] === 'read_file' && snap[0].model === 'p::m');
   check('快照与实时名册不共享数组引用（运行期改动不影响本次 run）',
     snap[0].toolNames !== liveMembers[0].toolNames);
+
+  // ── B-10：编制快照整体体积闸（成员提示词总字节超限 ⇒ 均分截断 + 可诊断标记）──
+  {
+    const rosterMod = require('../main/teamRoster');
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      id: `big${i}`, name: `成员${i}`, systemPrompt: '角'.repeat(12000),
+    }));
+    const bigSnap = snapshotRoster(many);
+    const total = bigSnap.reduce((n, m) => n + Buffer.byteLength(m.systemPrompt, 'utf8'), 0);
+    check('B-10 编制提示词总量被压到预算内',
+      total <= rosterMod.ROSTER_PROMPT_TOTAL_MAX_BYTES, `${total}B`);
+    check('B-10 被截断成员带可诊断标记',
+      bigSnap.every((m) => m.systemPromptTruncated === true && m.systemPromptChars === 12000));
+    check('B-10 截断不切坏多字节字符',
+      !bigSnap.some((m) => m.systemPrompt.includes('\uFFFD')));
+    const small = snapshotRoster([{ id: 's1', systemPrompt: '短提示' }]);
+    check('B-10 未超限时零改动（无 truncated 标记）',
+      small[0].systemPrompt === '短提示' && small[0].systemPromptTruncated === undefined);
+  }
   const mainSrc = fs.readFileSync(path.join(__dirname, '../main/main.js'), 'utf8');
   const rosterDecl = mainSrc.indexOf('resolveTeamRoster:');
   const snapRead = mainSrc.indexOf('group?.dag?.roster', rosterDecl);

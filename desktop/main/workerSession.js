@@ -33,6 +33,28 @@ function pickOwnerMember(roster, task) {
 }
 
 /**
+ * B-19 收口（2026-10-21）：任务指派的**唯一入口**。
+ *
+ * 此前同一 run 内并存两套算法：批次计划（`preferredOwnerOf` / `dag.assignments`）与
+ * `pickOwnerMember` 的 seq 取模兜底。两条路径各自调用，排查「这个任务为什么派给 A」
+ * 需要同时看两处，且计划缺失时的行为只能靠阅读调用顺序推断。
+ * 现在统一为一条确定性链：
+ *   ① 批次计划指派（运行期还经过 waveEngine 的「已撤员成员排除」）；
+ *   ② 仅当计划缺失（旧组 / 手工建组）才回落 seq 取模。
+ * 返回值只可能是名册里的成员 id（或 null），不会发明成员。
+ *
+ * @param {object} group 组对象（含 dag.assignments）
+ * @param {object} task 子任务
+ * @param {Array} roster 可用名册（调用方已剔除撤员成员）
+ * @param {string|null} planned 运行期算出的计划指派（preferredOwnerOf 的结果）
+ */
+function resolveOwnerMember(group, task, roster, planned = null) {
+  const fromPlan = String(planned || group?.dag?.assignments?.[task?.taskId] || '').trim();
+  if (fromPlan) return fromPlan;
+  return pickOwnerMember(roster, task);
+}
+
+/**
  * 成员断点读写门面。
  * @param {{getCheckpoint?: Function, saveCheckpoint?: Function}} deps 可覆写（单测注入假存储）
  */
@@ -55,7 +77,7 @@ function createMemberSession(deps = {}) {
         taskId: task.taskId,
         ownerMemberId: task.ownerMemberId || null,
         cwd: group.cwd || '',
-      });
+      }, { pinned: true }); // B-18：成员断点不参与普通 50 条 LRU 淘汰（跨 run 稳定复用）
     } catch (e) {
       console.warn('[workerPool] 成员断点保存失败（不影响任务结果）:', e.message);
     }
@@ -81,9 +103,9 @@ function createMemberSession(deps = {}) {
     }
   }
 
-  return { memberSessionKey, pickOwnerMember, save, read };
+  return { memberSessionKey, pickOwnerMember, resolveOwnerMember, save, read };
 }
 
 module.exports = {
-  MEMBER_SESSION_PREFIX, memberSessionKey, pickOwnerMember, createMemberSession,
+  MEMBER_SESSION_PREFIX, memberSessionKey, pickOwnerMember, resolveOwnerMember, createMemberSession,
 };

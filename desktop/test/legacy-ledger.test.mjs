@@ -148,14 +148,14 @@ check('台账记录了生成器路径（可追溯到唯一事实来源）',
     gateBaseline !== null && live.metrics.rawButtons.total === gateBaseline,
     `台账=${live.metrics.rawButtons.total} 门禁基线=${gateBaseline}`);
 
-  // 4b. 死 bridge：bridge-parity.test.mjs 只钉占比上限，台账钉绝对数 + 必须仍在上限内
+  // 4b. 死 bridge：C-05 收口后 bridge-parity 已改为**显式台账**（不再只看占比上限），
+  // 因此这里断言「门禁确实引用同一份台账」——否则两套口径会各自漂移。
   const bpSrc = fs.readFileSync(path.join(ROOT, 'test/bridge-parity.test.mjs'), 'utf8');
-  const tm = bpSrc.match(/ratio\s*>\s*([\d.]+)/);
-  const thr = tm ? Number(tm[1]) : null;
   const b = live.metrics.deadBridgeMethods;
-  check('死 bridge：当前占比仍在 bridge-parity 的上限内（台账不掩盖门禁失败）',
-    thr !== null && b.dead / b.total <= thr,
-    `占比=${(b.dead / b.total * 100).toFixed(1)}% 上限=${thr === null ? '（未解析到）' : `${thr * 100}%`}`);
+  const ledgerGate = /bridge-dead-allowlist\.json/.test(bpSrc);
+  check('死 bridge：bridge-parity 已按显式台账门禁（绝对数 + 双向差集）',
+    ledgerGate,
+    `占比=${(b.dead / b.total * 100).toFixed(1)}% 台账门禁=${ledgerGate ? '已启用' : '未接线'}`);
   // 门禁只守上限 → 明确记录「台账比门禁更严」这一事实，防止有人以为台账多余
   check('死 bridge：台账记录了绝对数（门禁只有占比，绝对数变化门禁看不见 → 台账补的正是这一块）',
     typeof b.dead === 'number' && typeof b.total === 'number' && b.total > 0,

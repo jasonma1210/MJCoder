@@ -12,8 +12,12 @@ try {
 } catch { utilityProcess = null; }
 
 const CHILD_ENTRY = path.join(__dirname, 'childEntry.js');
-// 引擎内存硬上限：失控任务最多吃掉 2GB 子进程堆，主进程与 UI 不受波及（验收②的资源护栏）
-const MEM_LIMIT_MB = 2048;
+// 引擎内存护栏（A-09 收口）：
+//   · HEAP_LIMIT_MB 只约束 **V8 堆**——`--max-old-space-size` 不会限制 ArrayBuffer / WASM /
+//     原生模块等堆外内存，因此不能把「2GB」当作进程 RSS 上限；
+//   · RSS 由子进程自监控（childEntry.js 的 `RSS_LIMIT_MB` 看门狗，超限主动 exit），
+//     两层合起来才是「失控任务最多吃掉 RSS_LIMIT_MB」。
+const HEAP_LIMIT_MB = 2048;
 
 let customSpawn = null; // initEngineHost({ spawnChild }) 注入（测试用真实 fork）
 const active = new Map(); // runId -> 宿主传输句柄（abort 转发与在役查询）
@@ -28,7 +32,7 @@ function isAvailable() {
 
 function defaultSpawn() {
   const child = utilityProcess.fork(CHILD_ENTRY, [], {
-    execArgv: [`--max-old-space-size=${MEM_LIMIT_MB}`],
+    execArgv: [`--max-old-space-size=${HEAP_LIMIT_MB}`],
     stdio: 'pipe',
   });
   // 子进程 stderr 转发主进程日志：引擎内部告警/异常可回查（不转发则彻底失联）

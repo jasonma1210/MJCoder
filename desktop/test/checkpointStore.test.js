@@ -42,6 +42,18 @@ check('最早条目被 LRU 淘汰（k0 不在）', cp.getCheckpoint('k0') === nu
 check('未淘汰条目仍在（k1）', cp.getCheckpoint('k1')?.summary === 's1');
 check('条目总数不超过上限', Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'agent-checkpoints.json'), 'utf8'))).length === cp.MAX_ENTRIES);
 
+// ── B-18：成员会话断点 pinned，不参与普通 LRU 淘汰 ──
+cp.saveCheckpoint('agent:m-1', { summary: '成员工作记录', kind: 'member-task' }, { pinned: true });
+for (let i = 0; i < cp.MAX_ENTRIES + 10; i++) cp.saveCheckpoint(`n${i}`, { summary: `n${i}` });
+check('B-18 pinned 成员断点不被普通 LRU 挤掉', cp.getCheckpoint('agent:m-1')?.summary === '成员工作记录');
+{
+  const map = JSON.parse(fs.readFileSync(path.join(dir, 'agent-checkpoints.json'), 'utf8'));
+  const pinnedCount = Object.keys(map).filter((k) => map[k].pinned === true).length;
+  const unpinnedCount = Object.keys(map).length - pinnedCount;
+  check('B-18 非 pinned 条目仍受 50 条上限约束', unpinnedCount <= cp.MAX_ENTRIES, `unpinned=${unpinnedCount}`);
+  check('B-18 pinned 条目单独记账', pinnedCount >= 1, `pinned=${pinnedCount}`);
+}
+
 // ── 损坏文件 fail-closed：不静默丢弃（P1-15）──
 fs.writeFileSync(path.join(dir, 'agent-checkpoints.json'), '{broken json!!', 'utf8');
 check('损坏文件 get 返回 null（不抛异常）', cp.getCheckpoint('thread-x') === null);

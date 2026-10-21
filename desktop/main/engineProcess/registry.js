@@ -60,9 +60,11 @@ const MEMBER_TASK_ONLY_CHANNELS = [
   // M5 / T5-8 / B-04：军团协同五工具，只在成员任务（注入 teamTools + teamContext）时出现。
   'teamListMembers', 'teamSendMessage', 'teamBoard', 'teamWait', 'teamReadMessages',
 ];
-// 引擎内部显式分支处理的工具：不经 RPC、无通道义务（此前只存在于 agent-core 的注释里，
-// A-03 建议把它与上面的作用域一起变成可断言的事实）。
-const ENGINE_BUILTIN_TOOLS = ['todoWrite'];
+// 引擎内部显式分支处理的工具（模型侧名称）：不经 RPC、无通道义务。
+// A-08 收口：这是**机器可读标注**，由 tool-registration-matrix 断言
+//   ① 与 agent-core 导出的 ENGINE_BUILTIN_TOOL_NAMES 完全一致；
+//   ② 不与 TOOL_CHANNELS 相交（内置工具不该同时登记宿主通道）。
+const ENGINE_BUILTIN_TOOLS = ['todo_write'];
 // 通知型回调（fire-and-forget，单向序列化即可）
 const NOTIFY_CBS = ['onStream', 'onToolCall', 'onMessage', 'onTodos', 'onSubagentEvent', 'onBudget', 'onTrace', 'onDone'];
 // 请求-响应型回调（需要返回值语义：onSuspend 返回断点是否保存成功）

@@ -31,6 +31,26 @@ const pendingTool = new Map(); // callId -> {resolve, reject}
 const pendingCb = new Map();   // callId -> {resolve}
 const controllers = new Map(); // runId -> AbortController（主进程 {t:'abort'} 级联）
 
+// ── A-09：进程 RSS 看门狗 ──
+// `--max-old-space-size` 只管 V8 堆，管不住 ArrayBuffer / WASM / 原生模块的堆外内存。
+// 失控任务若持续分配堆外内存，宿主只能等系统 OOM（整机受影响）。这里由子进程自监控：
+// 超过 RSS_LIMIT_MB 主动以 137 退出，宿主走既有的 engineExited 分支（保存断点 + 可续跑）。
+// 环境变量 MJCODE_ENGINE_RSS_LIMIT_MB 可调；0 表示关闭看门狗（排障用）。
+const RSS_LIMIT_MB = Math.max(0, Number(process.env.MJCODE_ENGINE_RSS_LIMIT_MB || 3072) || 0);
+const RSS_CHECK_INTERVAL_MS = 5000;
+if (RSS_LIMIT_MB > 0 && typeof setInterval === 'function') {
+  const rssTimer = setInterval(() => {
+    try {
+      const rssMb = process.memoryUsage().rss / (1024 * 1024);
+      if (rssMb > RSS_LIMIT_MB) {
+        console.error(`[engineChild] RSS ${Math.round(rssMb)}MB 超过上限 ${RSS_LIMIT_MB}MB，主动退出（保留断点续跑）`);
+        process.exit(137);
+      }
+    } catch { /* 监控失败不影响主流程 */ }
+  }, RSS_CHECK_INTERVAL_MS);
+  if (typeof rssTimer.unref === 'function') rssTimer.unref();
+}
+
 // 工具通道代理：引擎调用 → RPC 主进程实现 → 等回执
 function makeToolHandlers() {
   const h = {};
@@ -52,13 +72,25 @@ function makeCallbacks(runId) {
   for (const name of NOTIFY_CBS) {
     cbs[name] = (...args) => transport.send({ t: 'evt', id: runId, cb: name, args });
   }
-  // 语义限制（如实记录）：引擎侧 onSuspend 是同步调用（suspendNoticed = !!onSuspend?.(...)），
-  // 跨进程无法同步取回主进程的保存结果——返回值退化为「恒已保存」（Promise 恒真值）。
-  // 可接受：断点落盘是主进程 onSuspend 的副作用（cbReq 送达即执行），「继续」恢复不依赖返回值；
-  // 仅收尾文案「断点已保存」在磁盘写失败的极端场景下可能失实（fail-open 同主进程既有纪律）。
+  // A-05 收口（2026-10-21）：引擎侧已改为 `await onSuspend(...)`，这里必须给出**可靠的回执**。
+  //   · 主进程正常回执 {t:'cbRes', result:boolean} → 用真实落盘结果；
+  //   · 主进程已收尾 / 回执丢失 → 超时后按 false 返回（fail-closed 文案：不说「已保存」）；
+  //   · 超时兜底是为了避免 await 永远挂起（旧实现返回 Promise 恒真，不挂起但会说谎）。
+  const SUSPEND_ACK_TIMEOUT_MS = 5000;
   cbs.onSuspend = (info) => new Promise((resolve) => {
     const callId = `c${++callSeq}`;
-    pendingCb.set(callId, { resolve });
+    let timer = null;
+    const done = (v) => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      pendingCb.delete(callId);
+      resolve(v === true);
+    };
+    pendingCb.set(callId, { resolve: done });
+    timer = setTimeout(() => {
+      console.warn('[engineChild] onSuspend 回执超时，按「未保存」收尾（避免 await 永久挂起）');
+      done(false);
+    }, SUSPEND_ACK_TIMEOUT_MS);
+    if (typeof timer.unref === 'function') timer.unref();
     transport.send({ t: 'cbReq', id: runId, callId, cb: 'onSuspend', args: [info] });
   });
   return cbs;

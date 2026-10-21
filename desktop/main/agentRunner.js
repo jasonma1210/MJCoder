@@ -370,6 +370,9 @@ function startAgentRun(payload, sender) {
       planMode: !!payload.planMode,
       conversationId: payload.conversationId,
       tokenBudget: payload.tokenBudget || 0,
+      // A-06：整任务墙钟显式放行——渲染层可下发 runWallClockMs（缺省 undefined ⇒ 引擎默认值）。
+      // 与 Worker 通道的「maxRounds + runWallClockMs 都显式」保持一致，不再依赖隐式默认对齐。
+      runWallClockMs: Number(payload.runWallClockMs) > 0 ? Number(payload.runWallClockMs) : undefined,
       // Phase 3-1：断点恢复上下文（渲染层「继续」时从 checkpointStore 取回注入）
       resumeContext: payload.resumeContext || '',
       // 2026-10-19：任务收尾描述粒度——渲染层设置经 payload 下发，白名单必须放行，

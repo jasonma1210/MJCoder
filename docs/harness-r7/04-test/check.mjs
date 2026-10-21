@@ -953,8 +953,8 @@ function httpHeaderSegments() {
   okTrue('A18c', 'LAYER_QUOTA = {session:2, team:3, project:3, global:2}（四作用域）',
     /LAYER_QUOTA\s*=\s*\{\s*session:\s*2,\s*team:\s*3,\s*project:\s*3,\s*global:\s*2\s*\}/.test(mem));
   const pw = stripComments(read('desktop/main/mcpPrewarm.js'));
-  okTrue('A18d', "PREWARM_NAMES = filesystem/time/fetch 三个",
-    /PREWARM_NAMES\s*=\s*new Set\(\['filesystem',\s*'time',\s*'fetch'\]\)/.test(pw));
+  okTrue('A18d', "PREWARM_NAMES = time/fetch 两个（A-04 收口：filesystem 已移出 auto-start）",
+    /PREWARM_NAMES\s*=\s*new Set\(\['time',\s*'fetch'\]\)/.test(pw));
   const ar = stripComments(read('desktop/main/agentRunner.js'));
   okTrue('A18e', 'PREWARM_CONNECT_TIMEOUT_MS = 6000', /PREWARM_CONNECT_TIMEOUT_MS\s*=\s*6000/.test(ar));
   const ap = stripComments(read('desktop/main/approval.js'));

@@ -28,6 +28,8 @@ const { createMemberSession } = require('./workerSession');
 // M5 / T5-12：批次编排（§13.4）——读 dag_json.waves 做批次门控（批间串行）+ 5s×3 探活撤员。
 const teamWaves = require('./teamWaves');
 const { createWaveEngine } = require('./waveEngine');
+const { createGroupConcurrency } = require('./groupConcurrency');
+const { pauseOnCriticalFailure } = require('./workerCritical');
 const { broadcastWaitSweep, broadcastWoken } = require('./taskBroadcast');
 // 活动流文本工具（参数摘要 / 产物路径粗提取）——纯函数，已抽出到 workerText.js
 const { summarizeArgs, extractPaths } = require('./workerText');
@@ -78,6 +80,9 @@ function initWorkerPool(d) {
     discardIso: (iso) => workerIsolation.discardIsolated({ iso }),
     getMaxConcurrent: () => maxConcurrent,
     setMaxConcurrent: (n) => setMaxConcurrent(n),
+    // B-15：组级降档/还原（优先于全局读写；waveEngine 检测到回调存在时不再动全局）
+    lowerGroupConcurrency: (groupId) => groupConc.lower(groupId),
+    restoreGroupConcurrency: (groupId) => groupConc.restore(groupId),
   });
   // M5 / T5-11：按 deps 装配成员会话门面（单测可注入假断点存储；生产缺省回落 checkpointStore）
   memberSession = createMemberSession({ getCheckpoint: d.getCheckpoint, saveCheckpoint: d.saveCheckpoint });
@@ -92,6 +97,13 @@ function setMaxConcurrent(n) {
   maxConcurrent = Math.min(Math.max(Number(n) || 2, 1), 8);
   return maxConcurrent;
 }
+
+// ── B-15 收口（2026-10-21）：组级并发档（实现见 main/groupConcurrency.js）──
+// 探活撤员的降档只作用于**出问题的那一组**，不再改全局 maxConcurrent。
+const groupConc = createGroupConcurrency({
+  activeRuns,
+  getMaxConcurrent: () => maxConcurrent,
+});
 
 // ═══ M5 / T5-11：成员持久会话（会话键 / 确定性指派 / 成员断点读写）已抽出 ═══
 //
@@ -176,6 +188,9 @@ async function pump() {
       let dispatched = false;
       let allIdle = true;
       for (const g of groups) {
+        // B-15：组级并发上限（探活撤员只降本组；未降档的组等于全局上限）。
+        // 必须在 claimNext **之前**判定——认领会把任务置 running，提前退出会留下「已认领未派发」。
+        if (groupConc.activeCountFor(g.group_id) >= groupConc.limitOf(g.group_id)) continue;
         // 第八轮 B-02 / D-809：预算越界即确定性停派（只处置未开始的任务，不动在途）。
         if (groupBudget.tripIfExhausted(deps, g)) continue;
         // 先把依赖已满足的 pending 入队
@@ -196,7 +211,9 @@ async function pump() {
             // 批次运行时存在时，已被撤员的成员从名册里剔除——否则「计划缺失 → 回落 seq 取模」
             // 这条回退路径会把刚撤下的人重新派回来（形成撤员/重派的死循环）。
             const roster = deps.resolveTeamRoster?.(g);
-            const owner = planned || memberSession.pickOwnerMember(eligibleRoster(g.group_id, roster), task);
+            const owner = memberSession.resolveOwnerMember(
+              g, task, eligibleRoster(g.group_id, roster), planned,
+            );
             if (owner) {
               task = deps.store.setTaskStatus(g.group_id, task.taskId, 'running',
                 { workerId: task.workerId, ownerMemberId: owner }) || task;
@@ -390,6 +407,10 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
           // 那是唯一可持久化、可断言的位置（R6.1 渲染层另有 group.thread_id 权威反查）。
           // 第八轮 B-02 / D-809：max_rounds 从「提示词文案」变成引擎侧真实闸门。
           maxRounds: budgetPlan.maxRounds,
+          // A-06 收口：整任务墙钟显式下发（与宿主 setTimeout 同一个预算值）。
+          // 此前引擎走 DEFAULT_RUN_WALL_CLOCK_MS、宿主走任务超时，两条路径靠默认值隐式对齐；
+          // 现在同一份 `budgetPlan.timeoutMs` 同时驱动两边，任一侧先到都按「暂停 + 断点」收尾。
+          runWallClockMs: budgetPlan.timeoutMs,
           chatRetryBaseMs: 2000,
           tokenBudget: 200000,
           // Worker 也是无人值守：收尾文案不能出现「发送继续」
@@ -723,39 +744,11 @@ function waitTask(groupId, taskId, onTaskIds, opts = {}) {
   return r;
 }
 
-// 关键失败处理：不可重试的关键任务 → 若阻塞下游则暂停组（P1-7 组级失败策略）
+// 关键失败处理已抽至 main/workerCritical.js（B-15 补线后本文件越过 800 行软档）。
+// 保留空安全包装：调用点语义与抽走前一致（非关键任务 / 无阻塞失败均为 no-op）。
 function maybePauseOnCritical(groupId, task, retried) {
-  if (task.critical && !retried) {
-    // 立即检查：失败的关键任务是否阻塞下游（下游任务此刻尚未入队执行）
-    if (deps.store.groupHasBlockingFailure(groupId)) {
-      // 取消还在排队的下游任务（skip），保留已完成结果供重新规划
-      const tasks = deps.store.listTasks(groupId);
-for (const t of tasks) {
-          if (t.status === 'queued' || t.status === 'pending') {
-            // 原为 `catch { /* 状态竞争忽略 */ }`——纯空吞。
-            // setTaskStatus 对非法迁移会 throw，吞掉后该任务永远停在 queued，
-            // 而组的收尾判定依赖「无待执行任务」⇒ 组永不能收尾、界面一直转圈。
-            // 现按「是否仍在运行」区分处理：仍在运行 = 正常竞争，记 debug；
-            // 仍在但被吞 = 异常，显式记录并强制置为 skipped 以保证组可收尾。
-            try {
-              deps.store.setTaskStatus(groupId, t.taskId, 'skipped');
-            } catch (e) {
-              const stillPending = deps.store.getTask?.(groupId, t.taskId)?.status;
-              if (stillPending === 'queued' || stillPending === 'pending') {
-                console.error(`[workerPool] 子任务 ${t.taskId} 标记 skipped 失败且状态未推进`
-                  + `（${stillPending}）：${e.message}；强制置为 skipped 以免组无法收尾`);
-                try { deps.store.setTaskStatus(groupId, t.taskId, 'skipped', { force: true }); }
-                catch (e2) { console.error(`[workerPool] 强制置 skipped 仍失败：${e2.message}`); }
-              } else {
-                console.warn(`[workerPool] 子任务 ${t.taskId} 状态竞争（已为 ${stillPending}），忽略`);
-              }
-            }
-          }
-        }
-      deps.store.setGroupStatus(groupId, 'paused', { error: `关键任务「${task.title}」失败，下游任务已跳过：组已暂停（可重试失败任务或取消）` });
-      deps.emit?.({ type: 'group_update', groupId, status: 'paused', error: `关键任务「${task.title}」失败` });
-    }
-  }
+  if (!task.critical || retried) return;
+  pauseOnCriticalFailure(deps, groupId, task);
 }
 
 // 组收尾：聚合（代码聚合 v1）→ done / failed

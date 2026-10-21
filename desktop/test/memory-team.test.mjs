@@ -134,6 +134,21 @@ const ok = (name) => { n += 1; console.log(`  ✓ ${name}`); };
   assert.strictEqual(ts.findTeamByRun(''), null, '空 run → null');
   ok('findTeamByRun：run_id（=groupId）→ 团队归属反查');
 
+  // ── 9. B-16：成员私有记忆批量降权（单条 SQL、作用域精确、幂等）──
+  {
+    const other = mem.remember({ spaceId: '/p', domain: 'global_knowledge', scope: 'team', teamId: 't1', agentId: 'm-b', content: '另一成员的私有结论', source: 'model_conclusion' });
+    const otherBefore = mem.list({ scope: 'team', teamId: 't1', agentId: 'm-b' }).find((m) => m.id === other.id)?.importance;
+    const demoted = mem.demoteImportance({ scope: 'team', teamId: 't1', agentId: 'm-a', floor: 0.2, factor: 0.5 });
+    const afterA = mem.list({ scope: 'team', teamId: 't1', agentId: 'm-a' });
+    const otherAfter = mem.list({ scope: 'team', teamId: 't1', agentId: 'm-b' }).find((m) => m.id === other.id)?.importance;
+    assert.ok(demoted >= 1, '降权命中该成员私有条目');
+    assert.ok(afterA.every((m) => Number(m.importance) <= 0.2), '降权后 importance 不超过 floor');
+    assert.strictEqual(otherAfter, otherBefore, '不触碰其它成员的私有记忆');
+    const again = mem.demoteImportance({ scope: 'team', teamId: 't1', agentId: 'm-a', floor: 0.2, factor: 0.5 });
+    assert.strictEqual(again, 0, '幂等：已在 floor 以下的条目不再计入');
+    ok('B-16 demoteImportance：单条 SQL 批量降权 + 作用域精确 + 幂等');
+  }
+
   console.log(`\nmemory-team: ${n}/${n} 通过`);
   process.exit(0);
 })().catch((e) => {

@@ -9,6 +9,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const webTools = require('../main/webTools');
+// A-07：工具面基线的唯一数字来源（只守下限，精确清单由矩阵门禁守）
+const { BASE_TOOLS_FLOOR } = require('../main/toolBaseline');
 
 let pass = 0, fail = 0;
 function check(name, fn) {
@@ -51,7 +53,10 @@ import('../agent-core/index.js').then((m) => {
     // + deep_research = 47（G-deep-research：原生深度研究流水线，引擎内建）
     // + doc_create/xlsx_create/pptx_create/pdf_generate = 51（G-doc：文档生成原生工具）
     // + latex_compile = 52（G-latex：LaTeX 编译原生工具）
-    assert.strictEqual(BASE_TOOLS.length, 52, `实际 ${BASE_TOOLS.length} 个工具`);
+    // A-07 收口：这里只守「工具面不缩水」的下限（唯一数字来源 = main/toolBaseline.js）；
+    // 「清单是否完整 / 8 环节是否接线」由 tool-registration-matrix.test.mjs 的双向差集断言负责。
+    assert.ok(BASE_TOOLS.length >= BASE_TOOLS_FLOOR,
+      `实际 ${BASE_TOOLS.length} 个工具，低于基线下限 ${BASE_TOOLS_FLOOR}`);
   });
 
   // ── B2-B-12（源码注释基线数字治理）：防复发断言 ──

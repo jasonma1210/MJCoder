@@ -21,7 +21,10 @@ const teamWaves = require('./teamWaves');
  *   · emit: (evt) => void（事件出口 = workerPool 的 emitTask，兼作探活第一通道计数）
  *   · schedule: () => void（撤员后推进调度）
  *   · broadcastWoken / discardIso: 撤员收尾复用池侧既有实现（避免本文件重复实现等待唤醒/isolation 清理）
- *   · getMaxConcurrent / setMaxConcurrent：并发档读写（撤员时降档、全部批次收尾后还原）
+ *   · **并发降档（B-15 收口）**：
+ *       - `lowerGroupConcurrency(groupId)`：优先使用——只降**本组**并发档，不波及其它 run；
+ *       - `restoreGroupConcurrency(groupId)`：本组收尾时还原；
+ *       - `getMaxConcurrent / setMaxConcurrent`：保留为旧宿主注入的兼容回退（无分组函数时才用）。
  *   · **时序注入（2026-10-21 新增，为探活撤员的端到端测试）**：
  *       - `now: () => number`：时钟（默认 `Date.now`）。撤员的判据含「真实静默超窗
  *         `WAVE_PROBE_IDLE_MS=120000`」，测试不可能真等 2 分钟。
@@ -33,6 +36,7 @@ const teamWaves = require('./teamWaves');
 function createWaveEngine(host) {
   const {
     getDeps, activeRuns, emit, schedule, broadcastWoken, discardIso, getMaxConcurrent, setMaxConcurrent,
+    lowerGroupConcurrency, restoreGroupConcurrency,
     now = () => Date.now(),
     autoTimer = true,
     probeIntervalMs = teamWaves.WAVE_PROBE_INTERVAL_MS,
@@ -108,12 +112,18 @@ function createWaveEngine(host) {
     if (ownerId) rt.retired.add(ownerId);
     rt.reassign.set(victim.taskId, (rt.reassign.get(victim.taskId) || 0) + 1);
 
-    // 并发降档：每组只降一次（连续降档会让组越跑越慢，反而制造更多「静默」）。
+    // 并发降档（B-15）：只降**本组**（每组一次），不再动全局 maxConcurrent ——
+    // 此前某个组静默撤员会把所有并行 run 一起拖慢，属于放大故障的全局副作用。
     if (!rt.lowered) {
       rt.lowered = true;
-      if (concurrencyBefore == null) concurrencyBefore = getMaxConcurrent();
-      const next = Math.max(1, Math.floor(getMaxConcurrent() / 2));
-      if (next < getMaxConcurrent()) setMaxConcurrent(next);
+      if (typeof lowerGroupConcurrency === 'function') {
+        lowerGroupConcurrency(groupId);
+      } else if (typeof setMaxConcurrent === 'function') {
+        // 兼容回退：旧宿主只提供了全局读写（单测/旧装配），行为与改前一致。
+        if (concurrencyBefore == null) concurrencyBefore = getMaxConcurrent();
+        const next = Math.max(1, Math.floor(getMaxConcurrent() / 2));
+        if (next < getMaxConcurrent()) setMaxConcurrent(next);
+      }
     }
 
     emit({
@@ -165,8 +175,11 @@ function createWaveEngine(host) {
     if (!runtimes.has(groupId)) return;
     runtimes.delete(groupId);
     if (runtimes.size === 0 && timer) { clearInterval(timer); timer = null; }
-    // 并发基线还原：降档只针对「当时那批人不足」，不该永久拖慢其它 run。
-    if (runtimes.size === 0 && concurrencyBefore != null) {
+    // B-15：组级降档随组收尾还原（只影响本组；不会覆盖其它组的并发档）。
+    if (typeof restoreGroupConcurrency === 'function') {
+      restoreGroupConcurrency(groupId);
+    } else if (runtimes.size === 0 && concurrencyBefore != null) {
+      // 兼容回退：旧全局语义（全部批次收尾后还原）。
       setMaxConcurrent(concurrencyBefore);
       concurrencyBefore = null;
     }

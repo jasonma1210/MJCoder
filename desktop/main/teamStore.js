@@ -48,6 +48,13 @@ const MESSAGE_TOTAL_MAX = 4000;
 // 单条消息引用条目上限 / 单条引用长度上限（refs 只传「引用」不传内容）
 const MESSAGE_REFS_MAX = 20;
 const MESSAGE_REF_MAX = 512;
+// B-14 收口（2026-10-21）：团队消息的**容量闸 + 保留期**。
+// 此前只有单条 4000B 体积闸，全库无 DELETE / 清理任务 ⇒ 长会话下 team_messages 无界增长。
+//   · 每个团队保留最近 1000 条（看板/轨迹只回看最近 50 次派活、800 条消息，1000 足够覆盖）；
+//   · 超过 30 天的消息在每次追加时顺带清理（无需独立定时器，写入即维护）。
+// 注意：seq 单调性不受影响（删旧不删新；MAX(seq) 仍只增）。
+const TEAM_MESSAGES_MAX_PER_TEAM = 1000;
+const TEAM_MESSAGES_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // 无 run 归属的旁路广播（团队生命周期系统消息）用空串 run_id；派活消息一律带真实 run_id
 const SYSTEM_RUN_ID = '';
 
@@ -611,6 +618,12 @@ class TeamStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, teamId, runId, seq + 1, fromMemberId, toMemberId, kind, summary,
           JSON.stringify(refs), payloadJson, this.now());
+      // B-14：写入即维护——先按保留期清理过期消息，再按容量淘汰最旧（seq 升序）。
+      this.db.prepare('DELETE FROM team_messages WHERE team_id = ? AND created_at < ?')
+        .run(teamId, this.now() - TEAM_MESSAGES_TTL_MS);
+      this.db.prepare(`DELETE FROM team_messages WHERE team_id = ? AND id NOT IN (
+        SELECT id FROM team_messages WHERE team_id = ? ORDER BY seq DESC LIMIT ?
+      )`).run(teamId, teamId, TEAM_MESSAGES_MAX_PER_TEAM);
     })();
 
     return { message: this.getMessage(id), gated, reason };
@@ -710,6 +723,8 @@ module.exports = {
   MESSAGE_TOTAL_MAX,
   MESSAGE_REFS_MAX,
   MESSAGE_REF_MAX,
+  TEAM_MESSAGES_MAX_PER_TEAM,
+  TEAM_MESSAGES_TTL_MS,
   SYSTEM_RUN_ID,
   LEAD_DEFAULT_NAME,
   LEAD_DEFAULT_TOOLS,

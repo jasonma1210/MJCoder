@@ -2336,6 +2336,10 @@ export function resolveSupportsToolCall(m) {
 // P1-5：工具展示名 ↔ 通道名映射对外导出——主进程的 hooks 匹配器需要「展示名」做用户友好的
 // `match`（write_file 而非 writeFile），从单一来源取表可避免两处各写一份而漂移。
 export { TOOL_HANDLER_NAMES };
+// A-08：引擎内部显式 case 处理的工具（模型侧名称）。此常量是「哪些工具不经宿主 RPC」
+// 的机器可读事实来源——宿主 registry.js 与 tool-registration-matrix 都引用它，
+// 避免这条例外只存在于注释里（注释无法被门禁校验）。
+export const ENGINE_BUILTIN_TOOL_NAMES = ['todo_write'];
 
 export async function runAgent({
   messages, model, onStream, onToolCall, onDone, onMessage, onSuspend, onBudget, onTodos,
@@ -2957,6 +2961,17 @@ export async function runAgent({
   let contextRescued = false; // 上下文超限（provider 400）压缩救援已尝试过
   let renewNotice = '';
   let suspendNoticed = false; // Phase 3-1：断点是否已通过 onSuspend 成功保存
+  // A-05：onSuspend 的执行**可能异步**（子进程路径要经 RPC 回执才拿得到主进程落盘结果）。
+  // 此前四处调用写成 `!!onSuspend?.(...)`：Promise 恒为真值 ⇒ 断点写失败也会说「已保存」。
+  // 统一改为 await 真实返回值；in-process 路径 await 一个布尔值没有副作用。
+  async function noticeSuspend(info) {
+    try {
+      return !!(await onSuspend?.(info));
+    } catch (e) {
+      console.warn('[agent] 断点保存钩子异常:', e.message);
+      return false;
+    }
+  }
   // P1-1：整任务墙钟闸（wall-clock）——命中后走「暂停 + 收尾文案」，不新增 budgetKind 取值
   //（新增取值会外溢到 workerPool 收尾文案与 main.js 的 humanize），只在这里另记一个布尔用于文案。
   let wallClockHit = false;
@@ -3004,7 +3019,7 @@ export async function runAgent({
       budgetExhausted = true; budgetKind = 'rounds'; wallClockHit = true;
       console.warn(`[agent] 整任务总时长已达上限（${Math.round(runWallClockMs / 60000)} 分钟），保存断点后收尾`);
       try {
-        suspendNoticed = !!onSuspend?.({
+        suspendNoticed = await noticeSuspend({
           kind: 'wallclock', summary: finalText, usage: { ...usage },
           roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
         });
@@ -3114,7 +3129,7 @@ export async function runAgent({
       // 「继续」即可接续；budgetKind 不新增取值（会外溢到 workerPool 与收尾文案）。
       if (!signal?.aborted && (err?.name === 'AbortError' || /超时|timeout|TIMEOUT/.test(msg))) {
         try {
-          suspendNoticed = !!onSuspend?.({
+          suspendNoticed = await noticeSuspend({
             kind: 'timeout', summary: finalText, usage: { ...usage },
             roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
           });
@@ -3250,7 +3265,7 @@ export async function runAgent({
       budgetExhausted = true; budgetKind = 'tokens'; contextStuck = true;
       console.warn('[agent] 压缩与硬截断均无收益（历史已无早期内容可裁），挂起而非继续空转');
       try {
-        suspendNoticed = !!onSuspend?.({
+        suspendNoticed = await noticeSuspend({
           kind: 'tokens', summary: finalText, usage: { ...usage },
           roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
         });
@@ -3271,7 +3286,7 @@ export async function runAgent({
       // 都走「暂停而非失败」——挂起钩子落断点，收尾文案引导「继续」走断点恢复。
       budgetExhausted = true; budgetKind = 'tokens';
       try {
-        suspendNoticed = !!onSuspend?.({
+        suspendNoticed = await noticeSuspend({
           kind: 'tokens', summary: finalText, usage: { ...usage },
           roundsUsed, rescues: tokenRescues, windowSpent: tokenWindowSpent, budget: tokenBudget,
         });

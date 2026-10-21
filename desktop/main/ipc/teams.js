@@ -246,6 +246,8 @@ function buildTeamContext(team, { mode, budget, memberIds } = {}) {
 // M5 / T5-9：run 级编制快照（纯函数，2026-10-21 抽至 main/teamRoster.js 为 B-02 腾行数）；
 // 本文件继续 re-export，既有引用方零改动。
 const { snapshotRoster } = require('../teamRoster');
+// B-06：控制面（重置成员会话 / 中断）已抽至独立模块
+const { registerTeamControl } = require('./teamControl');
 
 function register() {
   ipcMain.handle('teams:list', async (_, payload = {}) => {
@@ -690,87 +692,10 @@ function register() {
     }
   });
 
-  // ── T5-11：重置成员会话（§13.3「对话即容器，成员会话是隔离工作台」）──
-  //
-  // 语义 = 把该成员的**工作台清空**：① 清成员断点 `agent:{memberId}`（复用既有
-  // checkpointStore 的清理通道，旧断点不复活）；② 该成员私有记忆降权（importance 减半，
-  // **不删除**——记忆仍有审计与召回价值，「重置工作台」不等于「清算历史」）。
-  //
-  // 为什么不做成删记忆：scope='team' 的私有记忆同时承载「该成员在本团队的历史结论」，
-  // 团队视图与后续召回都要读它；删除会让团队记忆出现无法解释的空洞。降权是
-  // 设计稿「降权」二字的直译，且可逆（下次命中会重新计入 importance？——否：importance 只由
-  // 写入与本次降权改动，故这是**单向弱化**，符合「重置后旧经验不再主导」的意图）。
-  //
-  // 为什么不经渲染层直调 checkpoint:clear：成员键的格式（`agent:{memberId}`）与「私有记忆降权」
-  // 是一件事的两半，分散到两处（渲染层拼键 + 另一条记忆通道）就会出现「清了断点没降权」的半成品状态。
-  ipcMain.handle('teams:resetMemberSession', async (_, payload = {}) => {
-    const store = deps.getTeamStore();
-    if (!store) return { ok: false, error: DISPATCH_ERRORS.UNAVAILABLE };
-    try {
-      guard.assertStrings(payload, { teamId: 128, memberId: 128 });
-      const member = store.getMember(payload.teamId, payload.memberId);
-      if (!member) return { ok: false, error: '成员不存在' };
-      const sessionKey = `agent:${payload.memberId}`;
-      const checkpointCleared = deps.clearCheckpoint
-        ? deps.clearCheckpoint(sessionKey) === true : false;
-      // 私有记忆降权：只取该成员在本团队下的私有条目（agent_id 精确匹配，不碰团队共享条目）。
-      let demoted = 0;
-      try {
-        const memory = deps.getMemoryManager?.();
-        const list = memory?.list?.({
-          scope: 'team', teamId: String(payload.teamId), agentId: String(payload.memberId), limit: 200,
-        }) || [];
-        for (const m of list) {
-          memory.updateMemory(m.id, { importance: Math.min(0.2, Number(m.importance ?? 0.5) * 0.5) });
-          demoted += 1;
-        }
-      } catch (e) { console.warn('[teams] 成员私有记忆降权失败（断点已清）：', e.message); }
-      audit('team_member_session_reset', payload.memberId, `team=${payload.teamId} demoted=${demoted}`);
-      broadcastSystem(payload.teamId, 'memberSessionReset', member.name);
-      return { ok: true, sessionKey, checkpointCleared, demoted };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  // ── M5 / T5-10：中断入口（§9.2 三主体矩阵）──
-  //
-  // 为什么是 IPC 而不是模型工具：§8.1 已定案 `team_interrupt` 不接给模型——成员 run 走
-  // 无人值守通道、审批一律 deny，接进来就是「schema 可见、调用必失败」的死工具。
-  // 控制层动作只允许用户经界面触发，本 handler 即用户的唯一入口。
-  //
-  // 范围二选一：`taskId`（中断单个任务）或 `targetMemberId`（中断该成员在本次 run 的全部任务）。
-  // 权限矩阵 / 执行处置 / 审计留痕全部收敛在 main/teamInterrupt.js（单一事实来源），
-  // 本 handler 只做入参收敛 + 审计 + 原样返回结构化结果，不复制任何矩阵判断。
-  ipcMain.handle('teams:interrupt', async (_, payload = {}) => {
-    try {
-      guard.assertStrings(payload, {
-        teamId: 128,
-        runId: 128,
-        taskId: { max: 128, optional: true, allowEmpty: true },
-        targetMemberId: { max: 128, optional: true, allowEmpty: true },
-        reason: { max: 500, optional: true, allowEmpty: true },
-      });
-      if (typeof deps.interruptTask !== 'function') {
-        return { ok: false, error: DISPATCH_ERRORS.UNAVAILABLE, interrupted: [] };
-      }
-      const r = deps.interruptTask({
-        teamId: payload.teamId,
-        runId: payload.runId,
-        taskId: payload.taskId || '',
-        targetMemberId: payload.targetMemberId || '',
-        reason: payload.reason || '',
-        confirmed: payload.confirmed === true,
-      });
-      if (r && r.ok) {
-        audit('team_interrupt', payload.runId,
-          `team=${payload.teamId} tasks=${(r.interrupted || []).join(',')} reason=${payload.reason || ''}`);
-      }
-      return r;
-    } catch (err) {
-      return { ok: false, error: err.message, interrupted: [] };
-    }
-  });
+  // ── B-06：控制面 handler（重置成员会话 / 运行中断）已抽至 ./teamControl.js ──
+  // 抽取原因与现实收益：两块控制面动作只由用户界面触发、权限全部委托既有模块，
+  // 与「编制 / 消息」读写是不同职责；抽走后本文件回落到 800 行软档以下。
+  registerTeamControl({ ipcMain, deps, guard, audit, broadcastSystem, DISPATCH_ERRORS });
 }
 
 function initTeamsIpc(d) {

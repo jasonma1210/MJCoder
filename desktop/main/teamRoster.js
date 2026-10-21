@@ -15,12 +15,38 @@
 
 'use strict';
 
+// B-10 收口（2026-10-21）：编制快照的整体体积闸。
+// 单成员 systemPrompt 已有 12000 字符上限，但**没有整体闸**——20 名成员 × 12000 字符
+// 会产出约 240K 字符的中文 JSON（UTF-8 约 720KB），整条 dag_json 落库/回传都要付这个成本。
+// 这里按「所有成员提示词总字节」设上限，超出时**按成员均分**截断（确定性，与成员顺序无关），
+// 并在被截断的成员上留 `systemPromptTruncated` + `systemPromptChars`，让运行期可诊断。
+const ROSTER_PROMPT_TOTAL_MAX_BYTES = 160 * 1024;
+const ROSTER_PROMPT_MIN_BYTES = 2 * 1024;
+
+function byteLen(s) {
+  return Buffer.byteLength(String(s || ''), 'utf8');
+}
+
+/** 按 UTF-8 字节上限截断（不切坏多字节字符）。 */
+function trimToBytes(s, maxBytes) {
+  const str = String(s || '');
+  if (byteLen(str) <= maxBytes) return str;
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (byteLen(str.slice(0, mid)) <= maxBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  return str.slice(0, lo);
+}
+
 /**
  * @param {Array<object>|null} members 本次被选中的成员（含统筹）
  * @returns {Array<object>} 快照数组（无 id 的成员被过滤掉）
  */
 function snapshotRoster(members) {
-  return (Array.isArray(members) ? members : [])
+  const snap = (Array.isArray(members) ? members : [])
     .filter((m) => m && m.id)
     .map((m) => ({
       id: String(m.id),
@@ -36,6 +62,33 @@ function snapshotRoster(members) {
       skillNames: Array.isArray(m.skillNames) ? [...m.skillNames] : [],
       enabled: m.enabled !== false,
     }));
+
+  // 整体体积闸：只对提示词部分计入预算（其余字段是有限结构，量级可忽略）。
+  const promptBytes = snap.reduce((n, m) => n + byteLen(m.systemPrompt), 0);
+  if (!snap.length || promptBytes <= ROSTER_PROMPT_TOTAL_MAX_BYTES) return snap;
+
+  const perMember = Math.max(ROSTER_PROMPT_MIN_BYTES,
+    Math.floor(ROSTER_PROMPT_TOTAL_MAX_BYTES / snap.length));
+  console.warn(
+    `[teamRoster] 编制提示词总量 ${promptBytes}B 超过 ${ROSTER_PROMPT_TOTAL_MAX_BYTES}B，`
+    + `按成员均分截断到 ≤${perMember}B（成员 ${snap.length} 名）`,
+  );
+  return snap.map((m) => {
+    const original = m.systemPrompt;
+    if (byteLen(original) <= perMember) return m;
+    return {
+      ...m,
+      systemPrompt: trimToBytes(original, perMember),
+      systemPromptTruncated: true,
+      systemPromptChars: original.length,
+    };
+  });
 }
 
-module.exports = { snapshotRoster };
+module.exports = {
+  snapshotRoster,
+  ROSTER_PROMPT_TOTAL_MAX_BYTES,
+  ROSTER_PROMPT_MIN_BYTES,
+  // 单测直接断言截断逻辑（不依赖 console 输出）
+  _trimToBytes: trimToBytes,
+};

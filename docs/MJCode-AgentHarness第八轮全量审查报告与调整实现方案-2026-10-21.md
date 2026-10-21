@@ -18,8 +18,8 @@
 | 3 | **军团协同的持久化层（v8–v12 五个迁移，153 行）全部只在未提交工作区**，按 HEAD 打包则六组表/列不存在                                                                                      | **P1**      | C-01           |
 | 4 | **MCP 落后一代**：支持集最高 `2025-11-25`，不含现行规范 `2026-07-28`；且硬依赖已被新规范移除的 `initialize` + `Mcp-Session-Id`                                                   | **P2（战略级）** | A-10           |
 | 5 | **`toolLevel()` 兜底方向仍是 fail-open**（未知工具回落 L2，而 auto-safe 档对 L2 直接放行）                                                                               | **P2**      | C-02 / 自检 C-44 |
-| 6 | **SSRF 是纯词法判定，5 种写法可绕过**（十进制 / 十六进制 / 八进制 / IPv4-mapped / IPv6 全写式），且 `web_fetch` 为 L2 在无人值守通道自动放行                                                 | **P2**      | C-06 / C-07    |
-| 7 | **团队层零端到端 eval**：新增 11 个测试 100% 是单模块确定性单测，三条顺序敏感不变量无覆盖                                                                                             | **P1**      | B-03           |
+| 6 | **SSRF 判定曾为纯词法**；经真实调用链复测，**仅 IPv6 方括号一族成立**（十进制 / 十六进制 / 八进制被 `new URL()` 归一，IPv4-mapped 属该族），且 `web_fetch` 为 L2 在无人值守通道自动放行（更正见 §4 D-802） | **P2**      | C-06 / C-07    |
+| 7 | **团队层缺三条顺序敏感不变量的专项覆盖**：11 个新增测试中 10 个为单模块单测；`worker-session.test.js` 已实际调用 `runGroup` / `finalizeGroup`，但未覆盖「探活撤员 vs 失败分支 / `team_wait` defer vs 失败分支 / 组收尾」 | **P1**      | B-03           |
 
 **本轮的两条正面结论（不要当问题重报）**：
 
@@ -160,7 +160,7 @@
 | 三  | Agent Harness 执行流 | **部分** | 单一循环 + 六道闸 ✅；但 Worker/定时任务通道**取消无法穿透到在途模型请求**（A-01，P1）；`resolveChannel` 无条件丢弃 `{ signal }`（A-02）         |
 | 四  | 原生工具矩阵与接线         | **部分** | 矩阵 143/143；但 `team_*` 是**条件展开注册**，矩阵扫字面量键看不见（A-03），属 F-002「假闭环」的新变种                                      |
 | 五  | MCP 三层治理          | **偏离** | 代际落后一代（A-10）；`filesystem` MCP 默认自启与「原生优先」自相矛盾（A-04）                                                      |
-| 六  | 技能 / 生态 / 数字员工    | **部分** | skill 渐进披露 ✅（自检 C-07）；但生态数字（员工 51 / 连接器 291 / skills.json 219 / 磁盘 SKILL.md 154）**与既有文档全部对不上**（A 角度，未裁定） |
+| 六  | 技能 / 生态 / 数字员工    | **完整** | skill 渐进披露 ✅（自检 C-07）；生态四组数字已核清且与既有文档一致：数字员工 **51**、精选连接器 **77 + WorkBuddy 原始 214 = 291**、`skills.json` **219**、随包实体 **100**；`154` 是**本机工作区** `~/.mjcode/skills` 口径，与随包实体不可互相校验（见 §7.2 L-2 与 D-812） |
 | 七  | 三层记忆 M0~M4        | **部分** | 分层召回 ✅；但**Worker 路径未启用分层召回**（B-11）；团队记忆链受 `memory.autoCapture`（默认关）总闸，默认配置下整条链空转（B-12）                   |
 | 八  | 任务编排与 Worker 池    | **部分** | 与团队层**复用不重叠** ✅；但成员配置不生效（B-01）、预算不强制（B-02）、零端到端 eval（B-03）                                               |
 | 九  | 审批 / 沙箱 / 安全      | **部分** | 三表零死条目 ✅、沙箱 fail-closed ✅；但 `toolLevel` 兜底 fail-open（C-02）、SSRF 词法可绕过（C-06/C-07）                         |
@@ -194,10 +194,10 @@
 | #        | 问题                                                                                                                                                                                                                                 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **A-01** | Worker / 定时任务通道的「停止」无法穿透到在途模型请求。工具工厂解构了 `signal` 却从未使用；`scheduledAgentChat(payload)` 单形参、内部自建 controller。交互式通道是对的（`chatStreamOnce(payload, sender, signal, runId)`）→ **是漏接不是设计取舍**。后果：abort 后 in-flight fetch 要等内部流式守卫（最长 15min）才停 |
-| **B-03** | 团队层零端到端 eval。11 个新增测试 100% 是单模块确定性单测，`runGroup` / `finalizeGroup` 在所有 team-* 测试中 0 命中。三条**顺序敏感**不变量无覆盖：探活撤员 vs 失败分支、`team_wait` defer vs 失败分支、组收尾                                                                                  |
+| **B-03** | 团队层缺三条顺序敏感不变量的专项覆盖。11 个新增测试中 10 个为单模块确定性单测；`worker-session.test.js` **已实际调用** `runGroup('s1')` / `runGroup('s2')` 并断言组状态 `done`（即 `finalizeGroup` 已执行），故「0 命中 / 100% 单模块」的表述不成立（已更正）。真正缺的是：探活撤员 vs 失败分支、`team_wait` defer vs 失败分支、组收尾三条顺序敏感不变量 |
+| **B-04** | 消息总线是「模型只写、UI 只读」的单向通道，`kind=question/handoff` 是死语义（模型侧无读取原语） |
 | **B-05** | 类型闸在 deferred 运行期被绕过                                                                                                                                                                                                               （三次收尾已修，见 §8.9） |
-| **B-07** | 中断矩阵 lead/member 分支生产不可达（`main.js` 硬编码 `actorKind:'user'`，`reason` / `confirmed` 成惰性参数）                                                                                                                                            （三次收尾已修，见 §8.9） |
-| **B-08** | 协作模式 `lead` / `select` 无任何运行期分支                                                                                                                                                                                                    （三次收尾已修，见 §8.9） |
+| **B-06** | `ipc/teams.js` 798 行，距 800 行软档仅 2 行且不在 `BASELINE_800` 白名单；同时仍在承接 T5-6/T5-10/T5-11 新需求 |
 | **C-01** | 军团协同持久化层全部只在未提交工作区。`MIGRATIONS` HEAD=7 / 工作区=12，v8–v12 五个迁移 153 行未提交。按 HEAD 打包，`teams` / `team_members` / `team_messages` / `sub_tasks` 团队列 / `memories` 团队列 / `task_events` **六组结构全部不存在**                                         |
 
 ### 3.3 P2（19 条，摘要）
@@ -207,23 +207,37 @@
 | A-02      | `resolveChannel` 无条件丢弃第二参 `{ signal }`，契约失真                                                                                                                                                                                                                                                                  |
 | A-03      | `team_*` 四工具三处登记全有、交互式运行时一个没有，而登记矩阵判 143/143（看不见条件展开）                                                                                                                                                                                                                                                        |
 | A-04      | `filesystem` MCP 默认自启 ⇒ 与「原生优先」自相矛盾、每轮无条件注入                                                                                                                                                                                                                                                                  |
+| A-07      | `BASE_TOOLS` 条数被 `context-budget.test.mjs` 钉死为 52 → 工具全集分裂为「静态 1 处 + 运行时 3 处」，改清单即红                                                                                                                                                                                                                |
 | **A-10**  | **MCP 落后整整一代**（详见 §4 D-804）                                                                                                                                                                                                                                                                                  |
-| B-04      | 消息总线是「模型只写、UI 只读」单向通道，`kind=question/handoff` 是死语义                                                                                                                                                                                                                                                           |
-| B-06      | `ipc/teams.js` 799 行，距 800 软档仅 2 行，且不在白名单                                                                                                                                                                                                                                                                    |
+| **B-07**  | 中断矩阵 `lead` / `member` 分支生产不可达（`main.js` 硬编码 `actorKind:'user'`，`reason` / `confirmed` 成惰性参数）（三次收尾已修，见 §8.9）                                                                                                                                     |
+| **B-08**  | 协作模式 `lead` / `select` 无任何运行期分支（三次收尾已修，见 §8.9）                                                                                                                                                                                                                                |
 | B-09      | `findTeamByRun` 走 `run_id` 单列但索引左前缀是 `team_id` → 全表扫，每任务 4 次                                                                                                                                                                                                                                                 |
+| B-10      | 编制快照把成员 `systemPrompt` 全量写入 `dag_json`；`SYSTEM_PROMPT_MAX=12000` 字符 × 单团队最多 20 人 ≈ 240K 字符（中文 UTF-8 更大），无整体体积闸                                                                                                                                                                                  |
 | B-11      | 分层召回（M0）在 Worker 路径未启用                                                                                                                                                                                                                                                                                       |
 | B-12      | 团队记忆链受 `memory.autoCapture`（默认关）总闸，默认配置下空转                                                                                                                                                                                                                                                                   |
-| B-13~B-19 | （详见角度 B 文件 §2）                                                                                                                                                                                                                                                                                               |
+| B-13      | 工具输出 offload 落到 `$TMPDIR`，会话内可失效且无清理                                                                                                                                                                                                                                                                          |
+| B-14      | `team_messages` 无容量闸、无 TTL（仅单条 4000B 体积闸，全库无 `DELETE` / 清理任务）                                                                                                                                                                                                                                 |
 | **B-20**  | **子代理结论回传：有 15000 字符硬截，但截掉的部分永久丢失**。`truncateToolResult(await summarizeToolOutput(...))` 在 switch 之后无条件执行，而 `summarizeToolOutput` 的 `pick()` **只认 `stdout` / `content` 两个字段、不认 `result`** → 子代理长结论**不 offload、不落盘、尾部不可回取**；`token_budget=50000` 闸的是子代理自身生成侧，不是回传侧。最坏形态：5 万 token 的产出被截成 15000 字符进父上下文且尾部永久丢失 |
 | **C-02**  | **`toolLevel()` 兜底 `\|\| 'L2'` 方向仍是 fail-open**。今天命中 0 条靠的是门禁枚举集覆盖，**不是 fail-closed 本身**                                                                                                                                                                                                                     |
 | C-03      | i18n 扫描脚本存在但从未自动触发（`GATES` 无 i18n，`test/` 无独立套件）                                                                                                                                                                                                                                                             |
-| C-04      | 汇总公式 `通过 = 总数 − 失败` 未减 skipped，3 个沙箱套件本机未跑却计绿                                                                                                                                                                                                                                                                |
-| **C-06**  | **SSRF 纯词法判定，5 种写法可绕过**                                                                                                                                                                                                                                                                                      |
+| C-05      | 22 个从未被引用的 preload 桥接（审查时点 22/208 = 10.6%），需二选一处置                                                                                                                                                                                                                                                       |
+| **C-06**  | **SSRF 判定曾为纯词法**；真实根因是 `new URL()` 对 IPv6 返回带方括号 hostname，导致 `h === '::1'` 永不命中、整个 IPv6 族未防；十进制 / 十六进制 / 八进制写法被 `new URL()` 归一（**更正见 §4 D-802，原「5 种写法」表述不成立**）                                                                                                     |
 | **C-07**  | **无 resolve-then-validate**（判据 7.8 ❌）                                                                                                                                                                                                                                                                        |
 
 ### 3.4 P3（10 条）
 
-详见三个角度文件的 §2，本表不逐一展开（含 A-05~A-09、B-14/B-16/B-18/B-19、C-05 等）。
+| # | 摘要 |
+| --- | --- |
+| A-05 | `onSuspend` 跨进程返回值退化为恒真（已文档化 fail-open） |
+| A-06 | `engineParams` 未下发超时/轮次，两条执行路径靠默认值隐式对齐（Worker 现已显式下发 `maxRounds`，超时仍由宿主 `AbortController` 管） |
+| A-08 | `todo_write` 的「引擎内置不经 RPC」例外只存在于注释，无机器可读标注 |
+| A-09 | 子进程「2GB 内存上限」只约束 V8 堆（`--max-old-space-size`），不等于进程 RSS |
+| B-15 | 探活撤员的并发降档是全局副作用（模块级 `maxConcurrent`），且基线是模块级单变量 |
+| B-16 | `teams:resetMemberSession` 同步循环最多 200 次 UPDATE，且降权不可逆 |
+| B-17 | `team_*` 条件展开与「登记矩阵扫字面量键」的耦合（已由字面量展开登记闭环） |
+| B-18 | 成员断点走 `checkpointStore` 的 50 条 LRU，「跨 run 复用」不保证 |
+| B-19 | 同一 run 内并存两套任务指派算法（批次计划优先，`seq` 取模兜底），可复现性打折 |
+| C-04 | 门禁汇总把「未执行/跳过」计入「通过」 |
 
 ---
 
@@ -577,8 +591,8 @@
 | 项    | 内容                                                                                                                       |
 | ---- | ------------------------------------------------------------------------------------------------------------------------ |
 | 决策   | 员工 / 连接器 / skills / 磁盘 SKILL.md 四组数字，取法命令与口径写进一处，文档一律引用该处                                                                |
-| 现状   | 实测（工作区）：员工 51 / 连接器 291（精选 77 + workbuddy 214）/ `skills.json` 219 / 磁盘真实 `SKILL.md` 154 —— **与既有文档全部对不上**（第七轮 F-021 的延续） |
-| 推荐理由 | 这是「文档声称」与「机器可查」落差的一个具体实例，也是判据 10.6（声称与守护一一对应）的直接命中点                                                                      |
+| 现状   | 实测（工作区）：员工 51 / 连接器 291（精选 77 + workbuddy 214）/ `skills.json` 219 / 随包实体 `SKILL.md` 100 / 本机已安装 `SKILL.md` 154 —— **四组数字是四个不同口径，与既有文档一致，非矛盾**（原「与既有文档全部对不上」的提法已由本节实施结果更正，见 §7.2 L-2） |
+| 推荐理由 | 立项时的判断是「文档声称」与「机器可查」有落差；复核后确认落差不存在，但**口径未集中声明**本身仍是判据 10.6（声称与守护一一对应）的命中点——因为四组数字散落在多处文档，读者无法自证哪个数字对应哪件事 |
 | 连带改动 | 新增/更新一处口径声明文件；各文档改为引用                                                                                                    |
 
 **实施结果（2026-10-21 已完成；并推翻「对不上」这个提法本身）**
@@ -739,9 +753,9 @@ cd /Users/jianma/Desktop/MJCode/desktop && node test/run-all.mjs
 | #   | 项                                              | 状态                                          |
 | --- | ---------------------------------------------- | ------------------------------------------- |
 | L-1 | 3 个沙箱套件在 darwin 本机未真跑却计绿                       | **未验证**。CI 跑 ubuntu，需确认 CI 最近一次确实绿（本轮只跑了本机） |
-| L-2 | 生态四组数字（51 / 291 / 219 / 154）与既有文档对不上           | **未裁定**。本轮只给取法命令，不断言谁对                      |
-| L-3 | SSRF 的 resolve-then-validate、工具定义钉定、审计不可改写、幂等键 | **未核**，列 D-802② 与自检 ❓ 项                     |
-| L-4 | 工作区 99 项改动在审查窗口内可能仍在被写入                        | **并发写入期**。终局门禁须在所有写入者停止后重跑                  |
+| L-2 | 生态四组数字（51 / 291 / 219 / 154）与既有文档对不上           | **已核清，非矛盾**。`node desktop/scripts/gen-ecosystem-counts.mjs`：员工 51、精选连接器 77 + WorkBuddy 原始 214 = 291、`skills.json` 219、随包实体 100、本机工作区 `~/.mjcode/skills` 154。四组为**四个不同口径**，与既有文档一致（见 D-812） |
+| L-3 | SSRF 的 resolve-then-validate、工具定义钉定、审计不可改写、幂等键 | **已核清**：`guardedLookup` DNS 钩子已实装（resolve-then-validate）；`mcpToolCache.fingerprintOf` + `mcp_tool_defs_changed` 漂移审计已实装；审计哈希链 `seq/prev/hash` + `verifyAuditChain()` 已实装；幂等键经全仓检索确认不存在，按 §8.10 明确不做并留「确认不存在」断言 |
+| L-4 | 工作区 99 项改动在审查窗口内可能仍在被写入                        | **已收敛**：当前工作区 0 dirty，HEAD `9c4de09`（领先 `origin/main` 2 个提交），可重跑终局门禁 |
 
 ### 7.3 未经确认的事项
 
@@ -875,8 +889,9 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 
 四个机制性原因，每个都能在本轮找到实证：
 
-1. **新功能带着「未审债务」一次性入场。** 团队层是 10-20 一次性落地的（44 + 95 文件），此前的 11 个测试
-   **100% 是单模块确定性单测**，`runGroup` / `finalizeGroup` 在所有 team-* 测试里**命中 0 次**（B-03 实测）。
+1. **新功能带着「未审债务」一次性入场。** 团队层是 10-20 一次性落地的（44 + 95 文件），此前的 11 个测试中
+   **10 个是单模块确定性单测**，`worker-session.test.js` 虽已调用 `runGroup` / `finalizeGroup`，但**未覆盖**
+   「探活撤员 vs 失败分支 / `team_wait` defer vs 失败分支 / 组收尾」三条顺序敏感不变量（B-03，已按独立复核更正）。
    所以它不是「修坏了」，而是**从来没被审过**——第一次审必然是一堆。
 2. **判据本身在动。** MCP 支持集最高 `2025-11-25`，现行规范是 `2026-07-28`。这不是我们退步，而是
    标准前进了。这类问题**不可能修到归零**，正确形态是「状态字段 + 到期日 + 双向门禁」（D-804 已这么做），
@@ -918,7 +933,7 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 | --- | --- | --- | --- | --- |
 | 1 | 推送 `origin/main` | 发布阻塞 | `git push` | `24acc15..b504fbe` 已推送；**`4bdf52b` 因网络故障未推送**（HTTP2 framing / CONNECT 502 / 直连 443 不通，三条命令见 §8.1），需在恢复后重试 |
 | 2 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §8.9 | 七条各自的落点与守护测试见 §8.9（新增 5 个套件） |
-| 3 | **L-1 / L-3 未核项** | P3 | 见 §8.10 | L-1 结论为「CI 从未运行」，如实标注为**不可验证项**；L-3 三项已核清，两项加固、一项明确不做 |
+| 3 | **L-1 / L-3 未核项** | P3 | 见 §8.10 | L-1 实测无任何 CI 运行记录（`gh run list` 为空），据此标注为**不可验证项**（不断言「从未运行」）；L-3 三项已核清，两项加固、一项明确不做 |
 
 > **第八轮至此没有任何「有明确落点却未处理」的事项**。仍然存在的只有三类：
 > ①**未逐条展开的 P3**（B-10/B-14/B-15~B-19、A-05~A-09、C-05，共 14 条，见 §3 表尾）——
@@ -1034,3 +1049,78 @@ node scripts/gen-ecosystem-counts.mjs --json   # 生态口径（skills/mcp/emplo
 ---
 
 **报告正文结束。**
+
+---
+
+## 附录 C · 独立复核（2026-10-21，Harness 同口径）
+
+> 复核对象：本报告 §0~§8 的 37 条编号发现与 §7.2 遗留项。
+> 复核方法：以「审查时点快照 `24acc15` → 修复提交 `9de20ca` → 当前 HEAD `9c4de09`」三段对照，配合源码取证与实测（`node test/run-all.mjs`、`bridge-parity`、`gen-ecosystem-counts.mjs`、`node` 探针），不冒用外部团队身份。
+
+### C.1 总体判定
+
+| 判定 | 条数 | 说明 |
+| --- | ---: | --- |
+| **完全属实** | **35** | 可在审查时点源码或 git 历史中复现 |
+| **表述不准确（实质成立）** | **2** | B-03（「0 命中 / 100%」不成立）、C-06（「5 种写法」不成立，仅 IPv6 方括号一族为真） |
+| 合计 | **37** | 与报告编号总数一致 |
+
+结论：问题清单**不是虚构**；需更正的是两处证据措辞与 §3.2~§3.4 的分节构成（本次已修正）。
+
+### C.2 本次更正的四处口径
+
+| 位置 | 原表述 | 更正后 | 依据 |
+| --- | --- | --- | --- |
+| §0 第 6 行 / §3.3 C-06 | 「5 种写法可绕过」 | 仅 IPv6 方括号一族成立；十进制/十六进制/八进制被 `new URL()` 归一 | 与 §4 D-802 自纠统一 |
+| §0 第 7 行 / §3.2 B-03 / §6.6 | 「11 个测试 100% 单模块，`runGroup` 0 命中」 | 10 个单模块；`worker-session.test.js` 已调用 `runGroup('s1')`/`runGroup('s2')` 并断言组 `done`；缺的是三条顺序敏感不变量 | `git show 9de20ca:desktop/test/worker-session.test.js` |
+| §3.2 / §3.3 / §3.4 | 分节严重度与 §3.1/角度源文件不一致（B-07/B-08 被提为 P1、B-04/B-06 被降入 P2、§3.3 展开实为 22 条、§3.4 重复列出 B-14/B-16/B-18/B-19） | 按源文件重排：P1 = A-01/B-03/B-04/B-05/B-06/C-01；P2 = A-02/A-03/A-04/A-07/A-10/B-07~B-14/B-20/C-02/C-03/C-05/C-06/C-07（19 条）；P3 = A-05/A-06/A-08/A-09/B-15~B-19/C-04（10 条） | 三个角度文件的发现标题严重度 |
+| §2 第六行 / §7.2 L-2 | 生态数字「与既有文档全部对不上」 | 四组为四个不同口径且与文档一致：员工 51、精选连接器 77 + WorkBuddy 214 = 291、`skills.json` 219、随包实体 100、本机工作区 154 | `node desktop/scripts/gen-ecosystem-counts.mjs` |
+
+### C.3 当前闭环状态
+
+- **已闭环（23 条）**：A-01/A-02/A-03/A-10、B-01/B-02/B-03/B-04/B-05/B-07/B-08/B-09/B-11/B-12/B-13/B-17/B-20、C-01/C-02/C-03/C-04/C-06/C-07。
+- **部分闭环（1 条）**：A-04 —— `filesystem` MCP 仍在 auto-start 预热名单，但其与原生重叠的工具由 `shared/mcpNativeOverlap.mjs` 在组装期下架（连接保留、工具让位）。
+- **仍开放（13 条）**：A-05/A-06/A-07/A-08/A-09、B-06/B-10/B-14/B-15/B-16/B-18/B-19、C-05。其中 B-06（`ipc/teams.js` 790 行）、B-14（`team_messages` 无容量闸/TTL）建议优先排期。
+
+### C.4 当前基线实测（HEAD `9c4de09`；复核取证时工作区 0 dirty，本次仅修订本报告与 README 两处文档）
+
+| 项 | 实测 |
+| --- | --- |
+| 全量门禁 | 总计 **266** · 通过 **263** · 失败 **0** · 跳过 **3**（3 个沙箱套件 darwin 未真跑） |
+| 工具登记矩阵 | **150/150** |
+| 桥接一致性 | 4/4（桥面 224、渲染层引用 174、死方法 50 ≈ 22.3%，低于 40% 门禁） |
+| SQLite 迁移 | **13**（v8~v13） |
+| `toolLevel()` 未知工具 | **L3**（fail-closed） |
+| MCP 协议 | 支持集含 `2026-07-28`；`HANDSHAKE_PROTOCOL_VERSIONS` 仍为 `2025-11-25`；`nextStatus='implemented'` |
+| 生态计数 | 员工 51 · 精选连接器 77 · WorkBuddy 214 · skills.json 219 · 随包实体 100 · 本机工作区 154 |
+
+### C.5 不可验证项
+
+- **L-1（CI 是否运行）**：`.github/workflows/ci.yml` 存在，但 `gh run list` 无任何记录且退出码为 0，无法据此断言「CI 从未运行」；维持**不可验证**。3 个沙箱套件仍需在 CI/Ubuntu 环境真跑后才能销账。
+
+---
+
+## 附录 D · 遗留项一次性收口（2026-10-21）
+
+> 范围：附录 C.3 的 13 条开放项 + A-04 的部分闭环。**全部落地并附守护断言**；
+> 基线复跑：全量 **266 · 通过 263 · 失败 0 · 跳过 3**（与收口前一致）、`tool-registration-matrix` **153/153**、
+> `bridge-parity` **7/7**、`harness-r7` **76/76**、`doc-fact-check` 通过、`lint` 159 / 0 error、`tsc --noEmit` 0 error。
+
+| 编号 | 处置 | 落点 | 守护证据 |
+| --- | --- | --- | --- |
+| **A-04** | `filesystem` 移出 auto-start（原生文件工具已完整覆盖），回落 `whitelist` 懒启动 | `main/mcpPrewarm.js` | `mcp-governance.test.mjs`（auto-start = time/fetch）、`mcp-lazy-prewarm.test.mjs`（重命名兜底同步反转） |
+| **A-05** | 引擎四处 `!!onSuspend(...)` 改为 `await noticeSuspend(...)`；子进程回执 5s 超时按「未保存」返回 | `agent-core/index.js`、`engineProcess/childEntry.js` | `engine-process.test.mjs`（await 与超时兜底源码断言；阻断「Promise 恒真」） |
+| **A-06** | 整任务墙钟显式下发：Worker 用 `budgetPlan.timeoutMs`，交互路径放行 `payload.runWallClockMs` | `workerPool.js`、`agentRunner.js` | `engine-process.test.mjs`（两处参数名断言） |
+| **A-07** | 工具面数字收敛为 `main/toolBaseline.js` 单一来源（只守下限）；精确清单交给矩阵双向差集 | `main/toolBaseline.js`、两处测试 | `context-budget.test.mjs` / `web-todo-tools.test.js`（新增工具不再触发两处魔法数字） |
+| **A-08** | 引擎内置工具成为机器可读事实：`ENGINE_BUILTIN_TOOL_NAMES` ↔ `registry.ENGINE_BUILTIN_TOOLS` ↔ 矩阵清单三方对齐 | `agent-core/index.js`、`engineProcess/registry.js` | `tool-registration-matrix.test.mjs`（+3 条 A-08 断言） |
+| **A-09** | `MEM_LIMIT_MB` 更名 `HEAP_LIMIT_MB`（只约束 V8 堆）；新增子进程 RSS 看门狗（默认 3072MB，`MJCODE_ENGINE_RSS_LIMIT_MB` 可调） | `engineProcess/host.js`、`childEntry.js` | `engine-process.test.mjs`（两层护栏源码断言） |
+| **B-06** | 控制面 handler（重置成员会话 / 中断）抽至 `ipc/teamControl.js`；`ipc/teams.js` 790 → **715 行** | `main/ipc/teams.js`、`teamControl.js` | 全量套件（handler 契约与审计文案不变） |
+| **B-10** | 编制快照整体体积闸：提示词总字节 >160KB 时按成员均分截断，并标记 `systemPromptTruncated/systemPromptChars` | `main/teamRoster.js` | `team-lead-dispatch.test.js`（+4 条，含多字节安全与零改动边界） |
+| **B-14** | `team_messages` 写入即维护：每团队保留最近 1000 条 + 30 天保留期 | `main/teamStore.js` | `team-message-bus.test.js`（+3 条：容量、淘汰最旧、TTL） |
+| **B-15** | 探活撤员降档改为**组级**：新增 `main/groupConcurrency.js`；全局 `maxConcurrent` 不再被改写；组收尾还原 | `waveEngine.js`、`workerPool.js`、`groupConcurrency.js` | `team-stall-e2e.test.mjs`（+4 条：只降本组 / 全局不变 / 收尾还原） |
+| **B-16** | 成员私有记忆降权改为单条 SQL（`memory.demoteImportance`），只命中 `importance > floor`，幂等 | `main/memory/index.js`、`ipc/teamControl.js` | `memory-team.test.mjs`（作用域精确、不触碰他人、重复调用 0 变更） |
+| **B-18** | 成员断点 `pinned`：不参与普通 50 条 LRU；pinned 子集另有 200 条上限 | `main/checkpointStore.js`、`workerSession.js` | `checkpointStore.test.js`（+3 条） |
+| **B-19** | 指派算法收敛为唯一入口 `resolveOwnerMember`（计划优先 → seq 兜底仅用于计划缺失） | `main/workerSession.js`、`workerPool.js` | `worker-session.test.js`（+4 条） |
+| **C-05** | 死桥接从「占比上限」改为显式台账 `test/bridge-dead-allowlist.json`：新增死方法红 / 台账腐烂红 / 台账幽灵红 | `test/bridge-parity.test.mjs`、台账 | `bridge-parity` 7/7；`legacy-ledger` 20/20（改为断言门禁引用同一台账） |
+
+**遗留**：L-1（CI 真实运行）仍不可销账；需在 Ubuntu runner 跑完 3 个沙箱套件后关闭。

@@ -425,6 +425,35 @@ class MemoryManager {
     return this.get(id);
   }
 
+  // ── B-16 收口（2026-10-21）：按作用域批量降权（单条 SQL，不再 N 次 UPDATE）──
+  // 重置成员会话时，旧实现先 list(200) 再逐条 updateMemory ⇒ 最多 200 次同步写。
+  // 现在一条 UPDATE 完成同样的语义（importance = MIN(floor, importance * factor)），
+  // 且只命中 importance > floor 的条目（幂等：重复重置不会继续往下压）。
+  // 返回受影响行数（用于审计文案）。
+  demoteImportance({ scope, spaceId, teamId, agentId, floor = 0.2, factor = 0.5 } = {}) {
+    const s = String(scope || 'team');
+    if (!['session', 'team', 'project', 'global'].includes(s)) return 0;
+    const where = ['scope = ?', 'importance > ?'];
+    const params = [s, floor];
+    if (s === 'team') {
+      if (!teamId) return 0;
+      where.push('team_id = ?');
+      params.push(String(teamId));
+      if (agentId) { where.push('agent_id = ?'); params.push(String(agentId)); }
+    } else if (spaceId) {
+      where.push('space_id = ?');
+      params.push(String(spaceId));
+    } else {
+      return 0;
+    }
+    const r = this.db.prepare(
+      `UPDATE memories SET importance = MIN(?, importance * ?), updated_at = ?
+       WHERE ${where.join(' AND ')}`,
+    ).run(floor, factor, this._now(), ...params);
+    const changed = r.changes || 0;
+    if (changed > 0) this._notify(s, s === 'global' ? null : (spaceId || null));
+    return changed;
+  }
   // ── 召回族（P2-6 / 三层记忆 M0 / M5-T5-5）已抽至 ./recall.js（2026-10-20 拆分护 800 行门禁）──
   // 本处仅保留装配注记：recall / _recallLayered / _layerRows / recallForPrompt / recallContents /
   // relevanceFor 的实现见 createRecallMethods 注入（依赖 SCOPES / LAYER_QUOTA / RECALL_* / trustOf）。
