@@ -30,9 +30,15 @@ const schedSrc = read('main/scheduler.js');
 const { buildScheduledPrompt } = require(path.join(ROOT, 'main', 'scheduledOutput.js'));
 
 check('定时通道暴露 orchestrate_task（对话有、定时也要有）', () => {
+  // 窗口从 80 放宽到 600（2026-10-21，D-805）。原窗口是「两个键在源码里位置相近」的**代理**，
+  // 而它们同属一个对象字面量：本轮在同处插入 `chat` 覆盖（取消信号透传）+ 4 行说明注释后，
+  // orchestrateTask 就被推到 80 字符之外，断言假红——**代码更正确了，门禁却响了**。
+  // 放宽窗口不改变断言语义（仍要求「同一个工具表里既有基础 spread、又有 orchestrateTask 覆盖」），
+  // 但去掉了「插入注释即红」这个与意图无关的脆弱点。若哪天有人把 orchestrateTask 搬到别处，
+  // 只要它仍落在这段装配内，本断言该绿；搬出装配范围就会红（窗口比整段装配短）。
   assert.match(
     mainSrc,
-    /scheduledToolHandlers\(\{ unattended: true, contextCwd: schedModel\.cwd \}\)[\s\S]{0,80}orchestrateTask:/,
+    /scheduledToolHandlers\(\{ unattended: true, contextCwd: schedModel\.cwd \}\)[\s\S]{0,600}orchestrateTask:/,
     'runScheduledAgentTask 的工具表里没有 orchestrateTask —— 模型看不到这个工具就只能串行',
   );
 });

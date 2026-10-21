@@ -339,7 +339,9 @@
 
 | 项 | 结论 |
 |---|---|
-| 落点 | `main/scheduledChannels.js` 的 `scheduledAgentChat(payload, opts)` 接 `opts.signal`；`main.js` 的 Worker 工具工厂 `chat: (payload) => scheduledAgentChat(payload, { signal })`；`agent-core` 的 `resolveChannel` 改为透传第二参 ctx、`chatWithRetry` 改成 `chatFn(params, { signal })`、decompose 调用点同步 |
+| 落点 | ① 引擎侧：`agent-core` 的 `resolveChannel` 改为透传第二参 ctx、`chatWithRetry` 改成 `chatFn(params, { signal })`、decompose 调用点同步；② 通道本体：`main/scheduledChannels.js` 的 `scheduledAgentChat(payload, opts)` 接 `opts.signal`；③ **宿主两处装配**：Worker 工具工厂 + **定时任务执行**（`main.js` 的 `toolHandlers` 段）都改 `chat: (payload) => scheduledAgentChat(payload, { signal })` |
+| 一处自己抓到的漏修 | 第一版只接 Worker，定时任务那条漏了（它的 `toolHandlers` 是 spread 基础表，`chat` 用的是裸单参版本）。守护测试当时也只断言 Worker ⇒ **测试和实现一起漏**。补的方法是「数出现次数」（必须 2 处，且各自落在 Worker / 定时任务装配段内），而不是只正配一次 |
+| 连带修的一处脆弱断言 | `scheduled-orchestrate.test.js` 原本要求 `orchestrateTask:` 出现在 spread 之后 **80 字符内**。我在这段插入 `chat` 覆盖 + 4 行注释后它假红——**代码更正确了，门禁却响了**。窗口放宽到 600 并在注释里写明理由：80 是「两键位置相近」的代理，而它们本就在同一个对象字面量里，插入注释即红与断言意图无关 |
 | 合并语义 | 外部取消与内部超时用 `AbortSignal.any([controller.signal, external])` 合并，**任一触发即中断在途 fetch**（不是等它自己结束） |
 | 返回形态 | 取消返回 `{ content:'', tool_calls:[], usage:null, finish_reason:'aborted', aborted:true }` —— 与交互式 `chatStreamOnce` 的 `{aborted:true}` **同款**，引擎据此 break，任务终态是「已取消」而不是「失败」 |
 | 为什么不抛错 | 取消不是故障：抛错会进 `chatWithRetry` 的失败路径、被配额记成 provider 失败、并被写进失败复盘 |

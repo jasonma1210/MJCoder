@@ -171,8 +171,23 @@ const neverEnds = (url, init) => new Promise((resolve, reject) => {
   // ⑥ 接线：三处缺一即红（宿主工厂 / 引擎通道解析 / 重试链）
   {
     const mainSrc = fs.readFileSync(path.join(ROOT, 'main/main.js'), 'utf8');
-    check('⑥ 宿主 Worker 工厂把 signal 传给模型通道',
-      /chat: \(payload\) => scheduledAgentChat\(payload, \{ signal \}\)/.test(mainSrc));
+    // 宿主侧有**两条**通道会跑无人值守模型调用：Worker 工具工厂与定时任务执行。
+    // 只接一处等于只修一半——第一版就漏了定时任务那条，测试当时也只断言了 Worker，没抓住。
+    // 故这里按**出现次数**断言，并要求两条各自落在正确的装配段里。
+    const chatHits = [...mainSrc.matchAll(/chat: \(payload\) => scheduledAgentChat\(payload, \{ signal \}\)/g)];
+    check('⑥ 两条无人值守通道（Worker + 定时任务）都把 signal 传给模型通道',
+      chatHits.length === 2, `命中 ${chatHits.length} 处`);
+
+    const idxWorker = mainSrc.indexOf('createToolHandlers: ({ signal, cwd, teamContext })');
+    const idxScheduled = mainSrc.indexOf("conversationId: 'scheduled'");
+    check('⑥ Worker 工具工厂区间可定位', idxWorker > 0);
+    check('⑥ 定时任务装配区间可定位', idxScheduled > 0);
+    if (idxWorker > 0 && idxScheduled > 0) {
+      const near = (base) => chatHits.some((m) => Math.abs(m.index - base) < 1200);
+      check('⑥ 两处 signal 透传分别落在 Worker / 定时任务装配段内',
+        near(idxWorker) && near(idxScheduled),
+        `worker=${near(idxWorker)} scheduled=${near(idxScheduled)}`);
+    }
 
     const coreSrc = fs.readFileSync(path.join(ROOT, 'agent-core/index.js'), 'utf8');
     check('⑥ 引擎 resolveChannel 透传第二参 ctx',

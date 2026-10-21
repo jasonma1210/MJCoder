@@ -1154,7 +1154,14 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
     // 追加在 BASE_PROMPT 之后（不替换）：BASE_PROMPT 承载「可用工具/默认目录/路径怎么给」，替换掉它模型就不知道自己能写文件、该写哪
     appendSystemPrompt: rc.appendPrompt,
     // 编排工具补齐：定时通道原先没有 orchestrate_task（对话有），这就是"同一句话对话能 4 Agent 并行、定时只能串行"的差别；cwd 强制产出目录，子 Agent 写入才落在用户找得到的地方。
-    toolHandlers: toolHooks.wrap(sguard.wrap({ ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }), orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}`, projectPath: rc.dir }) }), { cwd: rc.dir, conversationId: `scheduled:${taskId}` }),
+    toolHandlers: toolHooks.wrap(sguard.wrap({
+      ...scheduledToolHandlers({ unattended: true, contextCwd: schedModel.cwd }),
+      // D-805（2026-10-21）：**定时任务这条道同样要接取消信号**。此前只 spread 了基础表，
+      // 表里的 `chat: scheduledAgentChat` 是裸的单参版本 ⇒ 用户停掉定时任务时，在途模型请求
+      // 要等内部守卫到点才停。这里与 Worker 工厂同款覆盖一次。
+      chat: (payload) => scheduledAgentChat(payload, { signal }),
+      orchestrateTask: (a) => toolOrchestrateTask({ ...a, cwd: rc.dir }, { signal, conversationId: `scheduled:${taskId}`, projectPath: rc.dir }),
+    }), { cwd: rc.dir, conversationId: `scheduled:${taskId}` }),
     // V 层旁路：台账（父 run 才有）+ 最近一次测试输出（J3 输入）
     // trace 落盘用 runId（不是 taskId）：否则同一任务的多次运行互相覆盖，事后无法还原这一次发生了什么
     onTrace: (evt) => { sv.onTrace(evt); require('./runTrace').appendTraceEvent(runId, evt); },
