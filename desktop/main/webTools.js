@@ -24,22 +24,12 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2MB 上限
 const DEFAULT_TEXT_LIMIT = 15000;
 
 // ── SSRF 防护 ──
-function isPrivateHost(hostname) {
-  const h = String(hostname || '').toLowerCase();
-  if (!h) return true;
-  if (h === 'localhost' || h.endsWith('.localhost') || h === '::1') return true;
-  // IPv6 回环与链路本地
-  if (/^f[cd]/.test(h)) return true; // fc00::/7 唯一本地地址
-  if (h.startsWith('fe80')) return true;
-  // IPv4 内网 / 链路本地 / 云元数据
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true; // AWS/GCP 元数据端点
-  if (/^0\./.test(h)) return true;
-  return false;
-}
+// 第八轮 D-802（2026-10-21）：判定实现抽至 main/ssrfGuard.js 并重写。
+// 原实现用字符串前缀匹配，而 WHATWG URL 对 IPv6 返回**带方括号**的 hostname
+// （`[::1]` / `[fd00::1]` / `[fe80::1]` / `[::ffff:7f00:1]`），
+// 导致 `h === '::1'` 与 `^f[cd]` / `fe80` 永不命中 —— **整个 IPv6 地址族没有防护**。
+// 本文件继续 re-export，既有消费方（nativeTools 的 http_request、测试）零改动。
+const { isPrivateHost, guardedLookup } = require('./ssrfGuard');
 
 // ── 带超时与体积上限的 fetch ──
 // 2026-10-15 泛化出 httpRequest（支持 POST / 自定义头 / JSON body）：
@@ -67,6 +57,9 @@ function httpRequest(urlStr, { method = 'GET', headers = {}, body = null, timeou
       {
         method,
         timeout: timeoutMs,
+        // 第八轮 D-802 阶段②：resolve-then-validate —— 判**即将被连接的地址**，
+        // 堵住「字面量过检、解析结果变内网」的 DNS rebinding 缝隙（详见 ssrfGuard.guardedLookup）。
+        lookup: guardedLookup,
         headers: {
           'User-Agent': 'MJCode-Agent/1.0 (+https://github.com/jasonma1210/MJCoder)',
           Accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.8',

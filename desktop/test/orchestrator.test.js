@@ -168,6 +168,45 @@ function makeDeps({ chatOnce, events = [], runGroup }) {
   assert.ok(text.includes('max_agents 调小'), '人话含减少 Agent 建议');
   ok('waitGroupSettled + humanizeGroupResult（终态等待/中止/人话降级建议）');
 
+  // 8. T5-9（§9.1）：派活钩子回传的编制快照随 dag_json 一次性落库；未回传不凭空造字段
+  orchestrator.initOrchestrator(makeDeps({ chatOnce: async () => ({ content: GOOD_DAG }) }));
+  const roster = [
+    { id: 'm1', name: '统筹', roleKind: 'lead', systemPrompt: '负责分派', toolNames: ['read_file'], model: 'p::m' },
+    { id: 'm2', name: '工程师', roleKind: 'member', systemPrompt: '负责实现', toolNames: ['write_file'], model: null },
+  ];
+  const r8 = await orchestrator.planGoal({
+    goal: '快照组',
+    cwd: '/tmp',
+    planWaves: ({ tasks }) => ({
+      waves: [{ index: 1, taskIds: tasks.map((t) => t.id) }],
+      assignments: {},
+      roster,
+    }),
+  });
+  assert.ok(r8.ok);
+  const g8 = store.getGroup(r8.groupId);
+  assert.ok(Array.isArray(g8.dag?.roster) && g8.dag.roster.length === 2, 'dag.roster 快照落库');
+  assert.strictEqual(g8.dag.roster[0].id, 'm1');
+  assert.strictEqual(g8.dag.roster[1].toolNames[0], 'write_file', '快照保留工具授权');
+  assert.strictEqual(g8.dag.waves.length, 1, '批次计划与快照同批落库');
+  ok('T5-9：编制快照随 dag_json 落库（运行期只读快照）');
+
+  // 钩子只给 waves 不给 roster：dag 不出现 roster 键（普通/旧派活形状保持不变）
+  const r9 = await orchestrator.planGoal({
+    goal: '无常快照组', cwd: '/tmp', planWaves: () => ({ waves: [{ index: 1, taskIds: ['a', 'b'] }] }),
+  });
+  assert.ok(r9.ok);
+  assert.strictEqual(store.getGroup(r9.groupId).dag.roster, undefined, '未回传快照不造空字段');
+  ok('T5-9：未回传快照时不写入 roster 键（形状零漂移）');
+
+  // 钩子抛错：批次与快照一起降级，建组仍成功（fail-open，不阻断派活）
+  const r10 = await orchestrator.planGoal({
+    goal: '钩子异常组', cwd: '/tmp', planWaves: () => { throw new Error('计划崩溃'); },
+  });
+  assert.ok(r10.ok, '钩子异常不阻断建组');
+  assert.strictEqual(store.getGroup(r10.groupId).dag.waves, null);
+  ok('T5-9：批次/快照钩子异常 fail-open（按无分批调度）');
+
   console.log(`\norchestrator 自动编排：${n} 项全部通过`);
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

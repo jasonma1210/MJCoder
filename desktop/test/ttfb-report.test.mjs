@@ -170,15 +170,24 @@ async function runOnce({ ttfbField, ttfbValue = 3500, maxRounds = 4, maxTotalRou
 }
 
 // ── ⑥ P2-2 SLO 回归门禁：边界「当且仅当 > 目标值」──
+// ⚠ 2026-10-21 修复本套件偶发红（约 10% 概率，实测 20 次中红 2 次）：
+//   根因**不在断言太紧，而在断言把两个口径混在一起数**。引擎有两条口径：
+//     · 模型段  `roundTtfbMs`            → slow_ttfb{ scope 缺省 }
+//     · 端到端  `e2eTtfbMs = roundTtfbMs + 装配段耗时` → slow_ttfb{ scope: 'e2e' }
+//   边界用例构造 ttfbMs = 3000（模型段恰好达标），但 e2e = 3000 + 装配段，
+//   而装配段通常 0ms、**偶发 1ms** ⇒ e2e = 3001 越界并正确发出 scope:'e2e' 告警。
+//   原断言数「全部 slow_ttfb」，于是把这条**正确行为**判成了红。
+//   修法：按 scope 分开数 —— 断言的是「模型段恰好达标不得触发 model 口径告警」，
+//   而 e2e 是否越界取决于当次装配耗时，**不该由本用例断言**（那才是真·不确定的东西）。
 {
   const ok = await runOnce({ ttfbField: 'plain', ttfbValue: TTFB_TARGET_MS });
-  check(`边界：ttfbMs === ${TTFB_TARGET_MS}（恰好达标）不产生 slow_ttfb`,
-    ok.traces.filter((e) => e.type === 'slow_ttfb').length === 0,
-    `slow_ttfb=${ok.traces.filter((e) => e.type === 'slow_ttfb').length} 条`);
+  const okModelScope = ok.traces.filter((e) => e.type === 'slow_ttfb' && e.scope !== 'e2e');
+  check(`边界：模型段 ttfbMs === ${TTFB_TARGET_MS}（恰好达标）不产生慢首字节告警（model 口径）`,
+    okModelScope.length === 0, `model 口径 slow_ttfb=${okModelScope.length} 条`);
   const breach = await runOnce({ ttfbField: 'plain', ttfbValue: TTFB_TARGET_MS + 1 });
-  check(`边界：ttfbMs === ${TTFB_TARGET_MS + 1}（超标 1ms）即产生 slow_ttfb`,
-    breach.traces.filter((e) => e.type === 'slow_ttfb').length === 1,
-    `slow_ttfb=${breach.traces.filter((e) => e.type === 'slow_ttfb').length} 条`);
+  const breachModelScope = breach.traces.filter((e) => e.type === 'slow_ttfb' && e.scope !== 'e2e');
+  check(`边界：模型段 ttfbMs === ${TTFB_TARGET_MS + 1}（超标 1ms）即告警（model 口径）`,
+    breachModelScope.length === 1, `model 口径 slow_ttfb=${breachModelScope.length} 条`);
 }
 
 // ── ⑦ P2-2 端到端口径（e2eTtfbMs）：首个模型轮携带、≥ 模型段、后续轮不带 ──

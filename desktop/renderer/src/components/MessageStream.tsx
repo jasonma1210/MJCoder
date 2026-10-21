@@ -10,6 +10,8 @@ import { IconChevronDown, IconCopy, IconCpu, IconExternalLink, IconFile, IconGit
 import { ToolTraceGroup } from './tools/ToolTrace';
 import Button from './ui/Button';
 import Dot from './ui/Dot';
+// M5 / T5-6：对话内团队协同事件流（默认折叠卡片；不新增独立群聊页）
+import TeamRunStream from './TeamRunStream';
 
 // T2-2：消息流域（自主进程 ChatArea.jsx 原样搬移，行为不变）——
 // 窗口切片（C1）/ 智能滚底（C3）/ 轮次重放（T1-2）/ 本轮概览（T1-5）/ 运行态轨迹与思考流。
@@ -63,6 +65,8 @@ export default function MessageStream({
   runSummary, runUsage, runStartedAt, contextUsage, model,
   runFiles = [],
   onOpenFile,
+  // M5 / T5-6：当前会话 id —— 团队事件流按 thread_id 归属过滤（不跨会话串卡）
+  threadId = null,
 }) {
   const { t } = useI18n();
   // T1：让用户"看见它在动"——秒数与字数都从流式内容长度直接算，不额外走 IPC
@@ -103,6 +107,9 @@ export default function MessageStream({
         {/* 本轮工具轨迹并入「最后一轮」块内、答复正文之上（见 RoundBlock 的 extraCalls）。
             此前它单独排在消息流最底部，用户要往下翻才看得到「这一轮做了什么」，与正文割裂。 */}
         {rounds}
+        {/* M5 / T5-6：团队协同事件流——按 thread_id 投影为折叠卡片（派活/接手/汇报轨迹），
+            排在正文之后、本轮收尾卡之前：它是「这一轮协同」的补充事实，不打断对话正文。 */}
+        <TeamRunStream threadId={threadId} onOpenFile={onOpenFile} />
         {/* 本轮产出文件：运行结束后列出本轮被写入/修改的文件（点击在右侧预览栏打开） */}
         <RunOutputFiles files={runFiles} onOpenFile={onOpenFile} />
         {/* T1-5：本轮概览卡——运行中实时（耗时/消耗/上下文/模型），结束态转固定收尾条 */}

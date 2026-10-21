@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconBot, IconBranch, IconChevronRight, IconCheck, IconFile, IconFilePlus, IconMessage, IconMic,
-  IconPlug, IconSearch, IconUser, IconX, IconZap,
+  IconPlug, IconSearch, IconUser, IconUsers, IconX, IconZap,
 } from './icons';
+import TeamDispatchPanel from './TeamDispatchPanel';
 import { buildLaunchPlan, remotePayload } from '../lib/ecosystemConnectorLaunch';
 import { loadEnabledFromLocal, connectorValuesForLocal, saveConnectorValueLocal } from '../lib/ecosystemEnabled';
 import { normSkillKeySet, matchSkillKey, normSkillKey } from '../lib/skillKey';
@@ -59,10 +60,14 @@ function roleIcon(category) {
 export default function PlusMenu({
   open, onClose, onPickFiles, messages = [], runMode, onModeChange, hasProject,
   extras, onExtrasChange, onVoiceStart, connectedServers = [], enabledSkills = [],
+  // 2026-10-20 需求⑤：军团面板只需「当前选中的团队 id」用于回显高亮 + 「选中团队」回调，
+  // 派活参数（目标/模式/预算/成员/工作目录）全部由 ChatArea 在发送时按缺省回落补齐，
+  // 故此处不再需要 threadId / projectPath。
+  activeTeamId = null, onSelectTeam,
 }) {
   // 本文件 matchText 回调参数名为 t（文本项），解构改名 tr 避免遮蔽
   const { t: tr } = useI18n();
-  const [panel, setPanel] = useState(null); // null | refs | mode | experts | skills | connectors
+  const [panel, setPanel] = useState(null); // null | refs | mode | experts | skills | connectors | legion
   const [employees, setEmployees] = useState([]);     // 数字员工目录（全量）
   const [connectors, setConnectors] = useState([]);   // 连接器目录（全量，渲染时按启用清单过滤）
   const [enabled, setEnabled] = useState({ connectors: [], skills: [] }); // 连接器启用清单
@@ -269,6 +274,8 @@ export default function PlusMenu({
           <MenuRow Icon={IconPlug} label={tr('plusMenu.connectors')} hasSub
             badge={extras?.mcpServers?.length ? tr('plusMenu.connectorCount', { n: extras.mcpServers.length }) : null}
             onClick={() => setPanel('connectors')} />
+          {/* M5 / T5-4：军团派活（选团队 → 缺统筹补齐 → 派活三件 → 创建 run） */}
+          <MenuRow Icon={IconUsers} label={tr('plusMenu.legion')} hasSub onClick={() => setPanel('legion')} />
           <div className="my-2 border-t border-border" />
           <MenuRow Icon={IconMic} label={tr('plusMenu.voiceInput')} hint="Ctrl+M" onClick={() => { onVoiceStart?.(); onClose?.(); }} />
         </div>
@@ -516,6 +523,13 @@ export default function PlusMenu({
             {lazyConn.hasMore && <div ref={lazyConn.sentinelRef} className="h-6" />}
             <p className="text-caption text-text2 px-3 py-2">{tr('plusMenu.connectorsFooter')}</p>
           </div>
+        </SubPanel>
+      )}
+
+      {/* M5 / T5-4：军团选择面板（列团队 + 描述，选中即回填输入框上方团队名徽标；逻辑在 TeamDispatchPanel） */}
+      {panel === 'legion' && (
+        <SubPanel title={tr('plusMenu.legion')} onBack={() => setPanel(null)}>
+          <TeamDispatchPanel onClose={onClose} activeTeamId={activeTeamId} onSelectTeam={onSelectTeam} />
         </SubPanel>
       )}
     </div>

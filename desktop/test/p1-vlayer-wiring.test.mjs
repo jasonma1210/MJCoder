@@ -48,11 +48,18 @@ check("P1-1：主对话通道默认档为 'l3'，且注入 l3Chat/l3Model/l3Gate
 
 // ── ② Worker 通道接线（源码断言）──
 check("P1-2：Worker 通道默认档为 'l1'（不再 off），且注入 l3 能力", () => {
+  // 2026-10-21（第八轮 B-02）：workerPool 逼近 800 行软档，V 层装配整体搬至
+  // main/workerVerify.js（语义逐字等价）。断言按新契约拆分：
+  //   ① workerPool 仍委托（搬走不是断线）；② 装配细节与默认档在 workerVerify 内被守护。
+  // 任一处缺失都仍判红 —— 不是放宽，是把同一不变量钉在新位置。
   const src = read('main/workerPool.js');
-  assert(/defaultLevel:\s*'l1'/.test(src), "workerPool 默认档未升为 'l1'");
-  assert(!/defaultLevel:\s*'off'/.test(src), 'workerPool 仍残留默认 off');
-  assert(/l3Chat:\s*l3\.l3Chat/.test(src), 'workerPool 未注入 l3Chat');
-  assert(/verifyPolicy\.shouldRunL3/.test(src), 'workerPool 未接风险门');
+  assert(/createWorkerVerifyRun\(\{\s*deps,\s*runKey,\s*sessionKey,\s*runCwd\s*\}\)/.test(src),
+    'workerPool 未委托 createWorkerVerifyRun（V 层接线断了）');
+  const v = read('main/workerVerify.js');
+  assert(/defaultLevel:\s*'l1'/.test(v), "workerVerify 默认档未升为 'l1'");
+  assert(!/defaultLevel:\s*'off'/.test(v), 'workerVerify 仍残留默认 off');
+  assert(/l3Chat:\s*l3\.l3Chat/.test(v), 'workerVerify 未注入 l3Chat');
+  assert(/verifyPolicy\.shouldRunL3/.test(v), 'workerVerify 未接风险门');
 });
 
 // ── ③ 风险门语义（行为断言，策略层是纯函数）──

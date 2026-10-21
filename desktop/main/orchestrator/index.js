@@ -68,13 +68,16 @@ async function askDag(userMessage) {
   return { content: res?.content || '' };
 }
 
-// 拆解并建组。返回 { ok, groupId?, tasks?, levels?, error? }
-// opts：{ auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId }
+// 拆解并建组。返回 { ok, groupId?, tasks?, levels?, waves?, error? }
+// opts：{ auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves }
 //   · repairHint：上一次输出非法 JSON 时回喂的错误（自动修复重试路径）
 //   · contextBlock：重规划时注入的「上次执行情况」（已完成结论 / 失败原因）
 //   · approvalMode/sandboxPolicy：V04 宿主治理快照（建组时刻的父上下文），随组持久化
 //   · threadId：R6 组绑定会话——创建组的会话 id，随组持久化（渲染层据此归属显示）
-async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId } = {}) {
+//   · planWaves（M5 / T5-12）：批次计划钩子 `({ tasks }) => { waves }`，由团队派活方注入。
+//     编排器**不认识「团队」概念**（零侵入约束）：它只负责把自己的拆解结果交给回调，
+//     把回调产出的 waves 原样落进 dag_json。普通编排（autoOrchestrate 等）不传，行为完全不变。
+async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves } = {}) {
   const g = String(goal || '').trim();
   if (!g) return { ok: false, error: '目标为空' };
   if (!deps) return { ok: false, error: 'Orchestrator 未初始化' };
@@ -104,13 +107,43 @@ async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, r
   if (!dag.ok) return { ok: false, error: dag.error, raw: content.slice(0, 2000) };
 
   const levels = topoLevels(dag.tasks);
+  // M5 / T5-12：批次计划（可选钩子）。失败/未注入一律降级为「无分批」——
+  // 分批是调度优化，计划不出来也必须能按既有 DAG 跑完（fail-open）。
+  let waves = null;
+  let waveAssignments = null;
+  // M5 / T5-9（§9.1）：run 级编制快照。派活钩子可顺带回传本次参与成员的名册快照，
+  // 随 dag_json 一次性落库——运行期只读快照，团队配置变更只影响下一个 run。
+  let rosterSnapshot = null;
+  // 第八轮 B-02 / D-809：不透明运行元数据（同 roster 的透传模式，编排器不解释其内容）
+  let runMetaSnapshot = null;
+  if (typeof planWaves === 'function') {
+    try {
+      const plan = planWaves({ tasks: dag.tasks, levels });
+      if (plan && Array.isArray(plan.waves) && plan.waves.length) {
+        waves = plan.waves;
+        waveAssignments = plan.assignments || null;
+      }
+      if (plan && Array.isArray(plan.roster)) rosterSnapshot = plan.roster;
+      // 第八轮 B-02 / D-809：不透明运行元数据原样透传进 dag_json（语义由调用方定义）。
+      // 编排器**仍然不认识「团队」或「预算」概念**（零侵入约束不破）：它只负责把回调给的
+      // 对象存下来，谁读谁解释。目前唯一消费者是 workerPool 的组级预算闸（main/groupBudget.js）。
+      if (plan && plan.runMeta && typeof plan.runMeta === 'object') runMetaSnapshot = plan.runMeta;
+    } catch (e) {
+      console.warn('[orchestrator] 批次计划生成失败（按无分批调度）:', e?.message || e);
+    }
+  }
   const groupId = `tg-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+  const dagToStore = { levels, waves, assignments: waveAssignments };
+  // 只在钩子确实给了快照时写入：普通编排组的 dag 形状保持原样（不为空字段造语义）。
+  if (rosterSnapshot) dagToStore.roster = rosterSnapshot;
+  // 同上：只在钩子确实给了元数据时写入，普通编排组的 dag 形状保持原样。
+  if (runMetaSnapshot) dagToStore.runMeta = runMetaSnapshot;
   deps.store.createGroup({
-    groupId, goal: g, cwd, projectPath, dag: { levels }, tasks: dag.tasks,
+    groupId, goal: g, cwd, projectPath, dag: dagToStore, tasks: dag.tasks,
     auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId,
   });
   deps.emit?.({ type: 'group_created', groupId, goal: g, tasks: dag.tasks, levels, replanOf: replanOf || null });
-  return { ok: true, groupId, tasks: dag.tasks, levels };
+  return { ok: true, groupId, tasks: dag.tasks, levels, waves, waveAssignments };
 }
 
 // ── 自动编排（WorkBuddy 式主理人模式）──

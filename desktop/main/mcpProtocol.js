@@ -24,6 +24,38 @@ const PROTOCOL_VERSION = '2025-11-25';
 const MIN_PROTOCOL_VERSION = '2024-11-05';
 const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', MIN_PROTOCOL_VERSION];
 
+// ── D-804：MCP 代际路线（第八轮审查，2026-10-21）──────────────────────────────
+//
+// 事实：现行规范是 `2026-07-28`，它是一次**断裂式升级** —— 移除 `initialize` 握手与
+// `Mcp-Session-Id`，改为无状态请求/响应，并新增 `server/discover`、`Mcp-Method` / `Mcp-Name`
+// 头路由、MRTR（多轮往返）、可缓存 list、正式扩展框架，同时给旧特性 **12 个月弃用窗口**。
+// 本客户端建在「有状态握手」模型上（initialize → notifications/initialized → tools/list，
+// 并捕获 Mcp-Session-Id 回带），因此**不能靠改个常量就声称支持**。
+//
+// 为什么这里要放一个 roadmap 常量、而不是只写注释：
+//   判据 10.6 要求「对外声称的能力」与「机器守护的不变量」一一对应。
+//   `nextStatus` 就是那句「声称」：只要它还是 'not-implemented'，下面的
+//   `SUPPORTED_PROTOCOL_VERSIONS` **就不得**包含 next —— 由 test/mcp-protocol-roadmap.test.mjs
+//   双向断言（改了状态却没实现、或悄悄把版本号塞进支持集，都会红）。
+//   这比「注释里写一句未来做」强：注释不会红，状态会。
+//
+// 到期日 `dueBy` 的口径**不是拍脑袋**：取规范自己给的 12 个月弃用窗口
+// （2026-07-28 + 12 个月 = 2027-07-28）。到那天起，仍不支持无状态路径就意味着
+// 无法与已升级的服务端互通，届时 `MIN` 一侧的 legacy HTTP+SSE 也会一并退场。
+const MCP_PROTOCOL_ROADMAP = Object.freeze({
+  current: PROTOCOL_VERSION,
+  next: '2026-07-28',
+  // 'not-implemented' | 'implemented'  —— 只有真做出无状态路径并通过互通测试，才允许改这个值
+  nextStatus: 'not-implemented',
+  dueBy: '2027-07-28',
+  // 迁移形态：**双栈协商**，不是硬切。理由：大量现实 MCP 服务端仍停在 2025-11-25，
+  // 官方规范本身给了 12 个月窗口；按版本协商 + 显式降级路径是规范认可的对齐方式。
+  strategy: 'dual-stack-negotiation',
+  trackedIn: 'docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md（§4 D-804）',
+  // 在 2026-07-28 中被弃用、届时必须停止声明的能力（现在仍需声明：当前只与旧版握手）
+  deprecatedInNext: Object.freeze(['roots', 'logging']),
+});
+
 // 客户端能力声明（P2-4 残差收敛）。
 //
 // 严守「宁可少声明，不可虚报」：这里声明的每一项都必须在 mcpClient.handleServerMessage
@@ -78,6 +110,7 @@ module.exports = {
   PROTOCOL_VERSION,
   MIN_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
+  MCP_PROTOCOL_ROADMAP,
   CLIENT_CAPABILITIES,
   CLIENT_INFO,
   isSupportedProtocolVersion,

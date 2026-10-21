@@ -50,6 +50,9 @@ export function toolNameCN(name: string): string {
     computer_use: 'toolTrace.computerUse',
     // G-latex：LaTeX 编译
     latex_compile: 'toolTrace.latexCompile',
+    // M5 / T5-8：军团协同四工具
+    team_list_members: 'toolTrace.teamListMembers', team_send_message: 'toolTrace.teamSendMessage',
+    team_board: 'toolTrace.teamBoard', team_wait: 'toolTrace.teamWait',
   };
   return map[name] ? tGlobal(map[name]) : name;
 }
@@ -255,6 +258,13 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
       return a.probeOnly === true
         ? <span className="text-text2 truncate">{t('toolTrace.latexProbe')}</span>
         : <PathChip text={s('path')} />;
+    // M5 / T5-8：军团协同——发言显示摘要、等待显示目标数、名册/看板无参数
+    case 'team_send_message': return <span className="truncate">{s('summary')}</span>;
+    case 'team_wait': {
+      const ids = Array.isArray(a.taskIds) ? a.taskIds.length : 0;
+      return <span className="text-text2">{t('toolTrace.teamWaitCount', { n: ids })}</span>;
+    }
+    case 'team_list_members': case 'team_board': return null;
     default: {
       // mcp__server__tool / 未知工具：给出首个字符串参数或参数个数
       const keys = Object.keys(a);

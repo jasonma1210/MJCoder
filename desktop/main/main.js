@@ -76,7 +76,7 @@ function saveAlwaysRules() {
 const { ApprovalChannel, approvalReasonOf, denialText, initDiffCommentChannel } = require('./approvalChannel');
 const approvalChannel = new ApprovalChannel({ timeoutMs: 120000 });
 // 模型形状转换（扁平形 ⇄ 嵌套形）：全项目唯一事实来源，见 modelShape.js 顶部事故背景
-const { toAgentModel, toChatRequest } = require('./modelShape');
+const { toAgentModel, toChatRequest, resolveModelRef } = require('./modelShape');
 
 // 审批结束广播：让渲染层撤下对应卡片。
 // 没有这条通道时，主进程侧 pending 一旦因超时消失，UI 卡片却仍挂着——用户事后点击
@@ -871,6 +871,14 @@ const prTools = {
 // 定时任务专用 toolHandlers：与渲染层会话同源（复用主进程工具实现）
 // 定时任务 / Worker 共用的工具集：清单已在 main/scheduledTools.js（按能力边界拆，与行数无关）
 const { scheduledToolHandlers: buildScheduledToolHandlers, scheduledCreate: scheduledCreateTool } = require('./scheduledTools');
+// M5 / T5-8：军团协同工具（成员任务专用）+ 消息总线写入通道。
+// 提前 require（而非在 initTeamsIpc 处）是为了让下方 Worker 工具工厂的闭包在模块解析阶段就有绑定；
+// ipc/teams 模块本身的 deps 在 initTeamsIpc 之后才生效，此处只取函数引用，不触发任何 IO。
+const { createTeamToolHandlers } = require('./teamTools');
+const { initTeamsIpc, postTeamMessage } = require('./ipc/teams');
+// M5 / T5-10：中断权限矩阵与留痕（§9.2）——策略/执行/审计收敛在单一入口，
+// 与 ipc/teams 的 teams:interrupt 通过 deps.interruptTask 接线（本模块只取函数引用，不触发 IO）。
+const teamInterrupt = require('./teamInterrupt');
 const scheduledToolHandlers = () => buildScheduledToolHandlers({
   scheduledAgentChat, webTools,
   toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob,
@@ -1007,6 +1015,10 @@ agentRunner.initAgentRunner({
   l3Target: scheduledL3Target,
   // P1-5：用户自定义生命周期 hooks——交互会话的工具调用同样过 preToolUse/postToolUse
   toolHooks,
+  // T5-7：per-agent 模型绑定——成员绑定的引用串（`providerId::modelId`）解析为本机模型对象。
+  // 供应商列表是本机数据（localStore），在被调用时才求值：绑定失效（供应商/模型已删）返回 null，
+  // agentRunner 据此安静回落会话默认模型，不因绑定失效失败整轮。
+  resolveModelRef: (ref) => resolveModelRef(ref, localStore ? localStore.listProviders() : []),
   // v1（2026-10-19）：意图驱动的 MCP 动态加载依赖——离线意图判定后按需连接用户**已保存**的连接器
   // 并取其工具定义（原生优先由 agentRunner 侧的 intentMcpPrewarm 纯函数决定）。
   // 三者都取自 mcp ipc 域：凭证/落盘全程留在主进程，agentRunner 只做纯编排与工具定义合并。
@@ -1165,6 +1177,8 @@ async function runScheduledAgentTask({ prompt, model: schedModel, signal, taskId
 const { openDbAsync } = require('./db');
 const dbStatus = require('./dbStatus');
 const { TaskStore } = require('./taskStore');
+// M5 / T5-1：MJ 军团团队层——团队编制（与任务编排共用同一 SQLite 底座）
+const { TeamStore } = require('./teamStore');
 const { MemoryManager } = require('./memory');
 const { MemoryBgScheduler } = require('./memory/bgScheduler');
 // 三层记忆 M3：记忆文件双通道（SQLite 唯一事实来源，文件为导出视图）
@@ -1173,6 +1187,7 @@ const workerPool = require('./workerPool');
 const orchestrator = require('./orchestrator');
 
 let taskStore = null;
+let teamStore = null; // M5 / T5-1：军团编制（teams / team_members）
 let taskDb = null;
 let memoryManager = null;   // P2-1：记忆唯一写入入口（SQLite，五域四层）
 let memoryScheduler = null; // P2-5：记忆后台任务调度器
@@ -1186,10 +1201,50 @@ dbStatus.register(ipcMain, () => !!taskStore);
 const { hostPolicySnapshot, sandboxTierForCwd } = require('./approvalPolicy');
 
 function emitTaskEvent(evt) {
+  // M5 / T5-6（2026-10-21）：活动轨迹持久化——先落库再广播（顺序无关，但落库失败不阻断 UI）。
+  // 只收两类：task_activity（工具/撤员/改派/等待等过程）与带任务 id 的 task_update（状态推进）。
+  // 字段白名单裁剪：工具参数在 workerPool 已截断 80 字符；错误详情截断 300 字符，
+  // 避免把大段模型输出写进轨迹表（轨迹表只用于「看得见在做什么」，不是正文存储）。
+  try {
+    if (taskStore && evt && evt.groupId) {
+      if (evt.type === 'task_activity') {
+        taskStore.appendEvent({
+          groupId: evt.groupId,
+          taskId: evt.taskId || null,
+          type: 'activity',
+          payload: {
+            kind: evt.kind || '', textKey: evt.textKey || '', textParams: evt.textParams || null,
+            text: String(evt.text || '').slice(0, 300), name: evt.name || '',
+          },
+        });
+      } else if (evt.type === 'task_update' && evt.taskId) {
+        taskStore.appendEvent({
+          groupId: evt.groupId,
+          taskId: evt.taskId,
+          type: 'status',
+          payload: {
+            status: evt.status || '', title: evt.title || '', name: evt.name || '',
+            error: evt.error ? String(evt.error).slice(0, 300) : '',
+          },
+        });
+      }
+    }
+  } catch (e) {
+    // 轨迹是辅助观测：写失败只记日志，绝不影响任务执行与 UI 广播
+    console.warn('[tasks] 活动轨迹落库失败:', e?.message || e);
+  }
   // 事件桥接：编排器监听组终态/暂停事件，驱动 auto 组自动重规划
   try { orchestrator.onTaskEvent(evt); } catch (e) { console.error('[orchestrator] 事件处理异常:', e.message); }
   for (const w of BrowserWindow.getAllWindows()) {
     try { if (!w.isDestroyed()) w.webContents.send('tasks:event', evt); } catch { /* 窗口已销毁 */ }
+  }
+}
+
+// M5 / T5-2：军团消息总线事件桥（与 emitTaskEvent 同款）——消息落库后广播给所有窗口，
+// 渲染层据此实时追加时间轴。事件是「落库后」的通知，不是写通道：seq/落库在主进程内完成。
+function emitTeamsEvent(evt) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send('teams:event', evt); } catch { /* 窗口已销毁 */ }
   }
 }
 
@@ -1226,6 +1281,8 @@ function setupTaskOrchestration(db) {
   try {
     taskDb = db;
     taskStore = new TaskStore(db);
+    // M5 / T5-1：军团编制与任务编排同库同事务底座（切项目各看各的，按 project_path 过滤）
+    teamStore = new TeamStore(db);
 
     // P2：记忆体系初始化（与任务编排共用 SQLite 底座）
     // M3：文件双通道先于 manager 装配——sync 以 lazy getter 反向引用 manager（循环依赖），
@@ -1267,12 +1324,71 @@ function setupTaskOrchestration(db) {
       getModelOverrides: () => localStore?.getPreference('model_overrides') || null,
       emit: emitTaskEvent,
       resolveModel: resolveTaskModel,
+      // 第八轮 B-01 / D-808：军团成员的 per-bot 配置需要这两个依赖才能落地 ——
+      // resolveModelRef 解析成员绑定的模型引用串，loadSkillContents 按名装载成员技能。
+      // 此前 Worker 池**完全没有注入**这两个依赖，是「配了却不执行」的直接成因之一。
+      // 两者与主会话通道（agentRunner deps）同源实现，不新起第二套。
+      resolveModelRef: (ref) => resolveModelRef(ref, localStore ? localStore.listProviders() : []),
+      loadSkillContents: (names) => require('./skills').loadSkillContents(pluginsIpc.SKILLS_DIR(), names),
       // P1-2：Worker 通道的 L3 独立评审目标工厂（与定时/主对话同源）。
       l3Target: scheduledL3Target,
       // P1-5：Worker 的工具调用同样过用户 hooks（无人值守不代表可以绕过用户设的校验规则）
       toolHooks,
-      createToolHandlers: ({ signal, cwd }) => ({
-        ...scheduledToolHandlers({ unattended: true, contextCwd: cwd }), // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
+      // M5 / T5-11：成员会话（设计稿 v1.5 §13.1 C1 / §13.2 四级 key）——
+      // 会话 id 由 workerPool 按「认领成员」定，而「谁是成员」需要团队名册：
+      // run_id = groupId 是「团队↔run」的唯一事实来源（findTeamByRun），故名册在此按 run 反查。
+      // 未派活给团队的普通编排组返回 null ⇒ worker 退化为 `agent:anon:{groupId}:{taskId}` 隔离键。
+      // M5 / T5-9（§9.1）：**run 级快照优先**。派活时快照已随 dag_json 落库，运行期只读快照：
+      // 团队中途改配置/加人/删人都不影响本次 run，保证「同一次运行可复现、可审计」。
+      // 仅在快照缺失（旧数据 / 非派活组）时回落实时名册。
+      resolveTeamRoster: (group) => {
+        try {
+          const snapshot = group?.dag?.roster;
+          if (Array.isArray(snapshot) && snapshot.length) return snapshot;
+          const team = teamStore?.findTeamByRun?.(group?.group_id);
+          return team && Array.isArray(team.members) ? team.members : null;
+        } catch (e) { console.warn('[worker] 名册反查失败（按无成员身份运行）:', e.message); return null; }
+      },
+      // M5 / T5-12：批次探活的第二通道——团队消息序号（§13.4 三通道判据之一）。
+      // 只取 O(1) 的 MAX(seq)：探活每 5 秒对每个在跑团队组各拍一次，读全表会把探活本身变成负载。
+      getTeamMessageSeq: (runId) => {
+        try { return Number(teamStore?.latestSeqForRun?.(runId)) || 0; } catch { return 0; }
+      },
+      // M5 / T5-8：成员任务的协同上下文（团队 + 本 run + 本任务 + 认领成员）。
+      // 三处判据缺一不可，任一不成立就返回 null（模型看不到 team_* 工具）：
+      //   · 该 run 必须归属某个团队（findTeamByRun，唯一事实来源）；
+      //   · 团队未归档（归档 = 只读，不再接受协同）；
+      //   · 任务已有认领成员，且该成员在**本次 run 快照**内（T5-9：成员中途被下架，
+      //     正在跑的 run 仍以快照身份继续协作，直到本 run 收尾；无快照时才查实时名册）。
+      resolveTeamContext: (group, task) => {
+        try {
+          const team = teamStore?.findTeamByRun?.(group?.group_id);
+          if (!team || team.archivedAt) return null;
+          const memberId = task?.ownerMemberId || '';
+          if (!memberId) return null;
+          const snapshot = group?.dag?.roster;
+          const roster = Array.isArray(snapshot) && snapshot.length ? snapshot : team.members;
+          if (!Array.isArray(roster) || !roster.some((m) => m.id === memberId)) return null;
+          return { teamId: team.id, runId: group.group_id, taskId: task.taskId, memberId };
+        } catch (e) {
+          console.warn('[worker] 团队上下文反查失败（本次不暴露协同工具）:', e.message);
+          return null;
+        }
+      },
+      createToolHandlers: ({ signal, cwd, teamContext }) => ({
+        ...scheduledToolHandlers({
+          unattended: true, contextCwd: cwd, // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
+          // M5 / T5-8：协同四工具只在成员任务注入。四表写入/看板/等待全部复用既有单例：
+          // 总线走 postTeamMessage（G4 体积闸 + 审计 + 广播），看板走 taskStore，
+          // 等待走 workerPool.waitTask（唯一入口，登记后由池中止本 run 释放槽位）。
+          teamTools: teamContext ? createTeamToolHandlers({
+            teamContext,
+            getTeamStore: () => teamStore,
+            getTaskStore: () => taskStore,
+            postMessage: postTeamMessage,
+            waitTask: workerPool.waitTask,
+          }) : null,
+        }),
         // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联
         chat: (payload) => scheduledAgentChat(payload),
         // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）
@@ -1292,6 +1408,7 @@ function setupTaskOrchestration(db) {
         const recallSpace = group.project_path || group.cwd;
         let memoryBlock = '';
         try {
+          const blocks = [];
           if (memoryManager && recallSpace) {
             const hits = memoryManager.recallContents({
               spaceId: recallSpace, query: `${group.goal} ${task.title}`, topK: 3,
@@ -1300,9 +1417,25 @@ function setupTaskOrchestration(db) {
             if (hits.length) {
               const { wrapUntrusted } = await import('../shared/untrustedContent.mjs');
               const raw = hits.map((m) => `- ${m.content.slice(0, 200)}`).join('\n');
-              memoryBlock = wrapUntrusted(raw, { source: 'memory', label: '相关记忆（历史沉淀，供参考）' }).text;
+              blocks.push(wrapUntrusted(raw, { source: 'memory', label: '相关记忆（历史沉淀，供参考）' }).text);
             }
           }
+          // M5 / T5-5：团队层召回——可见范围 = 团队共享 ∪ 自身私有（agentId = 认领成员）。
+          // 归属经 teamStore.findTeamByRun 反查（run_id = groupId 是团队↔run 唯一事实来源）；
+          // 已归档团队的记忆不参与召回（归档团队的结论只读）。
+          const team = teamStore?.findTeamByRun?.(group.group_id);
+          if (memoryManager && team && !team.archivedAt) {
+            const teamHits = memoryManager.recallTeamMemories({
+              teamId: team.id, agentId: task.ownerMemberId || null,
+              spaceId: recallSpace, query: `${group.goal} ${task.title}`, topK: 3,
+            });
+            if (teamHits.length) {
+              const { wrapUntrusted } = await import('../shared/untrustedContent.mjs');
+              const raw = teamHits.map((m) => `- ${String(m.summary || m.content || '').slice(0, 200)}`).join('\n');
+              blocks.push(wrapUntrusted(raw, { source: 'memory', label: '团队记忆（本团队共识与产物索引）' }).text);
+            }
+          }
+          memoryBlock = blocks.join('\n\n');
         } catch (e) { console.warn('[worker] 记忆召回/隔离失败，本任务不带记忆块:', e.message); }
         return [
           `【总体目标】\n${group.goal}`,
@@ -1310,6 +1443,32 @@ function setupTaskOrchestration(db) {
           memoryBlock,
           `【你的子任务】${task.title}\n${task.prompt}\n\n只完成该子任务，产出可执行的结论；工作目录即项目目录。`,
         ].filter(Boolean).join('\n\n');
+      },
+      // M5 / T5-5：子任务成功结论 → 团队记忆沉淀（宿主侧收口，worker 只透传事实）。
+      //   三道闸：① 与主对话沉淀共用 memory.autoCapture 开关（默认关，无人值守 Worker 内容
+      //   无门槛进记忆会污染）；② 团队归档不写（归档团队记忆只读不参与召回）；
+      //   ③ 归属键由 findTeamByRun 反查——认领成员存在则写成员私有，否则写团队共享。
+      //   只收成功结论（worker 侧仅对 status=done 调用）；fail-open，绝不阻塞任务收尾。
+      rememberTeamMemory: ({ runId, ownerMemberId, title, text, cwd } = {}) => {
+        try {
+          if (!memoryManager) return;
+          if (!localStore?.getPreference('memory.autoCapture')) return;
+          const content = String(text || '').trim();
+          if (!content) return;
+          const team = teamStore?.findTeamByRun?.(runId);
+          if (!team || team.archivedAt) return;
+          memoryManager.remember({
+            spaceId: cwd || team.projectPath || 'default',
+            domain: 'global_knowledge',
+            scope: 'team',
+            teamId: team.id,
+            agentId: ownerMemberId || null, // 空 = 团队共享；非空 = 该成员私有
+            content: `【团队任务结论】${title ? `${title}：` : ''}${content}`.slice(0, 4000),
+            importance: 0.6,
+            entityTags: ['team_task_conclusion'],
+            source: 'model_conclusion',
+          });
+        } catch (e) { console.warn('[team-memory] 子任务结论沉淀失败（不阻塞）:', e.message); }
       },
     });
 
@@ -1364,6 +1523,48 @@ initTasksIpc({
   emitTaskEvent,
   orchestrator,
   workerPool,
+});
+
+// M5 / T5-1：MJ 军团团队层 IPC 域（teams:*）——团队编制读写 + AI 角色草稿。
+// chatOnce/resolveModel 与编排/定时任务同源：AI 草稿走既有模型通道，不新起调用路径。
+// 模块引用已在上方（T5-8 工具工厂需要 postTeamMessage）；此处只做依赖注入。
+initTeamsIpc({
+  getTeamStore: () => teamStore,
+  // M5 / T5-6：对话内团队事件流按 thread_id 反查 run（task_groups 是「run 属于哪个会话」的
+  // 唯一事实源）；用 getter 注入与 getTeamStore 同款，避免装配顺序耦合。
+  getTaskStore: () => taskStore,
+  audit,
+  chatOnce: scheduledAgentChat,
+  resolveModel: resolveTaskModel,
+  // T5-2：消息总线事件出口（落库后广播，渲染层时间轴实时追加）
+  emitTeamsEvent,
+  // T5-7：成员模型绑定的展示标签在本机解析（渲染层不实现引用串格式，避免格式漂移）
+  getProviders: () => (localStore ? localStore.listProviders() : []),
+  // T5-4：派活链路复用既有编排器（planGoal 拆解建组）与 Worker 池（runGroup 执行），
+  // 两模块在 setupTaskOrchestration 已初始化且与 tasks:* 同源——不新起第二条编排实现。
+  orchestrator,
+  workerPool,
+  // M5 / T5-11：成员会话重置（teams:resetMemberSession）——「重置」= 清该成员断点 +
+  // 其私有记忆降权，两件事都复用既有单例，不新起存储：
+  //   · clearCheckpoint 走 checkpointStore（与 checkpoint:clear 同一事实来源）；
+  //   · getMemoryManager 必须传 getter 而非实例——本行执行时 memoryManager 尚未赋值
+  //     （它在上面的 initDb 回调里创建），闭包在 handler 调用时才求值，与 999 行 remember
+  //     注入同款，装配顺序无关。
+  clearCheckpoint: (key) => checkpointStore.clearCheckpoint(key),
+  getMemoryManager: () => memoryManager,
+  // M5 / T5-10：中断入口（teams:interrupt）。用户主体经此进入统一矩阵；
+  // 策略/执行/留痕全在 teamInterrupt 内，IPC 层不复制任何权限判断。
+  interruptTask: (p) => teamInterrupt.interruptTask({ ...p, actorKind: 'user' }),
+});
+
+// M5 / T5-10：中断模块依赖注入（必须在 initTeamsIpc 之后——postTeamMessage 的 deps 即由
+// 上一步注入；提前调用会让中断留痕读到空 deps，表现为「任务停了但没有系统消息」）。
+teamInterrupt.initTeamInterrupt({
+  getTeamStore: () => teamStore,
+  getTaskStore: () => taskStore,
+  workerPool,
+  emit: emitTaskEvent,
+  postMessage: postTeamMessage,
 });
 
 // ═══════════════════════════════════════════

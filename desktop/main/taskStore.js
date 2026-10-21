@@ -3,17 +3,34 @@
 //   group: ready → running → done | failed | paused | cancelled
 //   task : pending → queued → running → done | failed | skipped
 //          failed --(retry, retry_count<max_retry)--> queued
+//          running --(M5/T5-3 动态等待)--> waiting --(依赖就绪)--> queued | --(超时/取消)--> failed | skipped
 // 关键失败 → 组 paused（等待重新规划/人工处置）；非关键失败 → 降级继续（聚合附警告）。
 // 写入全部经由本模块的同步 better-sqlite3 事务（主进程单线程，天然串行，无并发写脏数据）。
 
 const TASK_TRANSITIONS = {
   pending: ['queued', 'skipped'],
   queued: ['running', 'pending', 'skipped'], // pending：取消排队回退
-  running: ['done', 'failed', 'queued'],     // queued：崩溃恢复 / 重试
+  running: ['done', 'failed', 'queued', 'waiting'], // queued：崩溃恢复 / 重试；waiting：T5-3 动态等待
+  // M5 / T5-3（§7 L2）：waiting 是调度器的**唯一状态侵入点**。三条出边各有唯一语义：
+  //   waiting → queued「被等待方终态唤醒，重新入队可派发」；→ failed「等待超时」；→ skipped「被取消」。
+  waiting: ['queued', 'failed', 'skipped'],
   done: [],
   failed: ['queued'],                        // 手动重试入口
   skipped: [],
 };
+
+// 终态集合：等待图环检测与唤醒判定都以此为准（单一事实来源，别处不得手写列表）
+const TERMINAL_TASK_STATUSES = ['done', 'failed', 'skipped'];
+
+// ── M5 / T5-3 运行期等待边界（§7 五条硬规则）──
+// 规则 3「等待不叠加」：单个任务的等待边上限。设 3 是为了避免「等待树」爆炸——
+// 一条任务等 3 个已足够表达「等 A 产出 + 等 B 产出 + 等 C 产出」，再多说明拆解本身有问题。
+const MAX_WAIT_DEPS = 3;
+// 规则 2「等待必须超时」：缺省 10 分钟。过短会把正常的长任务误判为超时；
+// 过长则等待方在池外干等、用户看到「等待中」半天不动。上限 1 小时与单任务墙钟同量级。
+const WAIT_TIMEOUT_DEFAULT_MS = 10 * 60 * 1000;
+const WAIT_TIMEOUT_MIN_MS = 1000;
+const WAIT_TIMEOUT_MAX_MS = 60 * 60 * 1000;
 
 const GROUP_TRANSITIONS = {
   ready: ['running', 'cancelled'],
@@ -70,6 +87,23 @@ class TaskStore {
       .map((g) => ({ ...g, dag: safeParse(g.dag_json), result: safeParse(g.result_json) }));
   }
 
+  /**
+   * M5 / T5-6：按会话归属列任务组（对话内团队事件流的 run 关联事实源）。
+   *
+   * 关联键是 `task_groups.thread_id`（T5-11 已把 threadId 贯穿到建组），不是 team_messages：
+   * team_messages 只有 run_id，没有会话列；若在此另加一列就出现「会话归属」的第二事实源。
+   * 故「某个团队 run 属于哪个对话」= 建组时写入的 thread_id，单一判据。
+   * 返回结构与 listGroups 一致（含 dag/result），便于调用方直接取状态与聚合摘要。
+   */
+  listGroupsByThread(threadId, { limit = 50 } = {}) {
+    const t = String(threadId == null ? '' : threadId).trim();
+    if (!t) return [];
+    const cap = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 50)));
+    return this.db.prepare('SELECT * FROM task_groups WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?')
+      .all(t, cap)
+      .map((g) => ({ ...g, dag: safeParse(g.dag_json), result: safeParse(g.result_json) }));
+  }
+
   // R6（2026-10-16，用户实测反馈）：删除任务组——否则终态组永远留在任务面板。
   // fail-closed：running 组不可直接删（先取消/强制关闭，避免账目悬空）；
   // 事务级联清理 side_effects + sub_tasks + 组本体。
@@ -79,6 +113,7 @@ class TaskStore {
     if (g.status === 'running') return { ok: false, error: '任务组正在运行，请先取消再删除' };
     const tx = this.db.transaction(() => {
       this.db.prepare('DELETE FROM side_effects WHERE group_id = ?').run(groupId);
+      this.db.prepare('DELETE FROM task_events WHERE group_id = ?').run(groupId);
       this.db.prepare('DELETE FROM sub_tasks WHERE group_id = ?').run(groupId);
       this.db.prepare('DELETE FROM task_groups WHERE group_id = ?').run(groupId);
     });
@@ -111,7 +146,11 @@ class TaskStore {
   // force: 终态强制落位（workerPool.js:382 组收尾场景）——非法迁移但目标是终态
   // （done/failed/skipped）时放行并留痕。此前签名无 force：调用方传了也被忽略，
   // 迁移被拒 → 任务卡在 queued → 组「无待执行任务」判定永不成立 → 界面永久转圈（P0-10）。
-  setTaskStatus(groupId, taskId, status, { error, result, workerId, skipRetryCount, force } = {}) {
+  // M5 / T5-3：ownerMemberId = 被动认领者（军团成员 id），仅进入 running 时写入并留 claimed_at。
+  // 终态统一清空等待边（waiting_on_json / wait_deadline_at）——否则一个已终态的任务仍带着
+  // 「我在等 T3」的陈旧边，会让 settleWaitingTasks 的剩余判定失真。清空必须收敛在此单一落点，
+  // 不散落到各调用分支（否则总有分支漏清）。
+  setTaskStatus(groupId, taskId, status, { error, result, workerId, skipRetryCount, force, ownerMemberId } = {}) {
     const t = this.getTask(groupId, taskId);
     if (!t) throw new Error(`子任务不存在：${groupId}/${taskId}`);
     const transitionLegal = t.status === status || canTransition('task', t.status, status);
@@ -124,33 +163,65 @@ class TaskStore {
       }
     }
     const now = this.now();
+    const isTerminal = TERMINAL_TASK_STATUSES.includes(status);
     // retry_count 语义 = 自动重试次数：强制关闭（skipRetryCount）不计入
     this.db.prepare(`UPDATE sub_tasks SET status = ?, error = ?, result_json = ?, worker_id = ?,
       retry_count = CASE WHEN ? = 'failed' AND ? = 0 THEN retry_count + 1 ELSE retry_count END,
       started_at = CASE WHEN ? = 'running' THEN ? ELSE started_at END,
-      finished_at = CASE WHEN ? IN ('done','failed','skipped') THEN ? ELSE finished_at END
+      finished_at = CASE WHEN ? IN ('done','failed','skipped') THEN ? ELSE finished_at END,
+      owner_member_id = CASE WHEN ? = 'running' THEN COALESCE(?, owner_member_id) ELSE owner_member_id END,
+      claimed_at = CASE WHEN ? = 'running' THEN COALESCE(?, claimed_at) ELSE claimed_at END,
+      waiting_on_json = CASE WHEN ? = 1 THEN '[]' ELSE waiting_on_json END,
+      wait_deadline_at = CASE WHEN ? = 1 THEN NULL ELSE wait_deadline_at END
       WHERE group_id = ? AND task_id = ?`)
       .run(status, error ?? null, result != null ? JSON.stringify(result) : null, workerId ?? null,
-        status, skipRetryCount ? 1 : 0, status, now, status, now, groupId, taskId);
+        status, skipRetryCount ? 1 : 0, status, now, status, now,
+        status, ownerMemberId ?? null, status, status === 'running' ? now : null,
+        isTerminal ? 1 : 0, isTerminal ? 1 : 0, groupId, taskId);
     this.touchGroup(groupId);
     return this.getTask(groupId, taskId);
   }
 
   // 入队：pending 且全部依赖已 done 的任务 → queued
-  enqueueReady(groupId) {
+  // M5 / T5-12：allowIds 是**批次门控**（wave）的唯一接入点——给定时只放行本批任务入队，
+  // 后批任务保持 pending（不占槽位、不会被 claimNext 领走），批间因此天然串行。
+  // 依赖判定仍在此处强制：门控只「收紧」可派发集合，绝不放宽 depends_on。
+  enqueueReady(groupId, { allowIds = null } = {}) {
     const tasks = this.listTasks(groupId);
+    const allow = Array.isArray(allowIds) ? new Set(allowIds.map(String)) : null;
     const doneIds = new Set(tasks.filter((t) => t.status === 'done' || t.status === 'skipped').map((t) => t.taskId));
-    const ready = tasks.filter((t) => t.status === 'pending' && t.dependsOn.every((d) => doneIds.has(d)));
+    const ready = tasks.filter((t) => t.status === 'pending' && t.dependsOn.every((d) => doneIds.has(d))
+      && (!allow || allow.has(t.taskId)));
     for (const t of ready) this.setTaskStatus(groupId, t.taskId, 'queued');
     return ready.map((t) => t.taskId);
   }
 
   // 领取一个 queued 任务（占位 running，带 workerId）——由 WorkerPool 循环调用
-  claimNext(groupId, workerId) {
+  // M5 / T5-3「看板被动认领」：ownerMemberId 记录**谁认领的**（军团成员 id）。
+  // 语义上仍是「被动认领」——任务不会主动找人，而是由主管指派 / 队员按看板认领后落到此处；
+  // 普通（非军团）run 不传 owner，列保持 NULL（不发明身份）。
+  claimNext(groupId, workerId, { ownerMemberId = null } = {}) {
     const row = this.db.prepare(`SELECT task_id FROM sub_tasks
       WHERE group_id = ? AND status = 'queued' ORDER BY seq ASC LIMIT 1`).get(groupId);
     if (!row) return null;
-    return this.setTaskStatus(groupId, row.task_id, 'running', { workerId });
+    return this.setTaskStatus(groupId, row.task_id, 'running', { workerId, ownerMemberId });
+  }
+
+  // M5 / T5-12：探活撤员后的**重派**（§13.4 降级协议）。语义 = 换人不换任务：
+  //   · 状态回 queued（running/waiting/failed/pending → queued 均在状态机内）；
+  //   · owner_member_id 直写新成员——不能复用 setTaskStatus 的 COALESCE 语义（那是
+  //     「重跑不覆盖原认领者」的保护），撤员场景要的正是覆盖；
+  //   · 不清 retry_count：探活撤员不算 Agent 失败重试，也不消耗自动重试次数。
+  // 已完成/已跳过返回 null（撤员只能作用于还在生命周期内的任务）。
+  reassignTask(groupId, taskId, ownerMemberId, { error = null } = {}) {
+    const t = this.getTask(groupId, taskId);
+    if (!t) return null;
+    if (t.status === 'done' || t.status === 'skipped') return null;
+    if (t.status !== 'queued') this.setTaskStatus(groupId, taskId, 'queued', { error });
+    this.db.prepare('UPDATE sub_tasks SET owner_member_id = ? WHERE group_id = ? AND task_id = ?')
+      .run(String(ownerMemberId), groupId, taskId);
+    this.touchGroup(groupId);
+    return this.getTask(groupId, taskId);
   }
 
   // 失败处置：可重试 → 回 queued；不可重试 → failed（调用方决定组级动作）
@@ -176,10 +247,235 @@ class TaskStore {
     return { retried: false };
   }
 
+  // ── M5 / T5-3：跨成员依赖与防死锁（设计稿 §7，「防死锁核心」）──
+  //
+  // 分层处理依赖（v1.1 定案，**不是**「加一个状态就完事」）：
+  //   · L1 依赖前置（首选，零侵入）：静态 `depends_on` + enqueueReady/claimNext 只派发就绪任务，
+  //     等待根本不会成为运行期状态 —— 已在既有实现中成立，本轮不改；
+  //   · L2 运行期 `waiting`（兜底，唯一侵入点）：执行中才发现的**新**依赖走本节；
+  //   · L3 轮询：不进默认路径（4 槽位的池里两个任务互等，有效并发就腰斩）。
+  //
+  // 本节只做 L2 —— 也就是「拆解阶段消解不掉的那部分」。度量口径见 waitStats()（R2）。
+
+  /**
+   * 等待图环检测（Kahn，纯函数）。两条规则来自 §7 规则 1 / R3：
+   *
+   *   ① 图 = 静态 depends_on ∪ 运行期 waiting_on。只查 waiting_on 会漏掉
+   *      「A 动态等 B、而 B 静态依赖 A」这类互等（等价于成环）——必须合并成一张图才判得对；
+   *   ② 只在**未终态**节点上建图。已 done/failed/skipped 的任务无法再被任何人阻塞，
+   *      把它们算作节点会制造假环（例：A 已 done，B 动态等 A 之外的 C —— A 不该参与判环）。
+   *
+   * @param {Array} tasks 组内任务快照（含 dependsOn / waitingOn / status）
+   * @param {Array<[string,string]>} extraEdges 待加入的边 [waiter, waitedOn]
+   * @returns {boolean} true = 加入这些边后会成环
+   */
+  _wouldCycle(tasks, extraEdges) {
+    const live = tasks.filter((t) => !TERMINAL_TASK_STATUSES.includes(t.status));
+    const liveIds = new Set(live.map((t) => t.taskId));
+    const out = new Map(live.map((t) => [t.taskId, new Set()])); // 被等待者 → 等待者
+    const indeg = new Map(live.map((t) => [t.taskId, 0]));
+    const addEdge = (waiter, waitedOn) => {
+      // 自环（waiter === waitedOn）**不**在此静默跳过：它同样是环，交给 Kahn 判出来
+      if (!liveIds.has(waiter) || !liveIds.has(waitedOn)) return;
+      const set = out.get(waitedOn);
+      if (set.has(waiter)) return;
+      set.add(waiter);
+      indeg.set(waiter, indeg.get(waiter) + 1);
+    };
+    for (const t of live) {
+      for (const d of t.dependsOn) addEdge(t.taskId, d);
+      for (const d of t.waitingOn || []) addEdge(t.taskId, d);
+    }
+    for (const [waiter, waitedOn] of extraEdges) addEdge(waiter, waitedOn);
+    let queue = [...indeg.entries()].filter(([, n]) => n === 0).map(([id]) => id);
+    let visited = 0;
+    while (queue.length) {
+      const next = [];
+      for (const id of queue) {
+        visited += 1;
+        for (const nxt of out.get(id)) {
+          indeg.set(nxt, indeg.get(nxt) - 1);
+          if (indeg.get(nxt) === 0) next.push(nxt);
+        }
+      }
+      queue = next;
+    }
+    return visited !== live.length;
+  }
+
+  /**
+   * 为**运行中**的任务登记动态等待边（§7 L2）。建边、环检测、状态迁移三者**同一临界区**。
+   *
+   * 为什么必须同临界区（§7 规则 1 / R3）：并发两次建边时，若「读等待图 → 判环 → 写边」被拆开，
+   * 两个各自无环的请求叠起来可能成环（A 等 B 与 B 等 A 各自通过判环）。SQLite 单写事务天然串行化，
+   * 把整段放进 this.db.transaction() 即闭环——且环检测读的是**事务内**的最新快照，而非调用前的外部快照。
+   *
+   * @returns {{ok:boolean,error?:string,waiting:boolean,reason?:string,waitingOn:string[],deadlineAt:number|null}}
+   *   · ok=false + error：建边被拒（自等待 / 成环 / 超上限 / 目标不存在）→ Lead 据此改派，**不静默**；
+   *   · ok=true, waiting=false, reason='deps_already_settled'：目标已终态，无需挂起（调用方继续跑）；
+   *   · ok=true, waiting=true：已挂起，槽位可由调用方（WorkerPool）释放。
+   */
+  waitOnTasks(groupId, taskId, onTaskIds, { timeoutMs } = {}) {
+    const t = this.getTask(groupId, taskId);
+    if (!t) return { ok: false, error: `子任务不存在：${groupId}/${taskId}`, waiting: false, waitingOn: [], deadlineAt: null };
+    const fail = (error) => ({ ok: false, error, waiting: false, waitingOn: [], deadlineAt: null });
+    if (t.status !== 'running') {
+      return fail(`仅运行中的任务可进入等待（当前 ${t.status}）——可预见的依赖请写进拆解阶段的 dependsOn（§7 L1 首选）`);
+    }
+
+    const targets = [...new Set((Array.isArray(onTaskIds) ? onTaskIds : [])
+      .map((v) => String(v == null ? '' : v).trim()).filter(Boolean))];
+    if (targets.length === 0) return fail('等待目标为空');
+    if (targets.includes(t.taskId)) return fail('任务不能等待自身（§7 规则 1：等待图必须无环）');
+
+    const before = this.listTasks(groupId);
+    const byId = new Map(before.map((x) => [x.taskId, x]));
+    for (const d of targets) if (!byId.has(d)) return fail(`等待了不存在的任务：${d}`);
+
+    const merged = [...new Set([...(t.waitingOn || []), ...targets])];
+    if (merged.length > MAX_WAIT_DEPS) {
+      return fail(`等待目标数 ${merged.length} 超过上限 ${MAX_WAIT_DEPS}（§7 规则 3：等待不叠加）`);
+    }
+    // 已终态的目标不构成等待；若已无可等待对象 ⇒ 无需挂起（省一次「挂起再唤醒」的空往返）
+    const unmetTargets = merged.filter((d) => !TERMINAL_TASK_STATUSES.includes(byId.get(d).status));
+    if (unmetTargets.length === 0) {
+      return { ok: true, waiting: false, reason: 'deps_already_settled', waitingOn: merged, deadlineAt: null };
+    }
+
+    const ms = clampInt(timeoutMs, WAIT_TIMEOUT_MIN_MS, WAIT_TIMEOUT_MAX_MS, WAIT_TIMEOUT_DEFAULT_MS);
+    const deadlineAt = this.now() + ms;
+    let cycle = false;
+    const tx = this.db.transaction(() => {
+      // 事务内重读快照：判环与建边共用同一份 —— 两次并发建边无法各自通过（R3）
+      const live = this.listTasks(groupId);
+      cycle = this._wouldCycle(live, unmetTargets.map((d) => [taskId, d]));
+      if (cycle) return;
+      this.db.prepare(`UPDATE sub_tasks SET status = 'waiting', waiting_on_json = ?,
+        wait_deadline_at = ?, wait_count = wait_count + 1 WHERE group_id = ? AND task_id = ?`)
+        .run(JSON.stringify(merged), deadlineAt, groupId, taskId);
+      this.touchGroup(groupId);
+    });
+    tx();
+    if (cycle) return fail(`等待会成环：${taskId} → ${unmetTargets.join(', ')}（§7 规则 1：等待图必须无环）`);
+    return { ok: true, waiting: true, waitingOn: merged, deadlineAt };
+  }
+
+  /**
+   * 被等待任务到达终态后唤醒等待者（§7 规则 4：唤醒必须幂等）。
+   *
+   * 幂等由「按当前状态重判」天然成立：每次调用都重算一遍，`waiting → queued` 只会成功一次——
+   * 完成事件重复投递时，第二次调用已找不到 waiting 任务，是空操作（即 (waiter, settled) 组合去重）。
+   *
+   * 部分满足**不**提前放行：只有「全部 waiting_on 目标都已终态」的等待者才唤醒，
+   * 否则原地继续等（等 A 和 B 的任务，在 A 完成时不该立刻跑）。
+   *
+   * @param {string|null} settledTaskId 刚终态的任务 id；null = 扫描组内全部 waiting 任务
+   * @returns {Array<{taskId:string,waitingOn:string[]}>} 本次被唤醒的任务
+   */
+  settleWaitingTasks(groupId, settledTaskId = null) {
+    const tasks = this.listTasks(groupId);
+    const byId = new Map(tasks.map((x) => [x.taskId, x]));
+    const woken = [];
+    const tx = this.db.transaction(() => {
+      for (const t of tasks) {
+        if (t.status !== 'waiting') continue;
+        const waitingOn = t.waitingOn || [];
+        if (settledTaskId && !waitingOn.includes(settledTaskId)) continue;
+        const remaining = waitingOn.filter((d) => {
+          const dep = byId.get(d);
+          return dep && !TERMINAL_TASK_STATUSES.includes(dep.status);
+        });
+        if (remaining.length > 0) continue; // 还有未满足的依赖，保持等待
+        this.db.prepare(`UPDATE sub_tasks SET status = 'queued', waiting_on_json = '[]',
+          wait_deadline_at = NULL WHERE group_id = ? AND task_id = ?`).run(groupId, t.taskId);
+        woken.push({ taskId: t.taskId, waitingOn });
+      }
+      if (woken.length) this.touchGroup(groupId);
+    });
+    tx();
+    return woken;
+  }
+
+  /**
+   * 等待超时唤醒（§7 规则 2）。到点仍未满足 ⇒ 判 failed(wait_timeout)，
+   * 并把「被等待任务未完成」作为**结构化事实**写进 result 交 Lead 决策（绝不静默挂死）。
+   *
+   * 级联：超时任务自身成为终态 ⇒ 立即唤醒等它的其它任务（否则对方会白等到自己的超时 ——
+   * 与 §9.1「级联中断必须主动发 settled 事件」同型）。
+   * 不消耗自动重试次数：等待超时不是 Agent 失败，重跑由人工/重规划决定。
+   *
+   * @returns {Array<{groupId:string,taskId:string,waitingOn:string[],unmet:string[],woken:string[]}>}
+   */
+  sweepWaitTimeouts(now = Date.now()) {
+    const rows = this.db.prepare(`SELECT group_id, task_id FROM sub_tasks
+      WHERE status = 'waiting' AND wait_deadline_at IS NOT NULL AND wait_deadline_at <= ?`).all(now);
+    const out = [];
+    for (const r of rows) {
+      const t = this.getTask(r.group_id, r.task_id);
+      if (!t || t.status !== 'waiting') continue; // 竞态：期间已被正常唤醒
+      const tasks = this.listTasks(r.group_id);
+      const byId = new Map(tasks.map((x) => [x.taskId, x]));
+      const unmet = (t.waitingOn || []).filter((d) => {
+        const dep = byId.get(d);
+        return dep && !TERMINAL_TASK_STATUSES.includes(dep.status);
+      });
+      this.db.prepare(`UPDATE sub_tasks SET status = 'failed', error = ?, result_json = ?,
+        waiting_on_json = '[]', wait_deadline_at = NULL, finished_at = ?
+        WHERE group_id = ? AND task_id = ?`)
+        .run(`等待超时：依赖任务未在期限内完成（${unmet.join(', ') || '未知'}）`,
+          JSON.stringify({ waitTimeout: true, waitingOn: t.waitingOn || [], unmet }),
+          this.now(), r.group_id, t.taskId);
+      this.touchGroup(r.group_id);
+      const woken = this.settleWaitingTasks(r.group_id, t.taskId).map((w) => w.taskId);
+      out.push({ groupId: r.group_id, taskId: t.taskId, waitingOn: t.waitingOn || [], unmet, woken });
+    }
+    return out;
+  }
+
+  /**
+   * 取消组内等待中的任务（组强停 / 用户取消路径）。
+   * 为什么必须显式处理：`waiting` 任务**不在** Worker 池的 activeRuns 里（槽位已释放），
+   * 组级强停若只扫 queued/pending 会漏掉它们 ⇒ 组永远不结算、界面一直转圈。
+   * 取消即终态 ⇒ 级联唤醒等它们的任务（否则那些任务会白等到自己的超时）。
+   *
+   * @returns {Array<{taskId:string,waitingOn:string[]}>} 被取消的任务
+   */
+  cancelWaiting(groupId, { error = '等待中的任务已被取消', exclude = [] } = {}) {
+    const skip = new Set(exclude);
+    const targets = this.listTasks(groupId).filter((t) => t.status === 'waiting' && !skip.has(t.taskId));
+    const cancelled = [];
+    for (const t of targets) {
+      this.db.prepare(`UPDATE sub_tasks SET status = 'skipped', error = ?,
+        waiting_on_json = '[]', wait_deadline_at = NULL, finished_at = ?
+        WHERE group_id = ? AND task_id = ?`).run(error, this.now(), groupId, t.taskId);
+      cancelled.push({ taskId: t.taskId, waitingOn: t.waitingOn || [] });
+    }
+    if (cancelled.length) {
+      this.touchGroup(groupId);
+      this.settleWaitingTasks(groupId);
+    }
+    return cancelled;
+  }
+
+  /**
+   * R2 观测口径：动态等待占比 = 进入过 L2 等待的任务数 / 组内任务总数。
+   * 意义：§7 的正解是把绝大多数依赖在**拆解阶段**用 L1（dependsOn）消解掉；该比值持续偏高
+   * ⇒ Lead 拆不出跨成员依赖（R2），应从拆解提示词侧收敛，而不是继续给运行期等待路径加压。
+   * `waiting` 为当前仍挂起的实时数量。
+   */
+  waitStats(groupId) {
+    const tasks = this.listTasks(groupId);
+    const waited = tasks.filter((t) => (t.waitCount || 0) > 0).length;
+    const waiting = tasks.filter((t) => t.status === 'waiting').length;
+    return { total: tasks.length, waited, waiting, ratio: tasks.length ? waited / tasks.length : 0 };
+  }
+
   // 组是否已无待执行任务（收尾判定）
+  // M5 / T5-3：`waiting` 必须计入「未结算」——等待中的任务尚未有结果，若把它当已结算，
+  // 组会被提前聚合收尾，唤醒后的重跑就成了孤儿任务（永远不会再被调度）。
   isGroupSettled(groupId) {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM sub_tasks
-      WHERE group_id = ? AND status IN ('pending','queued','running')`).get(groupId);
+      WHERE group_id = ? AND status IN ('pending','queued','running','waiting')`).get(groupId);
     return row.n === 0;
   }
 
@@ -274,6 +570,46 @@ class TaskStore {
     return this.listUncertainEffects(groupId).includes(taskId);
   }
 
+  // ── 任务活动轨迹（M5 / T5-6，2026-10-21）──
+  // 为什么持久化：task_activity 此前只走 IPC 实时广播，刷新/重进会话即丢，
+  // 看板与对话卡只能显示「执行中」，用户无法回答「这个员工到底做了什么、为什么被撤下」。
+  // 写入只收关键事件（start/tool/stall/reassign/wait/stop/error/report），
+  // payload 在调用侧裁剪（工具参数 80 字符上限），不写 prompt/文件正文。
+  appendEvent({ groupId, taskId = null, type, payload = null } = {}) {
+    const gid = String(groupId || '');
+    if (!gid) return null;
+    const t = String(type || '');
+    if (!t) return null;
+    const info = this.db.prepare(
+      'INSERT INTO task_events (group_id, task_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(gid, taskId == null ? null : String(taskId), t, payload ? JSON.stringify(payload) : null, this.now());
+    // better-sqlite3 给 lastInsertRowid；sql.js 的 run 返回 [{ lastID }] 由兼容层归一
+    return Number(info?.lastInsertRowid || info?.lastID || 0) || null;
+  }
+
+  // 组内活动轨迹（按 id 升序 = 发生顺序）。limit 为**每组**上限，取最近 N 条后升序返回。
+  listEventsByGroup(groupId, { limit = 500 } = {}) {
+    const gid = String(groupId || '');
+    if (!gid) return [];
+    const cap = Math.min(2000, Math.max(1, Math.trunc(Number(limit) || 500)));
+    const rows = this.db.prepare(
+      'SELECT * FROM task_events WHERE group_id = ? ORDER BY id DESC LIMIT ?',
+    ).all(gid, cap);
+    return rows.reverse().map((r) => ({
+      id: Number(r.id) || 0,
+      groupId: r.group_id,
+      taskId: r.task_id || null,
+      type: r.type,
+      payload: safeParse(r.payload_json),
+      createdAt: Number(r.created_at) || 0,
+    }));
+  }
+
+  // 组删除时级联清理轨迹（与 side_effects 同事务，避免孤儿行无限增长）
+  clearEvents(groupId) {
+    this.db.prepare('DELETE FROM task_events WHERE group_id = ?').run(String(groupId || ''));
+  }
+
   touchGroup(groupId) {
     this.db.prepare('UPDATE task_groups SET updated_at = ? WHERE group_id = ?').run(this.now(), groupId);
   }
@@ -297,6 +633,12 @@ function rowToTask(r) {
     maxRetry: r.max_retry, timeoutMs: r.timeout_ms, status: r.status, retryCount: r.retry_count,
     result: safeParse(r.result_json), error: r.error, workerId: r.worker_id,
     startedAt: r.started_at, finishedAt: r.finished_at,
+    // M5 / T5-3：等待态与被动认领的读取面。必须在此暴露，否则 _wouldCycle 读 t.waitingOn、
+    // settleWaitingTasks 读 t.waitingOn、waitStats 读 t.waitCount 全部恒为 undefined，
+    // 环检测与唤醒判定集体失真（静默失效，不报错——最危险的那种）。
+    ownerMemberId: r.owner_member_id, claimedAt: r.claimed_at,
+    waitingOn: safeParse(r.waiting_on_json) || [],
+    waitDeadlineAt: r.wait_deadline_at, waitCount: r.wait_count || 0,
   };
 }
 
@@ -305,4 +647,16 @@ function safeParse(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
 
-module.exports = { TaskStore, canTransition, TASK_TRANSITIONS, GROUP_TRANSITIONS };
+// M5 / T5-3：等待时长入参的边界收敛（单一事实来源）。非法/缺省一律回落 fallback，
+// 再夹到 [min, max]。teamStore.js 有同名函数，但两模块无导入关系，就地复制以免跨模块耦合。
+function clampInt(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+module.exports = {
+  TaskStore, canTransition, TASK_TRANSITIONS, GROUP_TRANSITIONS,
+  TERMINAL_TASK_STATUSES, MAX_WAIT_DEPS,
+  WAIT_TIMEOUT_DEFAULT_MS, WAIT_TIMEOUT_MIN_MS, WAIT_TIMEOUT_MAX_MS,
+};

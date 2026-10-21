@@ -1,7 +1,7 @@
 // 三层记忆 M4 回归门禁（2026-10-20）：补齐设计文档 L1958 的两项承诺。
 // 锁定内容：
-//   ① 半衰期按 scope 差异化（scorer.HALF_LIFE_DAYS_BY_SCOPE：session 7 / project 30 / global 90），
-//      domain 表作兼容回落；scoreMemory / decayJob 均按「scope 优先，缺失回落 domain」取值；
+//   ① 半衰期按 scope 差异化（scorer.HALF_LIFE_DAYS_BY_SCOPE：session 7 / team 30（M5/T5-5 与项目同档）/
+//      project 30 / global 90），domain 表作兼容回落；scoreMemory / decayJob 均按「scope 优先，缺失回落 domain」取值；
 //   ② L3 全局层独立容量硬闸 MAX_GLOBAL_MEMORIES=300（跨空间按 scope 计数）；
 //      空间闸 / 全局层闸共用 _enforceCap 统一淘汰口径（单一事实来源）；
 //      写入记住（remember）与晋升（promoteScope → global）两条入口都受该闸约束。
@@ -26,8 +26,9 @@ const ok = (name) => { n += 1; console.log(`  ✓ ${name}`); };
 
 (async () => {
   // ── 1. 半衰期常量与查表（scope 优先，domain 回落）──
-  assert.deepStrictEqual(scorer.HALF_LIFE_DAYS_BY_SCOPE, { session: 7, project: 30, global: 90 }, 'scope 半衰期表：7 / 30 / 90');
+  assert.deepStrictEqual(scorer.HALF_LIFE_DAYS_BY_SCOPE, { session: 7, team: 30, project: 30, global: 90 }, 'scope 半衰期表：7 / 30(team) / 30 / 90');
   assert.strictEqual(scorer.halfLifeDaysFor('session'), 7, 'scope=session → 7 天');
+  assert.strictEqual(scorer.halfLifeDaysFor('team'), 30, 'scope=team → 30 天（M5/T5-5：与项目同档）');
   assert.strictEqual(scorer.halfLifeDaysFor('project'), 30, 'scope=project → 30 天');
   assert.strictEqual(scorer.halfLifeDaysFor('global'), 90, 'scope=global → 90 天（最持久）');
   assert.strictEqual(scorer.halfLifeDaysFor('global_knowledge'), 30, 'domain 兼容回落：global_knowledge → 30 天');

@@ -1,6 +1,6 @@
 // @ts-nocheck -- T2-2 存量代码原样搬移（零行为变更）；渐进 TS 路线下补全类型属后续任务（T0-3 门禁只约束新文件扩展名）
 import { useState, useEffect, useRef } from 'react';
-import { IconArrowUp, IconBot, IconEdit, IconEye, IconFile, IconFolder, IconGitBranch, IconMic, IconPlug, IconPlus, IconSpinner, IconSquare, IconTrash, IconX, IconZap } from './icons';
+import { IconArrowUp, IconBot, IconEdit, IconEye, IconFile, IconFolder, IconGitBranch, IconMic, IconPlug, IconPlus, IconSpinner, IconSquare, IconTrash, IconUsers, IconX, IconZap } from './icons';
 import ContextRing from './ContextRing';
 import InlineAlert from './InlineAlert';
 import PlusMenu from './PlusMenu';
@@ -43,6 +43,9 @@ export default function Composer({
   enabledSkills = [],
   // 附件 chips（拖入/粘贴/「添加到对话框」）：状态归 ChatArea（useAgentRun.send 统一转 @路径 上下文）
   attachments = [], onRemoveAttachment, onOpenAttachment,
+  // 2026-10-20 需求⑤：军团选中态——`+` 菜单选中团队后在上方显示团队名徽标；
+  // 发消息时由 ChatArea 的 sendOrDispatch 自动派活给该团队（本组件不感知派活细节）。
+  activeTeam = null, onClearTeam, teamErr = '', onClearTeamErr, teamBusy = false, onSelectTeam,
 }) {
   const { t } = useI18n();
   const [slashOpen, setSlashOpen] = useState(false);
@@ -54,7 +57,7 @@ export default function Composer({
   const voiceActive = voice?.state === 'recording' || voice?.state === 'transcribing';
   // 会话级徽标是否非空：全空时整行不渲染，避免留一条空白行把输入框往下推
   const hasTaskBadges = Boolean(
-    planMode || expert
+    planMode || expert || activeTeam
     || (extras?.skillIds || []).length > 0
     || (extras?.mcpServers || []).length > 0,
   );
@@ -194,6 +197,19 @@ export default function Composer({
             {t('composer.planMode')}
           </span>
         )}
+        {/* 2026-10-20 需求⑤：军团选中徽标——`+` 菜单选中团队后显示团队名，
+            发送即自动派活给该团队；X 取消选中（用 Button 原语，不新增裸 button）。 */}
+        {activeTeam && (
+          <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
+            title={t('composer.teamTip', { desc: activeTeam.description || '' })}>
+            <IconUsers size={11} />
+            <span className="max-w-[10rem] truncate">{activeTeam.name}</span>
+            {teamBusy && <IconSpinner size={10} className="animate-spin" />}
+            <Button variant="ghost" size="xs" onClick={() => onClearTeam?.()} aria-label={t('composer.removeTeam')}>
+              <IconX size={10} />
+            </Button>
+          </span>
+        )}
         {expert && (
           <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.expertTip', { mission: expert.mission || '' })}>
@@ -239,6 +255,13 @@ export default function Composer({
 
       {modeMsg && (
         <div className="mb-2 text-xs text-text2 px-4 truncate" title={modeMsg}>{modeMsg}</div>
+      )}
+
+      {/* 军团派活失败提示（2026-10-20 需求⑤）：就地可见，可关闭 */}
+      {teamErr && (
+        <div className="mb-2 mx-1">
+          <InlineAlert type="error" onDismiss={onClearTeamErr}>{teamErr}</InlineAlert>
+        </div>
       )}
 
       {/* A5：录音条（波形 + 计时 + 停止） */}
@@ -477,6 +500,9 @@ export default function Composer({
             onVoiceStart={() => voice?.start?.()}
             connectedServers={connectedServers}
             enabledSkills={enabledSkills}
+            // 2026-10-20 需求⑤：军团面板只需当前选中团队 id（高亮回显）+ 选中回调
+            activeTeamId={activeTeam?.id || null}
+            onSelectTeam={onSelectTeam}
           />
         )}
 

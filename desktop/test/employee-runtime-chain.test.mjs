@@ -105,10 +105,14 @@ check('④ useAgentRun 每轮 agent:run 携带 rolePreset（断了 → 预设只
 // ── ⑤ 主进程：消费 rolePreset 并取更严格者 ─────────────────────────────
 check('⑤ agentRunner 消费 payload.rolePreset 并调用钳制（断了 → 角色声明的审批/沙箱被无视，或可反向放宽权限）', () => {
   const src = readCode('main/agentRunner.js');
-  must(src, /if \(payload\.rolePreset\)/, 'payload.rolePreset 分支');
-  must(src, /engineParams\.approvalMode = stricterApproval\(engineParams\.approvalMode, payload\.rolePreset\.approvalMode\)/, '审批档取更严格者');
-  must(src, /engineParams\.sandboxPolicy = stricterSandbox\(engineParams\.sandboxPolicy, payload\.rolePreset\.sandboxPolicy\)/, '沙箱取更严格者');
+  // 2026-10-21（第八轮 D-808）：审批/沙箱钳制从内联收敛到 rolePresetApply，
+  // 与 Worker 通道共用一份（此前只有主会话接、Worker 完全没接 ⇒ 成员配置不生效）。
+  // 断言按新契约拆分：委托在 agentRunner、钳制在 helper —— 两处缺一即红。
+  must(src, /applyRolePreset\(engineParams, payload\.rolePreset,/, 'rolePreset 委托给 applyRolePreset');
   must(src, /rolePreset: payload\.rolePreset \|\| undefined/, 'rolePreset 透传进 engineParams');
+  const helper = readCode('main/rolePresetApply.js');
+  must(helper, /engineParams\.approvalMode = stricterApproval\(engineParams\.approvalMode, rolePreset\.approvalMode\)/, '审批档取更严格者');
+  must(helper, /engineParams\.sandboxPolicy = stricterSandbox\(engineParams\.sandboxPolicy, rolePreset\.sandboxPolicy\)/, '沙箱取更严格者');
 });
 
 // ── ⑥ 回退通道：同纪律（F-020 的收口点，防止「主通道严、回退通道松」）────

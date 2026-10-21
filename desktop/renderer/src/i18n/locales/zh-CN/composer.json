@@ -20,6 +20,8 @@
   "planModeTip": "规划模式：写工具已移除，只输出计划",
   "expertTip": "数字员工：{mission}（点击移除）",
   "removeExpert": "移除数字员工",
+  "teamTip": "军团：{desc}（点击移除）",
+  "removeTeam": "取消选中军团",
   "skillsTip": "会话级技能：{skills}（点击移除）",
   "skillsCount": "{n} 技能",
   "removeSkills": "移除会话级技能",

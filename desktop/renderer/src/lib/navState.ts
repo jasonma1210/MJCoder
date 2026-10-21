@@ -9,7 +9,7 @@
 //
 // 说明：工作台（Dashboard）不以一级导航承载，故返回 ''（三项都不亮），
 // 保持「它属于另一层入口」的语义；生态中心是覆盖在会话之上的弹层，打开时高亮其入口。
-export type NavKey = 'new' | 'scheduled' | 'ecosystem' | '';
+export type NavKey = 'new' | 'scheduled' | 'ecosystem' | 'teams' | '';
 
 export interface NavViewState {
   /** 定时任务页是否在前台 */
@@ -18,6 +18,8 @@ export interface NavViewState {
   showDashboard: boolean;
   /** 生态中心（弹层）是否打开 */
   showEcosystem: boolean;
+  /** MJ 军团（团队编制页）是否在前台 */
+  showTeams: boolean;
   /** 是否选中了某个会话 */
   hasActiveThread: boolean;
 }
@@ -25,6 +27,7 @@ export interface NavViewState {
 export function activeNavOf(view: NavViewState): NavKey {
   if (view.showScheduled) return 'scheduled';
   if (view.showEcosystem) return 'ecosystem';
+  if (view.showTeams) return 'teams';
   if (view.showDashboard || view.hasActiveThread) return '';
   return 'new';
 }

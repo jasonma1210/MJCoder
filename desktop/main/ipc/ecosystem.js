@@ -127,6 +127,16 @@ function mergeUserEmployees(builtin) {
   return out;
 }
 
+/**
+ * 按 id 解析数字员工（内置 + 自定义合并后的单一入口）。
+ * M5 / T5-1：军团「招募」需要按员工 id 取模板来组装成员（源 template）。
+ * 与 ecosystem:employees / ecosystem:employeeRuntime 同源，避免出现「列表看得到、招募取不到」。
+ */
+function resolveEmployeeById(id) {
+  const list = mergeUserEmployees(ecosystemLib.loadDigitalEmployees(resolveEcosystemDir()));
+  return list.find((e) => e.id === id) || null;
+}
+
 function saveUserEmployee(emp) {
   const file = employeeFile(emp.id);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -503,4 +513,4 @@ function initEcosystemIpc(d) {
   register();
 }
 
-module.exports = { initEcosystemIpc };
+module.exports = { initEcosystemIpc, resolveEmployeeById };

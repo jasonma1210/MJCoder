@@ -39,6 +39,8 @@ const TOOL_CHANNELS = [
   'computerUse',
   // G-latex LaTeX 编译原生工具（漏登记 → 子进程「未知工具: latex_compile」）
   'latexCompile',
+  // M5 / T5-8 军团协同四工具（漏登记 → 子进程「未知工具: team_*」）
+  'teamListMembers', 'teamSendMessage', 'teamBoard', 'teamWait',
 ];
 // 通知型回调（fire-and-forget，单向序列化即可）
 const NOTIFY_CBS = ['onStream', 'onToolCall', 'onMessage', 'onTodos', 'onSubagentEvent', 'onBudget', 'onTrace', 'onDone'];

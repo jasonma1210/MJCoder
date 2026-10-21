@@ -7,7 +7,9 @@
 //   G3 否定式断言（"全仓无 X"）无复验 → 空输出被读成"零使用"（第 10 章 J1 事故）
 //   G4 章内编号跨章漂移 → 「第 11 章 R1」而全文只有 10 章
 //
-// 本脚本把 G1 / G2 / G4 与「引用位置」变成机器校验，**按需运行**，不接入 npm test：
+// 本脚本把 G1 / G2 / G4 与「引用位置」变成机器校验。**已接入 npm test**（2026-10-20 起，作为
+// `test/run-all.mjs` 的前置门禁之一）——此前注释写「按需运行、不接入」，结果文档数字漂移
+// **红了一整轮没人发现**（没有任何自动触发方）。仍可单独跑：
 //   node scripts/doc-fact-check.mjs            # 默认校验技术设计文档
 //   node scripts/doc-fact-check.mjs --doc ../docs/xxx.md
 //   node scripts/doc-fact-check.mjs --quiet     # 只输出问题

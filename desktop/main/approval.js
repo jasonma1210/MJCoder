@@ -89,6 +89,12 @@ const REVERSIBILITY = {
   // 一次 computer_use 内部可执行多步点击/输入（可能已触发支付/删除/发送），
   // 本机无法回滚 → 不可补偿（与 cua_action 同纪律）。
   computer_use: { reversible: false, note: '桌面自动化直接操作用户真实应用，可能已产生支付/删除/发送等不可回滚的副作用' },
+  // M5 / T5-8：军团协同——名册/看板只读，可逆；总线消息一旦落库即被其它成员读取并可能驱动动作，
+  // 本机无法「撤回对方已看到的信息」⇒ 不可逆；等待边可被依赖完成/超时自然消解 ⇒ 可逆。
+  team_list_members: { reversible: true, note: '只读查询，无任何副作用' },
+  team_board: { reversible: true, note: '只读查询，无任何副作用' },
+  team_send_message: { reversible: false, note: '消息已进入团队总线，其它成员可能已读取并据此行动' },
+  team_wait: { reversible: true, note: '仅登记本任务的等待边，依赖完成或超时后自动消解' },
 };
 
 /**
@@ -279,7 +285,13 @@ const TOOL_LEVEL = {
   // （见 needsApproval），于是「新工具漏登记」＝「默认自动批准」—— 一个新增的写文件/外发工具
   // 会在无人值守档位静默过闸。本轮纪律：11 条一律显式写 'L2'，与兜底值**完全相同**，
   // 实际审批行为逐字节不变（不升 L3、不移出审批面 —— 那些属产品行为变更，另案评估）。
-  // 门禁：test/tool-registration-matrix.test.mjs 断言每个模型工具「不得依赖 || 'L2' 兜底」。
+  // 门禁：test/tool-registration-matrix.test.mjs 断言每个模型工具「不得依赖末行兜底」。
+  //
+  // 第八轮 D-801（2026-10-21）：**兜底方向已由 'L2' 改为 'L3'**。
+  // 原先「漏登记 ⇒ 级别取自 L2 ⇒ auto-safe 档静默放行」是一条结构性风险：新增的写文件/外发
+  // 工具只要忘了登记，就会在无人值守档位自动过闸。改成 L3 后，未知工具按「需审批、可被显式
+  // 规则豁免」处置（与 code_exec 的普通代码、mcp__ 工具同档），失败方向从 fail-open 翻成
+  // fail-closed。上表这 11 条仍保持**显式登记**：显式登记优于依赖兜底——读代码的人不必去猜末行。
   search_plugins: 'L2', // 市场检索只读，但会向外部 registry 发起查询（外发数据）→ 不放宽到 null
   pr_list: 'L2', // 只读 GitHub API；但涉及用户 token 与私有仓库元数据，故不并入
   pr_view: 'L2', //   READONLY_TOOLS（并入后 on-request 档不再提示），保持 L2 = 维持现状
@@ -305,12 +317,20 @@ const TOOL_LEVEL = {
   //     不靠外层档位。
   //   · 若将来要升 L3，**必须先回答「内层逐工具审批是否同时降级」**——否则只是把弹卡数量翻倍。
   orchestrate_task: 'L2', // 见上方裁决块：刻意**不升 L3**（2026-10-20）
+  // M5 / T5-8：军团协同——总线发言写的是**团队内部总线**（不触盘、不出网、不外发），
+  // 但会被其它成员读到并驱动后续动作 ⇒ L2（auto-safe 放行，on-request/always 逐次确认）。
+  // 体积闸在 teamStore.appendMessage 内部，审批层不重复判断。
+  team_send_message: 'L2',
+  // 动态等待只改本任务自己的等待边（登记后立刻收尾让出槽位），无外部副作用 ⇒ L2。
+  team_wait: 'L2',
 };
 
 // 只读工具：任何档位都不询问
 const READONLY_TOOLS = new Set([
   'read_file', 'list_dir', 'grep', 'glob',
   'git_status', 'git_diff', 'git_log', 'git_branch',
+  // M5 / T5-8：军团协同——列表查询是只读，不触发审批询问
+  'team_list_members', 'team_board',
 ]);
 
 // toolLevel() 在 `|| 'L2'` 兜底**之前**按工具名特判的工具（对应 toolLevel 里逐个 if 分支）。
@@ -337,26 +357,9 @@ const {
   DANGEROUS_PATTERNS, isDangerousCommand, matchDangerousPattern, isDangerousCode, cuaStrongConfirm,
 } = require('./dangerousPatterns');
 
-// 期 3：SQL 只读判定（**单一事实来源**）。
-// 两个消费方必须用同一份判定，否则就是「审批层以为只读、执行层却照跑」的错位：
-//   · toolLevel('sqlite', …)：只读语句不弹卡，写语句按 L3；
-//   · nativeTools.toolSqlite：action=query 只接受只读语句（sql.js 的 all()/step() 对
-//     DELETE/UPDATE 同样会真实执行，只按 action 分流等于给模型留了绕过审批的口子）。
-// 语义：剥掉前导空白与注释后，首关键字落在只读白名单内才算只读。
-const READONLY_SQL_RE = /^(select|pragma|explain|with|values)\b/i;
-function stripLeadingSqlNoise(sql) {
-  let s = String(sql || '');
-  for (;;) {
-    const next = s.replace(/^\s+/, '').replace(/^--[^\n]*\n?/, '').replace(/^\/\*[\s\S]*?\*\//, '');
-    if (next === s) return s;
-    s = next;
-  }
-}
-function isReadonlySql(sql) {
-  const s = stripLeadingSqlNoise(sql);
-  if (!s) return false; // 空语句一律按「非只读」保守处理（fail-closed）
-  return READONLY_SQL_RE.test(s);
-}
+// 期 3：SQL 只读判定（单一事实来源）——2026-10-21 抽至 main/sqlReadonly.js
+//（为 D-801 的注释腾出 800 行软档余量，语义逐字等价）；本文件继续 re-export，消费方零改动。
+const { isReadonlySql } = require('./sqlReadonly');
 
 function toolLevel(tool, args = {}) {
   if (READONLY_TOOLS.has(tool)) return null;
@@ -409,7 +412,14 @@ function toolLevel(tool, args = {}) {
   // 实际编译写 PDF 判 L2（见 TOOL_LEVEL）。
   if (tool === 'latex_compile') return args.probeOnly === true ? null : 'L2';
   if (tool.startsWith('mcp__')) return 'L3';
-  return TOOL_LEVEL[tool] || 'L2';
+  // MCP 工具在**兜底之前**就已返回 L3，因此下面这行只兜「未登记的原生 / 插件工具」。
+  // 第八轮 D-801：兜底由 'L2' 改为 **'L3'** —— 未登记 ≠ 自动批准。
+  //   · 'L2' 在 auto-safe 档直接放行（见 needsApproval），等于「漏登记即静默过闸」；
+  //   · 'L3' 需要审批、且可被「始终允许 / 本对话同类」规则豁免，与 code_exec 普通代码、
+  //     mcp__ 工具同档 —— 既不误杀合法新工具，也不给它免批的默认身份。
+  // 实测口径（第八轮）：当前全部模型工具都被 TOOL_LEVEL / 特判 / 只读三者之一显式覆盖，
+  // 因此本改动**零行为变化**；它锁的是「将来新增工具忘了登记」这一条路径。
+  return TOOL_LEVEL[tool] || 'L3';
 }
 
 // P0-S1 / P2-8：Code Mode 危险代码判定已收敛至 dangerousPatterns.js（单一事实来源），

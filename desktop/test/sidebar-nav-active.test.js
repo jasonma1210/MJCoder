@@ -37,16 +37,17 @@ const sidebar = blankComments(SIDEBAR);
 (async () => {
   const { activeNavOf } = await import('../renderer/src/lib/navState.ts');
 
-  // ── 行为：穷举 16 种组合 ──
+  // ── 行为：穷举 32 种组合（4 个视图标志 × 2）──
   const combos = [];
   for (const showScheduled of [false, true])
     for (const showDashboard of [false, true])
       for (const showEcosystem of [false, true])
-        for (const hasActiveThread of [false, true])
-          combos.push({ showScheduled, showDashboard, showEcosystem, hasActiveThread });
+        for (const showTeams of [false, true])
+          for (const hasActiveThread of [false, true])
+            combos.push({ showScheduled, showDashboard, showEcosystem, showTeams, hasActiveThread });
 
-  await check('穷举 16 种视图组合：返回值只可能是四个已定义字面量', () => {
-    const allowed = new Set(['new', 'scheduled', 'ecosystem', '']);
+  await check('穷举 32 种视图组合：返回值只可能是五个已定义字面量', () => {
+    const allowed = new Set(['new', 'scheduled', 'ecosystem', 'teams', '']);
     for (const c of combos) {
       const got = activeNavOf(c);
       assert.ok(allowed.has(got), `${JSON.stringify(c)} → ${got}`);
@@ -65,33 +66,39 @@ const sidebar = blankComments(SIDEBAR);
     }
   });
 
-  await check('工作台与会话中：三项都不亮（避免与一级导航语义混淆）', () => {
-    assert.equal(activeNavOf({ showScheduled: false, showDashboard: true, showEcosystem: false, hasActiveThread: false }), '');
-    assert.equal(activeNavOf({ showScheduled: false, showDashboard: false, showEcosystem: false, hasActiveThread: true }), '');
+  await check('MJ 军团页打开时选中「MJ 军团」（定时任务/生态中心优先）', () => {
+    for (const c of combos.filter((x) => !x.showScheduled && !x.showEcosystem && x.showTeams)) {
+      assert.equal(activeNavOf(c), 'teams', JSON.stringify(c));
+    }
+  });
+
+  await check('工作台与会话中：四项都不亮（避免与一级导航语义混淆）', () => {
+    assert.equal(activeNavOf({ showScheduled: false, showDashboard: true, showEcosystem: false, showTeams: false, hasActiveThread: false }), '');
+    assert.equal(activeNavOf({ showScheduled: false, showDashboard: false, showEcosystem: false, showTeams: false, hasActiveThread: true }), '');
   });
 
   await check('新会话页（什么都没有打开）才选中「新建会话」', () => {
-    assert.equal(activeNavOf({ showScheduled: false, showDashboard: false, showEcosystem: false, hasActiveThread: false }), 'new');
+    assert.equal(activeNavOf({ showScheduled: false, showDashboard: false, showEcosystem: false, showTeams: false, hasActiveThread: false }), 'new');
   });
 
   await check('互斥：任一组合下被选中的一级入口不超过一个', () => {
     for (const c of combos) {
       const got = activeNavOf(c);
-      const lit = ['new', 'scheduled', 'ecosystem'].filter((k) => k === got);
+      const lit = ['new', 'scheduled', 'ecosystem', 'teams'].filter((k) => k === got);
       assert.ok(lit.length <= 1, `${JSON.stringify(c)} → ${got}`);
     }
   });
 
   // ── 连线契约：组件必须真的用上这个判定 ──
-  await check('App 把三个视图标志作为 view 传给 Sidebar', () => {
-    assert.match(app, /view=\{\{\s*showScheduled,\s*showDashboard,\s*showEcosystem\s*\}\}/,
-      '缺少 view={{ showScheduled, showDashboard, showEcosystem }}');
+  await check('App 把四个视图标志作为 view 传给 Sidebar', () => {
+    assert.match(app, /view=\{\{\s*showScheduled,\s*showDashboard,\s*showEcosystem,\s*showTeams\s*\}\}/,
+      '缺少 view={{ showScheduled, showDashboard, showEcosystem, showTeams }}');
   });
 
-  await check('Sidebar 用 activeNavOf 计算，且三个入口各自绑定字面量', () => {
+  await check('Sidebar 用 activeNavOf 计算，且四个入口各自绑定字面量', () => {
     assert.match(sidebar, /activeNavOf\(\{/, 'Sidebar 未使用 activeNavOf');
     assert.match(sidebar, /hasActiveThread: !!activeThread/);
-    for (const key of ['new', 'scheduled', 'ecosystem']) {
+    for (const key of ['new', 'scheduled', 'ecosystem', 'teams']) {
       assert.match(sidebar, new RegExp(`active=\\{activeNav === '${key}'\\}`),
         `NavItem「${key}」缺少 active={activeNav === '${key}'}`);
     }

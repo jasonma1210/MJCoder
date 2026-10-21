@@ -53,8 +53,29 @@ const DOC = process.env.MJCODE_DOC_PATH
   : path.join(DESKTOP, '..', 'MJcoder-技术流程功能文档.md');
 
 // 文档引用的测试文件个数基线（棘轮）。文档增删引用时**必须**同步改这里 —— 见文件头「决策 2」。
-// 当前值 28 的来源：R7 基线实测（2026-10-20，HEAD 924909c），与审查报告附录列出的 28 个文件名逐一对齐。
-const REFERENCE_COUNT_BASELINE = 28;
+// 当前值 40 的来源：R7 基线实测（2026-10-20，HEAD 924909c）为 28；M5/T5-5 团队记忆批在
+//   `MJcoder-技术流程功能文档.md` §1.5 记忆层行的「守护测试」列新增 `memory-team.test.mjs`
+//   （团队记忆 scope='team' / 提名制的守护测试），故 28 → 29。
+// R8 增量修订（2026-10-21）再 29 → 40：第八轮全量审查新增「§十三 里程碑现状」六组表，
+//   每条里程碑都带「守护测试」列的**真实测试文件名**（团队层 TL-1~TL-10、记忆 M0~M5、
+//   MCP ML-1~ML-6、安全 SL-1~SL-6、门禁 GL-1~GL-6），故引用文件数由 29 增至 40。
+//   已由同一套件的「文档引用的测试文件均真实存在（共 40 个）」断言逐条校验存在性。
+// R8-D808 收口（2026-10-21）再 40 → 41：§十三 TL-6 由「进行中」改为「已完成」时，
+//   该行判定依据新增 `member-runtime-config.test.js`（新增 12 条断言，直接验证成员配置
+//   在 runOpts 上真实生效），故引用文件数 40 → 41。
+// R8-D809 收口（2026-10-21）再 41 → 42：§十三 TL-7 由「进行中」改为「已完成」时，
+//   该行判定依据新增 `group-budget.test.js`（14 条断言，验证三键预算在运行期真的终止派生），
+//   故引用文件数 41 → 42。
+// R8-D807① 收口（2026-10-21）再 42 → 43：§十三 TL-8「团队层端到端 eval」由「未开始」改为
+//   「已完成」，该行判定依据新增 `team-e2e-invariants.test.js`（14 条，覆盖三条顺序敏感不变量），
+//   故引用文件数 42 → 43。
+// R8-D806/D-810 收口（2026-10-21）再 43 → 44：§十三 TL-3 引用 `team-tools.test.mjs` 的
+//   D-810 段、CL-5 引用 `subagent-result-offload.test.mjs`，故引用文件数 43 → 44。
+// R8-D802 收口（2026-10-21）再 44 → 45：§十三 SL-5 引用 `ssrf-guard.test.js`（41 条，
+//   覆盖字面量层与解析层双闸），故引用文件数 44 → 45。
+// R8-D804 收口（2026-10-21）再 45 → 46：§5.6 引用 `mcp-protocol-roadmap.test.mjs`
+//   （10 条，双向锁定「声称的协议代际」与「实际支持集」一致），故引用文件数 45 → 46。
+const REFERENCE_COUNT_BASELINE = 46;
 
 let pass = 0;
 let fail = 0;
@@ -120,14 +141,14 @@ for (const [name, value] of NUM) {
 }
 
 // ── ② 结构常量：由源码对象拼出字面量，断言文档已含同形（空白归一化）──
-check('SCOPES 三作用域与文档一致',
+check('SCOPES 四作用域与文档一致',
   hasDoc(`SCOPES = [${memory.SCOPES.map((s) => `'${s}'`).join(', ')}]`),
   memory.SCOPES.join(','));
 {
   const q = memory.LAYER_QUOTA;
   check('LAYER_QUOTA 分层配额与文档一致',
-    hasDoc(`LAYER_QUOTA = { session: ${q.session}, project: ${q.project}, global: ${q.global} }`),
-    `${q.session}/${q.project}/${q.global}`);
+    hasDoc(`LAYER_QUOTA = { session: ${q.session}, team: ${q.team}, project: ${q.project}, global: ${q.global} }`),
+    `${q.session}/${q.team}/${q.project}/${q.global}`);
 }
 {
   const L = approval.LEVELS;

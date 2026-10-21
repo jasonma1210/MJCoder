@@ -20,8 +20,11 @@ const HALF_LIFE_DAYS_BY_DOMAIN = {
 //   层级越高越持久：L1 会话工作记忆 7 天 → L2 项目记忆 30 天 → L3 全局资产 90 天。
 //   与 domain 表的关系：scope 表优先，domain 表作为「无 scope 的旧对象 / 未知键」兼容回落。
 //   两表键空间基本正交（session 既是 scope 键也是 domain 键，且取值同为 7 天，无冲突）。
+// M5 / T5-5（2026-10-20）：团队记忆（scope='team'）与项目层同档 30 天——团队是项目内的临时编制，
+//   其结论的时效与项目知识同构；在此登记（而非在 memory/index.js 另起一张表）以保持单一事实来源。
 const HALF_LIFE_DAYS_BY_SCOPE = {
   session: 7,
+  team: 30,
   project: 30,
   global: 90,
 };

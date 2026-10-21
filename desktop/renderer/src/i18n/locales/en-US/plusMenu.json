@@ -9,6 +9,7 @@
   "skillCount": "{n} on",
   "connectors": "Connectors",
   "connectorCount": "{n} on",
+  "legion": "Legion",
   "voiceInput": "Voice input",
   "noFileRefs": "No file references in this thread yet",
   "localMode": "Local mode",

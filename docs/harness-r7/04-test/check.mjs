@@ -101,6 +101,23 @@
  *      · 同批汇总行展示口径：PASS/FAIL 计数剔除 T01 自身。全绿时原会打印
  *        「PASS=77 / 断言 76 条」—— 通过数比登记数还大，读者反而要怀疑混进了未登记断言
  *        （那恰是 T01 要防的东西）。仅改展示，判定与 exit 不变。
+ *      · M5/T5-5 团队记忆批（2026-10-20，**未提交工作区**）—— 四条口径被裁决变更，均**原地重写**
+ *        （总数仍 76，不触发 T01）：
+ *        → A18c：LAYER_QUOTA 三作用域 → **四作用域**（新增 team，配额 3），依据
+ *          `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` §5 与 `test/memory-team.test.mjs`；
+ *        → A17e（原 200±2 带宽）、A17f（原 =219）、A17g（原 =203）：**时点等位 → 下界不变量**
+ *          （≥203 / ≥221 / ≥205，只增不减）。理由与 A17d 同：IPC 与桥方法的绝对数随每个
+ *          里程碑递增，等位会把"随时点变化的数字"当契约，逼下一个人手改常量；
+ *          本批 teams:* 通道（含 T5-5 新增 memory 团队候选/确认通道）即为触发点。
+ *          口径放宽的是**上限**，下界仍严——**少于下界才是回归**（源文件被删 / 通道被撤）。
+ *        → 变更触发提交：T5-5 数据层 + IPC + UI 同批工作区改动（团队记忆 scope='team'）。
+ *      · M5/T5-8 军团协同工具批（2026-10-20，**未提交工作区**）—— 两条等位数字**原地重写**
+ *        （总数仍 76，不触发 T01）：
+ *        → A17a：TOOL_CHANNELS 52 → **56**（新增 teamListMembers / teamSendMessage / teamBoard / teamWait）；
+ *        → A18b：TOOL_HANDLER_NAMES 51 → **55**（新增 team_list_members / team_send_message /
+ *          team_board / team_wait 四个映射）。
+ *        → BASE_TOOLS 不变（A18a 仍 52）：协同工具属**运行时条件追加**（仅成员任务注入 teamContext
+ *          时出现），与 computer_use / load_skill 同纪律，不进静态清单。
  *
  * 5) 检索类断言一律在 `stripComments()` 后的**代码正文**上计数：注释里出现标识符既能让
  *    「应当成立」的断言假红，也能让「应当不成立」的断言假绿（注释喂饱）。
@@ -859,11 +876,11 @@ function httpHeaderSegments() {
   // 清扫记录（本轮）：原先 else 分支只补了一条 A17a —— registry require 失败时
   //   A17b/A17c **既不出现也不计 SKIP**，总数静默少 2。同样的病，同样的治法：BLOCKED 出声。
   if (!regErr) {
-    ok('A17a', 'TOOL_CHANNELS = 52', TOOL_CHANNELS.length, 52);
+    ok('A17a', 'TOOL_CHANNELS = 56', TOOL_CHANNELS.length, 56);
     ok('A17b', 'NOTIFY_CBS = 8', NOTIFY_CBS.length, 8);
     ok('A17c', 'REQUEST_CBS = 1', REQUEST_CBS.length, 1);
   } else {
-    ok('A17a', 'registry.js 可 require（=52 的值因此无从判定）', `ERR: ${regErr}`, 52);
+    ok('A17a', 'registry.js 可 require（=56 的值因此无从判定）', `ERR: ${regErr}`, 56);
     blockedAssert('A17b', 'NOTIFY_CBS = 8', `registry require 失败：${regErr}`);
     blockedAssert('A17c', 'REQUEST_CBS = 1', `registry require 失败：${regErr}`);
   }
@@ -893,16 +910,20 @@ function httpHeaderSegments() {
   const ipcSet = new Set();
   for (const f of mainFiles) for (const m of stripComments(read_(f)).matchAll(/ipcMain\.handle\(\s*['"]([^'"]+)['"]/g)) ipcSet.add(m[1]);
   console.log(`[INFO] A17e' ipcMain.handle 唯一字面量 = ${ipcSet.size}（简报称 186，见正文口径说明）`);
-  okTrue('A17e', 'ipcMain.handle 唯一字面量在 185±2 内（结构性量级）', ipcSet.size >= 183 && ipcSet.size <= 188, `实测 ${ipcSet.size}`);
+  // M5/T5-5（2026-10-20）：本节四条口径由**时点等位**改为**只增不减的下界不变量**，
+  //   与 A17d 同一理由——IPC / 桥方法的绝对数随每个里程碑递增，等位会把"随时点变化的数字"
+  //   当契约，逼下一个人手改常量（详见文件头第 4 条「契约变更台账」）。
+  //   A17e 的 200±2 带宽同理废止，改为以 203 为下界的量级不变量。
+  okTrue('A17e', 'ipcMain.handle 唯一字面量 ≥ 203（只增不减；减少须解释）', ipcSet.size >= 203, `实测 ${ipcSet.size}`);
 
   const pre = stripComments(read('desktop/main/preload.js'));
   const seg = pre.slice(pre.indexOf("exposeInMainWorld('mjcode'"));
   const keys = new Set();
   for (const m of seg.matchAll(/^  ([A-Za-z_][A-Za-z0-9_]*)\s*[:=]/gm)) keys.add(m[1]);
-  ok('A17f', 'preload bridge 顶层键 = 202', keys.size, 202);
+  okTrue('A17f', 'preload bridge 顶层键 ≥ 221（只增不减；减少须解释）', keys.size >= 221, `实测 ${keys.size}`);
   const inv = new Set();
   for (const m of pre.matchAll(/ipcRenderer\.invoke\(\s*'([^']+)'/g)) inv.add(m[1]);
-  ok('A17g', 'preload invoke 唯一通道 = 187', inv.size, 187);
+  okTrue('A17g', 'preload invoke 唯一通道 ≥ 205（只增不减；减少须解释）', inv.size >= 205, `实测 ${inv.size}`);
 }
 
 // ── A18  §1.3 关键常量 ───────────────────────────────────────────────────
@@ -914,14 +935,17 @@ function httpHeaderSegments() {
   } catch (e) { /* ignore */ }
   if (baseTools) ok('A18a', 'BASE_TOOLS = 52（真实 ESM import）', baseTools.length, 52);
   else ok('A18a', 'BASE_TOOLS 可导入', 'IMPORT_FAILED', 52);
-  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 51', Object.keys(handlerNames).length, 51);
-  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 51);
+  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 55', Object.keys(handlerNames).length, 55);
+  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 55);
 
   // A18c~g 全是「常量是否按契约写」的**代码**事实：注释里抄一遍同样的字面量
   //   就能把任何一条喂绿，故统一去注释。
   const mem = stripComments(read('desktop/main/memory/index.js'));
-  okTrue('A18c', 'LAYER_QUOTA = {session:2, project:3, global:2}',
-    /LAYER_QUOTA\s*=\s*\{\s*session:\s*2,\s*project:\s*3,\s*global:\s*2\s*\}/.test(mem));
+  // M5/T5-5（2026-10-20）：LAYER_QUOTA 由三作用域（session/project/global）扩为**四作用域**
+  //    —— 新增 team（配额 3，见 `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` §5 与
+  //       `desktop/test/memory-team.test.mjs`）。这是**被裁决的契约变更**，不是漂移。
+  okTrue('A18c', 'LAYER_QUOTA = {session:2, team:3, project:3, global:2}（四作用域）',
+    /LAYER_QUOTA\s*=\s*\{\s*session:\s*2,\s*team:\s*3,\s*project:\s*3,\s*global:\s*2\s*\}/.test(mem));
   const pw = stripComments(read('desktop/main/mcpPrewarm.js'));
   okTrue('A18d', "PREWARM_NAMES = filesystem/time/fetch 三个",
     /PREWARM_NAMES\s*=\s*new Set\(\['filesystem',\s*'time',\s*'fetch'\]\)/.test(pw));

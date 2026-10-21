@@ -161,8 +161,8 @@ await check('多会话并行：两个引擎子进程互不干扰', async () => {
 });
 
 // ── 6. registry 与 childEntry/host 协议一致性 + 主进程接线静态断言 ──
-await check('协议登记表完整（52 工具通道 / onSuspend 请求-响应）', () => {
-  assert.equal(registry.TOOL_CHANNELS.length, 52);
+await check('协议登记表完整（56 工具通道 / onSuspend 请求-响应）', () => {
+  assert.equal(registry.TOOL_CHANNELS.length, 56);
   assert.ok(registry.TOOL_CHANNELS.includes('chat') && registry.TOOL_CHANNELS.includes('shell'));
   assert.deepEqual(registry.REQUEST_CBS, ['onSuspend']);
 });

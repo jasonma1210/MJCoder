@@ -18,6 +18,11 @@ function scheduledToolHandlers(deps = {}) {
     toolShell, toolReadFile, runWriteTool, toolListDir, toolGrep, toolGlob,
     toolGitStatus, toolGitDiff, toolGitLog, toolGitBranch, toolGitCommit, toolGitAdd,
     callMcpTool, prTools,
+    // M5 / T5-8：军团协同工具（仅成员任务注入；无团队上下文时为 null ⇒ 四个键整体不出现）。
+    // 为什么由本模块承载：登记矩阵的 handler 扫描区间 = main.js createToolHandlers + 本文件，
+    // 而 Worker 的工具工厂在 `agent:run` 之后（不在扫描区间内）——因此四个字面量键必须落在本文件，
+    // 否则门禁看不见「有通道无 handler」。实现本体在 main/teamTools.js。
+    teamTools = null,
     // 无人值守是**显式入参、默认关闭**：这张表同时被交互式会话复用（main.js 的 createToolHandlers
     // 直接 spread 它），一旦在这里写死，人就在屏幕前也批不了 —— 真机回归实测：sudo 原本 3025ms 弹卡，
     // 变成了 6ms 被「无人值守…没有人在场」拒绝；越界写同样从弹卡变成硬拒。只允许定时/Worker 通道传 true。
@@ -87,6 +92,14 @@ function scheduledToolHandlers(deps = {}) {
     prDiff: withCtx(prTools.prDiff),
     prReview: withCtx(prTools.prReview),
     prComment: withCtx(prTools.prComment),
+    // M5 / T5-8：军团协同四工具（仅当宿主注入 teamTools 时出现——即成员任务）。
+    // 非成员任务（普通编排 Worker / 定时任务 / 主会话）不注册，模型也就看不到这四个 schema。
+    ...(teamTools ? {
+      teamListMembers: teamTools.teamListMembers,
+      teamSendMessage: teamTools.teamSendMessage,
+      teamBoard: teamTools.teamBoard,
+      teamWait: teamTools.teamWait,
+    } : {}),
   };
 }
 

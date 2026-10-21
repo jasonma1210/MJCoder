@@ -23,8 +23,11 @@ interface MemoryItem {
   id: string;
   spaceId: string;
   domain: string;
-  // 三层记忆 M3：作用域（session / project / global）——管理 UI 分区展示
+  // 三层记忆 M3：作用域（session / team / project / global）——管理 UI 分区展示
   scope: string;
+  // M5 / T5-5：团队归属（team 层才有值；agentId 为空 = 团队共享，非空 = 成员私有）
+  teamId?: string | null;
+  agentId?: string | null;
   tier: number;
   content: string;
   summary: string | null;
@@ -74,15 +77,20 @@ const DOMAIN_KEYS: Record<string, string> = {
 };
 
 // 三层记忆 M3：作用域 → i18n key（与记忆 index 的 SCOPES 同集合）
+// M5 / T5-5：新增 team（团队层）
 const SCOPE_KEYS: Record<string, string> = {
   session: 'settings.memoryScopeSession',
+  team: 'settings.memoryScopeTeam',
   project: 'settings.memoryScopeProject',
   global: 'settings.memoryScopePersonal',
 };
 
-// 作用域筛选档（'all' + 三层；顺序与层级优先级一致）
-const SCOPE_FILTERS = ['all', 'session', 'project', 'global'] as const;
+// 作用域筛选档（'all' + 四层；顺序与层级优先级一致 session > team > project > global）
+const SCOPE_FILTERS = ['all', 'session', 'team', 'project', 'global'] as const;
 type ScopeFilter = (typeof SCOPE_FILTERS)[number];
+// M5 / T5-5：可清空的层——team 层清空需携带 teamId，本全局设置面板无团队上下文，
+// 故不提供 team 清空入口（团队记忆的清空归团队侧管理），避免「无归属键」误删。
+const RESET_SCOPES = ['session', 'project', 'global'];
 
 function fmtTime(ts: number, locale: string) {
   if (!ts) return '';
@@ -98,6 +106,8 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
   // 三层记忆 M3：作用域筛选（默认全部）与团队共享开关
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
   const [teamSharing, setTeamSharing] = useState(false);
+  // M5 / T5-5：团队记忆「待晋升候选」（提名制，需用户一键确认才写入项目层）
+  const [candidates, setCandidates] = useState<MemoryItem[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   // 操作反馈（ UpdateSection 同款：命令式 toast 的 TS 签名要求 actionLabel/onAction，
   // 本组件用本地 notice 行承载，避免为过个提示传空动作）
@@ -106,12 +116,14 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
   const reload = useCallback(async () => {
     if (!projectPath) return;
     try {
-      const [st, bg, list, pref, teamPref] = await Promise.all([
+      const [st, bg, list, pref, teamPref, cand] = await Promise.all([
         window.mjcode?.memoryStats?.() as Promise<{ ok?: boolean; stats?: MemoryStats }> | undefined,
         window.mjcode?.memoryBgTasks?.({ limit: 20 }) as Promise<{ ok?: boolean; tasks?: BgTaskRow[] }> | undefined,
         window.mjcode?.memoryList?.({ projectPath, limit: 50 }) as Promise<{ ok?: boolean; items?: MemoryItem[] }> | undefined,
         window.mjcode?.localGetPreference?.({ key: 'memory.autoCapture' }) as Promise<unknown> | undefined,
         window.mjcode?.localGetPreference?.({ key: 'memory.teamSharing' }) as Promise<unknown> | undefined,
+        // M5 / T5-5：待晋升候选（只读；团队专有名/归档团队由主进程侧过滤）
+        window.mjcode?.memoryTeamPromotionCandidates?.({ limit: 20 }) as Promise<{ ok?: boolean; items?: MemoryItem[] }> | undefined,
       ]);
       setUnavailable(!!st && st.ok === false);
       if (st?.ok && st.stats) setStats(st.stats);
@@ -119,6 +131,7 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
       if (list?.ok) setItems(list.items || []);
       setAutoCapture(pref === true);
       setTeamSharing(teamPref === true);
+      if (cand?.ok) setCandidates(cand.items || []);
     } catch (err) {
       console.warn('[settings] memory section load failed:', err);
     }
@@ -173,6 +186,18 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
       else setNotice(t('settings.memoryOpFailed'));
     } catch (err) {
       console.warn('[settings] memory promote failed:', err);
+      setNotice(t('settings.memoryOpFailed'));
+    }
+  }
+
+  // M5 / T5-5：确认晋升一条团队记忆到项目级（提名制 U5：只在此显式点击时才写入）
+  async function promoteCandidate(id: string) {
+    try {
+      const r = await window.mjcode?.memoryConfirmTeamPromotion?.({ id }) as { ok?: boolean } | undefined;
+      if (r?.ok) { setNotice(t('settings.memoryPromotionDone')); await reload(); }
+      else setNotice(t('settings.memoryOpFailed'));
+    } catch (err) {
+      console.warn('[settings] team promotion confirm failed:', err);
       setNotice(t('settings.memoryOpFailed'));
     }
   }
@@ -339,6 +364,35 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
             )}
           </div>
 
+          {/* ③b 待晋升候选（M5 / T5-5 提名制 U5：团队记忆不自动晋升，由用户一键确认写入项目层） */}
+          <div className="py-4 border-t border-border">
+            <div className="text-sm font-medium mb-1">{t('settings.memoryPromotionTitle')}</div>
+            <p className="text-xs text-text2 mb-3">{t('settings.memoryPromotionHint')}</p>
+            {candidates.length === 0 ? (
+              <p className="text-xs text-text2">{t('settings.memoryPromotionEmpty')}</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {candidates.map((item) => (
+                  <div key={item.id} className="border border-border rounded-xl px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs text-text2 mb-1">
+                      <span className="border border-border rounded px-2 py-1">
+                        {t(DOMAIN_KEYS[item.domain] || 'settings.memoryDomainSession')}
+                      </span>
+                      <span>{t('settings.memoryImportance')} {item.importance.toFixed(2)}</span>
+                      <span className="ml-auto shrink-0">{fmtTime(item.updatedAt, locale)}</span>
+                    </div>
+                    <p className="text-xs whitespace-pre-wrap break-all">{(item.summary || item.content).slice(0, 160)}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <Button size="xs" variant="secondary" onClick={() => promoteCandidate(item.id)}>
+                        {t('settings.memoryPromotionAction')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* ④ 高级管理（M3：团队共享开关 + 按层清空） */}
           <div className="py-4 border-t border-border">
             <div className="text-sm font-medium mb-2">{t('settings.memoryAdvancedTitle')}</div>
@@ -355,7 +409,7 @@ export default function MemorySection({ projectPath = '' }: { projectPath?: stri
             <div className="py-2">
               <p className="text-xs text-text2 mb-2">{t('settings.memoryResetScopeHint')}</p>
               <div className="flex flex-wrap gap-2">
-                {Object.keys(SCOPE_KEYS).map((sc) => (
+                {RESET_SCOPES.map((sc) => (
                   <Button key={sc} size="sm" variant="danger-ghost" onClick={() => resetScope(sc)}>
                     {t('settings.memoryResetScopeAction', { scope: t(SCOPE_KEYS[sc]) })}
                   </Button>

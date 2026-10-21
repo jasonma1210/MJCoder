@@ -331,9 +331,12 @@ const DERIVE_ALLOWLIST = {
   'main/main.js': 0,
   // Worker 旧组回落：已走 sandboxTierForCwd
   'main/workerPool.js': 0,
-  // exec.js 是 **allow-list（不是无视）**：实测 wc -l = 799 raw / split('\n').length = 800，
-  // 800 软档余 0 行 —— 改它至少要多一行 require 就撞红，而纪律禁止往 BASELINE_800 新增条目。
-  // 正确做法是「先抽模块再改」，属下一批（台账 D-13-b）。
+  // exec.js 是 **allow-list（不是无视）**：两处分别是 runShellTool（L155）与 runWriteTool 的
+  // 「逐次执行的默认档」回落，调用方未显式指定 sandboxPolicy 时的兜底，角色与快照路径不同。
+  // 2026-10-20 更新：本条注释原写「实测 799 raw / 800 软档余 0 行，先抽模块再改（台账 D-13-b）」——
+  // **该抽离已完成**：写实现本体（executeWriteTool/outsideWriteTarget/patch 解析）已抽至
+  // main/tools/execWrite.js，exec.js 现为 622 raw（800 软档余 178）。抽离时特意**不含**这两处
+  // 回落表达式，故本表维持 2 不变；谁收敛了它们，本表必须同步收紧（降到 1 也红是棘轮，不是故障）。
   // 恰好 2 处是**只减不增棘轮**：降到 1 处也红，提醒把本表收紧到 1（否则它会慢慢腐烂成永久豁免）。
   'main/tools/exec.js': 2,
 };

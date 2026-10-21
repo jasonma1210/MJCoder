@@ -278,6 +278,9 @@ contextBridge.exposeInMainWorld('mjcode', {
   memorySyncFile: (payload) => ipcRenderer.invoke('local:memories/syncFile', payload),
   // 三层记忆 M3：按作用域清空（设置页「记忆」分区高级管理）
   memoryResetScope: (payload) => ipcRenderer.invoke('memory:resetScope', payload),
+  // M5 / T5-5：团队记忆待晋升候选（只读）与一键确认晋升（团队 → 项目级）
+  memoryTeamPromotionCandidates: (opts) => ipcRenderer.invoke('memory:teamPromotionCandidates', opts),
+  memoryConfirmTeamPromotion: (payload) => ipcRenderer.invoke('memory:confirmTeamPromotion', payload),
   quotaSnapshot: () => ipcRenderer.invoke('quota:snapshot'),
   // P1-5：用户自定义生命周期 hooks（preToolUse / postToolUse）——HooksSection 消费
   hooksGetConfig: () => ipcRenderer.invoke('hooks:getConfig'),
@@ -303,6 +306,45 @@ contextBridge.exposeInMainWorld('mjcode', {
     ipcRenderer.on('tasks:event', handler);
     return () => ipcRenderer.removeListener('tasks:event', handler);
   },
+  // M5 / T5-1：MJ 军团团队层（团队编制 CRUD + 生态招募 + 自定义成员 + AI 角色草稿）
+  teamsList: (payload) => ipcRenderer.invoke('teams:list', payload || {}),
+  teamsGet: (teamId) => ipcRenderer.invoke('teams:get', { teamId }),
+  teamsCreate: (payload) => ipcRenderer.invoke('teams:create', payload),
+  teamsUpdate: (teamId, patch) => ipcRenderer.invoke('teams:update', { teamId, patch }),
+  teamsArchive: (teamId, archived = true) => ipcRenderer.invoke('teams:archive', { teamId, archived }),
+  teamsRecruit: (payload) => ipcRenderer.invoke('teams:recruit', payload),
+  teamsDraftMember: (payload) => ipcRenderer.invoke('teams:draftMember', payload),
+  // 2026-10-20 需求①：数字员工列表右上角「新建员工」→ 模型自动出员工草稿（不落盘，
+  // 由渲染层表单预填，保存仍走 ecosystem:employeeCreate）
+  teamsDraftEmployee: (payload) => ipcRenderer.invoke('teams:draftEmployee', payload || {}),
+  teamsAddCustomMember: (payload) => ipcRenderer.invoke('teams:addCustomMember', payload),
+  teamsUpdateMember: (teamId, memberId, patch) => ipcRenderer.invoke('teams:updateMember', { teamId, memberId, patch }),
+  teamsSetMemberEnabled: (teamId, memberId, enabled) => ipcRenderer.invoke('teams:setMemberEnabled', { teamId, memberId, enabled }),
+  teamsRemoveMember: (teamId, memberId) => ipcRenderer.invoke('teams:removeMember', { teamId, memberId }),
+  teamsSetLead: (teamId, memberId) => ipcRenderer.invoke('teams:setLead', { teamId, memberId }),
+  // M5 / T5-4：缺统筹补位 + 派活（§6 F1/F2）
+  // createLead 只在缺统筹时可用（`teams:get` 返回的 leadMissing 是渲染层预检的单一判据）；
+  // dispatch 是派活唯一入口，失败时返回 { ok:false, code, error }，code=LEAD_MISSING 触发「一键创建」引导。
+  teamsCreateLead: (payload) => ipcRenderer.invoke('teams:createLead', payload || {}),
+  teamsDispatch: (payload) => ipcRenderer.invoke('teams:dispatch', payload || {}),
+  // M5 / T5-2：军团消息总线（只读历史 + 落库后事件广播）。
+  // 不提供写桥：发言由主进程按护栏仲裁（G1），用户不能自由发言，故此处只有读与订阅。
+  teamsListMessages: (payload) => ipcRenderer.invoke('teams:listMessages', payload || {}),
+  // M5 / T5-6：对话内团队协同事件流——按会话取「团队 run + 总线消息 + 看板任务」，
+  // 由渲染层投影为折叠卡片。只读；关联键是 task_groups.thread_id，不新增会话列。
+  teamsListThreadRuns: (payload) => ipcRenderer.invoke('teams:listThreadRuns', payload || {}),
+  onTeamsEvent: (cb) => {
+    const handler = (_, d) => cb(d);
+    ipcRenderer.on('teams:event', handler);
+    return () => ipcRenderer.removeListener('teams:event', handler);
+  },
+  // M5 / T5-11：重置成员会话（§13.3「对话即容器，成员会话是隔离工作台」）。
+  // 语义 = 清该成员工作台：清 `agent:{memberId}` 断点 + 该成员私有记忆降权（不删记忆）。
+  // 位置参数风格与其余 teams* 一致；键格式与降权语义都在主进程一处实现，渲染层不拼键。
+  teamsResetMemberSession: (teamId, memberId) => ipcRenderer.invoke('teams:resetMemberSession', { teamId, memberId }),
+  // M5 / T5-10：中断任务 / 成员范围中断（§9.2）。权限矩阵与留痕在主进程 teamInterrupt 单一入口，
+  // 渲染层只传定位参数；失败返回 { ok:false, code, error }，界面必须提示，不得静默。
+  teamsInterrupt: (payload) => ipcRenderer.invoke('teams:interrupt', payload || {}),
   // Computer Use（M4-C）
   cuaStatus: () => ipcRenderer.invoke('cua:status'),
   cuaPermissionHelp: (payload) => ipcRenderer.invoke('cua:permission-help', payload),

@@ -20,6 +20,8 @@
   "planModeTip": "Plan mode: write tools removed, plans only",
   "expertTip": "Digital worker: {mission} (click to remove)",
   "removeExpert": "Remove digital worker",
+  "teamTip": "Squad: {desc} (click to remove)",
+  "removeTeam": "Deselect squad",
   "skillsTip": "Session skills: {skills} (click to remove)",
   "skillsCount": "{n} skills",
   "removeSkills": "Remove session skills",

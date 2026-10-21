@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconAlert, IconBot, IconCheck, IconSpinner, IconX } from './icons';
+import { IconAlert, IconBot, IconCheck, IconClock, IconSpinner, IconX } from './icons';
 import { useI18n, tGlobal } from '../i18n';
 // A5：重试前置「副作用核对」的二次确认对话框
 import { confirm } from './feedback';
@@ -80,12 +80,12 @@ function ensureSubscribed() {
     const key = evt.groupId && evt.taskId ? `${evt.groupId}/${evt.taskId}` : null;
     if (!key) return;
     let changed = false;
-    if (evt.type === 'task_update' && (evt.status === 'running' || evt.status === 'queued')) {
+    if (evt.type === 'task_update' && ['running', 'queued', 'waiting'].includes(evt.status)) {
       // R6：组未入库时先登记——R6.1 归属校准后入列（跨会话组不入坞）
       if (!sharedState.groups.has(evt.groupId)) {
         registerGroupIfBelongs(evt.groupId, { groupId: evt.groupId, goal: '', status: evt.status, error: '', failed: [] });
       }
-      // 任务重新入队/开始执行 → 从组失败清单移除（重试成功后的即时回灌）
+      // 任务重新入队/开始执行/进入等待 → 从组失败清单移除（重试成功后的即时回灌）
       const g = sharedState.groups.get(evt.groupId);
       if (g?.failed?.some((f) => f.taskId === evt.taskId)) {
         commitGroups((groups) => {
@@ -93,7 +93,6 @@ function ensureSubscribed() {
           if (cur) groups.set(evt.groupId, { ...cur, failed: cur.failed.filter((f) => f.taskId !== evt.taskId) });
         });
       }
-      if (evt.status === 'queued') return;
     }
     if (evt.type === 'task_update' && evt.status === 'running') {
       const prev = sharedState.agents.get(key);
@@ -102,8 +101,29 @@ function ensureSubscribed() {
         name: evt.name || prev?.name || tGlobal('agentDock.defaultAgentName'),
         title: evt.title || prev?.title || '',
         activities: prev?.activities || [],
+        // 重新派发（含等待被唤醒后的重跑）→ 清掉等待标记，回到正常「运行中」
+        waiting: false, waitingOn: [], waitDeadlineAt: null,
       });
       changed = true;
+    } else if (evt.type === 'task_update' && evt.status === 'waiting') {
+      // M5 / T5-3（§7 规则 5）：等待态必须可见。等待中的 Agent 仍留在坞内，
+      // 用灰底时钟图标替代 spinner（不转圈，避免误导「仍在跑」），并展示它等待的依赖任务。
+      const prev = sharedState.agents.get(key);
+      sharedState.agents.set(key, {
+        key, groupId: evt.groupId, taskId: evt.taskId,
+        name: evt.name || prev?.name || tGlobal('agentDock.defaultAgentName'),
+        title: evt.title || prev?.title || '',
+        activities: prev?.activities || [],
+        waiting: true, waitingOn: evt.waitingOn || [], waitDeadlineAt: evt.waitDeadlineAt || null,
+      });
+      changed = true;
+    } else if (evt.type === 'task_update' && evt.status === 'queued') {
+      // 等待被唤醒（waiting → queued）：清掉等待标记，卡片保留到重新派发为 running。
+      const prev = sharedState.agents.get(key);
+      if (prev?.waiting) {
+        sharedState.agents.set(key, { ...prev, waiting: false, waitingOn: [], waitDeadlineAt: null });
+        changed = true;
+      }
     } else if (evt.type === 'task_update' && ['done', 'failed', 'skipped'].includes(evt.status)) {
       // R6：失败任务登记进组的失败清单，供「任务组」区展示重试入口；
       // 标题优先取坞内既有卡片（failed 事件不携带 title）
@@ -412,9 +432,12 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
           <div key={a.key} className="bg-input border border-border rounded-xl p-3">
             <div className="flex items-center gap-2 mb-2">
               {/* R0 契约适配：待人工审查的终态 Agent 用警示图标替换运行中 spinner */}
+              {/* M5 / T5-3：等待中的 Agent 用时钟图标（灰、静态），不转圈——不误导为「仍在跑」 */}
               {a.needsReview
                 ? <IconAlert size={13} className="text-warn shrink-0" />
-                : <IconSpinner size={13} className="text-accent animate-spin shrink-0" />}
+                : a.waiting
+                  ? <IconClock size={13} className="text-text2 shrink-0" />
+                  : <IconSpinner size={13} className="text-accent animate-spin shrink-0" />}
               <span className="text-sm font-medium shrink-0">{a.name}</span>
               <span className="text-xs text-text2 truncate flex-1" title={a.title}>{a.title}</span>
               {a.needsReview ? (
@@ -449,8 +472,15 @@ function AgentDockPanel({ agents, groups, historyGroups, onClose, onAbort, onAbo
                 {t('agentDock.needsReview')}{a.reviewError ? `: ${a.reviewError}` : ''}
               </div>
             )}
+            {/* M5 / T5-3（§7 规则 5）：等待态明细——等待中提示 + 依赖任务清单（可见、可核对） */}
+            {a.waiting && (
+              <div className="text-xs text-text2 mb-2 break-all">
+                {t('agentDock.taskWaiting')}
+                {a.waitingOn.length > 0 ? t('agentDock.waitingOn', { deps: a.waitingOn.join(', ') }) : ''}
+              </div>
+            )}
             <div className="space-y-1 max-h-32 overflow-y-auto">
-              {a.activities.length === 0 && <div className="text-text2 text-xs">{t('agentDock.thinking')}</div>}
+              {a.activities.length === 0 && !a.waiting && <div className="text-text2 text-xs">{t('agentDock.thinking')}</div>}
               {a.activities.slice().reverse().map((act, i) => (
                 <div key={i} className="text-xs px-2 py-1 rounded bg-surface">
                   <ActivityText kind={act.kind} text={act.text} textKey={act.textKey} textParams={act.textParams} />
@@ -653,12 +683,17 @@ export default function AgentDock({ threadId = null, cwd = '' }) {
             key={a.key}
             onClick={() => setOpen(true)}
             className="inline-flex items-center gap-2 h-7 px-3 rounded-full bg-surface border border-border text-xs hover:border-accent"
-            title={t('agentDock.agentRunning', { name: a.name, title: a.title })}
+            title={a.waiting
+              ? t('agentDock.agentWaiting', { name: a.name, deps: a.waitingOn.join(', ') || a.title })
+              : t('agentDock.agentRunning', { name: a.name, title: a.title })}
           >
             {/* 待人工审查的终态 Agent 胶囊同样用警示图标（不转圈，避免误导「仍在运行」） */}
+            {/* M5 / T5-3：等待态胶囊用时钟图标（静态灰），与运行中 spinner 明确区分 */}
             {a.needsReview
               ? <IconAlert size={12} className="text-warn" />
-              : <IconSpinner size={12} className="text-accent animate-spin" />}
+              : a.waiting
+                ? <IconClock size={12} className="text-text2" />
+                : <IconSpinner size={12} className="text-accent animate-spin" />}
             <span className="font-medium">{a.name}</span>
             <span className="text-text2 max-w-[10rem] truncate">{a.title}</span>
           </button>

@@ -122,9 +122,9 @@ check('main.js 接线：交互式不传、定时通道传 unattended+contextCwd�
   const src = fs.readFileSync(path.join(ROOT, 'main', 'main.js'), 'utf8');
   assert.match(src, /\.\.\.scheduledToolHandlers\(\),\n/, '交互式 createToolHandlers 应调用 scheduledToolHandlers()（不传参数）');
   assert.match(src, /scheduledToolHandlers\(\{\s*unattended: true, contextCwd: schedModel\.cwd\s*\}\)/, '定时通道未传 unattended/contextCwd');
-  assert.match(src, /scheduledToolHandlers\(\{\s*unattended: true, contextCwd: cwd\s*\}\)/, 'Worker 通道未传 unattended/contextCwd');
+  assert.match(src, /scheduledToolHandlers\(\{\s*unattended: true, contextCwd: cwd[\s\S]*?\}\)/, 'Worker 通道未传 unattended/contextCwd');
   const wp = fs.readFileSync(path.join(ROOT, 'main', 'workerPool.js'), 'utf8');
-  assert.match(wp, /createToolHandlers\(\{\s*signal: controller\.signal, cwd: runCwd\s*\}\)/, 'Worker 未把项目 cwd 传给工具表');
+  assert.match(wp, /createToolHandlers\(\{\s*signal: controller\.signal, cwd: runCwd[\s\S]*?\}\)/, 'Worker 未把项目 cwd 传给工具表');
 });
 
 check('agent-core 工具 schema：scheduled_create 暴露 expects_file（模型才知道要判断语义）', () => {

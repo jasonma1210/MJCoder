@@ -210,6 +210,10 @@ export const agentRunPayloadSchema = z
         sandboxPolicy: z.enum(['read-only', 'workspace-write', 'full-access']).optional(),
         // P2-6：角色模板的技能白名单（agentRunner:213 读它决定注入哪些技能）
         skillNames: z.array(z.string().min(1).max(120)).max(64).optional(),
+        // T5-7：per-agent 模型绑定**引用串**（`providerId::modelId`）。
+        // 只传引用不传模型对象：供应商可被改名/删除，快照会变成死引用；
+        // 解析不到（含空值/坏记录）由 agentRunner 安静回落会话默认模型，不得升级成整轮拒绝。
+        model: z.string().max(160).nullable().optional(),
       })
       .optional(),
   })

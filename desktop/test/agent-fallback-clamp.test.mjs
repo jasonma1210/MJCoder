@@ -210,13 +210,25 @@ check('C3 stricterSandbox 全矩阵（3×3 + 未知值/空值）逐值相等—�
   if (combos < 36) throw new Error(`矩阵覆盖不足：只跑了 ${combos} 组`);
 });
 
+// 2026-10-21（第八轮 D-808）：钳制语句从 agentRunner 内联**收敛**到 rolePresetApply，
+// 主会话与 Worker 共用一份。断言随之改为「两段合并成立」：
+//   ① agentRunner 仍把 payload.rolePreset 交给 applyRolePreset（委托没断）；
+//   ② rolePresetApply 里确实还有那两条取更严语句（钳制本身没丢）。
+// 任一段缺失都仍然判红 —— 这不是放宽，而是把同一个不变量钉在新位置上。
 check('C4 主进程 agentRunner 仍从 approvalPolicy 取钳制函数（主通道不得被本次改动波及）', () => {
   const src = readCode('main/agentRunner.js');
   if (!/const \{ stricterApproval, stricterSandbox \} = require\('\.\/approvalPolicy'\)/.test(src)) {
     throw new Error('agentRunner.js 的钳制函数来源变了（本任务要求主通道行为完全不变）');
   }
-  if (!/engineParams\.approvalMode = stricterApproval\(engineParams\.approvalMode, payload\.rolePreset\.approvalMode\)/.test(src)) {
-    throw new Error('agentRunner.js 的 rolePreset 审批钳制语句不见了');
+  if (!/applyRolePreset\(engineParams, payload\.rolePreset,/.test(src)) {
+    throw new Error('agentRunner.js 不再把 payload.rolePreset 委托给 applyRolePreset（钳制链断了）');
+  }
+  const helper = readCode('main/rolePresetApply.js');
+  if (!/engineParams\.approvalMode = stricterApproval\(engineParams\.approvalMode, rolePreset\.approvalMode\)/.test(helper)) {
+    throw new Error('rolePresetApply.js 的审批钳制语句不见了');
+  }
+  if (!/engineParams\.sandboxPolicy = stricterSandbox\(engineParams\.sandboxPolicy, rolePreset\.sandboxPolicy\)/.test(helper)) {
+    throw new Error('rolePresetApply.js 的沙箱钳制语句不见了');
   }
 });
 

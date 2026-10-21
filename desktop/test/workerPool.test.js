@@ -5,7 +5,7 @@ const path = require('path');
 const os = require('os');
 const { openDbAsync } = require('../main/db');
 const { TaskStore } = require('../main/taskStore');
-const { initWorkerPool, runGroup, setMaxConcurrent, activeCount, abortTask } = require('../main/workerPool');
+const { initWorkerPool, runGroup, setMaxConcurrent, activeCount, abortTask, abortGroup } = require('../main/workerPool');
 
 let pass = 0;
 let fail = 0;
@@ -229,6 +229,36 @@ const events = [];
   // ── 并发上限可配置 ──
   setMaxConcurrent(5);
   check('setMaxConcurrent 生效', activeCount() === 0); // 占位断言：不抛错即配置通路面可用
+
+  // ── 场景 9（T5-9 §9.1）：组级强停的级联中断——等待中/排队中任务必须补发 settled 事件 ──
+  // 语义②：被中断的等待任务要向等待者发 settled（否则对方白等到墙钟超时）；
+  // 排队/待开始任务置 skipped 时同样要发 settled，否则看板会把它们永远显示为「待开始」。
+  {
+    events.length = 0;
+    initWorkerPool({
+      loadAgentCore: async () => makeFakeCore({}),
+      createToolHandlers: () => ({}),
+      store, maxConcurrent: 1, emit: (e) => events.push(e),
+      resolveModel: () => ({ providerId: 1, isGlobal: false, baseUrl: '', model: 'test-model' }),
+      buildTaskPrompt: (g, t) => t.title,
+    });
+    store.createGroup({ groupId: 'w10', goal: '级联中断', cwd: '', dag: null, tasks: [
+      { id: 'a', title: '等待任务', prompt: 'x', dependsOn: [] },
+      { id: 'b', title: '被等任务', prompt: 'x', dependsOn: [] },
+      { id: 'c', title: '排队任务', prompt: 'x', dependsOn: [] },
+    ] });
+    store.setTaskStatus('w10', 'a', 'queued');
+    store.setTaskStatus('w10', 'a', 'running');
+    const waitRes = store.waitOnTasks('w10', 'a', ['b'], { timeoutMs: 60000 });
+    check('前置：等待建边成功', waitRes.ok === true && waitRes.waiting === true);
+    abortGroup('w10');
+    check('强停：等待中任务置 skipped', store.getTask('w10', 'a').status === 'skipped');
+    check('强停：等待任务补发 board_task_settled',
+      events.some((e) => e.type === 'board_task_settled' && e.groupId === 'w10' && e.taskId === 'a' && e.status === 'skipped'));
+    check('强停：排队/待开始任务均补发 board_task_settled',
+      ['b', 'c'].every((id) => events.some((e) => e.type === 'board_task_settled' && e.groupId === 'w10' && e.taskId === id)));
+    check('强停：组进入 cancelled（不留转圈组）', store.getGroup('w10').status === 'cancelled');
+  }
 
   // ── P0-C 回归：派发链路异常不得冒泡成 unhandledRejection（会直接杀掉主进程）──
   // 此前 dispatch 的 IIFE 是「浮动 Promise」且无 .catch()：workerIsolation.createIsolated

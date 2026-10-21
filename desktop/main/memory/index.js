@@ -35,8 +35,20 @@
 //   （scorer.HALF_LIFE_DAYS_BY_SCOPE，session 7 / project 30 / global 90，domain 表作兼容回落）；
 //   ② L3 全局层独立容量闸 MAX_GLOBAL_MEMORIES=300（跨空间按 scope 计数 + LRU 硬淘汰）。
 //   容量闸抽象为 _enforceCap 统一实现（空间闸 / 全局层闸共用淘汰口径）。
+// M5 / T5-5（2026-10-20）：团队记忆（scope='team'）——扩展本模块的作用域维度，不新建存储。
+//   · 归属两列 team_id / agent_id（迁移 v11）与「共享=agent_id IS NULL、私有=agent_id=成员 id」的判定；
+//   · 团队∧项目同档半衰期（scorer 登记）+ 团队容量闸 MAX_TEAM_MEMORIES（纳入 _enforceCap）；
+//   · 晋升 U5 定案为**提名制**：团队→项目默认不自动写入，只产出「待晋升候选」由用户一键确认，
+//     且内容含团队专有名（团队名 / Lead 名）的条目直接不进候选（由宿主注入反例清单，见
+//     listTeamPromotionCandidates 的 excludeNames —— 本模块不认识军团实体，团队知识留在宿主）。
 const crypto = require('crypto');
-const { scoreMemory, relevance, halfLifeDaysFor } = require('./scorer');
+// M5 / T5-5 拆分后：scoreMemory / relevance 已随召回族迁出，本文件只保留仍在本类使用的 halfLifeDaysFor
+//（decayJob 的 scope 优先取半衰期）；打分器由 recall.js / team.js 自行 require('./scorer')。
+const { halfLifeDaysFor } = require('./scorer');
+// M5 / T5-5 拆分（2026-10-20）：召回族与团队记忆族抽为独立子模块（护 800 行软档门禁），
+// 依赖由本文件在装配时注入（避免 index → 子模块 → index 的循环依赖，见各子模块头注释）。
+const { createRecallMethods } = require('./recall');
+const { createTeamMethods } = require('./team');
 
 // ── P0-2b：来源可信度白名单（唯一事实来源）──
 // 说明：trust 不单独建列——source 列本就持久化，trust 是 source 的确定性函数，
@@ -54,10 +66,14 @@ const TRUST_THRESHOLD = 0.6;
 // ── 三层记忆（M0，2026-10-20）：作用域（scope）与写入分流 ──
 // scope 与 domain 正交：domain 是语义分类（会话/知识/反思…），scope 是记忆层级（可见范围与生存周期）。
 //   session —— 本轮会话工作记忆：绑定 conversation_id，仅同会话可见（最强时效、最快衰减）
+//   team    —— 团队记忆：绑定 team_id，仅同团队可见；agent_id 为空 = 团队共享（决议/约定/产物索引），
+//              非空 = 该成员的私有长期记忆（可见范围 = 团队共享 ∪ 自身私有，见 _layerRows）
 //   project —— 项目记忆：按 space_id 分区，项目内跨会话可见
 //   global  —— 全局记忆：跨项目可见，仅「用户显式确认」的可信资产允许写入
 // 顺序即层级优先级（晋升只允许自左向右）：跨层去重取更高优先级者。
-const SCOPES = ['session', 'project', 'global'];
+// M5 / T5-5：新增 team —— 位置在 project **之下**（团队编制活在项目内，其结论的晋升方向是
+//   team → project → global，与「只允许向上晋升」的 promoteScope 判据一致）。
+const SCOPES = ['session', 'team', 'project', 'global'];
 // 来源 → 默认作用域（写入分流的唯一事实来源，配合下方两条硬约束生效）
 const SOURCE_DEFAULT_SCOPE = {
   user_input: 'project',       // 用户显式输入/指令：项目级资产
@@ -66,8 +82,8 @@ const SOURCE_DEFAULT_SCOPE = {
   external_content: 'session', // 外部内容：不可信，强制收敛到会话层
   'legacy-import': 'project',  // 旧记忆导入：历史沉淀按项目级（保持既有可召回语义）
 };
-// 分层召回配额（受控注入预算：会话 2 / 项目 3 / 全局 2，合计 7 条上限）
-const LAYER_QUOTA = { session: 2, project: 3, global: 2 };
+// 分层召回配额（受控注入预算：会话 2 / 团队 3 / 项目 3 / 全局 2，合计 10 条上限）
+const LAYER_QUOTA = { session: 2, team: 3, project: 3, global: 2 };
 
 // ── 三层记忆 M2：晋升阈值（会话删除 salvage 与后台 promote-scope 共用，单一事实来源）──
 //   salvageConversation：L1 命中≥3 或已长期固化（tier≥3）→ 沉淀为 L2（project）
@@ -76,6 +92,11 @@ const SALVAGE_MIN_HITS = 3;
 const SALVAGE_MIN_TIER = 3;
 const PROMOTE_L1_MIN_HITS = 3;
 const PROMOTE_L2_MIN_HITS = 5;
+// ── M5 / T5-5：团队记忆阈值（提名制，单一事实来源）──
+//   PROMOTE_TEAM_MIN_HITS：团队记忆进入「待晋升候选」的命中门槛（复用 L1→L2 的 3 次口径，
+//     避免同一系统里并存两个「算不算高频」的判据）。
+//   注意：门槛只决定「是否被提名」，是否真写入项目层永远由用户确认（U5 定案）。
+const PROMOTE_TEAM_MIN_HITS = 3;
 
 // ── P3-3：容量总闸常量 ──
 const RECALL_SCAN_LIMIT = 200;        // recall 单次最多扫描打分的行数（按 updated_at 取最新窗口）
@@ -83,6 +104,10 @@ const RECALL_TOP_K_MAX = 50;          // Top-K 硬上限
 const MAX_MEMORIES_PER_SPACE = 500;   // 单空间（项目）记忆总量上限（有效 + 失效）
 // 三层记忆 M4：L3 全局层独立容量闸（设计文档 L1958 承诺）——全局资产跨项目唯一，按 scope 计数
 const MAX_GLOBAL_MEMORIES = 300;
+// M5 / T5-5：团队层独立容量闸（设计稿 §5「新增 MAX_TEAM_MEMORIES，建议 200」）——
+//   按 team_id 计数：一个团队的共享 + 全部成员私有一并受此闸约束（团队是临时编制，
+//   不留无限增长的工作痕迹）；超限先清失效行，再按 updated_at 最旧硬淘汰。
+const MAX_TEAM_MEMORIES = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INVALID_GRACE_MS = 7 * DAY_MS;  // 失效行物理删除宽限（P1-17：半衰期 + 7 天）
 
@@ -96,9 +121,13 @@ function trustOf(memory) {
 //   ① external_content 不可信 → 强制收敛到会话层（禁止跨会话/跨项目传播不可信内容）；
 //   ② 全局层是「用户显式确认的跨项目资产」→ 非 user_input 一律降级项目层（防自动沉淀污染全局）。
 // 调用方传入非法 requestedScope（不在 SCOPES 内）时回落来源默认档，绝不写入未知作用域。
-function resolveScope({ source = '', requestedScope } = {}) {
+// M5 / T5-5：团队层多一条前置约束——必须携带归属键 teamId（无归属的团队记忆永不召回、
+//   永不晋升，是纯孤儿行），缺失时回落来源默认档，而不是造一个无团队的 scope='team'。
+function resolveScope({ source = '', requestedScope, teamId = null } = {}) {
   const src = String(source || '').trim() || 'model_conclusion';
-  const scope = SCOPES.includes(requestedScope) ? requestedScope : (SOURCE_DEFAULT_SCOPE[src] || 'project');
+  const fallback = SOURCE_DEFAULT_SCOPE[src] || 'project';
+  const want = SCOPES.includes(requestedScope) ? requestedScope : fallback;
+  const scope = (want === 'team' && !teamId) ? fallback : want;
   if (src === 'external_content') return 'session';
   if (scope === 'global' && src !== 'user_input') return 'project';
   return scope;
@@ -166,7 +195,18 @@ class MemoryManager {
         this.db.exec('ALTER TABLE memories ADD COLUMN conversation_id TEXT');
         console.log('[memory] 已补齐 memories.conversation_id 列（L1 会话作用域绑定）');
       }
+      // M5 / T5-5：团队层归属两列惰性补齐（与迁移 v11 同语义，幂等双保险）——
+      // 迁移链归 db/index.js 维护，本模块只做「使用前确保列存在」，故两处并存不冲突。
+      if (!names.has('team_id')) {
+        this.db.exec('ALTER TABLE memories ADD COLUMN team_id TEXT');
+        console.log('[memory] 已补齐 memories.team_id 列（团队记忆归属）');
+      }
+      if (!names.has('agent_id')) {
+        this.db.exec('ALTER TABLE memories ADD COLUMN agent_id TEXT');
+        console.log('[memory] 已补齐 memories.agent_id 列（团队记忆成员归属：NULL = 团队共享）');
+      }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(space_id, scope, conversation_id)');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_memories_team ON memories(team_id, agent_id)');
     } catch (e) {
       // 补齐失败不阻断启动：分层召回退化为单层（旧行为），其余能力不受影响
       console.warn('[memory] scope 列补齐失败（三层作用域降级为单层）：', e.message);
@@ -183,7 +223,10 @@ class MemoryManager {
   // ── 写入（Tier1）──
   // 三层记忆 M0：新增 scope（作用域，缺省按来源默认档）+ conversationId（L1 会话层绑定）。
   // 作用域分流全部经 resolveScope（唯一事实来源），调用方无需自行判断约束。
-  remember({ spaceId, domain = 'session', scope, conversationId = null, content, importance = 0.5, entityTags = [], source = '', summary = null }) {
+  // M5 / T5-5：新增 teamId / agentId（团队层归属）——只有 scope 落定为 'team' 时才保留：
+  //   agentId 为空 = 团队共享；非空 = 该成员私有。非团队层一律清空两列，避免「项目记忆挂团队键」
+  //   这种既召回不到、又会让容量闸与晋升判据读错归属的脏数据。
+  remember({ spaceId, domain = 'session', scope, conversationId = null, teamId = null, agentId = null, content, importance = 0.5, entityTags = [], source = '', summary = null }) {
     // P0-2b：来源白名单校验——未知来源拒绝写入并返回 null（调用方据此报错），
     // 不静默按模型结论档收留（那会让不可控来源混入长期记忆）
     const src = String(source || '').trim() || 'model_conclusion';
@@ -201,16 +244,19 @@ class MemoryManager {
       dom = 'session';
     }
     // 三层记忆 M0：作用域分流（约束在 resolveScope 内统一处理）
-    const sc = resolveScope({ source: src, requestedScope: scope });
+    const sc = resolveScope({ source: src, requestedScope: scope, teamId });
     // 只有会话层绑定 conversation_id；其余层一律解绑（跨会话可见，不受单会话生命周期影响）
     const conv = sc === 'session' && conversationId ? String(conversationId) : null;
+    // M5 / T5-5：团队层归属两列（非团队层清空，见方法头注释）
+    const team = sc === 'team' && teamId ? String(teamId) : null;
+    const agent = team && agentId ? String(agentId) : null;
     const now = this._now();
     const space = spaceId || 'default';
     const hash = contentHashOf(normalizeContent(text));
     // 去重（去重键随作用域分化）：命中则刷新元数据，不重复 INSERT。
     // re_hit_count 不在此刷新：它只由召回命中驱动（recall），重复写入刷高会误触发
     // promoteByHits 的「高频晋升」，把一次性重复当成多次使用。
-    const dup = this._findDup({ space, scope: sc, dom, hash, conversationId: conv });
+    const dup = this._findDup({ space, scope: sc, dom, hash, conversationId: conv, teamId: team, agentId: agent });
     if (dup) {
       this.db.prepare('UPDATE memories SET updated_at = ?, usage_count = usage_count + 1, source = ?, importance = MAX(importance, ?) WHERE id = ?')
         .run(now, src, Math.max(0, Math.min(1, Number(importance) || 0.5)), dup.id);
@@ -222,6 +268,8 @@ class MemoryManager {
       space_id: space,
       scope: sc,
       conversation_id: conv,
+      team_id: team,
+      agent_id: agent,
       domain: dom,
       tier: 1,
       content: text.slice(0, 8000),
@@ -238,14 +286,15 @@ class MemoryManager {
       updated_at: now,
       trust: trustOf({ source: src }), // 返回值与 _rowToMemory 输出同构（含可信度）
     };
-    this.db.prepare(`INSERT INTO memories (id, space_id, scope, conversation_id, domain, tier, content, summary, importance, entity_tags,
+    this.db.prepare(`INSERT INTO memories (id, space_id, scope, conversation_id, team_id, agent_id, domain, tier, content, summary, importance, entity_tags,
       expire_at, is_valid, compressed, re_hit_count, usage_count, source, created_at, updated_at, content_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(mem.id, mem.space_id, mem.scope, mem.conversation_id, mem.domain, mem.tier, mem.content, mem.summary, mem.importance,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(mem.id, mem.space_id, mem.scope, mem.conversation_id, mem.team_id, mem.agent_id, mem.domain, mem.tier, mem.content, mem.summary, mem.importance,
         mem.entity_tags, mem.expire_at, mem.is_valid, mem.compressed, mem.re_hit_count, mem.usage_count,
         mem.source, mem.created_at, mem.updated_at, hash);
     this._enforceSpaceCap(space); // P3-3：容量总闸（写入侧）
     if (sc === 'global') this._enforceGlobalCap(); // 三层记忆 M4：L3 全局层独立容量闸
+    if (sc === 'team' && team) this._enforceTeamCap(team); // M5 / T5-5：团队层独立容量闸
     this._notify(sc, space); // 三层记忆 M3：变更通知（文件导出视图）
     // 与去重命中路径返回同构（统一经 _rowToMemory：camelCase + 含 scope/conversationId/trust），
     // 避免「新插入返 snake_case、重复写入返 camelCase」的双形态给调用方造成字段歧义。
@@ -254,9 +303,10 @@ class MemoryManager {
 
   // 三层记忆 M0：去重键随作用域分化——
   //   session —— 含 conversation_id（不同会话的同内容各自独立，避免跨会话互相覆盖归属）；
+  //   team    —— team_id + agent_id（共享与各成员私有互不覆盖：同内容在共享与成员私有各存一份）；
   //   global  —— 忽略 space_id（全局资产跨项目唯一，避免同内容在多个项目各存一份）；
   //   project —— space_id + scope + domain + content_hash。
-  _findDup({ space, scope, dom, hash, conversationId }) {
+  _findDup({ space, scope, dom, hash, conversationId, teamId, agentId }) {
     if (scope === 'session') {
       return this.db.prepare('SELECT * FROM memories WHERE space_id = ? AND scope = ? AND domain = ? AND content_hash = ? AND conversation_id IS ? LIMIT 1')
         .get(space, scope, dom, hash, conversationId);
@@ -264,6 +314,12 @@ class MemoryManager {
     if (scope === 'global') {
       return this.db.prepare('SELECT * FROM memories WHERE scope = ? AND domain = ? AND content_hash = ? LIMIT 1')
         .get(scope, dom, hash);
+    }
+    // M5 / T5-5：团队层去重键含归属两列——共享（agent_id IS NULL）与成员私有互不吞并，
+    // 同一结论「团队共享 + 某成员私有」可各自独立存在（私有是成员的个体上下文，不该被共享覆盖）。
+    if (scope === 'team') {
+      return this.db.prepare('SELECT * FROM memories WHERE scope = ? AND team_id = ? AND agent_id IS ? AND domain = ? AND content_hash = ? LIMIT 1')
+        .get(scope, teamId || null, agentId || null, dom, hash);
     }
     return this.db.prepare('SELECT * FROM memories WHERE space_id = ? AND scope = ? AND domain = ? AND content_hash = ? LIMIT 1')
       .get(space, scope, dom, hash);
@@ -310,11 +366,16 @@ class MemoryManager {
     });
   }
 
+  // M5 / T5-5：团队层独立容量闸 _enforceTeamCap 与团队记忆召回/晋升族已抽至 ./team.js
+  //（2026-10-20 拆分护 800 行门禁），本处仅保留装配注记——实现见 createTeamMethods 注入。
+
   _rowToMemory(r) {
     return r ? {
       id: r.id, spaceId: r.space_id, domain: r.domain, tier: r.tier,
       // 三层记忆 M0：作用域/会话绑定/内容去重键随条目输出（缺失列时回落：scope=project、其余 null）
       scope: r.scope || 'project', conversationId: r.conversation_id || null, contentHash: r.content_hash || null,
+      // M5 / T5-5：团队归属两列（非团队层为 null）——渲染层/宿主据此区分「团队共享 vs 成员私有」
+      teamId: r.team_id || null, agentId: r.agent_id || null,
       content: r.content, summary: r.summary, importance: r.importance,
       entityTags: (() => { try { return JSON.parse(r.entity_tags || '[]'); } catch { return []; } })(),
       expireAt: r.expire_at, isValid: !!r.is_valid, compressed: !!r.compressed,
@@ -364,132 +425,9 @@ class MemoryManager {
     return this.get(id);
   }
 
-  // ── 分层召回路由（P2-6）──
-  // 路由顺序：先 Tier3/Tier2（摘要层，性价比高）→ Tier1（原文）；按六因子 Top-K 重排。
-  // query 为空（如启动注入）→ 跳过相关性因子，退化为 importance×recency 排序。
-  // P3-3：限量载入 + Top-K 钳制——只扫描最近 scanLimit 条进入打分（复杂度 O(scanLimit)，
-  // 与记忆总量解耦）；topK 超硬上限时按上限截断。
-  // 三层记忆 M0：新增 scopes（作用域数组）+ conversationId。传入 scopes 即走分层模式
-  // （每层按 LAYER_QUOTA 配额、跨层同 content_hash 去重）；缺省保持单空间旧行为（向后兼容）。
-  recall({ spaceId, query = '', topK = 5, scopes = null, conversationId = null, domains = null, minScore = 0, scanLimit = RECALL_SCAN_LIMIT }) {
-    const space = spaceId || 'default';
-    const scan = Math.min(Math.max(1, Number(scanLimit) || RECALL_SCAN_LIMIT), RECALL_SCAN_LIMIT);
-    if (Array.isArray(scopes) && scopes.length) {
-      return this._recallLayered({ space, query, scopes, conversationId, domains, minScore, scan });
-    }
-    const k = Math.min(Math.max(1, Number(topK) || 5), RECALL_TOP_K_MAX);
-    const rows = this.db.prepare(
-      'SELECT * FROM memories WHERE space_id = ? AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?'
-    ).all(space, scan);
-    const memories = rows.map((r) => this._rowToMemory(r))
-      .filter((m) => !domains || domains.includes(m.domain));
-    const scored = memories
-      // P0-2c：可信度乘子——external_content 0.2 / model_conclusion 0.6 / user_input 1.0，
-      // 低可信条目即使被返回也排在低权重位置
-      .map((m) => ({ memory: m, score: scoreMemory(m, { query }), trust: trustOf(m) }))
-      .map((x) => ({ memory: x.memory, score: { ...x.score, total: x.score.total * x.trust } }))
-      .filter((x) => x.score.total > minScore)
-      .sort((a, b) => b.score.total - a.score.total)
-      .slice(0, k);
-    // 命中反馈：re_hit_count / usage_count 自增（防抖合并刷盘由 SQLite 同步写承担，量级极小）
-    for (const { memory } of scored) {
-      this.db.prepare('UPDATE memories SET re_hit_count = re_hit_count + 1, usage_count = usage_count + 1, updated_at = ? WHERE id = ?')
-        .run(this._now(), memory.id);
-    }
-    return scored.map(({ memory, score }) => ({ ...memory, score: Number(score.total.toFixed(4)) }));
-  }
-
-  // 三层记忆 M0：分层召回（session 配额 2 / project 3 / global 2）。
-  //   ① 每层独立扫描打分，各取本层配额（受 RECALL_TOP_K_MAX 硬上限约束）；
-  //   ② 按层优先级（session > project > global）合并，跨层同 content_hash 去重（先入者即高层，胜出）；
-  //   ③ 结果按总分重排，命中反馈与单层路径同口径。
-  // 无会话上下文（conversationId 缺省）时跳过会话层——不注入无法归属的会话工作记忆。
-  _recallLayered({ space, query, scopes, conversationId, domains, minScore, scan }) {
-    const collected = [];
-    const seen = new Set();
-    for (const sc of SCOPES) {
-      if (!scopes.includes(sc)) continue;
-      if (sc === 'session' && !conversationId) continue;
-      const rows = this._layerRows({ space, scope: sc, conversationId, scan });
-      const quota = Math.max(1, Math.min(LAYER_QUOTA[sc], RECALL_TOP_K_MAX));
-      const scored = rows.map((r) => this._rowToMemory(r))
-        .filter((m) => !domains || domains.includes(m.domain))
-        .map((m) => ({ memory: m, score: scoreMemory(m, { query }), trust: trustOf(m) }))
-        .map((x) => ({ memory: x.memory, score: { ...x.score, total: x.score.total * x.trust } }))
-        .filter((x) => x.score.total > minScore)
-        .sort((a, b) => b.score.total - a.score.total)
-        .slice(0, quota);
-      for (const x of scored) {
-        const key = x.memory.contentHash || `id:${x.memory.id}`; // 跨层去重键：内容 hash（缺列回落 id）
-        if (seen.has(key)) continue;
-        seen.add(key);
-        collected.push(x);
-      }
-    }
-    collected.sort((a, b) => b.score.total - a.score.total);
-    const out = collected.slice(0, RECALL_TOP_K_MAX);
-    for (const { memory } of out) {
-      this.db.prepare('UPDATE memories SET re_hit_count = re_hit_count + 1, usage_count = usage_count + 1, updated_at = ? WHERE id = ?')
-        .run(this._now(), memory.id);
-    }
-    return out.map(({ memory, score }) => ({ ...memory, score: Number(score.total.toFixed(4)) }));
-  }
-
-  // 三层记忆 M0：单层取行（限量载入，scan 上限与旧路径同口径）。
-  //   session —— 同空间 + 会话绑定；project —— 同空间；global —— 忽略空间（跨项目）。
-  _layerRows({ space, scope, conversationId, scan }) {
-    if (scope === 'session') {
-      return this.db.prepare(`SELECT * FROM memories WHERE space_id = ? AND scope = 'session' AND conversation_id IS ?
-        AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(space, conversationId, scan);
-    }
-    if (scope === 'global') {
-      return this.db.prepare(`SELECT * FROM memories WHERE scope = 'global'
-        AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(scan);
-    }
-    return this.db.prepare(`SELECT * FROM memories WHERE space_id = ? AND scope = 'project'
-      AND is_valid = 1 AND compressed = 0 ORDER BY tier DESC, updated_at DESC LIMIT ?`).all(space, scan);
-  }
-
-  // 三层记忆 M0：给主对话 / Worker 注入用的「预算内记忆文本块」。
-  // 分层召回（session 2 / project 3 / global 2）→ 可信度过滤（低可信默认不进，query 显式命中才带）
-  // → 按 budgetChars 逐条累积装配（超预算即停止）。返回可直接拼进 system prompt 的文本；
-  // 无命中返回空串（调用方据此不注入「相关记忆」段）。
-  recallForPrompt({ projectPath, conversationId = null, query = '', budgetChars = 4000 } = {}) {
-    const budget = Math.max(0, Number(budgetChars) || 4000);
-    const hits = this.recall({
-      spaceId: projectPath, query, scopes: [...SCOPES], conversationId,
-    });
-    const q = String(query || '').trim();
-    const kept = hits.filter((m) => trustOf(m) >= TRUST_THRESHOLD
-      || (q && relevance(q, `${m.summary || ''}\n${m.content || ''}`) > 0));
-    const lines = [];
-    let used = 0;
-    for (const m of kept) {
-      const text = String(m.summary || m.content || '').replace(/\s+/g, ' ').trim();
-      if (!text) continue;
-      const line = `- ${text}`;
-      if (used + line.length + 1 > budget) break;
-      lines.push(line);
-      used += line.length + 1;
-    }
-    return lines.join('\n');
-  }
-
-  // 注入格式兼容旧链路（renderer 取 content 列表）
-  // P0-2c：域 + 可信度过滤——低可信（trust < TRUST_THRESHOLD，即 external_content）条目
-  // 默认不进 system prompt 注入；仅当 query 显式命中（词法相关性 > 0）时才返回
-  // （打分侧的 trust 乘子保证其权重仍然低）。
-  // 三层记忆 M3：增 scopes/conversationId 分层模式，且输出 scope——渲染层据此加层级前缀
-  // （`[个人]/[项目]/[本次会话]`）后注入 system prompt（引擎仍吃 string[]，零改动）。
-  recallContents({ spaceId, query, topK = 5, domains, includeLowTrust = false, scopes = null, conversationId = null }) {
-    const q = String(query || '').trim();
-    const hits = this.recall({ spaceId, query, topK, domains, scopes, conversationId });
-    const kept = includeLowTrust
-      ? hits
-      : hits.filter((m) => trustOf(m) >= TRUST_THRESHOLD
-        || (q && relevance(q, `${m.summary || ''}\n${m.content || ''}`) > 0));
-    return kept.map((m) => ({ id: m.id, content: m.summary || m.content, domain: m.domain, scope: m.scope || 'project', trust: trustOf(m) }));
-  }
+  // ── 召回族（P2-6 / 三层记忆 M0 / M5-T5-5）已抽至 ./recall.js（2026-10-20 拆分护 800 行门禁）──
+  // 本处仅保留装配注记：recall / _recallLayered / _layerRows / recallForPrompt / recallContents /
+  // relevanceFor 的实现见 createRecallMethods 注入（依赖 SCOPES / LAYER_QUOTA / RECALL_* / trustOf）。
 
   // ── 压缩（P2-4）：同空间同域的未压缩 Tier1 批量合并为 1 条 Tier2 摘要 ──
   // chatOnce 由调用方注入（主进程非流式通道）；返回 { wrote, skipped } 供后台任务记账
@@ -592,6 +530,10 @@ class MemoryManager {
     return this.get(id);
   }
 
+  // M5 / T5-5（U5）：团队记忆「待晋升候选」读取（listTeamPromotionCandidates）与
+  // 团队→项目显式晋升（promoteTeamMemoryToProject）已抽至 ./team.js（2026-10-20 拆分护 800 行门禁）。
+  // 本处仅保留装配注记：实现见 createTeamMethods 注入（依赖 PROMOTE_TEAM_MIN_HITS / MAX_TEAM_MEMORIES）。
+
   // 三层记忆 M2（决策 3）：会话删除时的 salvage 沉淀（两段式）。
   //   ① 先把该会话「有价值的」L1 晋升为项目级（跨会话留存）：命中≥SALVAGE_MIN_HITS 或已长期固化（tier≥SALVAGE_MIN_TIER）；
   //   ② 再物理删除该会话剩余的 L1（未被沉淀的瞬时工作记忆随会话一并清除）。
@@ -623,13 +565,17 @@ class MemoryManager {
   //   session —— 按 conversation_id 精确删除该会话的工作记忆；
   //   project —— 按 space_id 删除该项目的项目级记忆；
   //   global  —— spaceId 缺省时清全部全局记忆（跨项目资产，属显式管理操作）。
-  resetScope({ scope, spaceId = null, conversationId = null } = {}) {
+  // M5 / T5-5：新增 team —— 必须携带 teamId（否则拒绝，避免「无归属键清空全表」的静默误删）。
+  resetScope({ scope, spaceId = null, conversationId = null, teamId = null } = {}) {
     if (!SCOPES.includes(scope)) return 0;
     let r;
     if (scope === 'session') {
       r = this.db.prepare('DELETE FROM memories WHERE scope = ? AND conversation_id IS ?').run(scope, conversationId || null);
     } else if (scope === 'global' && !spaceId) {
       r = this.db.prepare("DELETE FROM memories WHERE scope = 'global'").run();
+    } else if (scope === 'team') {
+      if (!teamId) return 0;
+      r = this.db.prepare("DELETE FROM memories WHERE scope = 'team' AND team_id = ?").run(String(teamId));
     } else {
       r = this.db.prepare('DELETE FROM memories WHERE scope = ? AND space_id = ?').run(scope, spaceId || 'default');
     }
@@ -685,23 +631,42 @@ class MemoryManager {
   }
 
   // ── 列表（P0-2c 记忆管理 UI 数据源）：项目维度分页，含可信度/域/层级/有效期 ──
-  list({ spaceId, limit = 50, offset = 0, includeInvalid = false } = {}) {
+  // M5 / T5-5：新增可选 scope/teamId/agentId 过滤——记忆面板按层筛选与团队视图取数用；
+  //   缺省保持原「按 space_id 全量」旧行为（向后兼容既有调用方）。
+  list({ spaceId, limit = 50, offset = 0, includeInvalid = false, scope = null, teamId = null, agentId = null } = {}) {
     const lim = Math.min(Math.max(1, Number(limit) || 50), 200);
     const off = Math.max(0, Number(offset) || 0);
-    const where = includeInvalid ? 'space_id = ?' : 'space_id = ? AND is_valid = 1';
-    const rows = this.db.prepare(`SELECT * FROM memories WHERE ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
-      .all(spaceId || 'default', lim, off);
+    const conds = [];
+    const args = [];
+    if (scope === 'global') {
+      conds.push("scope = 'global'"); // 全局层忽略空间（跨项目资产）
+    } else {
+      conds.push('space_id = ?');
+      args.push(spaceId || 'default');
+      if (SCOPES.includes(scope)) { conds.push('scope = ?'); args.push(scope); }
+    }
+    if (teamId) { conds.push('team_id = ?'); args.push(String(teamId)); }
+    if (agentId) { conds.push('agent_id = ?'); args.push(String(agentId)); }
+    if (!includeInvalid) conds.push('is_valid = 1');
+    const rows = this.db.prepare(`SELECT * FROM memories WHERE ${conds.join(' AND ')} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+      .all(...args, lim, off);
     return rows.map((r) => this._rowToMemory(r));
   }
 
   // 三层记忆 M3：按作用域取数（管理 UI 分层计数 + 文件导出视图取数）。
   //   global —— 忽略空间（跨项目资产）；session/project —— 限定空间（container 的会话/项目层）。
-  listScope({ scope, spaceId = null, limit = 500 } = {}) {
+  // M5 / T5-5：team —— 按 team_id 取（共享 + 全部成员私有；团队视图不混入空间维度）。
+  listScope({ scope, spaceId = null, teamId = null, limit = 500 } = {}) {
     if (!SCOPES.includes(scope)) return [];
     const lim = Math.min(Math.max(1, Number(limit) || 500), 500);
     if (scope === 'global') {
       return this.db.prepare(`SELECT * FROM memories WHERE scope = 'global' AND is_valid = 1
         ORDER BY updated_at DESC LIMIT ?`).all(lim).map((r) => this._rowToMemory(r));
+    }
+    if (scope === 'team') {
+      if (!teamId) return []; // 无归属键取不到任何团队记忆（防「取全表」的静默错误）
+      return this.db.prepare(`SELECT * FROM memories WHERE scope = 'team' AND team_id = ? AND is_valid = 1
+        ORDER BY updated_at DESC LIMIT ?`).all(String(teamId), lim).map((r) => this._rowToMemory(r));
     }
     return this.db.prepare(`SELECT * FROM memories WHERE scope = ? AND space_id = ? AND is_valid = 1
       ORDER BY updated_at DESC LIMIT ?`).all(scope, spaceId || 'default', lim).map((r) => this._rowToMemory(r));
@@ -780,9 +745,16 @@ class MemoryManager {
       .get(space || 'default', scope, hash);
   }
 
-  // 词法相关性暴露给外部（Worker 注入时按任务标题查询）
-  relevanceFor(query, text) { return relevance(query, text); }
+  // 词法相关性（relevanceFor）随召回族一并抽至 ./recall.js（见 createRecallMethods 注入）。
 }
+
+// M5 / T5-5 拆分装配（2026-10-20）：把抽取的召回族与团队记忆族方法装回 MemoryManager.prototype。
+// 依赖注入：常量与 trustOf 来自本文件的单一事实来源；子模块直接 require('./scorer') 取打分器（无环）。
+Object.assign(
+  MemoryManager.prototype,
+  createRecallMethods({ SCOPES, LAYER_QUOTA, RECALL_SCAN_LIMIT, RECALL_TOP_K_MAX, TRUST_THRESHOLD, trustOf }),
+  createTeamMethods({ PROMOTE_TEAM_MIN_HITS, MAX_TEAM_MEMORIES, RECALL_SCAN_LIMIT, RECALL_TOP_K_MAX, trustOf }),
+);
 
 module.exports = {
   MemoryManager, SOURCE_TRUST, TRUST_THRESHOLD, normalizeContent, contentHashOf, trustOf,
@@ -792,4 +764,6 @@ module.exports = {
   SALVAGE_MIN_HITS, SALVAGE_MIN_TIER, PROMOTE_L1_MIN_HITS, PROMOTE_L2_MIN_HITS,
   // 三层记忆 M4：容量闸常量（空间闸 500 / L3 全局层闸 300）
   MAX_MEMORIES_PER_SPACE, MAX_GLOBAL_MEMORIES,
+  // M5 / T5-5：团队层常量（提名制阈值 + 团队层容量闸；供宿主/i18n/测试统一引用）
+  PROMOTE_TEAM_MIN_HITS, MAX_TEAM_MEMORIES,
 };

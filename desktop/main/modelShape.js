@@ -158,6 +158,95 @@ function assertAgentModel(m) {
   return true;
 }
 
+// ── T5-7：per-agent 模型绑定的**引用串**编解码（军团成员 model 字段的唯一事实来源）──
+//
+// 为什么存「引用串」而不是 provider/model 快照对象：
+//   · 供应商会被改名、换 Key、整条删除，快照会变成指向已不存在资源的死引用；
+//   · 只存 id 才能做到「解析不到就安静回落默认模型」——与渲染层 threadModels 同一纪律。
+// 为什么放在本文件：本文件已是「模型形状的唯一转换处」，绑定串与模型形状同层同源最省心。
+// 复合键分隔符沿用仓库既有约定（main/scheduledGuard.js 的 `${handlerKey}::${cmd}`）。
+const MODEL_REF_JOIN = '::';
+// 上限与 shared-ipc/contract.mjs 的 rolePreset.model schema 同值（改一处必须同步另一处）
+const MODEL_REF_MAX = 160;
+const MODEL_REF_PROVIDER_MAX = 30; // 160 - 2 - 128（modelId 上限 128）
+const MODEL_REF_MODEL_MAX = 128;
+
+function refStr(v) {
+  return v == null ? '' : String(v).trim();
+}
+
+/**
+ * {providerId, modelId} → `providerId::modelId`；任一侧缺失/含分隔符/超长 → null。
+ * fail-closed：宁可存 null（= 用默认模型），也不存一条解析不出来的脏引用。
+ */
+function encodeModelRef(ref) {
+  if (!isPlainObject(ref)) return null;
+  const pid = refStr(ref.providerId);
+  const mid = refStr(ref.modelId);
+  if (!pid || !mid) return null;
+  // 分隔符两侧都不能含：否则拼出的串切分点不唯一，无法无损还原
+  if (pid.includes(MODEL_REF_JOIN) || mid.includes(MODEL_REF_JOIN)) return null;
+  if (pid.length > MODEL_REF_PROVIDER_MAX || mid.length > MODEL_REF_MODEL_MAX) return null;
+  const s = pid + MODEL_REF_JOIN + mid;
+  return s.length > MODEL_REF_MAX ? null : s;
+}
+
+/**
+ * `providerId::modelId` → {providerId, modelId}；结构不合法 → null（**绝不抛**，调用方回落默认模型）。
+ * 按第一个分隔符切分：编码时已保证 providerId 不含分隔符，故切分无损。
+ */
+function decodeModelRef(str) {
+  if (typeof str !== 'string') return null;
+  const s = str.trim();
+  if (!s || s.length > MODEL_REF_MAX) return null;
+  const i = s.indexOf(MODEL_REF_JOIN);
+  if (i <= 0) return null;
+  const providerId = s.slice(0, i);
+  const modelId = s.slice(i + MODEL_REF_JOIN.length);
+  if (!providerId || !modelId) return null;
+  if (providerId.includes(MODEL_REF_JOIN) || modelId.includes(MODEL_REF_JOIN)) return null;
+  return { providerId, modelId };
+}
+
+/**
+ * 边界归一（**唯一**的模型绑定清洗点）：接受两种自然入参——
+ *   · 引用串（落库形态，`providerId::modelId`）
+ *   · 引用对象（渲染层选择器的天然形态，{providerId, modelId}）
+ * 统一产出 canonical 引用串；任何解析不出的输入 → null（= 用默认模型）。
+ * 两种入参都收在此处，是为了让「什么能落库」只有一个判据，下游不得各自解释格式。
+ */
+function canonicalizeModelRef(v) {
+  if (v == null || v === '') return null;
+  if (isPlainObject(v)) return encodeModelRef(v);
+  return encodeModelRef(decodeModelRef(refStr(v)));
+}
+
+/**
+ * 引用串 → **扁平形**模型对象（本模块既有形状契约；要喂 agent-core 请再经 toAgentModel）；
+ * 解析不到返回 null（供应商/模型已被删除 ⇒ 调用方回落默认模型）。
+ * providers 取自主进程本机供应商列表（localStore.listProviders）：`{ id, base_url, models:[{modelId, caps?}] }`。
+ * id 一律按字符串比较（本机是自增数字、服务端是 's…' 串，两种都合法）。
+ */
+function resolveModelRef(ref, providers) {
+  const d = decodeModelRef(refStr(ref));
+  if (!d) return null;
+  const list = Array.isArray(providers) ? providers : [];
+  const p = list.find((x) => x && refStr(x.id) === d.providerId);
+  if (!p) return null;
+  const models = Array.isArray(p.models) ? p.models : [];
+  const m = models.find((x) => x && refStr(x.modelId != null ? x.modelId : x.model_id) === d.modelId);
+  if (!m) return null;
+  return {
+    providerId: d.providerId,
+    isGlobal: !!p.isGlobal,
+    baseUrl: p.base_url || '',
+    model: d.modelId,
+    // 只在本机确实声明过 caps 时才带（不造空对象：空对象会被下游读成「已声明但无字段」）
+    ...(isPlainObject(m.caps) ? { caps: { ...m.caps } } : {}),
+  };
+}
+
 module.exports = {
   toAgentModel, toChatRequest, assertAgentModel, isNested, DEFAULT_CONTEXT_WINDOW,
+  MODEL_REF_MAX, encodeModelRef, decodeModelRef, canonicalizeModelRef, resolveModelRef,
 };

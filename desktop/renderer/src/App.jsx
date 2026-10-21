@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard';
 import ApprovalCard from './components/ApprovalCard';
 import DiffReviewPanel from './components/DiffReviewPanel';
 import ScheduledTasks from './components/ScheduledTasks';
+import TeamsPage from './components/TeamsPage';
 import ProjectPicker from './components/ProjectPicker';
 import Onboarding from './components/Onboarding';
 import SplashScreen from './components/SplashScreen';
@@ -55,6 +56,7 @@ export default function App() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
   const [showEcosystem, setShowEcosystem] = useState(false); // 生态中心（侧栏一级导航，对标 Codex Plugins）
+  const [showTeams, setShowTeams] = useState(false); // M5 / T5-1：MJ 军团（团队编制页，侧栏一级导航）
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [activeProject, setActiveProject] = useState(() => loadJSON('mj_active_project', getDefaultProject()));
   // Bug2 + P0-D：当前选中模型与项目目录实时推送主进程定时任务调度器
@@ -177,10 +179,8 @@ export default function App() {
       .then(setGlobalProviders)
       .catch((err) => console.warn('[app] failed to load global providers:', err));
   }, []);
-  // 挂载即加载本机数据（登录系统已移除：恒本地模式，无认证态变化重载的触发源）。
-  // loadData 内部读 selectedModel，不列入依赖——用户每次切换模型都会触发全量
-  // threads/providers 请求，那是多余往返。需要刷新时由各业务点显式调用
-  // loadData()/scheduleLoadData()。
+  // 挂载即加载本机数据；loadData 内部读 selectedModel 但不列入依赖——切换模型不应触发全量
+  // threads/providers 请求（多余往返），需要刷新时由各业务点显式调用 loadData()/scheduleLoadData()。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadData(); }, []);
 
@@ -315,11 +315,9 @@ export default function App() {
     }
   }
 
-  // 布局状态持久化
+  // 布局 / 项目状态持久化（各自独立 effect，依赖数组即触发源）
   useEffect(() => { localStorage.setItem('mj_sidebar_open', JSON.stringify(sidebarOpen)); }, [sidebarOpen]);
   useEffect(() => { localStorage.setItem('mj_pane_open', JSON.stringify(paneOpen)); }, [paneOpen]);
-
-  // 项目状态持久化
   useEffect(() => { localStorage.setItem('mj_active_project', JSON.stringify(activeProject)); }, [activeProject]);
   useEffect(() => { localStorage.setItem('mj_projects', JSON.stringify(projects)); }, [projects]);
 
@@ -348,9 +346,7 @@ export default function App() {
       .catch((err) => console.warn('[app] project probe failed:', err));
   }, [activeProject?.path]);
 
-  // AGENTS.md 项目规范：上提到 App 层按项目路径缓存
-  // 原因：原先放在 ChatArea 内，切换「数据/定时任务」面板会卸载重挂 ChatArea，
-  // 导致每次切换都重跑一次 5 级向上探测（既浪费，也刷主进程日志）
+  // AGENTS.md 项目规范：上提到 App 层按项目路径缓存，避免面板切换卸载重挂 ChatArea 时 5 级向上探测重跑
   useEffect(() => {
     if (!activeProject?.path) { setAgentsMd(null); return; }
     let cancelled = false;
@@ -379,8 +375,7 @@ export default function App() {
     }
   }
 
-  // G4：消息级刷新 debounce —— 收发消息不再立即全量拉取 threads（600ms 合并），
-  // 长列表下每条消息一次全量刷新会造成可感知卡顿
+  // G4：消息级刷新 debounce —— 收发消息 600ms 合并全量拉取，避免长列表下可感知卡顿
   const loadDataTimerRef = useRef(null);
   function scheduleLoadData() {
     clearTimeout(loadDataTimerRef.current);
@@ -427,6 +422,7 @@ export default function App() {
   function resetView() {
     setShowDashboard(false);
     setShowScheduled(false);
+    setShowTeams(false);
   }
 
   // 选择/切换项目：写入最近项目列表（去重，最多保留 10 个）
@@ -592,7 +588,7 @@ export default function App() {
       <Sidebar
         threads={threads}
         activeThread={activeThread}
-        view={{ showScheduled, showDashboard, showEcosystem }}
+        view={{ showScheduled, showDashboard, showEcosystem, showTeams }}
         onSelect={selectThread}
         onNew={() => { setActiveThread(null); resetView(); }}
         onNewThread={newThreadInProject}
@@ -636,6 +632,7 @@ export default function App() {
         onOpenArchive={localMode ? () => setArchiveOpen(true) : undefined}
         onOpenScheduled={() => { resetView(); setShowScheduled(true); }}
         onOpenEcosystem={() => setShowEcosystem(true)}
+        onOpenTeams={() => { resetView(); setShowTeams(true); }}
         onOpenProjectPicker={() => setShowProjectPicker(true)}
         onOpenSettings={() => setShowSettings(true)}
         projects={projects}
@@ -649,12 +646,13 @@ export default function App() {
       <div className="flex-1 min-w-0 flex flex-col">
         {showDashboard && <Dashboard />}
         {showScheduled && <ScheduledTasks />}
+        {showTeams && <TeamsPage />}
         {/* 任务编排已并入对话流（orchestrate_task 工具 + AgentDock 胶囊），不再有独立面板入口 */}
         {/* E4：ChatArea 常驻挂载（数据/定时任务视图下用 hidden 隐藏而非卸载）。
             此前条件渲染会卸载 ChatArea，导致生态中心「在当前会话启用」的
             mjcode:enable-expert/skill 事件静默丢失；同时避免重挂载带来的
             消息重拉与 AGENTS.md 重复探测。contents 保持原 flex 布局不变。 */}
-        <div className={showDashboard || showScheduled ? 'hidden' : 'contents'}>
+        <div className={showDashboard || showScheduled || showTeams ? 'hidden' : 'contents'}>
           <ChatArea
             thread={activeThread}
             agentsMd={agentsMd}

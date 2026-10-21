@@ -79,6 +79,10 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 2026-10-20 需求①：AI 自动创建（仅新建模式）——描述 → 草稿预填四个字段，人审后再保存
+  const [aiDesc, setAiDesc] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   // 打开时用传入值重置（新建/编辑共用一套表单，避免两份状态互相污染）
   useEffect(() => {
@@ -91,6 +95,9 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
     setError('');
     setSaving(false);
     setBusy(false);
+    setAiDesc('');
+    setAiBusy(false);
+    setAiError('');
   }, [open, editingId, employee]);
 
   // 名称 → id 自动预览（用户手动改过 id 之后不再覆盖）
@@ -105,6 +112,40 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
 
   function toggleTool(alias: ToolAlias) {
     setTools((prev) => (prev.includes(alias) ? prev.filter((x) => x !== alias) : [...prev, alias]));
+  }
+
+  // ── 2026-10-20 需求①：AI 自动创建 —— 一句话描述 → 草稿预填（不落盘，保存仍走 ecosystem:employeeCreate）──
+  // 直写 `window.mjcode?.teamsDraftEmployee` 字面形态：bridge-parity 门禁靠它比对调用面与桥面。
+  async function aiGenerate() {
+    if (!aiDesc.trim()) { setAiError(t('settings.employeeAiDescRequired')); return; }
+    type DraftFn = (p: { description: string }) => Promise<{ ok?: boolean; draft?: EmployeeDraft; error?: string }>;
+    const fn = window.mjcode?.teamsDraftEmployee as DraftFn | undefined;
+    if (typeof fn !== 'function') {
+      setAiError(t('settings.employeeAiFailed', { error: '' }));
+      return;
+    }
+    setAiBusy(true);
+    setAiError('');
+    try {
+      const r = await fn({ description: aiDesc.trim() });
+      if (r?.ok && r.draft) {
+        const d = r.draft;
+        if (d.name) setName(String(d.name));
+        // 草稿 id 是 ASCII slug（中文名 slug 化为空）：必须置 idTouched=true，
+        // 否则下面的 autoId 效应会用 slugify(中文名)='' 把它覆盖掉。
+        if (d.id) { setId(String(d.id)); setIdTouched(true); }
+        if (d.system_prompt) setPrompt(String(d.system_prompt));
+        if (Array.isArray(d.tools)) {
+          setTools(d.tools.map(String).filter((x) => (TOOL_ALIASES as readonly string[]).includes(x)));
+        }
+      } else {
+        setAiError(t('settings.employeeAiFailed', { error: r?.error || '' }));
+      }
+    } catch (e) {
+      setAiError(t('settings.employeeAiFailed', { error: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setAiBusy(false);
+    }
   }
 
   async function save() {
@@ -224,6 +265,27 @@ export default function EmployeeFormModal({ open, onClose, employee, onSaved, on
       )}
     >
       <div className="space-y-3">
+        {!isEdit && (
+          <div className="border border-border rounded-lg p-3 space-y-2">
+            <TextArea
+              label={t('settings.employeeAiLabel')}
+              placeholder={t('settings.employeeAiPlaceholder')}
+              value={aiDesc}
+              onChange={(e) => setAiDesc(e.target.value)}
+              rows={2}
+              maxLength={2000}
+              hint={t('settings.employeeAiHint')}
+            />
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="secondary" loading={aiBusy} onClick={aiGenerate}>
+                {aiBusy ? t('settings.employeeAiBusy') : t('settings.employeeAiBtn')}
+              </Button>
+              {aiError && (
+                <span className="text-caption text-danger leading-relaxed" role="alert">{aiError}</span>
+              )}
+            </div>
+          </div>
+        )}
         <Input
           label={t('settings.employeeName')}
           placeholder={t('settings.employeeNamePh')}

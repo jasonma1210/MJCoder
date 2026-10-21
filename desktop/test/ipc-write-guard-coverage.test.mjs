@@ -68,6 +68,9 @@ const GUARDED_CHANNELS = [
   'model:testConnection',
   'local:preferences/set',
   'local:memories/add',
+  // M5 / T5-5：团队记忆一键确认晋升（写通道，落库改 scope/agent_id）——纳入清单防腐化：
+  // 将来若删掉 id 的边界守卫，本套件会红。候选读取 memory:teamPromotionCandidates 为纯读，不纳入。
+  'memory:confirmTeamPromotion',
   // 2026-10-18（P1-6）：会话分支写通道（复制历史落新会话，threadId/fromMessageId 须为数字）
   'local:threads/fork',
   // main/ipc/mcp.js

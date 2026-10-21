@@ -703,6 +703,20 @@ const CUA_PROMPT_SECTION = '\n\n- 桌面界面自动化（computer_use，macOS�
   + '必须明确给出目标应用名；涉及支付、删除、发送、验证码等敏感操作时会强制逐次请求用户确认，被拒即停止。'
   + '仅在用户明确要求「操作/点击某个 App 界面」时使用，不要用它替代已有的文件/命令工具';
 
+// M5 / T5-8：军团协同能力说明——**仅在宿主注入 teamContext（成员任务）时**并入 base。
+// 与 CUA 段同纪律：没接上下文时告诉模型有协同工具，只会诱导它调用一个不存在的工具。
+// 这段是运行期治理信息（谁能发言、发言边界），与角色人格无关，因此不因 customSystemPrompt 而跳过。
+const TEAM_PROMPT_SECTION = '\n\n## 军团协同（团队协作）\n'
+  + '你是本次团队派活中的一名成员。除本职工作外，可用以下协同工具：\n'
+  + '- team_list_members：查看本团队名册（成员 id / 名称 / 职责 / 统筹）。\n'
+  + '- team_board：查看本 run 的任务看板（任务状态、认领人、依赖），用来判断该等谁、谁在做什么。\n'
+  + '- team_send_message：向团队总线发消息（kind=assign/handoff/question/report/artifact_ref）。'
+  + '只传结论摘要与文件引用（refs），不要粘贴大段原文；跨成员交接必须留一条 report 或 handoff。\n'
+  + '- team_wait：确有未完成的跨成员依赖时登记等待（taskIds 取自 team_board），'
+  + '登记成功后本次执行会立即让出并发槽位，依赖就绪后自动重新排队继续。\n'
+  + '纪律：发送者身份与 run 归属由系统注入，不要伪造他人身份或跨团队投递；'
+  + '能写进拆解阶段 dependsOn 的依赖优先在拆解时表达，team_wait 只用于运行期才发现的依赖。';
+
 // 2026-10-19（设置 → 通用 → AI 描述粒度）：任务收尾文案的产出规范，三档。
 // 背景（用户反馈）：任务跑完后只剩「运行结束」一行，没有任何核心结论——用户不知道完成了什么、
 //   改了哪些文件、下一步该干嘛。这里把「必须给出结构化收尾」写进 system，由模型自行产出。
@@ -820,6 +834,48 @@ export const COMPUTER_USE_TOOL = { type: 'function', function: {
     allowed_apps: { type: 'array', items: { type: 'string' }, description: '允许操作的应用白名单（可选，缺省仅 app_name）' },
   }, required: ['objective', 'app_name'] },
 } };
+
+// M5 / T5-8：军团协同工具（4 个协作原语）——与 LOAD_SKILL_TOOL / COMPUTER_USE_TOOL 同款
+// **运行时条件追加**：仅当宿主注入 teamContext（当前 run 是某团队成员任务）时才通告给模型，
+// 不进 BASE_TOOLS 静态清单（其条数被 test/web-todo-tools.test.js 钉死，不得新增）。
+// 控制层（加/改/删成员、中断成员）刻意不在此列：成员 run 是无人值守通道，需要用户批准的调用
+// 只能被拒绝，接进来就是死工具（完整理由见 main/teamTools.js 文件头）。
+export const TEAM_TOOLS = [
+  { type: 'function', function: {
+    name: 'team_list_members',
+    description: '查看当前军团团队的名册（只读）：成员 id、名称、角色类型、是否统筹、可用工具。'
+      + '需要给某人发消息或等待某人时，先用本工具拿到准确的成员 id。',
+    parameters: { type: 'object', properties: {}, required: [] },
+  } },
+  { type: 'function', function: {
+    name: 'team_board',
+    description: '查看当前团队 run 的任务看板（只读）：每个子任务的状态、认领成员、依赖与是否关键。'
+      + '用于判断谁在做什么、某个依赖是否已完成；不含任务正文与结果全文。',
+    parameters: { type: 'object', properties: {}, required: [] },
+  } },
+  { type: 'function', function: {
+    name: 'team_send_message',
+    description: '向团队消息总线发一条消息（发送者与 run 归属由系统注入，不可伪造）。'
+      + '只放结论摘要与文件引用，不要粘贴大段原文；超过体积上限时系统会丢弃正文、只保留摘要与引用。'
+      + '跨成员交接、提问、汇报都走本工具。',
+    parameters: { type: 'object', properties: {
+      toMemberId: { type: 'string', description: '接收成员 id（取自 team_list_members）；省略 = 广播给全队' },
+      kind: { type: 'string', enum: ['assign', 'handoff', 'question', 'report', 'artifact_ref'], description: '消息类型（默认 report）' },
+      summary: { type: 'string', description: '一句话结论/请求（必填，越精炼越好）' },
+      refs: { type: 'array', items: { type: 'string' }, description: '引用（文件路径、任务 id、链接等，可选）' },
+      payload: { type: 'object', description: '可选结构化附加数据（体积超限时会被丢弃）' },
+    }, required: ['summary'] },
+  } },
+  { type: 'function', function: {
+    name: 'team_wait',
+    description: '登记对其它子任务的动态等待（运行期才发现的跨成员依赖）。登记成功后本次执行立即收尾'
+      + '并让出并发槽位，依赖全部完成时你的任务会被重新排队继续。能写进 dependsOn 的依赖不要用它。',
+    parameters: { type: 'object', properties: {
+      taskIds: { type: 'array', items: { type: 'string' }, description: '要等待的子任务 id 列表（取自 team_board）' },
+      timeoutMs: { type: 'number', description: '等待超时（毫秒，可选；超时后任务判失败并由调度器唤醒下游）' },
+    }, required: ['taskIds'] },
+  } },
+];
 
 // 从 SKILL.md 正文里取 description：优先 frontmatter 的 description，其次首个非标题正文行。
 // 这是**结构解析**（确定性文本提取），不涉及语义理解，故用规则而非 LLM。
@@ -1085,6 +1141,12 @@ const TOOL_HANDLER_NAMES = {
   computer_use: 'computerUse',
   // G-latex：LaTeX 编译原生工具通道
   latex_compile: 'latexCompile',
+  // M5 / T5-8：军团协同四工具（成员任务才注入；通道名须同步登记到 engineProcess/registry.js，
+  // 否则子进程路径会报「未知工具: team_*」）
+  team_list_members: 'teamListMembers',
+  team_send_message: 'teamSendMessage',
+  team_board: 'teamBoard',
+  team_wait: 'teamWait',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -1947,6 +2009,13 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   // G-latex：一次 latex_compile = 单次引擎编译（含 latexmk 多轮 pass），实现侧 5min
   // → 看门狗 6min（数值与 main/tools/timeouts.js 的 LATEX_* 对账，由 test 断言）
   latex_compile: 360000,
+  // M5 / T5-8：军团协同工具——都是主进程内的短路径（总线落库 / 看板读 / 等待登记）。
+  // team_wait 登记成功后立即中止本 run（不真的在工具里阻塞等待），故同样只需短超时；
+  // 给 60s 是为了覆盖 SQLite 写事务抖动，而不是等待本身。
+  team_list_members: 30000,
+  team_board: 30000,
+  team_send_message: 30000,
+  team_wait: 60000,
 };
 
 export function withTimeout(promise, ms, label) {
@@ -2035,14 +2104,27 @@ export function collapsePassLines(text, maxRun = PASS_COLLAPSE_RUN) {
   return out.join('\n');
 }
 
-// 长输出摘要化入口。仅处理纯字符串结果，或带 stdout/content 字段的对象结果；
+// 长输出摘要化入口。仅处理纯字符串结果，或带 stdout/content/result 字段的对象结果；
 // 其余结构原样返回（走既有 truncateToolResult 兜底）。fs 不可用时只折叠不落盘。
 export async function summarizeToolOutput(result, toolName = 'tool') {
   const pick = (r) => {
     if (typeof r === 'string') return { obj: null, field: null, text: r };
     if (r && typeof r === 'object') {
-      for (const f of ['stdout', 'content']) {
-        if (typeof r[f] === 'string' && r[f].length > TOOL_OUTPUT_SAVE_THRESHOLD) {
+      // 第八轮 B-20（D-806）修复：`result` 是 spawn_subagent 的**结论正文**键。
+      // 此前白名单只有 stdout/content，子代理结论因此既不走头尾保留、也不落盘，
+      // 而是被后面的 truncateToolResult 直接腰斩 —— 5 万 token 的结论截成 15000 字符，
+      // **尾部永久丢失且无从取回**（token_budget 闸的是子代理生成侧，与回传长度无关）。
+      //
+      // 阈值刻意用 TOOL_RESULT_MAX_CHARS（而非 TOOL_OUTPUT_SAVE_THRESHOLD）：
+      // 只有「长到会被腰斩」的那部分才需要摘要化 + 落盘补偿；
+      // 8k~15k 的结论原本能完整进上下文，保持原样（**不改变既有无损行为**）。
+      const fields = [
+        ['stdout', TOOL_OUTPUT_SAVE_THRESHOLD],
+        ['content', TOOL_OUTPUT_SAVE_THRESHOLD],
+        ['result', TOOL_RESULT_MAX_CHARS],
+      ];
+      for (const [f, threshold] of fields) {
+        if (typeof r[f] === 'string' && r[f].length > threshold) {
           return { obj: r, field: f, text: r[f] };
         }
       }
@@ -2218,6 +2300,10 @@ export async function runAgent({
   // 由宿主判定（macOS + 用户在设置中主动开启 + 主会话路径）后显式传入；
   // 为 false 时 computer_use 不进 tools 数组，模型既看不到也无法调用（V02 守卫兜底）。
   computerUseEnabled = false,
+  // M5 / T5-8：军团协同上下文——{ teamId, runId, taskId, memberId }。
+  // 非空 ⇒ 本次 run 是团队成员任务：追加 TEAM_TOOLS 与协同提示词段；null/缺省 ⇒
+  // 四个 schema 与提示词段都不出现（主会话/定时任务/普通编排组零回归）。
+  teamContext = null,
   // P1-4：稳定前缀区段序开关（A/B 回滚用；见 PROMPT_SECTIONS）
   enablePrefixOrder = true,
 } = {}) {
@@ -2264,7 +2350,7 @@ export async function runAgent({
     // 保证通道级追加（定时任务/Worker 产出契约）仍是 system 尾部不变量
     //（见 test/append-system-prompt.test.mjs）。styleSection 为每 run 定值，用户不改设置时
     // 字节稳定；BASE_PROMPT 本身仍是完整前缀，prompt cache 不受影响。
-    base: `${customSystemPrompt || BASE_PROMPT}${computerUseEnabled && !customSystemPrompt ? CUA_PROMPT_SECTION : ''}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
+    base: `${customSystemPrompt || BASE_PROMPT}${computerUseEnabled && !customSystemPrompt ? CUA_PROMPT_SECTION : ''}${teamContext && !customTools ? TEAM_PROMPT_SECTION : ''}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
     role: '',    // S2 每 run 定：数字员工角色设定
     tools: '',   // S2 每 run 定：工具表说明（工具 schema 本身经 allTools 下发，这里留位以备补充说明）
     skills: '',  // S2/S3：启用技能提示 + 技能索引（summary）或技能正文（full）
@@ -2463,6 +2549,11 @@ export async function runAgent({
   }
   if (computerUseEnabled && !customTools) {
     effectiveBaseTools = [...effectiveBaseTools, COMPUTER_USE_TOOL];
+  }
+  // M5 / T5-8：成员任务追加四个协同工具。与上面两处同纪律：不进 BASE_TOOLS 静态清单，
+  // 只在宿主显式注入 teamContext 时出现，故非团队通道的工具面与提示词字节完全不变。
+  if (teamContext && !customTools) {
+    effectiveBaseTools = [...effectiveBaseTools, ...TEAM_TOOLS];
   }
   // ── B2 移交项（F-007 定义侧闸门的**消费方**）──
   // shared/mcpToolDefs.mjs 用不可枚举的 `__blocked__`（原因字符串）标记 schema 超限的 MCP 工具，

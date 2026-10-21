@@ -183,6 +183,159 @@ const MIGRATIONS = [
       addColumn(db, 'task_groups', 'project_path', 'TEXT');
     },
   },
+  {
+    // M5 / T5-1（2026-10-20）：MJ 军团团队层——团队编制（设计稿 §5 表 1 / 表 2）。
+    // 归属键 project_path（D1，与记忆归档同键），切项目各看各的；
+    // source 两入口同表（D3）：生态中心「招募」= template，自定义描述 = custom，单一真值源；
+    // lead_member_id 为 NULL 即「缺统筹」的**唯一判据**（T5-4 在派活时强校验，不在别处重复判断）；
+    // 成员下架用 enabled=0（不物理删，历史 run 可追溯——物理删规则由 T5-9 收紧）。
+    // team_messages / team_turns 属 T5-2；看板任务的 owner_member_id 等列属 T5-3，本迁移不涉及。
+    version: 8,
+    name: 'team-roster',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS teams (
+          id             TEXT PRIMARY KEY,
+          name           TEXT NOT NULL,
+          description    TEXT NOT NULL DEFAULT '',
+          project_path   TEXT NOT NULL DEFAULT '',
+          lead_member_id TEXT,
+          default_mode   TEXT NOT NULL DEFAULT 'lead',
+          budget_json    TEXT,
+          created_at     INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          archived_at    INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_path, archived_at);
+
+        CREATE TABLE IF NOT EXISTS team_members (
+          id               TEXT PRIMARY KEY,
+          team_id          TEXT NOT NULL REFERENCES teams(id),
+          name             TEXT NOT NULL DEFAULT '',
+          avatar           TEXT,
+          role_kind        TEXT NOT NULL DEFAULT 'member',
+          source           TEXT NOT NULL DEFAULT 'custom',
+          template_ref     TEXT,
+          system_prompt    TEXT NOT NULL DEFAULT '',
+          tool_names_json  TEXT NOT NULL DEFAULT '[]',
+          allow_mcp        INTEGER NOT NULL DEFAULT 0,
+          model            TEXT,
+          approval_mode    TEXT NOT NULL DEFAULT 'on-request',
+          sandbox_policy   TEXT NOT NULL DEFAULT 'workspace-write',
+          skill_names_json TEXT NOT NULL DEFAULT '[]',
+          state            TEXT NOT NULL DEFAULT 'idle',
+          enabled          INTEGER NOT NULL DEFAULT 1,
+          created_at       INTEGER NOT NULL,
+          removed_at       INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id, enabled);
+      `);
+    },
+  },
+  {
+    // M5 / T5-2（2026-10-20）：消息总线条（设计稿 §5 表 3）。
+    // 语义三件套，缺一不可：
+    //   ① run 隔离——一次派活 = 一个 run（run_id），消息不跨 run 注入；
+    //   ② seq 单调——团队内单调序号，渲染顺序与模型注入顺序的**单一事实来源**；
+    //   ③ 只传摘要与引用——summary 为面向模型的摘要（硬上限 N 字符），refs_json 只放
+    //      文件路径 / artifact id / 任务 id；payload_json 禁全量上下文，写入前体积校验（G4）。
+    // 写入闸（G4 落点）在 teamStore.appendMessage：超限拒绝写入原始体积，回落 refs-only。
+    // 旁路广播（无 run 归属的团队生命周期系统消息）run_id 允许为空串，天然不进任何 run 的注入。
+    version: 9,
+    name: 'team-message-bus',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS team_messages (
+          id             TEXT PRIMARY KEY,
+          team_id        TEXT NOT NULL REFERENCES teams(id),
+          run_id         TEXT NOT NULL DEFAULT '',
+          seq            INTEGER NOT NULL,
+          from_member_id TEXT,
+          to_member_id   TEXT,
+          kind           TEXT NOT NULL DEFAULT 'system',
+          summary        TEXT NOT NULL DEFAULT '',
+          refs_json      TEXT NOT NULL DEFAULT '[]',
+          payload_json   TEXT,
+          created_at     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_team_messages_bus ON team_messages(team_id, run_id, seq);
+      `);
+    },
+  },
+  {
+    // M5 / T5-3（2026-10-20）：看板被动认领 + 运行期等待态（设计稿 §5 表 4 / §7「防死锁核心」）。
+    //
+    // 为什么**不**新增 board_state 列（设计稿表 4 列了它）：
+    //   sub_tasks.status 已是子任务状态的唯一事实来源；再添一个 board_state 立刻产生第二事实源，
+    //   两者一旦不同步就是「界面显示等待中、调度器却当它 running」这类静默错误。
+    //   表 4 的看板态语义本就落得进既有 status 值域，故按「单一事实来源」硬约束收敛为映射：
+    //     pending→pending ／ claimed→queued（认领者记 owner_member_id）／ running→running
+    //     waiting→waiting（本轮新增的**唯一**状态侵入点，§7）／ done→done ／ failed→failed ／ cancelled→skipped
+    //
+    // waiting_on_json：运行期**动态**等待边（§7 L2 兜底）。静态依赖仍在 depends_on（§7 L1 首选）——
+    //   两层分开存，才能度量「L1 消解了多少、L2 兜了多少」（R2 要求的观测口径）。
+    // wait_deadline_at：等待超时（§7 规则 2）。到点唤醒为 failed(reason='wait_timeout')，绝不静默挂死。
+    // wait_count：进入等待的累计次数。唤醒后 waiting_on_json 会被清空，没有它就无法度量动态等待占比（R2）。
+    // owner_member_id / claimed_at：被动认领痕迹（谁认领的、何时认领），T5-4 派活链路据此传入成员 id。
+    version: 10,
+    name: 'team-board-waiting',
+    up: (db) => {
+      addColumn(db, 'sub_tasks', 'owner_member_id', 'TEXT');
+      addColumn(db, 'sub_tasks', 'claimed_at', 'INTEGER');
+      addColumn(db, 'sub_tasks', 'waiting_on_json', "TEXT NOT NULL DEFAULT '[]'");
+      addColumn(db, 'sub_tasks', 'wait_deadline_at', 'INTEGER');
+      addColumn(db, 'sub_tasks', 'wait_count', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    // M5 / T5-5（2026-10-20）：团队记忆 —— **扩展既有 memories 表，不新建**（设计稿 §5「团队记忆」）。
+    //
+    // 为什么扩展而不新建表：团队记忆与项目/全局记忆的差异只有「归属维度」，六因子打分、
+    //   半衰期、容量闸、召回装配、可信度分级、文件视图全部可复用既有实现；新建表等于把这些
+    //   全部复制一份，立刻产生第二事实源（两套召回口径必然漂移）。
+    //
+    // 两列语义（判定即查询条件，不再引入第三个状态列）：
+    //   · 团队共享（决议/约定/产物索引）：scope='team' AND team_id=X AND agent_id IS NULL
+    //   · 成员私有长期记忆            ：scope='team' AND team_id=X AND agent_id=Y
+    //   · 项目级（无团队）            ：scope='project'（既有，本迁移不触碰）
+    // agent_id 记的是**军团成员 id**（team_members.id），与 sub_tasks.owner_member_id 同域，
+    //   故运行期认领链路一旦传入成员 id，成员私有记忆即可自动生效，无需再一次迁移。
+    //
+    // 为什么 team_id 不加外键：teams 行可被物理清理（T5-9 收紧规则尚未来到），外键会让
+    //   记忆随团队行一起消失——而设计稿 §5 归档语义明确要求「团队记忆不随团队删除」。
+    version: 11,
+    name: 'team-memory',
+    up: (db) => {
+      addColumn(db, 'memories', 'team_id', 'TEXT');
+      addColumn(db, 'memories', 'agent_id', 'TEXT');
+      // 索引键 (team_id, agent_id)：团队层召回固定按这两个维度过滤（共享 + 自身私有）
+      db.exec('CREATE INDEX IF NOT EXISTS idx_memories_team ON memories(team_id, agent_id)');
+    },
+  },
+  {
+    // M5 / T5-6（2026-10-21）：任务活动轨迹持久化 —— 用户真机反馈「只能看到执行中，
+    // 看不到每个员工具体在做什么」。此前 task_activity 只经 IPC 实时广播，窗口关掉/刷新即丢，
+    // 看板与对话卡也只能显示状态，无法回溯「谁在什么时候调了什么工具、为什么被撤下改派」。
+    //
+    // 只存**轨迹**不存正文：payload_json 只放渲染所需最小字段（textKey/textParams/kind/text/status），
+    // 工具参数在写入侧已截断（summarizeArgs，80 字符），避免把大段 prompt/文件内容写进库。
+    // (group_id, task_id, id) 覆盖「按任务取最近 N 条」，id 自增即时间序（seq 单调）。
+    version: 12,
+    name: 'task-activity-events',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_events (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          group_id    TEXT NOT NULL,
+          task_id     TEXT,
+          type        TEXT NOT NULL,
+          payload_json TEXT,
+          created_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_events_group ON task_events(group_id, id);
+      `);
+    },
+  },
 ];
 
 function openDb(dataDir) {

@@ -14,6 +14,8 @@
 //   → useAgentRun 每轮携带 rolePreset → agent:run。
 const fs = require('fs');
 const path = require('path');
+// T5-7：角色预设的模型绑定引用串编解码（单一事实来源 = main/modelShape.js）
+const { canonicalizeModelRef } = require('./modelShape');
 
 // 产品审批矩阵实际支持的模式（与 main/approval.js 对齐）；非法值一律降级为最保守的 on-request
 const VALID_APPROVAL = ['on-request', 'auto-safe', 'always', 'safe-auto', 'trusted'];
@@ -164,6 +166,10 @@ function buildEmployeeRuntimePreset(emp) {
   return {
     systemPrompt: String(emp.system_prompt || ''),
     toolNames,
+    // T5-7：per-agent 模型绑定——来源对象若带模型引用（`providerId::modelId`）就透传，
+    // 未声明/非法一律 null（agentRunner 见 null/解析不出即用默认模型，绝不因此让整轮失败）。
+    // canonical 化只有 modelShape.canonicalizeModelRef 一个判据，此处不重复解释格式。
+    model: canonicalizeModelRef(emp.model),
     // B1-B-02（F-019）：allowMcp 的缺省值在引擎侧已翻转为**最小权限**（只有显式 true 才保留
     // 全部 mcpTools，缺省/false 一律让 MCP 也走角色白名单）。这是刻意的方向修正，但若不同批
     // 处理存量角色，已发布的 51 个数字员工会「突然失去全部 MCP 工具」——行为变弱且无预告。

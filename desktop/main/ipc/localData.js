@@ -523,10 +523,12 @@ function register() {
   ipcMain.handle('memory:bgTasks', async (_, opts) => (deps.getMemoryScheduler() ? { ok: true, tasks: deps.getMemoryScheduler().listTasks(opts) } : { ok: false }));
   // P0-2c/P1-17：记忆管理 IPC（设置页「记忆与后台作业」分区消费）——
   // invalidate 早已在 memory/index.js 实现但无 IPC 出口；promote 对应「人工确认长期留存」。
-  ipcMain.handle('memory:list', async (_, { projectPath, limit = 50, offset = 0 } = {}) => {
+  ipcMain.handle('memory:list', async (_, { projectPath, limit = 50, offset = 0, scope = null, teamId = null, agentId = null } = {}) => {
     const memoryManager = deps.getMemoryManager();
     if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
-    return { ok: true, items: memoryManager.list({ spaceId: projectPath, limit, offset }) };
+    // M5 / T5-5：scope/teamId/agentId 为可选过滤（记忆面板按层筛选与团队视图取数）；
+    // 缺省保持原「按 space_id 全量」旧行为。
+    return { ok: true, items: memoryManager.list({ spaceId: projectPath, limit, offset, scope, teamId, agentId }) };
   });
   ipcMain.handle('memory:invalidate', async (_, { id, reason } = {}) => {
     const memoryManager = deps.getMemoryManager();
@@ -545,12 +547,54 @@ function register() {
   });
   // 三层记忆 M3：作用域清空（设置页「记忆」分区高级管理）——
   //   project —— 清空当前项目空间的项目级记忆；global —— 清空全部跨项目全局记忆（spaceId 不传）。
-  ipcMain.handle('memory:resetScope', async (_, { scope, projectPath } = {}) => {
-    guard.assertEnum({ scope }, 'scope', ['session', 'project', 'global']);
+  ipcMain.handle('memory:resetScope', async (_, { scope, projectPath, teamId } = {}) => {
+    guard.assertEnum({ scope }, 'scope', ['session', 'team', 'project', 'global']);
+    // M5 / T5-5：team 层必须携带 teamId（无归属键清空会退化为「按 space 删全部」，语义错误）
+    if (scope === 'team') {
+      try {
+        guard.assertStrings({ teamId }, { teamId: 200 });
+      } catch (e) {
+        return { ok: false, error: '缺少团队标识（teamId）' };
+      }
+    }
     const memoryManager = deps.getMemoryManager();
     if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
-    const removed = memoryManager.resetScope({ scope, spaceId: scope === 'global' ? null : (projectPath || null) });
+    const removed = memoryManager.resetScope({
+      scope,
+      spaceId: (scope === 'global' || scope === 'team') ? null : (projectPath || null),
+      teamId: scope === 'team' ? String(teamId) : null,
+    });
     return { ok: true, removed };
+  });
+  // M5 / T5-5（U5 提名制）：团队记忆「待晋升候选」——**只读**，写入永远由用户在 UI 一键确认。
+  //   团队知识留在宿主：团队名/统筹名/归档态由 teamStore 现算注入，MemoryManager 不认识军团实体。
+  ipcMain.handle('memory:teamPromotionCandidates', async (_, { limit = 100, minHits } = {}) => {
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    const ts = deps.getTeamStore?.();
+    const excludeTeamIds = [];
+    const excludeNames = [];
+    if (ts) {
+      for (const t of ts.listTeams({ includeArchived: true }) || []) {
+        // ① 已归档团队的记忆不参与跨团队复用
+        if (t.archivedAt) { excludeTeamIds.push(t.id); continue; }
+        // ② 含团队专有名（团队名 / 统筹名）的条目直接不进候选（防跨团队污染）
+        if (t.name) excludeNames.push(t.name);
+        if (t.leadMemberId) {
+          const lead = ts.getMember(t.id, t.leadMemberId);
+          if (lead?.name) excludeNames.push(lead.name);
+        }
+      }
+    }
+    return { ok: true, items: memoryManager.listTeamPromotionCandidates({ minHits, excludeNames, excludeTeamIds, limit }) };
+  });
+  // M5 / T5-5：一键确认晋升（团队记忆 → 项目级）——用户显式操作，走唯一向上晋升路径。
+  ipcMain.handle('memory:confirmTeamPromotion', async (_, { id } = {}) => {
+    guard.assertStrings({ id }, { id: 200 });
+    const memoryManager = deps.getMemoryManager();
+    if (!memoryManager) return { ok: false, error: '记忆子系统未就绪' };
+    const m = memoryManager.promoteTeamMemoryToProject(id);
+    return m ? { ok: true, item: m } : { ok: false, error: '记忆不存在、已失效或非团队层' };
   });
 }
 

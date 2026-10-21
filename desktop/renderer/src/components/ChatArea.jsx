@@ -110,6 +110,11 @@ export default function ChatArea({
   const [sessionExtras, setSessionExtras] = useState(EMPTY_EXTRAS);
   const [plusOpen, setPlusOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false); // A12：拖拽悬停提示
+  // 2026-10-20 需求⑤：军团选中态——`+` 菜单选定团队后显示团队名徽标，发送时自动派活给该团队。
+  // activeTeam 是列表项快照（id/name/description/leadMissing）；teamErr 是派活失败的**就地**反馈；teamBusy 是派活进行中。
+  const [activeTeam, setActiveTeam] = useState(null);
+  const [teamErr, setTeamErr] = useState('');
+  const [teamBusy, setTeamBusy] = useState(false);
   // A5：语音录入状态机
   const voice = useVoice({ onText: (text) => setInput((prev) => (prev ? `${prev} ${text}` : text)) });
   // 实际执行目录：隔离工作区就绪时用 worktree 路径，否则用项目目录
@@ -439,9 +444,80 @@ export default function ChatArea({
     setQueued((q) => q.filter((_, j) => j !== i));
     setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text));
   }
+
+  // 2026-10-20 需求⑤：选定军团后，发送 = 自动派活给该团队（目标就是用户输入的那句话）。
+  // 派活参数按缺省回落：模式取团队 defaultMode、预算取团队 budget、成员取全队（都由主进程承担单一事实来源）。
+  // 边界：① 未选团队 → 走普通 send；② 计划分步（opts.planStep 三参调用）→ 仍走普通 send（分步是既有编排，不走军团）。
+  // 缺统筹：本地预检先拦（activeTeam.leadMissing），主进程 LEAD_MISSING 是权威兜底判据。
+  async function sendOrDispatch(text, forcedThread, opts) {
+    // Composer 的发送按钮是**无参**调用（onSend()），与 useAgentRun.send 不同、这里不会自动回落 input；
+    // 此前只读 text 导致选了军团后点按钮 goal='' 直接 return（输入框不清空、无任何反馈）。
+    // 口径与 send 一致：显式入参优先，否则取输入框当前值。
+    const goal = String(text || input || '').trim();
+    if (!activeTeam || opts) { send(text, forcedThread, opts); return; }
+    if (!goal) return;
+    if (activeTeam.leadMissing) { setTeamErr(t('teams.needLeadFirst')); return; }
+    setTeamBusy(true);
+    setTeamErr('');
+    try {
+      // M5 / T5-8 真机修复：新会话直接派活时 thread 为 null，主进程建组写入的 thread_id 为空，
+      // 对话内团队卡按 thread_id 反查永远查不到 → 界面只剩一句「已派活」提示，其余全空白。
+      // 因此派活前先把会话落库（与 useAgentRun.send 同一口径），并把目标作为用户消息持久化，
+      // 这样对话里能同时看到「用户提问 + 团队协同卡」，刷新/切回也不会丢。
+      let runThreadId = thread?.id != null ? String(thread.id) : null;
+      if (runThreadId == null) {
+        try {
+          const nt = await api.createThread({
+            provider_id: selectedModel?.provider?.id,
+            model_id: selectedModel?.model?.id,
+            provider_name: selectedModel?.provider?.name,
+            model_name: selectedModel?.model?.model_id,
+            cwd,
+            project_path: project?.path || '',
+            title: goal.slice(0, 50),
+          });
+          if (!nt?.id) throw new Error('no thread id');
+          runThreadId = String(nt.id);
+          onNewMessage?.();
+          // 必须切到新会话：否则仍停在欢迎页，卡片不可见（与 send 同款真机事故）
+          onThreadCreated?.(nt);
+        } catch (err) {
+          setTeamErr(t('runtime.threadCreateFailed', { error: String(err?.message || err) }));
+          return;
+        }
+      }
+      // 团队 run 本身不产生 assistant 消息，用户提问必须显式落库，否则刷新后只剩卡片、没有提问
+      await api.sendMessage(runThreadId, { role: 'user', content: goal });
+      // 既有会话不会因 thread.id 变化触发消息重拉，就地补气泡；新建会话由切换后的拉取结果覆盖（同一条，不重复）
+      if (thread?.id != null) setMessages((m) => [...m, { role: 'user', content: goal }]);
+
+      const r = await window.mjcode?.teamsDispatch({
+        teamId: activeTeam.id,
+        goal,
+        threadId: runThreadId,
+        // 工作目录回落：全局团队不带 project_path，用当前会话工作目录（cwd）兜底，worker 才有真实落点
+        projectPath: cwd || project?.path || '',
+      });
+      if (r?.ok) {
+        setInput('');
+        setAttachments([]);
+        setModeMsg(t('teams.dispatched', { n: r.tasks || 0 }));
+      } else if (r?.code === 'LEAD_MISSING') {
+        setActiveTeam((p) => (p ? { ...p, leadMissing: true } : p));
+        setTeamErr(t('teams.needLeadFirst'));
+      } else {
+        setTeamErr(t('teams.dispatchFailed', { msg: r?.error || '' }));
+      }
+    } catch (e) {
+      setTeamErr(e?.message || String(e));
+    } finally {
+      setTeamBusy(false);
+    }
+  }
+
   // T2-2：Composer 接线在欢迎页与对话页间共享（仅 workspaceBound 语义随场景不同）
   const composerProps = {
-    input, setInput, onSend: send, onStop: stop, onPickFiles: pickFiles,
+    input, setInput, onSend: sendOrDispatch, onStop: stop, onPickFiles: pickFiles,
     loading, selectedModel, project,
     onOpenProjectPicker, agentsMd,
     providers, onSelectModel,
@@ -465,6 +541,10 @@ export default function ChatArea({
     // 改前按 `__` 裸切：服务名含 `__`/空格/中文时得到 `my` 或 `my%5F%5Fsvc` 这类**不存在的服务名**，
     // UI 上就显示成一个用户没配置过的服务。反解与拼名同源 → 显示名永远等于真实服务名。
     connectedServers: [...new Set((mcpTools || []).map((t) => decodeToolName(t?.function?.name)?.server).filter(Boolean))],
+    // 2026-10-20 需求⑤：军团选中态接线——徽标回显团队名、发送即自动派活、失败就地提示、可取消选中
+    activeTeam, onClearTeam: () => { setActiveTeam(null); setTeamErr(''); },
+    teamErr, onClearTeamErr: () => setTeamErr(''), teamBusy,
+    onSelectTeam: (team) => { setActiveTeam(team); setTeamErr(''); },
   };
 
   // 欢迎页
@@ -510,6 +590,7 @@ export default function ChatArea({
         model={selectedModel?.model?.model_id}
         runFiles={runFiles}
         onOpenFile={onOpenFile}
+        threadId={thread?.id != null ? String(thread.id) : null}
       />
       {/* Composer 容器必须 shrink-0：否则会被上方消息区挤压，输入框被推出可视区*/}
       <div className="px-6 pb-4 shrink-0">

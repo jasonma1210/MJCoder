@@ -91,5 +91,10 @@
   "latexProbe": "LaTeX toolchain check",
   "researchEvidence": "{n} evidence items",
   "researchDeepRead": "{n} sources read in depth",
-  "researchFailures": "{n} subquestions failed to search"
+  "researchFailures": "{n} subquestions failed to search",
+  "teamListMembers": "List team members",
+  "teamSendMessage": "Team message",
+  "teamBoard": "Team board",
+  "teamWait": "Team wait",
+  "teamWaitCount": "Waiting on {n} task(s)"
 }

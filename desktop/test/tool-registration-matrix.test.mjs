@@ -9,6 +9,11 @@
 // `return TOOL_LEVEL[tool] || 'L2'`，而未登记工具在 auto-safe 档下 L2 **直接放行**
 // （见 needsApproval 的 `if (approvalMode === 'auto-safe' && level === 'L2') return { need: false }`）。
 // 于是「新工具忘登记 TOOL_LEVEL」＝一个新加的写文件/外发工具默认自动批准。
+//
+// 第八轮 D-801（2026-10-21）更新：**兜底方向已由 'L2' 改为 'L3'** ——
+// 「漏登记即自动批准」这条结构性风险从根上消失（未知工具现在需审批、可被显式规则豁免）。
+// 但本套件的正向覆盖要求**不放宽**：显式登记仍优于依赖兜底（读代码的人不必去猜末行），
+// 且矩阵里有一句反向断言（⑤-d）专门钉住「兜底必须仍是 L3」—— 防有人把它改回 L2 图省事。
 // 旧版门禁只查「无孤儿条目」（反向），对这个方向**完全无感**：未登记工具不在任何集合里，
 // 不产生孤儿，恒绿。本版因此改为**逐工具正向覆盖**。
 //
@@ -60,7 +65,8 @@ const ALL_TOOLS = Array.from(new Set([...BASE_NAMES, ...TH_KEYS])).sort();
 const TOOL_SET = new Set(ALL_TOOLS);
 
 // 允许的「非静态 schema」工具：运行时条件追加，不进 BASE_TOOLS（其条数被基线条数测试钉死）。
-const RUNTIME_SCHEMA_TOOLS = ['computer_use'];
+// M5 / T5-8：team_* 四工具仅在成员任务（宿主注入 teamContext）时追加，故同属运行时 schema。
+const RUNTIME_SCHEMA_TOOLS = ['computer_use', 'team_list_members', 'team_send_message', 'team_board', 'team_wait'];
 // 「无 UI 轨迹标签」允许清单：编排/插件/定时/PR 类工具在其它视图展示，无 toolTrace.* 条目。
 const NO_LABEL_TOOLS = ['orchestrate_task', 'search_plugins', 'install_plugin', 'scheduled_create',
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment'];
@@ -173,7 +179,7 @@ for (const t of ALL_TOOLS) {
   const names = ['①schema', '②通道', '③handler', '④登记', '⑤分级', '⑥提示词', '⑦标签'];
   const bad = names.filter((_n, i) => !cols[i]);
   checkQuiet(`工具 ${t}：8 环节全登记`, bad.length === 0, bad.join(',') || '');
-  matrixRows.push({ t, cols, regs, level: cov.hits.join('+') || '（兜底 L2）' });
+  matrixRows.push({ t, cols, regs, level: cov.hits.join('+') || '（兜底 L3）' });
 }
 
 // ── 2. 逐工具审批分级覆盖（核心断言：53 条，每条一个工具）──
@@ -181,8 +187,8 @@ for (const t of ALL_TOOLS) {
 for (const t of ALL_TOOLS) {
   const cov = levelCoverage(t);
   const ok = cov.covered && cov.exactlyOne;
-  checkQuiet(`⑤ ${t}：审批分级不依赖 || 'L2' 兜底（显式登记 / 特判 / 只读，恰居其一）`, ok,
-    cov.covered ? `命中 ${cov.hits.join('+')}（${cov.hits.length} 个，应为 1）` : '三处均未登记 → 级别由兜底 L2 提供');
+  checkQuiet(`⑤ ${t}：审批分级不依赖末行兜底（显式登记 / 特判 / 只读，恰居其一）`, ok,
+    cov.covered ? `命中 ${cov.hits.join('+')}（${cov.hits.length} 个，应为 1）` : '三处均未登记 → 级别由兜底 L3 提供');
 }
 
 // 矩阵表（人眼可读证据：53 行 × 7 环节）
@@ -233,9 +239,17 @@ console.log('');
 {
   // ⑤-a 聚合：零工具依赖兜底（等价于 53 条逐工具断言的汇总，保留以便一眼看结论）
   const uncovered = ALL_TOOLS.filter((t) => !levelCoverage(t).covered);
-  check('⑤ 审批分级：零工具依赖 «TOOL_LEVEL[tool] || \'L2\'» 兜底（漏登记即＝auto-safe 档静默默认批准）',
+  check('⑤ 审批分级：零工具依赖末行兜底（显式登记 / 特判 / 只读，恰居其一；漏登记不得靠兜底拿级别）',
     uncovered.length === 0,
     uncovered.length ? `未登记：${uncovered.join(', ')}` : `${ALL_TOOLS.length} 个工具全部有显式依据`);
+
+  // ⑤-d（第八轮 D-801）：兜底方向必须是 **fail-closed**。
+  // 这条是**反向断言**：兜底写成 'L2' 会让任何未登记的新工具在 auto-safe 档静默放行；
+  // 写成 'L3' 则「需审批、可被显式规则豁免」，与 code_exec 普通代码 / mcp__ 工具同档。
+  // 注意：mcp__ 前缀在兜底之前就返回 L3，因此这里用不带前缀的假名验证真正的末行兜底。
+  const fallbackLevel = approval.toolLevel('__unregistered_tool_probe__');
+  check('⑤-d 未登记工具的级别兜底为 L3（fail-closed，不是 L2 静默放行）',
+    fallbackLevel === 'L3', `实测 ${fallbackLevel}`);
 
   // ⑤-b 聚合：三处恰居其一（防「两处都登记」导致读者无法判断谁生效）
   // 加严（B2-B-14）：本轮起**不再有任何豁免名单**——SHADOWED 白名单已随 3 条死条目一并移除，

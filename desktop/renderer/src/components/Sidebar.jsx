@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import ThreadList from './ThreadList';
-import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSettings, IconArchive } from './icons';
+import { IconClock, IconEdit, IconPlus, IconPuzzle, IconSettings, IconArchive, IconUsers } from './icons';
 import { activeNavOf } from '../lib/navState';
 import logo from '../assets/logo.png';
 import { useI18n } from '../i18n';
@@ -10,7 +10,7 @@ import { useI18n } from '../i18n';
 // 新会话自动归属当前项目/默认工作区，无需先「打开项目」再操作
 export default function Sidebar({
   threads, activeThread, onSelect, onNew, onDelete, onRenameThread, onAssignThread, onOpenArchive,
-  onOpenScheduled, onOpenEcosystem, onOpenProjectPicker, onOpenSettings,
+  onOpenScheduled, onOpenEcosystem, onOpenTeams, onOpenProjectPicker, onOpenSettings,
   projects, activeProject, onSelectProject, onRemoveProject, onRenameProject,
   onNewThread, filter, view,
 }) {
@@ -20,6 +20,7 @@ export default function Sidebar({
     showScheduled: !!view?.showScheduled,
     showDashboard: !!view?.showDashboard,
     showEcosystem: !!view?.showEcosystem,
+    showTeams: !!view?.showTeams,
     hasActiveThread: !!activeThread,
   });
   // 版本号从主进程 app.getVersion() 动态获取（此前硬编码 v1.0.0，发版后永远显示旧版本）
@@ -50,6 +51,8 @@ export default function Sidebar({
         <NavItem icon={<IconEdit size={16} />} label={t('sidebar.newChat')} onClick={onNew} active={activeNav === 'new'} />
         <NavItem icon={<IconClock size={16} />} label={t('sidebar.scheduled')} onClick={onOpenScheduled} active={activeNav === 'scheduled'} />
         <NavItem icon={<IconPuzzle size={16} />} label={t('sidebar.ecosystem')} onClick={onOpenEcosystem} active={activeNav === 'ecosystem'} />
+        {/* M5 / T5-1：MJ 军团（团队编制页）——与生态中心并列的一级入口 */}
+        <NavItem icon={<IconUsers size={16} />} label={t('sidebar.teams')} onClick={onOpenTeams} active={activeNav === 'teams'} />
       </div>
 
       {/* 会话（项目 → 会话 二级结构） */}

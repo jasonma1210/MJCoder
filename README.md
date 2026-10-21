@@ -3287,3 +3287,1156 @@ Electron 主进程 CJS + sql.js/better-sqlite3 双驱动 SQLite + Node ESM 测�
 - 其余未决：U2 运行中增删成员语义、U3 `team_interrupt` 的"谁能中断谁"、U4 蓝本未公开的 3 个协同工具（缺一手来源，不推测）。
 - **推荐下一步**：① 用户确认 U1 后，按 T5-1（编制）→ T5-2（消息总线）→ T5-7（per-agent 模型）→ T5-3（看板认领+防死锁）→ T5-4（Lead）→ T5-5（团队记忆）→ T5-6（群聊视图）→ T5-8（协同工具）顺序推进；② 每任务过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 门禁；③ 群聊视图遵守既有视觉纪律（无 emoji、图标白底黑字、无蓝色、性冷淡配色、固定头部 `shrink-0`）。
 
+---
+
+## 会话总结：MJ 军团设计稿升级 v1.1（U1–U5 五决策定案） · 2026-10-20（第四轮）
+
+### 会话背景
+用户以 agent harness 视角追问设计稿 §11 的 U1–U5 五个未决项应如何设计。给出的五条设计被用户确认（「好的，按这个方案更新设计稿」），本轮把决策**回写进设计稿并升版为 v1.1**。
+
+### 会话的主要目的
+把五个未决项从"待决"推进为"定案 + 落点"，改掉 v1 中被推翻的方案，补齐 v1 漏掉的洞，保持文档可评审、可开工。**不改业务代码**。
+
+### 完成的主要任务
+- **U1 防死锁（推翻 v1）**：原 v1 的「方案 A 新增 `waiting` 态 vs 方案 B 轮询」二选一被推翻，改为**三层设计**——**L1 依赖前置（首选，零侵入）**：把跨成员依赖写进子任务 DAG（`waiting_on_json` ≡ `dependsOn`），worker 池只派发依赖已就绪的任务，复用既有 `validateDag` 语义，"等待"不成为运行期状态；**L2 运行期 `waiting` 兜底**：仅服务执行中才发现的新依赖，进入即 `releaseSlot()`，由 `board_task_settled` 事件唤醒 resume；**L3 轮询**降为默认关闭的降级开关。硬规则由 4 条扩为 5 条（新增「建边与环检测必须同临界区防并发竞态」「`waiting` 态必须 UI 可见」）。
+- **U2 编制变更 → 快照制**（新增 §9.1）：run 启动打不可变快照（绑定 `run_id`），运行中改配置只影响下一 run（理由：中途换人格会让运行不可复现、破坏审计）；运行中禁止加人；**参与过任何 run 的成员只允许 `enabled=0` 下架、禁止物理删除**（保护历史可追溯）；下架时该成员正在跑则给用户显式选择「等他收尾／立即中断」。附**级联中断语义**四条，堵住孤儿任务：running→cancelled、waiting→cancelled 并**主动向其等待者发 settled 事件**、产物保留引用标 `incomplete`、下游按既有 `autoReplan` 重规划。快照落库**不新建表**，作为 run/group 的 JSON 列。
+- **U3 中断权限 → 三主体矩阵**（新增 §9.2）：用户可中断全部 / Lead 可中断本团队任意成员但**不可自我中止**/ 成员仅可中断自己认领的任务。两条硬约束：Lead 中断成员**必须写一条 `kind='system'` 的 `team_messages` 留理由**；**按 L1 逐次确认且不允许「本 run 同类豁免」**（对齐项目既有 L1/L3 不可被同类规则静默放行的规则，特意不开豁免口子）。并明确**中断 ≠ 删除**，中断前对 worktree 中间产物做记录标 `aborted`，保证可补偿。
+- **U4 工具集 → 按能力分层**（改写 §8）：不再纠结"6 vs 9"，改按通信层/协调层/控制层/交付层四层设计；判定**缺口最可能在控制层**（配置变更、下架），补 `team_update_member` / `team_remove_member` 两个工具行；拿到 DSH 真实清单后仅做**名字映射**。仍**不推测**未公开的 3 个工具。
+- **U5 团队记忆 → 提名制**（改写 §5）：默认**不自动写入**项目级（团队结论常含团队专有约定，自动晋升会污染跨团队上下文），改为**自动只提名、不写入**；**反例保护**——内容含团队专名（团队名/Lead 名）的条目不进候选；保留两条显式通道（面板按钮、`/mem` 指定 scope）；**补 v1 漏掉的归档洞**：团队归档后记忆不随归档删除，转「只读保留 + 不参与召回」，30 天随半衰期自然淘汰。
+- **任务表同步扩容**：T5-3 改名并收紧验收（依赖前置优先 / 动态等待释放槽位 / 建边环检测同临界区 / 等待超时可唤醒 / waiting 态 UI 可见）；**新增 T5-9**（编制快照与运行期变更语义，依赖 T5-1）、**T5-10**（中断权限矩阵与留痕，依赖 T5-3）。
+- **末章重构**：原「§11 风险与未决项」改为「**§12 决策定案与剩余风险**」，上半为 U1–U5 定案表（含落点章节号），下半为 4 条剩余风险（R1 未公开工具、R2 依赖前置质量取决于 Lead 拆解、R3 并发建边竞态、R4 快照存储位置待校验）。章节号连带重排：原 §9→§10、§10→§11、§11→§12。文档头部新增 **v1.1 修订记录**。
+
+### 会话中主要使用的技术栈
+`Edit`（对设计稿做 8 次定点改写 + README 追加）。全程未执行构建或测试——本轮为纯文档修订，**无业务代码变更**。
+
+### 关键决策和解决方案
+1. **U1 的核心跃迁**：从"新增一个运行期状态"改为"**把等待在拆解阶段消解掉**"——依赖前置是 harness 的正解，因为 `waiting_on_json` 本来就是 `dependsOn`，worker 池"不派发未就绪任务"即天然实现等待，**零侵入**。
+2. **U2 快照制的价值**：一份不可变快照同时解决"中途换人不可复现""运行期改动的一致性""历史 run 可追溯"三个问题，且**不新建表**。
+3. **U3 主动收窄自身权限**：Lead 不可自我中止、Lead 中断成员**不享受同类豁免**——与项目既有 L1/L3 规则严格对齐，避免团队成为"绕过审批"的新入口。
+4. **U4 拒绝照搬**：明确"我们做的是 MJCode 自己的团队层，不是 DSH 插件复刻"，因此 **"6 vs 9" 不构成约束**，改以能力分层兜住未知。
+5. **U5 提名制**：在"全手动没人用"与"全自动污染上下文"之间取中，自动只提名、写入权留给用户。
+
+### 会话中主要使用的工具
+`Edit`（设计稿 8 处定点改写 + README 累积追加）。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改（v1 → **v1.1**） | ① 标题与头部新增 v1.1 修订记录；② §5 团队记忆补提名制、反例保护、归档语义（U5）；③ **§7 整章重写为「三层依赖处理」**（U1，推翻 A/B 二选一）；④ §8 改为按能力分层并补 2 个控制层工具（U4）；⑤ **新增 §9「运行期编制变更与中断治理」**（U2/U3）；⑥ 章节重排 §9→§10、§10→§11、§11→§12；⑦ §11 任务表 T5-3 收紧 + 新增 T5-9/T5-10；⑧ §12 改为「决策定案与剩余风险」 | 用户确认「按这个方案更新设计稿」，把 U1–U5 五决策落地 |
+| `README.md` | 修改 | 文末累积追加本节「设计稿升级 v1.1」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`**：v1.1。关键新增/改写集中在 §7（三层依赖处理 + 5 条硬规则）、§9（9.1 快照制与级联中断、9.2 中断权限矩阵）、§12（U1–U5 定案表 + R1–R4 剩余风险）。**未改动任何业务代码**，文件仍受 `.gitignore` 的 `*.md` 规则约束未纳入版本控制。
+- **`README.md`**：Append 上表结构化总结（背景 / 目的 / 任务 / 技术栈 / 决策 / 工具 / 文件 / 详细内容 / 下一步）。
+
+### 尚存问题与推荐下一步
+- **剩余风险（已记入 §12.2）**：R1 蓝本未公开的 3 个协同工具仍缺一手来源（**不阻塞开工**）；R2 依赖前置的落地质量取决于 Lead 能否拆出跨成员依赖，需在 T5-3 观测「动态等待占比」；R3 并发建边竞态需专项单测覆盖；R4 快照作为 run/group JSON 列需在 T5-9 开工前校验既有 group 持久化结构可承载。
+- **推荐下一步**：设计稿已可开工。按 T5-1 → T5-2 → T5-7 → T5-3 → T5-4 → T5-5 → T5-6 → T5-8 → T5-9 → T5-10 顺序推进；每任务过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 门禁；`team_*` 工具严格走 8 环节接线。
+
+---
+
+## 会话总结：M5 团队层 T5-1 编制底座落地（首个里程碑） · 2026-10-20（第五轮）
+
+### 会话背景
+用户指令「请 agent harness 团队请配合完成」——承接设计稿 v1.1 的开工令，按依赖链 **T5-1 → T5-10** 顺序编码推进 M5「MJ 军团」团队层。本轮范围是 **T5-1（编制底座）全量落地 + 四道门禁转绿**，即团队编制从「数据表 → 持久化层 → IPC → preload 桥 → 渲染层页面」的端到端打通。这是 M5 的第一个里程碑，前序 R4 已校验「既有幂等迁移 + group 同行 JSON 列可承载编制快照，无返工风险」。
+
+### 会话的主要目的
+把设计稿 §5 表1/表2 的字段级定义与 §6 F1 组建流程、D3 两入口同一张表的约束，落实为**可运行、可持久化、可测试**的编制底座；同时让 typecheck / lint / 全量测试 / 渲染层构建四道门禁全部转绿，使 T5-1 具备验收条件。
+
+### 完成的主要任务
+- **T5-1a 数据库迁移 v8**：`db/index.js` 新增 `teams` / `team_members` 两表，字段级对齐设计稿 §5，幂等迁移（版本号守卫）。
+- **T5-1b 持久化层**：新增 `main/teamStore.js`，实现编制 CRUD + 枚举 **fail-closed 归一**（非法 approval/sandbox 值回落安全默认）+ **缺统筹单一判据**（`lead_member_id IS NULL`），不在多分支重复判断。
+- **T5-1c IPC + 桥**：新增 `main/ipc/teams.js`（**12 个通道**，含 AI 生成角色草稿、人审后落库），`main.js` 完成 TeamStore 接线，`preload.js` 暴露 **12 个 `teams*` 桥方法**（位置参数风格）。
+- **T5-1d 渲染层**：`navState.ts` 扩 `NavKey='teams'` 与 `showTeams`，`Sidebar.jsx` 新增「MJ 军团」入口（`IconUsers`），`App.jsx` 接线并削减至 798 raw 行，新建 `TeamsPage.tsx`（招募 + 自定义创建 + 缺统筹温和标签）。
+- **T5-1e i18n**：新增 `locales/{zh-CN,en-US}/teams.json`（**68 key，双向完全一致**）+ `sidebar.json` 补 `teams` 键。
+- **T5-1f 单元测试**：新增 `test/team-store.test.js`（**40 项断言**：持久化 / 重启恢复 / 两入口同表 / 缺统筹判据 / 枚举回落）。
+- **门禁全绿**：`typecheck` 零错误 · `lint` **0 errors / 159 warnings**（棘轮 161 未破）· `npm test` **总计 236 · 通过 236 · 失败 0**（233 套件 + smoke-load/render-smoke）· 渲染层生产构建 `✓ built in 10.22s`。
+
+### 会话中主要使用的技术栈
+Electron 33 + React 18 + Vite；SQLite（迁移 v8，两表）；IPC 双段契约（ipcMain.handle ↔ preload 顶层桥）；i18n 零依赖 context（`import.meta.glob` eager 收集）；渲染层 TS 化（`allowJs:true / checkJs:false / strict:true`，新组件必须 `.tsx`）；门禁体系（tsc --noEmit / eslint 棘轮 / run-all.mjs 发现式全量测试 + eval:check / doc-fact-check / harness-r7:check 前置门禁）。
+
+### 关键决策和解决方案
+1. **TeamsPage 直连 `window.mjcode.teams*`**：preload 桥是**位置参数风格**，与 `lib/ipc.js` 单载荷 `call()` 契约不匹配；且直连才能被 `gen-legacy-ledger.mjs` 的引用扫描器识别，避免把**在用的桥误计为死桥**（否则 12 个 teams 桥全判死，台账虚增）。
+2. **组件命名避开 `TeamSpace`**：仓库已存在 0.6.0-beta 的 `TeamSpace.jsx`，新组件命名为 `TeamsPage.tsx` 防冲突；同时 `.jsx` 旧文件删除并转 `.tsx`，满足 `no-new-jsx.test.js` 门禁。
+3. **App.jsx 削至 798 行**：为不破坏 `max-lines.test.js` 的 **800 raw 行软档**（纪律禁止往基线加条目），通过压缩 4 处注释/合并 effect 削减 6 行；本质是「先拆再合入」而非放宽门禁。
+4. **门禁失败一律「更新权威来源」而非绕行**：`doc-fact-check` 与 `harness-r7:check` 的红，根因是**我方新增 12 通道/桥导致的合法数字漂移**（非缺陷），故同步更新技术设计文档 5 处数字与 check.mjs 的 A17e/f/g 期望值（桥 202→214、通道 192→204、死桥台账 46/202→50/214）。
+5. **`teams` 组在台账中如实登记**：新增 12 桥中 8 个已被 TeamsPage 引用，剩 4 个（get/update/updateMember/setMemberEnabled）属 T5-4 派活，新组计 4、处置 `pending`，不粉饰。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Write` / `Edit`（源码与文档）、`Shell`（跑门禁：`npm run typecheck`、`npm run lint`、`npm test`、`npm run build --prefix renderer`、`node scripts/doc-fact-check.mjs`、`node scripts/gen-legacy-ledger.mjs --write`、`node docs/harness-r7/04-test/check.mjs`）、`git`（`add` 新源文件以满足 `untracked-deps.test.mjs`）。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `desktop/main/db/index.js` | 修改 | 新增迁移 v8：`teams` / `team_members` 两表 | T5-1a 编制持久化底座 |
+| `desktop/main/teamStore.js` | **新增** | 编制 CRUD + 枚举 fail-closed 归一 + 缺统筹单一判据 | T5-1b 持久化层 |
+| `desktop/main/ipc/teams.js` | **新增** | 12 个 IPC 通道（含 AI 角色草稿人审落库） | T5-1c 前后端契约 |
+| `desktop/main/main.js` | 修改 | TeamStore 接线 + 注释削减至 1800 raw 行 | T5-1c 接线 + 守住 max-lines 软档 |
+| `desktop/main/preload.js` | 修改 | 暴露 12 个 `teams*` 桥（位置参数风格） | T5-1c 渲染层可用面 |
+| `desktop/main/ipc/ecosystem.js` | 修改 | 新增导出 `resolveEmployeeById` | T5-1 招募复用生态中心数字员工 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | **新增** | 招募 + 自定义创建 + 缺统筹温和标签；直连 `window.mjcode.teams*` | T5-1d 编制页 |
+| `desktop/renderer/src/App.jsx` | 修改 | 接入 `TeamsPage` + 削减至 798 raw 行 | T5-1d 接线 + 守 max-lines |
+| `desktop/renderer/src/components/Sidebar.jsx` | 修改 | 新增「MJ 军团」NavItem（`IconUsers`） | T5-1d 导航入口 |
+| `desktop/renderer/src/lib/navState.ts` | 修改 | `NavKey` 加 `teams`、`activeNavOf` 加分支、`NavViewState` 加 `showTeams` | T5-1d 导航态 |
+| `desktop/renderer/src/components/icons/index.jsx` | 修改 | 新增 `IconUsers` | T5-1d 图标 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | **新增** | 68 个 key | T5-1e 中文包 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | **新增** | 68 个 key（与 zh-CN 双向一致） | T5-1e 英文包 |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/sidebar.json` | 修改 | 补 `teams` 键 | T5-1e 导航文案 |
+| `desktop/test/team-store.test.js` | **新增** | 40 项断言（持久化/重启恢复/两入口同表/缺统筹/枚举回落） | T5-1f 守护测试 |
+| `desktop/test/sidebar-nav-active.test.js` | 修改 | 扩为 4 入口契约（32 组合穷举 + `teams` 断言） | 导航门禁随 M5 扩展 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | 重新生成（死桥 46/202 → 50/214） | 台账须等于现算 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 数字与分组同步（新增 `teams` 组 4 条 `pending`） | 台账文档一致性 |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A17e/f/g 不变量更新（桥 202→214、通道 192→204） | harness-r7 不变量随桥面扩展 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 5 处快照数字同步（套件 232→233、通道 192→204、桥 202→214、main 模块 139→141、raw 1785→1800） | doc-fact-check 门禁 |
+| `README.md` | 修改 | 文末累积追加本节「T5-1 编制底座」会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`desktop/main/teamStore.js`（新增）**：对外暴露编制 CRUD；枚举归一采用 **fail-closed**（非法 approval/sandbox 一律回落安全默认），"是否缺统筹"的判据**只有一处**（`lead_member_id IS NULL`），避免多分支重复判断导致的规则漂移。
+- **`desktop/main/ipc/teams.js`（新增）**：12 个通道；含 `genRoleDraft` 类能力——AI 只产出角色草稿，**必须人审后落库**（对齐设计稿「自动只提名、写入权留用户」的精神）。
+- **`desktop/main/preload.js`（修改）**：桥方法总数 202 → **214**（+12 `teams*`），风格与既有位置参数桥一致。
+- **`desktop/renderer/src/components/TeamsPage.tsx`（新增）**：由 `.jsx` 转 `.tsx`（并删旧文件）；关键决策是**删除 `bridge()` 辅助、直连 `window.mjcode.*`**，使台账扫描器能识别引用；i18n 一律走 `t(key)`（修正了全角冒号导致的裸中文门禁红）；间距半档类 `px-1.5`/`py-0.5` 收敛为 `px-2`/`py-1`。
+- **`desktop/renderer/src/App.jsx`（修改）**：按代码纪律**削减 6 行**（804 → 798 raw），守住 800 软档且不往基线加条目。
+- **`docs/MJCode-技术设计文档-2026-10-17.md`（修改）**：仅同步受本次新增影响的派生数字，**未改任何结论**；`doc-fact-check` 复跑输出 `✓ 文档与源码一致`。
+- **`docs/harness-r7/04-test/check.mjs`（修改）**：A17e（185±2 → 197±2）、A17f（202 → 214）、A17g（187 → 199）随主进程通道/桥面扩展重新定档；复跑 `PASS=76 FAIL=0`。
+- **`README.md`**：Append 上表结构化总结（背景 / 目的 / 任务 / 技术栈 / 决策 / 工具 / 文件 / 详细内容 / 下一步）。
+
+### 尚存问题与推荐下一步
+- **T5-1 尚未提交**：上述全部改动仍在工作区（`git add` 仅用于满足 `untracked-deps.test.mjs`，未 commit）。工作区另携带**同批未提交**的 `exec.js → execWrite.js` 抽离重构（`max-lines` 800 软档历史欠账，非 T5-1 范围），提交时需分批说明。
+- **可视化/真机项**：本机为非 Linux/macOS 沙箱受限环境，3 个沙箱相关套件按设计跳过（不计入 236 通过）；不影响 T5-1 结论。
+- **推荐下一步**：T5-1 验收通过后按依赖链进入 **T5-2 消息总线 → T5-7 per-agent 模型 → T5-3 跨成员依赖 + 防死锁 → T5-4 Lead 与派活校验 → T5-5 团队记忆 → T5-6 群聊视图 → T5-8 `team_*` 工具 → T5-9 编制快照 → T5-10 中断权限矩阵**；每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁；新增 `team_*` 工具必须走 8 环节完整接线。
+
+---
+
+## 会话总结：M5 团队层 T5-2 消息总线落地（IPC 事件契约 + G4 体积闸） · 2026-10-20（第六轮）
+
+### 会话背景
+承接上一轮 **T5-1 编制底座**（四道门禁全绿）。按 M5 依赖链 **T5-1 → T5-2 → T5-7 → T5-3 → …** 顺序推进，本轮落地第二个构件：**消息总线**。设计唯一事实来源是 [MJCode-技术设计稿-v1.1](file:///Users/jianma/Desktop/MJCode/MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md) 的 §5 表 3（`team_messages` 字段）、§2 G4（消息体积闸）、§11 验收行。
+
+### 会话的主要目的
+把设计稿的「消息总线」从纸面落成代码，并达成该任务的验收判据原文：**落库 + 渲染可见；超限消息被闸拒绝并回落 refs-only**。三条语义必须同时成立：① 只传摘要与引用（`summary` + `refs`，不搬运全文）；② 超限消息被闸拒绝并回落 refs-only（丢 `payload`、截断 `summary`）；③ 落库后渲染层可见。
+
+### 完成的主要任务
+- **T5-2a 数据底座**：SQLite 迁移 **v9 `team-message-bus`**，新增 `team_messages` 表（字段级对齐表 3）+ `(team_id, run_id, seq)` 索引。
+- **T5-2b 持久化层**：`teamStore` 新增消息常量（`MESSAGE_KINDS` / 三个体积上限 / `SYSTEM_RUN_ID`）、`normalizeRefs`（只收字符串、去空、单条限 512、最多 20 条）、`rowToMessage`，以及 **`appendMessage`（唯一写入口，G4 体积闸在此判并回落 refs-only）/ `getMessage` / `listMessages`**。
+- **T5-2c IPC 事件契约**：`ipc/teams.js` 新增 `emitTeamsEvent` / `postMessage` / `broadcastSystem` 三个内部函数 + **4 处生命周期系统广播**（`teamCreated` / `memberAdded` / `leadSet` / `teamArchived`）+ 只读通道 **`teams:listMessages`**；`main.js` 新增 `emitTeamsEvent` 并注入 `initTeamsIpc`；`preload.js` 新增 **`teamsListMessages` 与 `onTeamsEvent`** 双桥。
+- **T5-2d 渲染层**：`TeamsPage` 团队卡片内新增**消息时间轴**（默认收起，展开时拉历史 + 事件实时追加，按 `seq` 升序）。
+- **T5-2e 国际化**：`zh-CN` / `en-US` 双向各新增 **14 个 key**（标题与空态、展开/收起、6 个消息种类、4 个系统广播类别）。
+- **T5-2f 守护测试**：新建 **[team-message-bus.test.js](file:///Users/jianma/Desktop/MJCode/desktop/test/team-message-bus.test.js)**，**36 项断言**（落库字段 / seq 团队内单调且分团队计数 / run 隔离 / 四条 G4 闸回落路径 / refs 归一 / 非法入参 / 重启恢复后 seq 续增）。
+- **门禁同步与全量验证**：6 道门禁全部转绿（明细见下节）。
+
+### 会话中主要使用的技术栈
+SQLite（`sql.js` WASM 驱动）迁移与 `db.transaction` 临界区；Electron `ipcMain.handle`（invoke）+ `BrowserWindow.getAllWindows().webContents.send`（事件广播）；`contextBridge` preload「位置参数桥 + 事件订阅桥（返回 `removeListener` 清理函数）」；React + TypeScript（`useState` / `useCallback` / `useEffect` 幂等订阅）；Tailwind；i18n **静态字面量映射表**（key 当值使用，过「动态引用防漏登记」门禁）。
+
+### 关键决策和解决方案
+1. **不提供任何「自由发言」写通道**。设计 G1 规定发言只能由**看板事件驱动 + 主管指定**触发，若给渲染层一个 `teams:sendMessage` 写桥，用户就能绕过仲裁自由发言，护栏形同虚设。故**写入路径全部留在主进程内部**（本轮为 4 处生命周期系统广播，后续 T5-3/T5-4/T5-8 接派活链路），IPC 只暴露**只读 `teams:listMessages`**。
+2. **G4 体积闸必须在「原始体积」上判，再决定是否截断**。若先截断再判，任何消息都会「不超限」，闸门就成了摆设。实现为：`summary > 600 字符` 或 `summary + payload > 4000 字节` ⇒ `gated = true`，丢弃 `payload`、把 `summary` 截到硬上限，并通过返回值 `{message, gated, reason}` 让宿主落一条审计（`team_message_gate`）。
+3. **`seq` 自增与 `INSERT` 放进同一个 `db.transaction`**。并发追加时两条消息不可能拿到同一个序号；`seq` 因此成为**渲染顺序与模型注入顺序的单一事实来源**。
+4. **定义 `run_id = ''`（`SYSTEM_RUN_ID`）为「无 run 归属的旁路广播」**，不进任何 run 的注入；`listMessages` 里 `runId` 传空串 = 不做 run 过滤（供时间轴取全量），传真实 run 值 = 严格隔离。
+5. **系统广播的 `summary` 存「面向模型的中性机器文本」，界面文案交渲染层翻译**。若把中文直接写进 `summary`，英文界面会渲染中文（既破「零裸中文」门禁纪律，也是真机可见的显示事故）。故落库 `summary = 'teamCreated: 前端交付组'`、`payload = { sys, name }`，渲染层用静态映射 `SYS_LABEL` 把 `sys` 翻成当前语言的文案。
+6. **幂等去重**：历史拉取与事件推送可能重叠同一条消息，渲染层按 `id` 去重、按 `seq` 排序，重复事件不会造成重复渲染。
+7. **时间轴展开按钮复用 `ui/Button`（`ghost`/`xs`）而非裸 `<button>`**，避免抬升 `rawButton` 台账计数导致 `ui-conventions` / `legacy-ledger` 门禁破线。
+8. **补导出 `MESSAGE_REF_MAX`**：写测试时发现该常量未进导出表，测试侧只能拿到 `undefined`（断言静默失真）。与其在测试里硬编码 512，不如把它与其余常量同样从单一事实来源导出。
+
+### 会话中主要使用的工具
+`Read`（先读 `teamStore.js` / `ipc/teams.js` / `main.js` / `preload.js` / `TeamsPage.tsx` / `i18n.test.mjs` 再动手，落实「不臆想不猜测」）；`Edit` / `Write`（分层落地与新建测试）；`Grep` / `Glob`（定位门禁权威数字与既有桥风格）；`Shell`（`node` 直跑测试、`npm run typecheck/lint/test`、渲染层构建）；`TodoWrite`（T5-2a…f 分阶段跟踪）。
+
+### 修改了哪些文件
+
+| 文件 | 类型 | 修改内容 | 修改原因 |
+|---|---|---|---|
+| `desktop/main/db/index.js` | 修改 | 新增迁移 **v9 `team-message-bus`**：`team_messages` 表 + 联合索引 | T5-2a 消息落库底座（对齐设计稿表 3） |
+| `desktop/main/teamStore.js` | 修改 | 消息常量、`normalizeRefs`、`rowToMessage`、`appendMessage`（含 G4 闸回落 refs-only）、`getMessage`、`listMessages`、导出补齐 | T5-2b 唯一写入口与读入口 |
+| `desktop/main/ipc/teams.js` | 修改 | `emitTeamsEvent`/`postMessage`/`broadcastSystem` + 4 处生命周期广播 + `teams:listMessages` 通道 + deps 注释 | T5-2c 事件契约（不给自由发言写通道） |
+| `desktop/main/main.js` | 修改 | 新增 `emitTeamsEvent(evt)` 并注入 `initTeamsIpc`（raw 1800→1810 行） | T5-2c 主进程事件出口接线 |
+| `desktop/main/preload.js` | 修改 | 新增 `teamsListMessages` 与 `onTeamsEvent` 双桥（桥面 214→216） | T5-2c 渲染层可用面 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | 消息时间轴：类型 + `KIND_LABEL`/`SYS_LABEL` 静态映射 + `timeline`/`msgOpen` 状态 + 幂等订阅 + 历史拉取 + 卡片内渲染 | T5-2d 「渲染可见」 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | +14 个 key | T5-2e 中文文案 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | +14 个 key（与 zh-CN 双向一致） | T5-2e 英文文案 |
+| `desktop/test/team-message-bus.test.js` | **新增** | 36 项断言 | T5-2f 守护测试 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 4 处快照数字同步（套件 233→234、通道 204→205、桥 214→216、main.js raw 1800→1810） | `doc-fact-check` 门禁 |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A17f=216、A17g=200（A17e 在 197±2 区间内无需改） | harness-r7 不变量随桥面扩展 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | 重新生成（死桥 50/214 → **50/216**） | 台账必须等于现算 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 数字与口径同步 + 新增一条变更记录 | 台账文档一致性（「文档不撒谎」断言） |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`desktop/main/teamStore.js`（修改，核心）**：写入闸的三个关键实现点——① 体积判定**在原始字符串上**（`Buffer.byteLength(rawSummary,'utf8')`）而非截断后；② 回落动作是**丢 `payload` + 截断 `summary`**（`refs` 原样保留，因为引用不是体积风险）；③ `seq` 取自 `SELECT MAX(seq) ... WHERE team_id = ?` 并与 `INSERT` 同事务，团队内单调、跨团队各算各的。
+- **`desktop/main/ipc/teams.js`（修改）**：`broadcastSystem` 把「系统广播」收敛成**一个函数**，4 处生命周期事件（建团队 / 加成员（招募与自定义两处）/ 指定统筹 / 归档）都调用它，避免四处手写消息体导致格式漂移；`postMessage` 是**唯一**的落库+广播出口，超限时补落一条 `team_message_gate` 审计。
+- **`desktop/renderer/src/components/TeamsPage.tsx`（修改）**：`KIND_LABEL` / `SYS_LABEL` 采用**顶层静态字面量映射**（值即 i18n key），既过「组件引用 key 必须存在」断言③，又过「映射表动态引用防漏登记」断言⑥；`onTeamsEvent` 回调参数收为 `unknown` 再内部断言为 `TeamsEventData`（`window.mjcode` 的类型是 `Record<string, (...args: unknown[]) => unknown>`，直接标注窄类型会在 `strictFunctionTypes` 下报错）。
+- **`desktop/test/team-message-bus.test.js`（新增）**：四条 G4 回落路径分开断言（摘要超限 / 合计超限 / 回落时 `payload` 确实为 `null` / 回落时 `refs` 仍在），并断言**重启后 seq 从既有最大值续增**——这是「落盘后仍单调」的关键回归点。
+- **`docs/harness-r7/存量收敛台账.md`（修改）**：本轮**死桥总数不变（50）**，只有分母 214→216 上升（两个新桥均已被子页面引用）；文档同步写明这一点，避免把「分母变了」误读成「欠账增加」。
+
+### 门禁结果（本轮真实输出）
+- `npm run typecheck`：**0 error**。
+- `npm run lint`：**159 warnings / 0 error**（棘轮上限 161，未破线、无反弹）。
+- `npm test`：**总计 237 · 通过 237 · 失败 0**（= 234 个套件 + 3 个前置门禁；3 条平台相关套件按设计跳过并记账）。
+- `doc-fact-check`：`✓ 文档与源码一致`（现算：套件 234 · 通道 205 · 桥方法 216 · 主进程 JS 141 · main.js raw 1810）。
+- `harness-r7:check`：**PASS=76 FAIL=0**（A17f/A17g 已随桥面扩展重新定档）。
+- `legacy-ledger`：**20/20 通过**（台账 死桥 **50/216**、裸 button **258**）。
+- `npm run build --prefix renderer`：构建成功。
+
+### 尚存问题与推荐下一步
+- **尚未提交**：本轮与上一轮 T5-1 的改动都还在工作区（`git add` 仅用于满足 `untracked-deps.test.mjs`，未 commit）。工作区另携带**同批非 T5 范围**的 `exec.js → execWrite.js` 抽离重构，提交时需分批说明。
+- **可见性边界（诚实说明）**：本轮渲染层能看到的**只有系统广播**（建团队/加成员/指定统筹/归档）。成员间的 `assign` / `report` 等消息要等 **T5-3（跨成员依赖）/ T5-4（Lead 与派活）** 把派活链路接上才会真正产生——「落库 + 渲染可见」的管道本轮已完整打通并用测试证明，但**内容产出依赖下游任务**。
+- **未做的端到端目视验证**：消息时间轴的真机（Electron 窗口内）展开/实时追加效果未做人工目视确认，建议下次启动应用时建团队触发一次系统广播来核对。
+- **推荐下一步**：按依赖链进入 **T5-7（per-agent 模型绑定）**；随后 T5-3 / T5-4 / T5-5 / T5-6 / T5-8 / T5-9 / T5-10。每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁，并**同步更新会漂移的权威数字**（`doc-fact-check` 现算值、`check.mjs` A17f/A17g、`legacy-ledger.json` + 台账文档）。
+
+## 会话总结：M5 团队层 T5-7 per-agent 模型绑定落地 · 2026-10-20（第七轮）
+
+### 会话的背景
+延续 MJ 军团（团队层）M5 依赖链，本轮推进第七个任务 **T5-7：per-agent 模型绑定**。此前 T5-1（编制底座）已落地 teams/team_members 表与 12 条编制桥，T5-2（消息总线）已打通落库 + 事件广播管道，但成员的 `model` 字段在表结构里只是占位的 `TEXT NULL`，既无写入路径、也无消费端——团队里每个成员实际上只能跑会话默认模型，「一个团队里研究员用推理模型、执行者用快模型」这一核心诉求无法表达。设计稿唯一事实来源为 `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（v1.1）：§4 L98「`team_members.model`；空=用默认模型」、§5 表 2「`model` TEXT NULL（T5-7），per-agent 模型；NULL=默认模型」、§11 L380 验收原文「**`rolePreset` 补 `model`；空值回落默认模型**」。
+
+### 会话的主要目的
+把「成员级模型绑定」做成**端到端可用链路**：成员表落库 `model` → 下发到渲染层做回显与选择 → `rolePreset` 透传到引擎侧 → agentRunner 覆盖该轮 `engineParams.model`；且保持一致性的两条铁律：**空值一律回落会话默认模型（fail-closed）**、**模型引用串格式只有一份实现**（避免「界面显示已绑定、实际跑默认模型」的静默错误）。
+
+### 完成的主要任务
+1. **T5-7a 模型引用编解码**：在既有 `main/modelShape.js`（全项目唯一的模型形状/引用转换处）新增 `providerId::modelId` 复合引用串的 `encodeModelRef / decodeModelRef / canonicalizeModelRef / resolveModelRef` 与 `MODEL_REF_MAX=160` 等常量；`decodeModelRef` 绝不抛异常（坏串一律返回 `null`），`resolveModelRef` 依据本机 `listProviders()` 解析回**扁平形**模型对象，供应商/模型已被删除时回落 `null`。
+2. **T5-7b 落库规范化**：`teamStore.normalizeMemberInput` 对 `member.model` 走 `canonicalizeModelRef` 单点清洗（解析不出即落 `null`）；`patch` 未含 `model` 时不改动既有绑定。
+3. **T5-7c rolePreset 补 model**：`ecosystem.buildEmployeeRuntimePreset` 返回对象新增 `model: canonicalizeModelRef(emp.model)`；`shared-ipc/contract.mjs` 的 `rolePreset` schema 新增 `model: z.string().max(160).nullable().optional()`，契约层与插件层同步。
+4. **T5-7d 消费端接线**：`agentRunner` 在 `if (payload.rolePreset)` 块内判定 `payload.rolePreset.model`，经注入的 `deps.resolveModelRef` 解析成功后 `engineParams.model = toAgentModel(...)` 覆盖会话模型；解析失败/转换异常仅 `console.warn` 并回落，**绝不让整轮失败**。
+5. **T5-7e 编制 UI**：新建 `MemberModelSelect.tsx` 承载成员模型选择器（选项来自 `window.mjcode.localProviders()`，label 形如「供应商名 · 模型名」）；`TeamsPage` 成员行新增选择器，回写 `window.mjcode.teamsUpdateMember(teamId, memberId, { model })`；主进程 `ipc/teams.js` 的 `decorateMember` 下发 `modelRef:{providerId,modelId}` 与 `modelLabel` 供渲染层回显生效绑定与「绑定已失效」态。
+6. **T5-7f 守护测试**：新建 `test/member-model.test.js`，**54 项断言**覆盖 codec 往返不变量与边界、resolveModelRef 解析与回落、解析结果可 `toAgentModel`、teamStore canonical 化与重启保持、agentRunner 覆盖/回落/缺依赖不崩、契约 `validateAgentRunPayload` 放行与拒绝。
+7. **T5-7g 门禁与文档同步**：更新会漂移的权威数字（`doc-fact-check` 现算值、`legacy-ledger` 台账），并追加本节 README 总结。
+
+### 会话中主要使用的技术栈
+- **Electron 三进程架构**：渲染层（React/TS）→ Electron 主进程（CJS）→ agent-core（ESM），工具 RPC 走静态白名单。
+- **模型「两形状」单一事实源**：扁平形 `{providerId,isGlobal,baseUrl,model,...}` ↔ 嵌套形 `{provider:{id,isGlobal,base_url},model:{model_id,context_window,...}}`，转换集中在 `main/modelShape.js`（`toAgentModel` / `toChatRequest` / `assertAgentModel`）。
+- **Zod 契约**：`shared-ipc/contract.mjs` 的 `rolePreset` schema 校验会话入参。
+- **SQLite（打包版固定 sql.js）**：`team_members` 表落库与 canonical 化读取。
+- **i18n 双语（zh-CN / en-US）**：静态字面量 key + 动态引用 key 存在性断言。
+- **门禁体系**：`typecheck`、`lint`（棘轮 `--max-warnings=161`）、`npm test`（发现式 + 3 前置门禁 `eval:check` / `doc-fact-check` / `harness-r7:check`）、`legacy-ledger`、`max-lines`（800 行 God File 黄线只减不增）、`untracked-deps`（新增源文件必须入 git 索引）、渲染层 `vite build`。
+
+### 关键决策和解决方案
+- **引用串只存 id 快照，不存对象**：`member.model` 落库仅存 `providerId::modelId` 字符串，不存 provider/model 对象；解析发生在**消费时刻**（agentRunner 经 `deps.resolveModelRef` 注入，数据源 `localStore.listProviders()`），这样供应商配置变更后不会留下「已固化但已失效」的快照；解析失败仅 warn 回落会话模型，**fail-closed 不影响整轮**。
+- **格式只有一份实现**：成员模型绑定的**展示解析下沉到主进程**（`ipc/teams.js` 的 `decorateMember` 下发 `modelRef` + `modelLabel`），渲染层**永不自己拼 `providerId::modelId`**——否则格式就有第二份实现，漂移时表现为「界面显示已绑定、实际跑默认模型」的静默错误；UI 选择结果用 `{providerId, modelId}` 对象经 `teamsUpdateMember` 回写，由 `canonicalizeModelRef` 单点 canonical 化。
+- **分隔符沿用既有先例**：复合键分隔符 `::` 沿用 `main/scheduledGuard.js` 的既有先例，不新造分隔符。
+- **codec 落在既有文件，不新增源文件**：编解码放进既有的 `modelShape.js`（而非新文件），避免 `doc-fact-check` 的 `mainJsModules` 计数漂移，也让「模型形状/引用」这件事保持在同一个单一事实源里。
+- **抽出子组件守住 God File 黄线**：T5-7e 使 `TeamsPage.tsx` 达到 805 行（超 800 行黄线），选择器与选项推导抽出为独立文件 `components/MemberModelSelect.tsx` 后本页降至 744 行；**没有**把该文件加进 `BASELINE_800` 豁免清单（门禁规则「只减不增」）。
+- **招募链路模型来源修正**：`teams:recruit` 的 model 改为 `payload.model || preset.model || null`——防止「员工模板声明的 model 在此被静默丢弃」导致「会话里按模板模型跑、团队里却跑默认模型」的不一致。取证：`ecosystem/digital-employees.json` 51 条员工当前**均无 `model` 字段**（0/51），故此改动**今天行为不变**，只消除隐患。
+- **两侧上限即总长上限**：`MODEL_REF_PROVIDER_MAX=30` + `MODEL_REF_JOIN=2` + `MODEL_REF_MODEL_MAX=128` 恰好等于 `MODEL_REF_MAX=160`，故「总长 > 160」分支在两侧校验通过时不可达（保留为防御性冗余），测试中已就地注明。
+
+### 会话中主要使用的工具
+`Read`（逐份阅读源码取证、不臆想）、`Grep`（定位既有先例与桥签名）、`Edit` / `Write`（改源码、建组件与测试）、`Shell`（跑 `typecheck` / `lint` / `npm test` / `doc-fact-check` / `legacy-ledger` / `max-lines` / 渲染层 `build`）、`TodoWrite`（按 7 个子任务排期）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/modelShape.js` | 修改 | 新增 `MODEL_REF_MAX/...` 常量与 `encodeModelRef / decodeModelRef / canonicalizeModelRef / resolveModelRef` | T5-7a 模型引用单源编解码 |
+| `desktop/main/teamStore.js` | 修改 | `normalizeMemberInput` 对 `member.model` 走 `canonicalizeModelRef`（解析不出落 `null`） | T5-7b 落库规范化 |
+| `desktop/main/ecosystem.js` | 修改 | `buildEmployeeRuntimePreset` 返回对象补 `model: canonicalizeModelRef(emp.model)` | T5-7c rolePreset 补 model |
+| `desktop/shared-ipc/contract.mjs` | 修改 | `rolePreset` schema 补 `model: z.string().max(160).nullable().optional()` | T5-7c 契约同步 |
+| `desktop/main/agentRunner.js` | 修改 | `rolePreset.model` 存在时经 `deps.resolveModelRef` 解析并覆盖 `engineParams.model`；失败仅 warn 回落 | T5-7d 消费端接线 |
+| `desktop/main/main.js` | 修改 | 注入 `resolveModelRef`（数据源 `localStore.listProviders()`）与 `getProviders` 到 teams deps | T5-7 依赖装配 |
+| `desktop/main/ipc/teams.js` | 修改 | `decorateMember` 下发 `modelRef` + `modelLabel`；`teams:recruit` model 改为 `payload.model \|\| preset.model \|\| null` | T5-7e 展示解析 + 消除模板声明被丢弃 |
+| `desktop/renderer/src/components/MemberModelSelect.tsx` | **新增** | 成员模型选择器 + `toModelOptions` / `sameModelRef` 与相关类型 | T5-7e UI，并守住 TeamsPage 800 行黄线 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | 成员行集成模型选择器、拉取 `localProviders()` 生成选项、`bindMemberModel` 回写、删除本地重复定义 | T5-7e 编制 UI 接入 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | +4 key（`modelDefault` / `modelUnresolved` / `modelBindFailed` / `modelSelectLabel`） | T5-7e 中文文案 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | +4 key（与 zh-CN 双向一致） | T5-7e 英文文案 |
+| `desktop/test/member-model.test.js` | **新增** | 54 项断言 | T5-7f 守护测试 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 234→**235**、总计 237→**238**；`main.js raw` 1810→**1816**（3 处） | `doc-fact-check` 门禁 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 死桥 50→**49**、占比 23.2%→**22.7%**、引用集 166→**167**、`teams` 组 4→**3**、扫描文件数 109→**110**；§6 新增一条变更记录 | 台账必须等于现算 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | 重新生成（死桥 50/216 → **49/216**） | 台账与门禁一致 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`desktop/main/modelShape.js`（修改，核心）**：新增的四个函数构成「引用串」的**唯一**读写通道——`encodeModelRef` 只做拼接与长度/字符校验（两侧任一项超上限即 `null`）；`decodeModelRef` 用首个 `::` 切分并**绝不抛异常**（坏串一律 `null`）；`canonicalizeModelRef` 是**唯一清洗点**（接受对象或字符串两种入参，统一产出规范串或 `null`）；`resolveModelRef` 拿 `listProviders()` 做 id → 对象的回填，返回扁平形并按需携带 `caps`。收敛到单文件的意义：全项目只有这一处知道「引用串长什么样」。
+- **`desktop/main/ipc/teams.js`（修改）**：`labelOfModelRef` / `decorateMember` 把「落库的引用串」翻译成渲染层要的两样东西——`modelRef:{providerId,modelId}`（结构化回显）与 `modelLabel`（可读文案）；装饰已一致应用到 `teams:list`（`.map(decorateTeam)`）/ `get` / `recruit` / `addCustomMember` / `updateMember` 全部返回点，避免某个出口漏装饰造成回显不一致。本轮新增的招募 model 来源判定（`payload.model || preset.model || null`）只做传递，canonical 化仍在 `teamStore` 单点完成。
+- **`desktop/renderer/src/components/MemberModelSelect.tsx`（新增）**：选项值用**下标**（空串=默认模型，`'stale'`=失效绑定回显项），渲染时 `idx = options.findIndex(o => sameModelRef(o, member.modelRef))` 定位当前绑定；`stale = !!member.model && idx < 0`——即「落库确有绑定但当前供应商/模型已不在本机」，此时仍显示 `modelLabel`（或 `modelUnresolved`）而非静默显示默认模型，让用户看得见失效。
+- **`desktop/renderer/src/components/TeamsPage.tsx`（修改）**：`useEffect` 拉 `window.mjcode?.localProviders?.()` → `toModelOptions` 生成选项（取不到时只保留「默认模型」一项，**不阻塞**其余编制操作）；`bindMemberModel` 失败提示 `teams.modelBindFailed`；`busy` 用 `model:${memberId}` 做单行粒度锁定。此文件顶部的 `modelRef/modelLabel` 接口注释已写明「渲染层不解析其格式」的纪律。
+- **`desktop/test/member-model.test.js`（新增）**：六个分区——A codec（往返不变量 + 边界，含「两侧上限即总长上限」的放行断言）；B resolveModelRef（含 `'s…'` 字符串 id、`caps` 携带、供应商/模型已删回落 `null`）；C 解析结果可喂 `toAgentModel`；D teamStore 落库 canonical 化（对象/串/非法/patch 未含 model/重启保持）；E agentRunner（stub `loadAgentCore` 捕获 opts：有效绑定覆盖会话模型、失效绑定回落且**不发 error**、未声明沿用会话模型、缺 `resolveModelRef` 依赖不崩）；F 契约（放行合法串/`null`/缺省，拒绝 161 长串/非字符串/非对象 rolePreset）。
+- **`docs/harness-r7/存量收敛台账.md`（修改）**：本轮 `teamsUpdateMember` 由死转活（新增 UI 调用方），故**死桥 50→49、`teams` 组 4→3**（剩 `teamsGet` / `teamsUpdate` / `teamsSetMemberEnabled` 留待 T5-4 派活）；裸 button **不变**（新控件用 `<select>`，未引入裸 button）；因选择器抽为独立文件，**扫描文件数 109→110**、计数不变。所有数字均来自 `node scripts/gen-legacy-ledger.mjs --write` 现算重生成，非手改。
+
+### 门禁结果（本轮真实输出）
+- `npm run typecheck`：**0 error**。
+- `npm run lint`：**159 warnings / 0 error**（棘轮上限 161，未破线、无反弹）。
+- `npm test`：**总计 238 · 通过 238 · 失败 0**（= 235 个套件 + 3 个前置门禁；3 条平台相关套件按设计跳过并记账）。
+- `doc-fact-check`：`✓ 文档与源码一致`（现算：套件 235 · 通道 205 · 桥方法 216 · 主进程 JS 141 · main.js raw 1816）。
+- `harness-r7:check`：随 `npm test` 前置门禁通过。
+- `legacy-ledger`：**20/20 通过**（台账 死桥 **49/216**、裸 button **258**）。
+- `max-lines`：**3/3 通过**（`TeamsPage.tsx` 抽出子组件后 744 行 < 800；未新增基线豁免）。
+- `test/member-model.test.js`：**54/54 通过**。
+- `npm run build --prefix renderer`：**构建成功**。
+
+### 尚存问题与推荐下一步
+- **尚未提交**：本轮 T5-7 改动仍在工作区（`git add` 仅用于满足 `untracked-deps.test.mjs`，**未 commit**）；工作区另携带同批非 T5 范围的 `exec.js → execWrite.js` 抽离重构，提交时需分批说明。
+- **端到端能力边界（诚实说明）**：团队当前**尚无 run 派发链路**（`teams:*` 无 run 通道），故 T5-7 端到端可用的落点是「成员模型**绑定/解绑 + 展示**」；而其**消费端**（`rolePreset.model` → agentRunner 覆盖 `engineParams.model`）已就绪并被测试证明，供后续 **T5-3（跨成员依赖）/ T5-4（Lead 与派活）** 直接复用。
+- **未做的目视验证**：成员模型选择器在真机 Electron 窗口内的交互（切换、失效态显示、回写成功提示）未做人工目视确认，建议下次启动应用时招募一个成员并绑定/解绑模型核对。
+- **推荐下一步**：按依赖链进入 **T5-3 / T5-4**（派活链路可复用已就绪的 `rolePreset.model` 消费端），随后 T5-5 / T5-6 / T5-8 / T5-9 / T5-10。每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁，并**同步更新会漂移的权威数字**（`doc-fact-check` 现算值、`check.mjs` A17f/A17g、`legacy-ledger.json` + 台账文档）。
+
+## 会话总结：M5 团队层 T5-3 看板被动认领 + 等待态/唤醒落地 · 2026-10-20（第八轮）
+
+### 会话的背景
+延续 MJ 军团（团队层）M5 依赖链，本轮推进**防死锁核心**任务 **T5-3：看板被动认领 + 等待态/唤醒**。此前 T5-2（消息总线）已打通跨成员消息落库与事件广播，但**跨成员依赖**仍无处表达：一个成员要等另一个成员产出后才能开工时，唯一的「前向」手段是静态 `depends_on`（拆解期确定），对**运行期才发现的依赖**毫无兜底——若硬派发就会产出错误结果，若轮询忙等则空耗槽位并可能全局死锁。设计稿唯一事实来源为 `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（v1.1）：§7 为 T5-3 必读，§5 表 4 为看板列定义，§11 为验收口径原文，§12 R2/R3 为剩余风险。
+
+### 会话的主要目的
+按设计稿 v1.1 的**分层依赖处理定案**落地：**L1 依赖前置**（静态 `depends_on`，已存在、零侵入）/ **L2 运行期 `waiting`**（兜底，唯一状态侵入点）/ **L3 轮询**（降级开关，不进默认路径）。并把 §7 五条硬规则变成可回归的守护：①**等待图无环**（建边与环检测**同临界区**）②**等待必须超时** ③**等待不叠加**（上限 3）④**唤醒幂等** ⑤**等待态可见**。
+
+### 完成的主要任务
+1. **T5-3a DB 迁移 v10**：`sub_tasks` 幂等加列 `owner_member_id`（认领归属）、`claimed_at`、`waiting_on_json NOT NULL DEFAULT '[]'`、`wait_deadline_at`、`wait_count NOT NULL DEFAULT 0`；**刻意不新增 `board_state` 列**（避免第二事实源），board 态由既有 `status` 值域承载并在迁移注释显式记录映射：pending→pending / claimed→queued（记 owner）/ running→running / waiting→waiting / done→done / failed→failed / cancelled→skipped。
+2. **T5-3b taskStore 单一事实源**：`TASK_TRANSITIONS` 增 `running→waiting`、`waiting→queued|failed|skipped`；常量 `TERMINAL_TASK_STATUSES` / `MAX_WAIT_DEPS=3` / `WAIT_TIMEOUT_DEFAULT_MS=600000`（min 1000 / max 3600000）；`setTaskStatus` 增 `ownerMemberId` 参数（仅进 running 时写 `owner_member_id/claimed_at`，终态统一清空等待列）；`claimNext(groupId, workerId, { ownerMemberId })`；`isGroupSettled` SQL 计入 `'waiting'`；新增**整节方法群**：`_wouldCycle`（Kahn 组合图环检测纯函数）、`waitOnTasks`（**事务内建边 + 环检测 + 状态迁移**，返回 `{ok,waiting,reason,waitingOn,deadlineAt}`）、`settleWaitingTasks`（幂等唤醒，部分满足不放行）、`sweepWaitTimeouts`（超时→failed 结构化 result + 级联唤醒，**不进 retry_count**）、`cancelWaiting`、`waitStats`（占比观测）；`rowToTask` 增暴露全部等待字段；新增模块级 `clampInt`；同步导出新常量。
+3. **T5-3c workerPool 调度集成**：`runWorkerTask` 中「等待即释放槽位」的 **defer 模式**——`waitTask` 登记等待后主动 abort 当前 run，并在 `runWorkerTask` 所有失败分支（abortReason→failed）**之前**用 store 的 `waiting` 状态拦截（该 abort 是 defer 语义而非失败）；`pump()` 顶部接 `sweepWaitTimeouts`；`initWorkerPool` 增 **30s 心跳**（unref）保证「全部任务都在等待」时超时仍被清扫；终态（done/failed/skipped）后在 `schedule()` **之前**调 `settleWaitingTasks` 唤醒并发 `task_update`/`task_activity`（`runtime.workerWoken`）+ `board_task_settled`；`abortTask` 增 waiting 分支（等待中任务不在 `activeRuns`）；`abortGroup` 在 queued/pending 清扫**之前**先 `cancelWaiting`（先唤醒为 queued 再被置 skipped，避免残留孤儿）；导出 `waitTask` 作为 T5-8 `team_wait` 的**唯一接缝**（真实实现，非 stub）。
+4. **T5-3d 渲染层等待态可见**：`AgentDock.jsx` 的事件分流把活动态集合扩为 `['running','queued','waiting']`；新增 `waiting` 分支登记卡片（`waiting:true, waitingOn, waitDeadlineAt`）、`queued` 分支清除等待标记、`running` 分支重置等待字段；卡片头与底部胶囊图标三分支（`needsReview`→`IconAlert` / `waiting`→静态灰时钟 `IconClock` **不转圈**避免误导 / 运行中→`IconSpinner`）；新增等待态明细行展示依赖任务；双语 i18n 补 5 个 key。
+5. **T5-3e 守护测试**：新建 `test/team-dag-wait.test.js`，**35 项断言**覆盖四条硬规则与边界（见下）。
+6. **T5-3f 门禁与文档同步**：全量门禁通过，并同步 `doc-fact-check` 会漂移的权威数字（套件 235→**236**、总计 238→**239**）。
+
+### 会话中主要使用的技术栈
+- **Electron 三进程架构**：渲染层（React/JSX）→ Electron 主进程（CJS）→ agent-core（ESM），事件经 `tasks:event` 广播到渲染层。
+- **SQLite 版本链迁移**：`PRAGMA user_version` 递增 + 幂等 `addColumn`；dev=better-sqlite3（金丝雀探测）/ packaged=sql.js（WASM）。
+- **任务状态机**：`TASK_TRANSITIONS` 表 + `canTransition` 单一事实源。
+- **Worker 池信号量**：默认 4 / 上限 8；`activeRuns` Map（key=`${groupId}/${taskId}`）即占用槽位；`pump()` 调度泵 + `schedule()` 去重触发。
+- **图算法**：Kahn 拓扑排序做**组合等待图**（`depends_on ∪ waiting_on`，仅未终态节点子图）环检测。
+- **i18n 双语（zh-CN / en-US）**：`textKey`/`textParams` 机制由渲染层**运行时**翻译（切语言即生效），非入列时固化。
+- **门禁体系**：`typecheck`、`lint`（棘轮 `--max-warnings=161`）、`npm test`（发现式 + 3 前置门禁 `eval:check` / `doc-fact-check` / `harness-r7:check`）、`legacy-ledger`、`max-lines`（800 行 God File 黄线）、`untracked-deps`（新源文件必须入 git 索引）、渲染层 `vite build`。
+
+### 关键决策和解决方案
+- **不加 `board_state` 列**：看板态是对任务的**投影**，新增列会成为第二事实源、必须双写并可能漂移；改为由既有 `status` 值域映射承载（`claimed` 复用 `queued` + `owner_member_id`），并在 v10 迁移注释显式记录映射表，使「看板列 ↔ 任务状态」的对应只有一处定义。
+- **建边与环检测同临界区**：`waitOnTasks` 在**同一事务**内先写入候选边、再用 Kahn 在**组合图**（静态 `depends_on` **并入**运行期 `waiting_on`）上判环；分两步会导致「先建边后判环」之间存在被另一 writer 插入成环的窗口。且只对**未终态**节点建图（已终态节点不可能再被等待），避免把历史边算成环。
+- **等待即释放槽位（defer 模式）**：等待中的任务若仍占着 Worker 槽位，则并发上限被虚假占用、可能全局饿死。方案是 `waitTask` 登记成功后**主动 abort 当前 run** 释放槽位，并让 `runWorkerTask` 以 store 的 `waiting` 状态（单一事实来源）**优先于** abortReason 分支识别为 defer 而非失败——直接放在失败分支里会把它误判为「超时失败」并触发重试。
+- **超时清扫的触发缺口**：`pump` 只在 `schedule()` 时运行，而「全部任务都在等待」时没有任何事件触发 `schedule` ⇒ 超时永不判定、永久死锁。补 **30s 心跳定时器**（`unref`）每拍调用 `schedule()`，判定逻辑仍收敛在 `pump` 顶部的 `sweepWaitTimeouts`（不新增第二判定点）。
+- **超时不消耗重试额度**：等待超时的语义是「依赖永远没来」，**不是**本次执行失败；故 `sweepWaitTimeouts` 直落 `failed` 并写结构化 `result.waitTimeout===true`，**不递增 `retry_count`**，避免重试额度被等待吃掉。
+- **唤醒幂等靠状态重判**：`settleWaitingTasks` 不维护「已唤醒集合」，而是按当前状态重判——`waiting→queued` 的迁移只可能成功一次，重复投递自然成为空操作；**部分满足不放行**（任一依赖未终态即保持等待）。
+- **唤醒时序必须在 `schedule()` 之前**：终态处理里先唤醒（发 `task_update:queued`），再 `schedule()`；顺序颠倒会让被唤醒者白等多一拍调度。
+- **`abortGroup` 先取消等待再置跳过**：等待中任务不在 `activeRuns`，若不先 `cancelWaiting` 就地级联唤醒为 `queued`，它们会成为「既不执行也不终结」的孤儿；顺序为「先 cancelWaiting → 级联 queued → 再被清扫置 skipped」。
+- **`waitTask` 提供真实接缝**：T5-3 需要「运行期登记等待」的触发者，选择在 workerPool 显式导出 `waitTask(groupId, taskId, onTaskIds, opts)`（内部走 store + abort 释放槽位），供 T5-8 的 `team_wait` 调用——是完整实现 + 测试驱动，**非占位代码**。
+- **`join('、')` 改 `join(', ')`**：i18n 扫描门禁的 CJK 正则含中文标点区段 `\u3000-\u303F`，渲染层代码内出现顿号会被判为「裸中文」⇒ 两处依赖列表拼接改用半角逗号，文案本身仍在语言包内。
+- **`broadcastWaitSweep` 不硬编码中文 error**：超时 failure 的文案从 `deps.store.getTask(...).error` 读取（单一事实来源），既避免重复措辞，又减少 `main/` 中文债务行。
+
+### 会话中主要使用的工具
+`Read`（逐份阅读设计稿与源码取证，不臆想）、`Grep`（定位 `TASK_TRANSITIONS` / 迁移数组 / i18n key）、`Edit` / `Write`（改源码、建守护测试）、`Shell`（跑 `typecheck` / `lint` / `npm test` / `doc-fact-check` / `legacy-ledger` / 渲染层 `build` / `git add`）、`TodoWrite`（按 6 个子任务排期）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/db/index.js` | 修改 | 新增 `MIGRATIONS` v10 `team-board-waiting`：`sub_tasks` 幂等加 `owner_member_id` / `claimed_at` / `waiting_on_json` / `wait_deadline_at` / `wait_count`（**不加 `board_state`**） | T5-3a 等待态与被动的物理承载 |
+| `desktop/main/taskStore.js` | 修改 | waiting 状态机 + 常量 + `clampInt`；`rowToTask` 暴露等待字段；`setTaskStatus` owner 写入；`claimNext` owner；`isGroupSettled` 计入 waiting；`_wouldCycle` / `waitOnTasks` / `settleWaitingTasks` / `sweepWaitTimeouts` / `cancelWaiting` / `waitStats`；同步导出 | T5-3b 防死锁单一事实源 |
+| `desktop/main/workerPool.js` | 修改 | 30s 等待心跳；`pump` 顶部超时清扫；defer 提前返回；终态唤醒 + `board_task_settled`；`abortTask` waiting 分支；`abortGroup` 先 `cancelWaiting`；导出 `waitTask` 接缝 | T5-3c 调度集成（唯一侵入点） |
+| `desktop/renderer/src/components/AgentDock.jsx` | 修改 | 活动态集合扩为 `running/queued/waiting`；新增 waiting / queued 分支；图标三分支；等待明细行；依赖拼接改半角逗号 | T5-3d 等待态可见（§7 规则 5） |
+| `desktop/renderer/src/i18n/locales/zh-CN/agentDock.json` | 修改 | +3 key（`agentWaiting` / `taskWaiting` / `waitingOn`） | T5-3d 中文文案 |
+| `desktop/renderer/src/i18n/locales/en-US/agentDock.json` | 修改 | +3 key（与 zh-CN 双向一致） | T5-3d 英文文案 |
+| `desktop/renderer/src/i18n/locales/zh-CN/runtime.json` | 修改 | +2 key（`workerWaiting` / `workerWoken`） | T5-3c 活动流文案 |
+| `desktop/renderer/src/i18n/locales/en-US/runtime.json` | 修改 | +2 key（与 zh-CN 双向一致） | T5-3c 活动流文案 |
+| `desktop/test/team-dag-wait.test.js` | **新增** | 35 项断言（已 `git add`） | T5-3e 守护测试 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 235→**236**、总计 238→**239**（技术基线行 + 第 8 章附录 B 两处） | `doc-fact-check` 门禁 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`desktop/main/taskStore.js`（修改，核心）**：整节新增方法群构成跨成员依赖的**唯一**读写通道——`_wouldCycle(tasks, extraEdges)` 把「静态 `depends_on`」与「候选 `waiting_on`」合并成一张图，用 Kahn 在**未终态节点**子图上判环（纯函数，便于测试）；`waitOnTasks` 是**唯一登记入口**，在同一事务里完成「校验（非 running 不可等待 / 拒绝自等待 / 目标必须存在 / 上限 3 夹紧）→ 建边 → 环检测 → 状态迁移 running→waiting + 写 `waiting_on_json/wait_deadline_at` + `wait_count+1`」，返回结构化 `{ok,waiting,reason,waitingOn,deadlineAt}`，失败给 `reason`（如 `self_wait` / `too_many_deps` / `would_cycle`）。`settleWaitingTasks(groupId, settledTaskId)` 在某个任务终态后重扫全组等待者，逐条检查 `waiting_on` 是否**全部**终态，满足者 `waiting→queued` 并返回被唤醒列表；`sweepWaitTimeouts(now)` 扫描已过 `wait_deadline_at` 的等待者，直落 `failed` 并写 `result.waitTimeout===true`、**不递增 `retry_count`**，随后级联唤醒其下游。`clampInt(v,min,max,fallback)` 为 `waitOnTasks` 的时间窗夹紧提供统一工具。
+- **`desktop/main/workerPool.js`（修改）**：`runWorkerTask` 在 `activeRuns.delete(runKey)` 之后、进入 `try` 之前插入 **defer 提前返回**——从 store 读回任务，若为 `waiting` 则发 `task_update:waiting` + `task_activity`（`runtime.workerWaiting`），丢弃隔离环境并 `schedule()` 返回，**不落入任何失败分支**。尾部终态处理读回 `settledStatus`，调 `settleWaitingTasks` 唤醒并广播 `task_update:queued` + `runtime.workerWoken`，终态则补发 `board_task_settled`，随后才 `schedule()`。`pump()` 每拍先 `broadcastWaitSweep(sweepWaitTimeouts() || [])` 广播超时失败与级联唤醒。`waitTask` 是 T5-8 的唯一入口：登记成功后把 `activeRuns` 条目标 `deferred` 并 `controller.abort(new Error('任务进入等待：依赖未就绪'))`。
+- **`desktop/renderer/src/components/AgentDock.jsx`（修改）**：把「活动态」从 `running/queued` 扩为 `running/queued/waiting`——组登记与失败清单回灌都对 waiting 生效；`waiting` 分支写入 `waiting:true, waitingOn:evt.waitingOn||[], waitDeadlineAt`；`queued` 分支仅在 `prev.waiting` 时清除等待标记（唤醒即恢复排队卡片）；图标用静态 `IconClock`（灰）替代 spinner，避免「仍在跑」的误导；新增等待明细行 `t('agentDock.taskWaiting') + t('agentDock.waitingOn',{deps})`；空活动提示加 `&& !a.waiting` 守卫。
+- **`desktop/test/team-dag-wait.test.js`（新增）**：七个分区——A 状态机/终态集合；gA 登记校验（owner 落库、非 running 不可等待、自等待拒、目标不存在拒、上限 3 拒、合法建边、超上限夹紧、`waitCount`、`isGroupSettled` 计入 waiting）；gC **静态 ∪ 动态合并判环**（`cx` 动态等 `cy`、而 `cy` 静态依赖 `cx` ⇒ 拒）；gS 目标已终态 ⇒ `waiting:false, reason:'deps_already_settled'`；gW **幂等唤醒 + 部分满足不放行 + `waitStats` 占比**；gT 未到点不超时 / 到点 `failed` + `result.waitTimeout` + `retryCount` 不变 + 级联唤醒；gX `cancelWaiting` 后互等任务强停 → skipped；gD 缺省超时 = `WAIT_TIMEOUT_DEFAULT_MS`。
+
+### 门禁结果（本轮真实输出）
+- `npm run typecheck`：**0 error**。
+- `npm run lint`：**159 warnings / 0 error**（棘轮上限 161，未破线、无反弹）。
+- `npm test`：**总计 239 · 通过 239 · 失败 0**（= 236 个套件 + 3 个前置门禁；3 条平台相关套件按设计跳过并记账）。
+- `doc-fact-check`：`✓ 文档与源码一致`（现算：套件 **236** · 通道 205 · 桥方法 216 · 主进程 JS 141 · main.js raw 1816）。
+- `harness-r7:check`：随 `npm test` 前置门禁通过（台账不变：死桥 49/216、裸 button 258，本轮未改桥与按钮）。
+- `legacy-ledger`：**20/20 通过**。
+- `test/team-dag-wait.test.js`：**35/35 通过**。
+- `npm run build --prefix renderer`：**构建成功**（`✓ built in 9.59s`）。
+- 首轮 `npm test` 曾出现 `test/ttfb-report.test.mjs` 偶发红（时序抖动），重跑 **24/24 全绿**，已被后续两次全量运行证伪为环境抖动而非回归。
+
+### 尚存问题与推荐下一步
+- **尚未提交**：本轮 T5-3 改动仍在工作区（`git add` 仅用于满足 `untracked-deps.test.mjs`，**未 commit**）；工作区另携带同批非 T5 范围的 `exec.js → execWrite.js` 抽离重构，提交时需分批说明。
+- **端到端能力边界（诚实说明）**：T5-3 打通的是**等待/唤醒的机制与可见性**，其**触发者**（成员在 run 中声明「我要等 X」）由 `workerPool.waitTask()` 提供接缝、待 **T5-8 `team_wait`** 工具接上后才会在真实 run 中产生；本轮已用测试驱动证明整条链路（登记 → 释放槽位 → 超时/唤醒 → 状态可见）成立。
+- **未做的目视验证**：等待卡片（灰底时钟 + 依赖文案）在真机 Electron 窗口内的实际渲染与唤醒后的卡片状态切换未做人工目视确认，建议下次启动应用时构造一次跨成员等待来核对。
+- **推荐下一步**：按依赖链进入 **T5-4（统筹负责人 Lead + 缺负责人校验，校验仅在派活时触发、一键创建 Lead）**；随后 T5-5 / T5-6 / T5-8 / T5-9 / T5-10。每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁，并**同步更新会漂移的权威数字**（`doc-fact-check` 现算值、`check.mjs` A17f/A17g、`legacy-ledger.json` + 台账文档）。
+
+## 会话总结：修复启动白屏（残留 vite 占用 5173 端口）· 2026-10-20
+
+### 会话的背景
+用户执行 `npm run dev` 后应用窗口「什么都不显示」。终端日志显示两处异常：`[0]` vite dev server 报 `Error: Port 5173 is already in use` 直接退出（exit code 1），而 `[1]` Electron 主进程照常启动并完成了 MCP 重连。排查 `lsof -nP -iTCP:5173` 发现一个**运行了约 19 小时 46 分的残留 vite 进程**（PID 79714，属上一轮 dev 会话的 concurrently 进程树 79594）仍占着端口；此外还有更旧的 v0.6.0-beta 残留实例（PID 52675 树）。本次 Electron 的 `wait-on http://localhost:5173` 被那个**已失去父管理器的旧 vite** 满足，渲染层加载不到有效模块图，故白屏。
+
+### 会话的主要目的
+清除全部残留 dev 进程、释放 5173 端口，并验证 `npm run dev` 能完整拉起 vite + Electron 且应用正常显示。
+
+### 完成的主要任务
+1. `lsof` / `ps` / `pgrep` 取证：定位占用端口的残留 vite（79714）及其 concurrently 父树（79594/79599）、旧版本残留（52675/52779）、本次失败运行的空壳 Electron（10177 树）。
+2. 逐树 `kill` 清理，确认 5173 释放、无 mj-code 相关进程残留。
+3. 后台重启 `npm run dev` 验证：vite `ready in 92 ms`、`http://localhost:5173/` 返回 200、Electron 主进程日志完整（本地数据层 / MCP 重连 16 工具 / 调度器均正常），白屏根因消除。
+4. 验证后停掉自启实例并再次确认端口归零，避免用户自行启动时再次撞端口。
+
+### 会话中主要使用的技术栈
+- Electron dev 链路：`concurrently`（dev:vite + wait-on + electron）+ vite 5 dev server（5173）+ HMR 加载依赖。
+- macOS 进程/端口取证：`lsof -iTCP -sTCP:LISTEN`、`pgrep -fl`、`ps -o etime`、进程树 `kill`。
+
+### 关键决策和解决方案
+- **根因判定**：白屏不是代码问题而是**进程卫生**问题——上一轮会话的 dev 树未被完整回收（只杀 Electron 不杀 vite 时常见），`wait-on` 检测到旧端口存活即放行 Electron，形成「vite 已死透但端口还亮」的假就绪。修复方式是清干净进程树而非改代码。
+- **验证后主动释放端口**：自启验证实例用完即停，防止把同样的 EADDRINUSE 陷阱留给用户的下一次启动。
+- **无代码改动**：本轮零源码变更，不触碰 CHANGELOG 与门禁（lint/typecheck/test 均不受影响）。
+
+### 会话中主要使用的工具
+`Shell`（lsof/ps/pgrep/kill/curl 取证与清理、后台重启验证）、`Read`/`Grep`（README 追加位置定位）、`Edit`（追加本节总结）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`README.md`（修改）**：在「T5-3 会话总结」之后追加本运维会话总结，记录端口占用白屏的取证过程、清理步骤与验证结论。原因：本轮无代码产出，仅记录故障根因与处置，符合累积式追加规则。
+
+### 遗留提示
+- 若今后再遇「dev 起了但窗口空白」，先跑 `lsof -nP -iTCP:5173 -sTCP:LISTEN` 看监听者启动时长——超过几小时的多半是残留；正确停法是杀 **concurrently 父进程**（它会级联回收 vite 与 Electron），只杀 Electron 窗口会留下 vite 占端口。
+
+## 会话总结：M5 团队层 T5-4 统筹负责人 + 派活链路落地 · 2026-10-20（第九轮）
+
+### 会话的背景
+延续 MJ 军团（团队层）M5 依赖链，T5-3（看板被动认领 + 等待态/唤醒）已验收，本轮推进 **T5-4：统筹负责人 Lead + 缺负责人校验 + 派活链路**。此前 T5-1 已落 `teams / team_members` 编制底座（含 `lead_member_id` 与 `leadMissing()` 单一判据），但**「谁来派活」与「派活动作」之间的门尚未建**：团队可以没有统筹负责人就被「派活」，而设计稿 §6 F1 明确要求「首次派活时强校验 `lead_member_id`，为 NULL ⇒ 提示一键创建 Lead」。同时编排器（`orchestrator.planGoal`）与 Worker 池（`workerPool.runGroup`）已存在，F2 要求「主管拆解**复用 planGoal**」——本轮的关键约束是**零侵入复用**，不为「团队」改造编排器。唯一事实来源为 `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（v1.1）：§11 表 T5-4 验收口径、§6 F1/F2 流程原文、§5 表 1/2/3。
+
+### 会话的主要目的
+在**不改造 orchestrator / workerPool** 的前提下，打通「选团队 → 检查统筹 → （缺则一键创建 Lead）→ 填派活三件（目标 / 协作模式 / 预算上限）→ 创建 run → 主管拆解 → 任务入看板 → 派发」的完整链路，并把「缺统筹」校验收敛为**服务端唯一判据**、把「run ↔ team」关联收敛为**既有字段**（不新增列）。
+
+### 完成的主要任务
+1. **T5-4a teamStore 单一事实来源**：新增 `LEAD_DEFAULT_NAME`（统筹负责人）/ `LEAD_DEFAULT_TOOLS`（`read/grep/glob/write` 最小集）/ `LEAD_SYSTEM_PROMPT`（四段职责边界：只拆解指派汇总、按工具权限与角色描述匹配、显式声明跨成员依赖、汇总只引用结论）；新增模块级 `dispatchGate(team)`（返回 `TEAM_NOT_FOUND` / `TEAM_ARCHIVED` / `LEAD_MISSING` 三码，是**派活强校验的唯一判据**）；新增类方法 `createLead(teamId, {name, model})`——只在缺统筹时可用（已有 Lead 直接拒绝），复用 `addMember` 落库（`roleKind:'lead'` 自动触发 `setLead`）。
+2. **T5-4b IPC 域接线**：`ipc/teams.js` 新增 `DISPATCH_ERRORS`（结构化错误码 + 中文兜底文案，含 `LEAD_MISSING: '缺少编排/统筹负责人，需要帮你创建吗？'`）、`buildTeamContext(team,{mode,budget,memberIds})`（注入派活三件 + 编制清单，**不注入成员完整提示词**）、`teams:createLead` handler（审计 + `broadcastSystem(...,'leadCreated')` 系统留痕）、`teams:dispatch` handler（三段校验 → `dispatchGate` → 计算成员子集 → 落库默认模式与预算 → 装配上下文 → `planGoal` → 派活消息入总线 → 后台 `runGroup`）。
+3. **T5-4c 桥与装配接线**：`preload.js` 新增 `teamsCreateLead` / `teamsDispatch` 两桥；`main.js` 的 `initTeamsIpc({...})` 追加 `orchestrator, workerPool`（与 `tasks:*` 同源的模块级单例）。
+4. **T5-4d 渲染层派活面板**：新建 `TeamDispatchPanel.tsx`（两步：①选团队 ②目标 / 模式 / 预算 / 成员子集 + 缺统筹一键创建 Lead），并在 `PlusMenu.jsx` 新增一级入口「军团」+ `legion` 子面板；`Composer.tsx` / `ChatArea.jsx` 透传 `threadId`。
+5. **T5-4e 双语 i18n**：`teams.json`（zh-CN / en-US）补 27 个派活与创建 Lead 的 key；`plusMenu.json` 双语补 `legion`。
+6. **T5-4f 守护测试**：新建 `test/team-lead-dispatch.test.js`，**30 项断言**覆盖常量 / `dispatchGate` 三码 / `createLead` 落库与三拒绝 / `buildTeamContext` 装配细节 / `DISPATCH_ERRORS` 键齐备。
+7. **T5-4g 门禁与权威数字同步**：修复 4 项预期中的门禁红（`doc-fact-check` 数字漂移 / `harness-r7:check` A17e-A17g 结构性量级 / `legacy-ledger` 台账重生成 / `layout-tokens` 半档间距残留）。
+
+### 会话中主要使用的技术栈
+- **Electron 三进程架构**：渲染层（React/TSX）→ Electron 主进程（CJS，团队层 L5）→ agent-core（ESM，L2 零改动），工具经静态白名单 RPC。
+- **零侵入任务编排复用**：`orchestrator.planGoal({goal,cwd,projectPath,contextBlock,threadId})` 的 **`contextBlock` 通道**注入团队上下文 + `workerPool.runGroup(groupId)` 执行；编排器与 Worker 池**零改动**。
+- **SQLite 编制持久化**：`TeamStore`（T5-1 底座）+ 单一事实来源 `leadMissing()` / `dispatchGate()`。
+- **枚举 fail-closed 归一**：`normalizeMemberInput` / `normalizeBudget`（空对象视为「未填」，不发明默认值）。
+- **结构化错误码契约**：`code` 供渲染层分支、`error` 文案兜底。
+- **i18n 双语（zh-CN / en-US）**：key 双向一致，动态 key 需在所有语言包存在（i18n-scan 门禁）。
+- **门禁体系**：`typecheck` / `lint`（棘轮 161）/ `npm test`（发现式 + 3 前置门禁）/ `doc-fact-check` / `harness-r7:check` / `legacy-ledger` / `layout-tokens` / 渲染层 `vite build`。
+
+### 关键决策和解决方案
+- **不新增 `teams:dispatchCheck` 通道**：派活前置检查与 `teams:get` 的 `leadMissing` 字段**冗余**；改为渲染层经 `teamsGet` 预检（拿到 `leadMissing` 就地露出「一键创建」），服务端 `teams:dispatch` 用 `dispatchGate` 做**权威闸**。少一条通道、少一处事实源。
+- **`dispatchGate` 收敛于 teamStore**：判据是 `teams.lead_member_id IS NULL` 及其派生（团队不存在 / 已归档），在 teamStore 单点实现并导出，IPC 层不重复判断（否则「缺统筹」会有两份定义）。
+- **成员子集是软约束，不做运行期强制指派**：设计稿把「运行期编制强制快照」划给 **T5-9**，本轮 `memberIds` 仅经 `contextBlock` 软注入；不在 T5-4 越界实现快照语义（否则快照会有两处实现）。
+- **run ↔ team 关联不新增列**：`team_messages.run_id = groupId` 已是「run 属于哪个团队」的既有承载，`postMessage({runId: r.groupId, kind:'assign'})` 复用即可，避免新增 `group` 列形成第二事实源。
+- **`createLead` 只在缺统筹时可用**：已有 Lead 的团队直接拒绝（文案提示改用「设为统筹」），保证「缺统筹」单一判据自洽——若允许覆盖，`leadMemberId` 的写入路径就有两处。
+- **预算「空对象 = 未填」**：`normalizeBudget({})` 会补默认值；若不做区分，F2 的「预算上限必填」会被「什么都没填 → 被补成默认值」伪装成已填。故 handler 先判 `Object.keys(budget).length > 0`，空对象返回 `MISSING_BUDGET`。
+- **派活后不 `await` 执行**：`planGoal` 建组后立即返回 `{groupId, tasks}` 给渲染层（同 `autoOrchestrate` 语义），`workerPool.runGroup` 用 `Promise.resolve(...).catch(...)` 后台跑，进度经既有 `tasks:event` 流到 AgentDock，派活失败单独发 `team_dispatch_failed` 事件。
+- **门禁红一律更新权威来源而非绕行**：`docs/MJCode-技术设计文档-2026-10-17.md` 同步套件 236→**237**、通道 205→**207**、桥 216→**218**、main.js raw 1816→**1820**、测试条目 241→**244**；`docs/harness-r7/04-test/check.mjs` 的 A17e（`200±2`）/ A17f（`218`）/ A17g（`202`）同步；`legacy-ledger` 重生成 + 台账文档同步 48/218；`TeamDispatchPanel.tsx` 两处 `py-1.5` 改为 `py-2`（半档间距收敛规则：向上取整）。
+
+### 会话中主要使用的工具
+`Read`（逐份阅读设计稿 §6/§11 与源码取证：`orchestrator.planGoal` / `workerPool.runGroup` / `payloadGuard.assertStrings` / `Button` 原语 / `IconUsers`，不臆想）、`Grep`（定位 `leadMissing` / 桥方法 / i18n key / 无引用死桥）、`Edit`/`Write`（改源码、建守护测试与新组件）、`Shell`（跑 `typecheck`/`lint`/`npm test`/`doc-fact-check`/`legacy-ledger`/`layout-tokens`/`harness-r7 check`/渲染层 build/`git add`）、`TodoWrite`（按 §11 七个子任务排期）、`new_context`（上下文压缩后接续）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/teamStore.js` | 修改 | 新增 `LEAD_DEFAULT_NAME` / `LEAD_DEFAULT_TOOLS` / `LEAD_SYSTEM_PROMPT` 常量块、模块级 `dispatchGate(team)`、类方法 `createLead(teamId,{name,model})`；`module.exports` 追加 4 项 | T5-4a 统筹负责人与缺统筹单一判据 |
+| `desktop/main/ipc/teams.js` | 修改 | 新增 `DISPATCH_ERRORS` / `buildTeamContext` / `teams:createLead` / `teams:dispatch` handler；`module.exports` 追加 `buildTeamContext` / `DISPATCH_ERRORS` | T5-4b 派活链路（§6 F1/F2） |
+| `desktop/main/preload.js` | 修改 | 新增 `teamsCreateLead` / `teamsDispatch` 两桥 | T5-4c 渲染层可达 |
+| `desktop/main/main.js` | 修改 | `initTeamsIpc({...})` 追加 `orchestrator, workerPool` deps | T5-4c 派活复用既有编排/Worker |
+| `desktop/renderer/src/components/TeamDispatchPanel.tsx` | **新增** | 两步派活面板（选团队 → 缺统筹一键创建 Lead + 目标/模式/预算/成员子集 → 派活）；全用 `Button` 原语 + `<label>`/`sr-only`，**零裸 button** | T5-4d 派活入口 UI |
+| `desktop/renderer/src/components/PlusMenu.jsx` | 修改 | import `IconUsers` + `TeamDispatchPanel`；props 增 `threadId`；一级菜单加「军团」行 + `legion` 子面板 | T5-4d 对话 `+` → 军团入口 |
+| `desktop/renderer/src/components/Composer.tsx` | 修改 | props 增 `threadId`，透传给 `PlusMenu` | T5-4d 派活携带会话上下文 |
+| `desktop/renderer/src/components/ChatArea.jsx` | 修改 | `composerProps` 追加 `threadId`（`thread.id` 字符串化） | T5-4d 派活携带会话上下文 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | `SYS_LABEL` 追加 `leadCreated` 映射 | 避免系统广播裸机器文本渲染 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | +27 key（派活 `dispatch*` + 创建 Lead `leadMissingDispatch`/`createLead`/`createLeadDone`/`createLeadFailed`/`msgSysLeadCreated`） | T5-4e 中文文案 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | +27 key（与 zh-CN 双向一致） | T5-4e 英文文案 |
+| `desktop/renderer/src/i18n/locales/zh-CN/plusMenu.json` | 修改 | +`legion` | T5-4e 军团入口文案 |
+| `desktop/renderer/src/i18n/locales/en-US/plusMenu.json` | 修改 | +`legion`（与 zh-CN 一致） | T5-4e 军团入口文案 |
+| `desktop/test/team-lead-dispatch.test.js` | **新增** | 30 项断言（已 `git add`） | T5-4f 守护测试 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 236→**237**、测试条目 241→**244**（用例 232→**235**）、通道 205→**207**、桥 216→**218**、main.js raw 1816→**1820**；总计 239→**240**；附录基线 236→**237** 套件 | `doc-fact-check` 门禁数字同步 |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A17e `197±2`→`200±2`、A17f `216`→`218`、A17g `200`→`202` | `harness-r7:check` 结构性量级同步 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | `node scripts/gen-legacy-ledger.mjs --write` 重生成（死桥 48/218、扫描文件 111） | `legacy-ledger` 门禁 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 死桥 49/216→**48/218**、`teams` 组 3→**2**（`teamsGet` 由死转活）、变更记录追加本批一行 | `legacy-ledger` 门禁 + 台账不撒谎 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 文件修改的详细内容
+- **`desktop/main/teamStore.js`（修改，核心）**：`LEAD_SYSTEM_PROMPT` 是四段职责边界（「只做拆解/指派/汇总，不亲自执行成员可完成的工作」「按工具权限与角色描述匹配成员」「跨成员数据依赖必须显式声明」「汇总只引用成员结论，不臆造」），与 `orchestrator` 的拆解约定对齐；`dispatchGate(team)` 是**纯函数**（无 DB 依赖，便于测试），按「不存在 → 已归档 → 缺统筹」顺序返回第一个命中的 code，全通过返回 `{ok:true,code:null}`；`createLead` 先 `getTeam` 校验存在/未归档/缺统筹，再以 `roleKind:'lead'` 调 `addMember`（`addMember` 内的 `if (m.roleKind==='lead') this.setLead(...)` 自动把 `lead_member_id` 指向新成员），工具取最小集 `read/grep/glob/write`，审批 `on-request`、沙箱 `workspace-write`、`allowMcp:false`。
+- **`desktop/main/ipc/teams.js`（修改）**：`buildTeamContext` 只注入「团队名 + 描述 + 协作模式语义 + 预算三键（有值才渲染该行）+ 在册成员清单（名称/工具/职责前 60 字，统筹成员加「（统筹）」）+ 四条拆解要求」，并**明确不注入成员完整提示词**（快照语义留给 T5-9）；`teams:dispatch` 的三段前置校验（goal 非空 / mode∈{lead,select} / budget 非空对象）在 `dispatchGate` **之前**执行——先给「用户没填」的即时反馈，再判「团队状态」；`memberIds` 在 handler 内由 `payload.memberIds` 与在册成员求交得到（空/未传→全队），`buildTeamContext` 与总线 `payload` 复用**同一个** `memberIds` 变量（避免「上下文说全队、总线记子集」的分叉）；`updateTeam({defaultMode,budget})` 把本次取值落为团队默认（同一语义供下次预填）。
+- **`desktop/renderer/src/components/TeamDispatchPanel.tsx`（新增）**：第一步 `teamsList({})` 拉全部团队（过滤 `archivedAt`），用 `label` + `sr-only` 单选包裹卡片（**不引入裸 `<button>`**，守 ui-conventions 棘轮）；第二步 `teamsGet` 取详情，`leadMissing` 为真时显示提示 + 「一键创建统筹负责人」按钮；预算三 number 输入逐项 `Number.parseInt` 入 `budget` 对象（未填项不写键，交服务端 `normalizeBudget` 补默认）；提交调 `teamsDispatch({teamId,goal,mode,budget,memberIds,threadId})`，`r.code==='LEAD_MISSING'` 时就地 `setTeam(prev=>({...prev,leadMissing:true}))` 露出创建按钮（服务端权威闸与 UI 预检同源）；成员数用 `memberCount ?? members.length`（避免 0 成员错显 1）。
+- **`desktop/test/team-lead-dispatch.test.js`（新增）**：`openDbAsync(dir,{driver:'sqljs'})` + `TeamStore`，并从 `ipc/teams.js` 取纯函数 `buildTeamContext` / `DISPATCH_ERRORS`（`require('electron')` 在 `initTeamsIpc` 调用前不会执行，故可安全加载）；分区覆盖：常量存在性与工具最小集、`dispatchGate` 三码 + 通过、`createLead` 落库（`role_kind`/提示词/工具映射/审批档/沙箱/`allowMcp`/`lead_member_id`/自定义名去空格）、已有 Lead / 不存在 / 已归档三拒绝、`buildTeamContext`（团队名 / 模式 / 预算三键 / 「（统筹）」标记 / `dependsOn` 要求 / 能力匹配要求 / `memberIds` 子集 / 无 budget 不渲染预算行）、`DISPATCH_ERRORS` 文案与键齐备。
+
+### 门禁结果（本轮真实输出）
+- `npm run typecheck`：**0 error**。
+- `npm run lint`：**159 warnings / 0 error**（棘轮上限 161，未破线）。
+- `npm test`：**总计 240 · 通过 240 · 失败 0**（= 237 个套件 + 3 个前置门禁；3 条平台相关套件按设计跳过并记账）。
+- `doc-fact-check`：`✓ 文档与源码一致`（现算：套件 **237** · 通道 **207** · 桥方法 **218** · 主进程 JS 141 · main.js raw **1820**）。
+- `harness-r7:check`：**76 PASS / 0 FAIL**（A17e/A17f/A17g 已同步新量级）。
+- `legacy-ledger`：**20/20 通过**（死桥 **48/218**、裸 button **258**）。
+- `layout-tokens`：**2/2 通过**（半档间距残留 0）。
+- `test/team-lead-dispatch.test.js`：**30/30 通过**。
+- `npm run build --prefix renderer`：**构建成功**（`✓ built in 9.12s`）。
+
+### 尚存问题与推荐下一步
+- **尚未提交**：本轮 T5-4 改动仍在工作区（`git add` 仅用于满足 `untracked-deps` 门禁，**未 commit**）；工作区另携带同批非 T5-4 范围的历史改动，提交时需分批说明。
+- **端到端能力边界（诚实说明）**：`teams:dispatch` 已能真实创建 run（`planGoal` 建组 + 入总线 + `runGroup` 执行），「主管拆解上下文」经 `contextBlock` 注入成立；但**运行期按子集强制指派**与**编制快照**不在本轮范围（属 **T5-9**），当前 `memberIds` 仅作软注入。
+- **未做的目视验证**：`TeamDispatchPanel` 在真机 Electron 窗口内的两步交互（缺统筹提示 → 一键创建 → 预算表单 → 派活成功提示）未做人工目视确认，建议下次启动应用时构造一次「无 Lead 团队派活」来核对。
+- **`teamsSetMemberEnabled` 仍是死桥**：本轮继续保持（未接入口），已如实登记在台账 `teams` 组；`teamsUpdate` 亦同。
+- **推荐下一步**：按依赖链进入 **T5-5 → T5-6 → T5-8 → T5-9 → T5-10**；每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁，并**同步更新会漂移的权威数字**（`doc-fact-check` 现算值、`check.mjs` A17e/A17f/A17g、`legacy-ledger.json` + 台账文档）。
+
+## 会话总结：M5 军团前置修正（去项目强制绑定）+ AI 自动创建员工 · 2026-10-20（第十轮）
+
+### 会话的背景
+M5 团队层依赖链推进到 T5-4（统筹负责人 + 派活链路）后，用户在真机上验证时提出两项需求与一个缺陷：①**雇佣的军团不要强制绑定项目**——「只要创建就可以了」；②在**数字员工（军团成员）选择列表右上角加「新建员工」按钮**，点开弹出「可用模型自动创建员工」的界面，也支持自行创建；③**缺陷**——军团保存后，在任意对话点 `+` →「军团」**看不到任何已创建好的军团**，用户怀疑「是否因为被强制绑定到某个项目造成」，且「默认直接给我绑定了一个，但哪个项目也没有办法选择已创建好的军团」。根因确实指向**原设计稿 D1「团队归属项目级」**（`project_path` 归属键 + 按项目过滤），据此过滤后全局团队在别的项目下不可见。
+
+### 会话的主要目的
+1. 推翻了军团归属键的项目绑定语义：`project_path` 从「必填归属键」降级为**可选「工作目录」**，军团改为**全局可见**（任意对话均可列出与选用）；
+2. 交付「AI 自动创建员工」能力（模型根据自然语言描述生成员工草稿，回填表单）；
+3. 在招募弹窗（数字员工列表位置）右上角补「新建员工」入口；
+4. 补齐军团卡片的「取消归档」入口，收敛归档/取消归档为统一动作；
+5. 全程保证界面一致性、零裸 `<button>`、双语 i18n 不缺口，并同步所有会漂移的权威数字与台账。
+
+### 完成的主要任务
+1. **存储层去项目绑定**：`teamStore.createTeam` 删除项目必填校验，`listTeams({ includeArchived })` 去掉 `project_path` 过滤键。
+2. **IPC 域放宽与回落**：`teams:create` 校验放宽 `projectPath`（`optional+allowEmpty`）、`teams:list` 不再透传项目、`teams:dispatch` 取 `team.projectPath || payload.projectPath` 做工作目录回落；新增 `EMPLOYEE_DRAFT_SYSTEM` + `teams:draftEmployee` handler（复用同源 `chatOnce`/`resolveModel`/`extractJson`，`tools` 按 `ROLE_TOOL_ALIASES` 白名单过滤）。
+3. **渲染层装配**：`EmployeeFormModal.tsx` 新增「AI 自动创建」面板（仅新建态）；`TeamsPage.tsx` 移除 `project` prop 与过滤、卡片全局展示、新增取消归档、招募弹窗右上角「新建员工」+ 内嵌 `EmployeeFormModal`；`Composer → PlusMenu → TeamDispatchPanel` 逐级透传 `projectPath`。
+4. **i18n 双语**：`teams.json` / `settings.json` 增删键与文案改写（见下表）。
+5. **守护测试**：`test/team-store.test.js` 反转项目必填断言、补全局可见与取消归档断言。
+6. **权威数字与台账同步**：设计文档通道/桥方法、`check.mjs` A17f/A17g、`legacy-ledger.json` + 台账文档。
+
+### 会话中主要使用的技术栈
+- **Electron 三进程架构**：渲染层（React/TSX）→ 主进程（CJS，`ipc/teams.js`）→ agent-core（未改动）；工具经静态白名单 RPC。
+- **SQLite 编制持久化**：`TeamStore`（`teams`/`team_members`），`project_path` 语义降级为可选工作目录。
+- **复用同源模型通道**：`chatOnce`/`resolveModel`/`extractJson` 与编排/定时任务同源，AI 草稿不新起第二条调用路径。
+- **工具别名单一事实来源**：`main/ecosystem.js` 的 `ROLE_TOOL_ALIASES` 作为员工工具白名单。
+- **UI 原语纪律**：`Modal` 的 `titleNode`（标题右侧嵌入动作）、`Button` 原语变体（`secondary` / `accent-ghost` / `ghost`）与 `xs` 尺寸档；零新增裸 `<button>`。
+- **i18n 双语（zh-CN / en-US）**：key 双向一致 + 动态 key 存在性门禁。
+- **门禁体系**：`typecheck` / `lint`（棘轮 161）/ `npm test`（发现式 + 前置门禁）/ `doc-fact-check` / `harness-r7:check` / `legacy-ledger` / 渲染层 `vite build`。
+
+### 关键决策和解决方案
+- **推翻设计稿 D1（团队归属项目级）**：设计稿 v1.1 §D1 把团队按 `project_path` 归属，切项目各看各的；用户需求②直接否决该语义。**决策**：`project_path` 降级为可选「工作目录」，`listTeams` 去掉项目过滤 → 军团全局可见。这是**本轮对设计稿的刻意偏离**，已在文末说明。
+- **AI 草稿 IPC 落 `ipc/teams.js` 而非 `ipc/ecosystem.js`**：复用同源 `chatOnce`/`resolveModel`/`extractJson`，避免 ecosystem 域初始化顺序 TDZ 与 `teams ↔ ecosystem` 循环依赖。
+- **草稿返回 `id`（ASCII slug）**：中文名经 `slugify` 会得空串；让模型给语义化 id，比让用户卡在「名字中文、id 空」更可靠。渲染层回填时置 `idTouched=true` 防止被覆盖。
+- **为全局团队补派活工作目录回落**：全局团队不带 `project_path`，若不在派活时补当前会话项目，worker 会在「无工作目录」下空转——故 `Composer → PlusMenu → TeamDispatchPanel → teams:dispatch` 逐级透传 `projectPath`，主进程取 `team.projectPath || payload.projectPath`。
+- **归档/取消归档收敛为统一入口**：`setTeamArchived(team, archived)` 单点实现，卡片按 `archivedAt` 条件渲染「取消归档」按钮，避免两处归档逻辑分叉。
+- **门禁红一律更新权威来源而非绕行**：`doc-fact-check` 数字漂移（通道 207→**208**、桥 218→**219**）改设计文档；`harness-r7:check` A17f/A17g 同步 218→**219** / 202→**203**；`legacy-ledger` 重生成 + 台账文档同步为 48/**219**（死桥总数不变，仅分母上升）。
+
+### 会话中主要使用的工具
+`Read`（逐份阅读源码取证：`teamStore` / `ipc/teams.js` / `EmployeeFormModal.tsx` / `TeamsPage.tsx` / `Modal.tsx` / `plusMenu`，不臆想）、`Grep`（定位死桥、i18n key、门禁 CLAIMS 正则、`initTeamsIpc` 依赖）、`Edit`（改源码 / 单测 / 文档数字）、`Shell`（跑 `typecheck`/`lint`/`npm test`/`doc-fact-check`/`harness-r7 check`/`legacy-ledger`/`gen-legacy-ledger --write`/渲染层 build/`git add`）、`TodoWrite`（按 7 步排期）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/teamStore.js` | 修改 | `createTeam` 删项目必填校验；`listTeams({includeArchived})` 去 `project_path` 过滤 | 需求①军团去项目强制绑定、全局可见 |
+| `desktop/main/ipc/teams.js` | 修改 | `teams:create` guard 放宽 `projectPath`（optional+allowEmpty）；`teams:list` 去项目透传；`teams:dispatch` 取 `team.projectPath || payload.projectPath`；新增 `EMPLOYEE_DRAFT_SYSTEM` + `teams:draftEmployee` handler + export | 需求①③（可见性与工作目录回落）+ 需求②（AI 草稿） |
+| `desktop/main/preload.js` | 修改 | 新增 `teamsDraftEmployee` 桥 | 需求②渲染层可达 AI 草稿 |
+| `desktop/renderer/src/components/EmployeeFormModal.tsx` | 修改 | 新增「AI 自动创建」面板（desc 输入 + 生成 + 回填 name/id/system_prompt/tools） | 需求②AI 自动创建员工 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | 去 `project` prop 与过滤；卡片全局展示；`setTeamArchived` 统一归档/取消归档；招募弹窗右上角「新建员工」+ 内嵌员工表单 | 需求①③ + 需求②入口 |
+| `desktop/renderer/src/App.jsx` | 修改 | `<TeamsPage />` 去掉 `project={activeProject}` | 军团全局化（不再按项目渲染） |
+| `desktop/renderer/src/components/Composer.tsx` | 修改 | PlusMenu 传参增 `projectPath` | 全局团队派活工作目录回落 |
+| `desktop/renderer/src/components/PlusMenu.jsx` | 修改 | 新增 `projectPath` prop 并透传给 `TeamDispatchPanel` | 同上 |
+| `desktop/renderer/src/components/TeamDispatchPanel.tsx` | 修改 | 新增 `projectPath` prop，`teamsDispatch` 载荷补 `projectPath`；更新陈旧归属注释 | 同上 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | 删 `noProject`；改写 `subtitle`/`projectLabel`/`projectHint`；增 `projectPlaceholder`/`newEmployee`/`unarchive*`/`unarchivedNotice` | 去项目语义 + 取消归档 + 新建员工文案 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | 与 zh-CN 双向一致 | 双语不缺口 |
+| `desktop/renderer/src/i18n/locales/zh-CN/settings.json` | 修改 | 增 `employeeAi*` 7 键 | AI 自动创建员工面板文案 |
+| `desktop/renderer/src/i18n/locales/en-US/settings.json` | 修改 | 与 zh-CN 双向一致 | 双语不缺口 |
+| `desktop/test/team-store.test.js` | 修改 | 反转项目必填断言 → 项目留空可建；项目过滤断言 → 全局可见；补取消归档断言 | 守护新语义 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 通道 207→**208**、桥方法 218→**219** | `doc-fact-check` 数字同步 |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A17f `218`→`219`、A17g `202`→`203` | `harness-r7:check` 结构性量级同步 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | `--write` 重生成（死桥 48/219、扫描文件 111） | `legacy-ledger` 门禁 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 死桥 48/218→**48/219**、引用集 170→171、`teams` 组补注、变更记录追加本批一行 | 台账不撒谎 |
+| `CHANGELOG.md` | 修改 | `[未发布]` 顶部追加本批变更条目 | 用户规则：变更日志累积追加 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 门禁结果（本轮真实输出）
+- `npm run typecheck`：**0 error**。
+- `npm run lint`：**159 warnings / 0 error**（棘轮上限 161，未破线）。
+- `npm test`：**总计 240 · 通过 240 · 失败 0**（3 条平台相关套件按设计跳过并记账）。
+- `doc-fact-check`：`✓ 文档与源码一致`（现算：套件 **237** · 通道 **208** · 桥方法 **219** · 主进程 JS 141 · main.js raw **1820**）。
+- `harness-r7:check`：**76 PASS / 0 FAIL**（A17f/A17g 已同步新量级）。
+- `legacy-ledger`：**20/20 通过**（死桥 **48/219**、裸 button **258**）。
+- `npm run build --prefix renderer`：**构建成功**。
+
+### 对设计稿的偏离说明
+`MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（v1.1）§D1 定义团队**归属项目级**（`project_path` 归属键 + 切项目各看各的）。本轮依据用户需求①②，将 `project_path` **降级为可选「工作目录」**，军团改为**全局可见**——与 D1 的归属语义**刻意偏离**。后续若继续 M5 依赖链（T5-5 起）需以「军团全局可见 + 派活时工作目录回落」为新事实来源，设计稿 D1 章节应同步修订以避免两份口径。
+
+### 尚存问题与推荐下一步
+- **尚未提交**：本轮改动仍在工作区（`git add` 仅用于满足 `untracked-deps` 门禁，**未 commit**）；工作区另携带前序 T5-4 / exec.js 抽离等历史改动，提交时需分批说明。
+- **未做的真机目视验证**：`EmployeeFormModal` 的「AI 自动创建」面板（模型返回草稿 → 回填四个字段）与招募弹窗右上角「新建员工」、卡片「取消归档」三项交互未做人工目视确认，建议真机各构造一次核对。
+- **设计稿需同步修订**：`MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` §D1 未随本轮修订（仍写「团队归属项目级」），存在口径漂移风险，建议下轮一并更新。
+- **推荐下一步**：按依赖链进入 **T5-5 → T5-6 → T5-8 → T5-9 → T5-10**；每个任务仍须过 `typecheck / lint / 全量测试 / engine-process 防漏登记断言 / 渲染层构建` 五道门禁，并**同步更新会漂移的权威数字**（`doc-fact-check` 现算值、`check.mjs` A17e/A17f/A17g、`legacy-ledger.json` + 台账文档）。
+
+## 会话总结：同步修订设计稿 D1 文档偏差（军团全局可见） · 2026-10-20（第十一轮）
+
+### 会话的背景
+上一轮（第十轮）依据用户需求落地了「军团去项目强制绑定、全局可见」，但设计稿 `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（v1.1）§D1 仍写「团队归属 = 项目级」，形成**实现与设计稿的口径漂移**。该漂移已在第十轮 README 的「尚存问题」中如实登记，本轮用户点名**先修复它**。
+
+### 会话的主要目的
+将设计稿从 v1.1 升级为 **v1.2**：把 D1「团队归属 = 项目级」修订为「**全局可见 + `project_path` 可选工作目录**」，消除实现与设计稿两份口径。
+
+### 完成的主要任务
+1. 顶部新增 **v1.2 修订记录**（记录推翻 D1 的动因、同步范围与不变项）。
+2. §1 决策表 **D1 行** 改写为「团队归属 = 全局可见」。
+3. §4 构件表 **T5-1** 标注改为「全局可见，工作目录可选」。
+4. §5 表 1 `teams` 的 **`project_path`** 行由 `NOT NULL · 归属键（D1）` 改为 `NULL · 工作目录（可选）`。
+5. §11 任务表 **T5-1 验收要点** 补「项目留空可建、全局可见」。
+6. 明确 `scope='team'` 记忆归属语义**不变**（记忆挂 `team_id`，与 `project_path` 无耦合）。
+
+### 会话中主要使用的技术栈
+Markdown 设计文档修订；`Grep` 全库取证「项目 / 归属 / `project_path` / D1」引用点，确认无其它未同步处；`git check-ignore` 确认该 `.md` 被 `.gitignore` 忽略且无门禁读取。
+
+### 关键决策和解决方案
+- **只改设计稿、不动业务代码**：本轮为纯文档偏差修复，实现已在第十轮落地，无需再改源码。
+- **记忆归属与工作目录解耦**：`project_path` 降级只影响「军团可见性 + 派活工作目录」，`scope='team'` 记忆仍以 `team_id` 为归属键，避免误伤记忆子系统。
+- **README 历史不改，只追加**：第十轮「设计稿需同步修订」条目保持原样，本轮以追加方式记录修复结果（README 为累积日志）。
+
+### 会话中主要使用的工具
+`Grep`（定位全库 D1 / `project_path` / 项目 引用点）、`Read`（取证各修订段落上下文）、`Edit`（5 处修订 + 顶部修订记录）、`Shell`（`git check-ignore` 确认文档忽略状态）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | 顶部加 v1.2 修订记录；§1 D1 行、§4 T5-1、§5 表 1 `project_path` 行、§11 T5-1 四处同步 | 消除实现与设计稿 D1 口径漂移 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 门禁结果
+本轮为纯文档修订（设计稿被 `.gitignore` 忽略、且无门禁读取该文件），**未改任何源码**：`typecheck` / `lint` / `npm test` / `doc-fact-check` / `harness-r7:check` / `legacy-ledger` 均不受影响（上一轮已全绿：240/240、159 warnings、76 PASS/0 FAIL、20/20）。
+
+### 尚存问题与推荐下一步
+- 「军团全局可见 + 派活工作目录回落」已成为 M5 后续依赖链（T5-5 起）的新事实来源，**设计稿与实现口径现已一致**。
+- **推荐下一步**：按依赖链进入 **T5-5**，仍过五道门禁并同步会漂移的权威数字。
+
+---
+
+## 2026-10-20 M5 军团界面形态五条修正（必填 / 工作目录下拉 / 标签化招募 / 去归档 / 派活简化）
+
+### 会话背景
+M5 军团（团队层）T5-1 编制、T5-2 消息总线、T5-3 看板被动认领已交付，T5-4 派活链路仍在收尾。用户以真机截图（新建团队弹窗、招募弹窗、对话 `+ → 军团` 面板三张）反馈五处界面问题：新建团队必填项无反馈（点「创建」没反应）、工作目录靠手输、招募成员看不到当前编制、归档功能对「创建的团队都必须存在」的用户是多余入口、`+` 军团面板表单过重。本次为**界面形态收敛轮**（前后端一并调整，工作区已有大量未提交改动，本轮不 commit）。
+
+### 会话的主要目的
+把上述五条反馈逐条落为可验收的界面行为，并保持既有后端契约（归档列 / IPC / 闸门 / 单测）不被破坏；同时守住项目全套门禁（类型、lint 棘轮、全量测试、文档一致性、harness 契约、行数与布局 token 门禁）。
+
+### 完成的主要任务
+1. **必填与反馈**：新建团队「团队名称」「团队目标 / 职责」升为必填（`Field required` 星号 + 弹窗内 `InlineAlert` 精确报错），修复「点创建没反应」。
+2. **工作目录下拉**：自由输入改为 `<select>`，候选＝本机最近项目（`localProjects()`，`lastOpenedAt` 倒序＝使用频率高到低；已删除项目天然不入候选），首项「全局团队（不限定工作目录）」。
+3. **招募弹窗标签化**：招募与自定义落库后**不关窗**，成员以标签就地累积（统筹红头像 + 「统筹」标记，成员绿头像 + 「设为统筹」入口，全局唯一）；成员上限 `MAX_MEMBERS_PER_TEAM` 8 → **20**，上限由主进程经 `teams:get` 下发；「新建员工」保存后自动刷新列表并**自动加入本团队**。
+4. **移除归档 UI 入口**：删除 `setTeamArchived()`、`showArchived` 开关与卡片归档/取消归档按钮；后端 `archived_at` / `teams:archive` / `setTeamArchived` / `TEAM_ARCHIVED` 分支与单测**全部保留**。
+5. **派活面板简化**：`TeamDispatchPanel` 重写为「选团队」单职责（名称 + 描述 + 成员数 + 缺统筹警示），删掉 本次任务目标 / 协作模式 / 预算上限 / 参与成员 四块表单；选中后 `Composer` 输入框上方显示**团队名徽标**（可点 × 取消）；发送即调 `teams:dispatch` **自动派活**（模式回落 `defaultMode`、预算回落 `budget_json`、成员＝全队含 Lead），缺统筹拦截并回写警示。
+6. **拆分文件守阈值**：把加成员弹窗外迁为 `TeamMemberModal.tsx`，`TeamsPage.tsx` 由 ~880 行降至 527 行。
+7. **门禁全绿与文档同步**：legacy-ledger 台账重生成（死桥 48/219 → **50/219**）、设计稿 v1.3 修订记录与 §4/§5/§6/§11 同步、CHANGELOG 与本 README 追加。
+
+### 会话中主要使用的技术栈
+Electron 三进程架构（渲染层 React/TSX → Electron 主进程 IPC → agent-core 引擎）· React Hooks（`useState`/`useEffect`/`useCallback`）· TypeScript（`.tsx` 严格推断）· Tailwind + 语义色 token（`bg-danger-bg` / `bg-success-bg` / `bg-warn-bg` / `bg-accent-bg` / `bg-input` / `border-border`）· i18n 双语 JSON（zh-CN / en-US 深度 key 双向一致 + `{var}` 插值一致）· Node ESM 门禁脚本（`node test/run-all.mjs`、`scripts/gen-legacy-ledger.mjs`）· SQLite 编制表（`teams` / `team_members`）。
+
+### 关键决策和解决方案
+- **「点创建没反应」的根因是反馈落点错**：原校验只写页面级 `error`，而 Modal 覆盖在页面上 ⇒ 用户看不到任何提示。解法是新增弹窗内 `createErr` state + `InlineAlert`，并给必填字段加星号（点击前即可读）。招募失败同一根因，改用弹窗内 `err`。
+- **单一事实来源纪律**：成员上限只在主进程 `MAX_MEMBERS_PER_TEAM` 定义、经 `teams:get` 下发 `maxMembers`（渲染层不硬编码，避免「界面写 20、后端拒在 8」）；项目排序只在 `listProjects()` 的 `lastOpenedAt` 倒序实现（渲染层不再排第二份）；缺统筹唯一判据仍是 `lead_member_id IS NULL`。
+- **归档「仅移除界面入口、后端保留」**：既满足用户「我创建的团队都必须存在」，又不破坏既有数据语义与测试；设计稿同步补注「当前仅存量数据与历史 run 受该语义约束」。
+- **派活装配口径下沉主进程**：面板只收「团队 + 用户那句话」，模式/预算/成员按团队持久化默认值装配，避免同一件事在界面与后端各配一遍；`teams:dispatch` 的 `MISSING_MODE` / `MISSING_BUDGET` 强校验改为缺省回落，`LEAD_MISSING` 仍是硬拦截。
+- **God File 防线**：`TeamsPage.tsx` 突破 800 行即被 `max-lines` 门禁 FAIL，故按「弹窗职责」切出 `TeamMemberModal.tsx`，并把 `Field` / `initial` 一并外迁（建队表单与卡片共用同形态，避免三份实现）。
+- **布局 token 门禁**：新写的标签样式统一用 4px 基尺整档（`gap-2 pl-1 pr-2 py-1`）与 `rounded-full` / `rounded-lg`，不引入间距半档与 `rounded-md`。
+- **门禁红一律改权威来源、不绕行**：`untracked-deps` 要求新文件入库 ⇒ `git add`（不 commit）；`legacy-ledger` 漂移 ⇒ 重跑生成器而非手改数字。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 TeamsPage、TeamMemberModal、TeamDispatchPanel、Composer、ChatArea 与 i18n 语言包现状）· `Write`（新建 `TeamMemberModal.tsx`）· `Edit`（组件与语言包逐处修改、CHANGELOG/README/设计稿追加）· `Shell`（`typecheck` / `lint` / `max-lines` / `layout-tokens` / `run-all.mjs` / `untracked-deps` / `doc-fact-check` / `harness-r7 check.mjs` / `gen-legacy-ledger --write` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `renderer/src/components/TeamsPage.tsx` | 修改 | 必填校验 + `createErr` 内联错误、工作目录改 `<select>`、删归档入口与 `showArchived`、卡片头像红/绿、删 `MemberModal`/`Field`/`initial`/`CAP_KEYS`/`APPROVAL_LABEL`/`SANDBOX_LABEL` 并改 import | 需求①②④ + 守 max-lines 阈值 |
+| `renderer/src/components/TeamMemberModal.tsx` | 新增 | `MemberModal`（标签化编制 + 不关窗 + 自动加入新建员工）default 导出，`Field` / `initial` 命名导出 | 抽文件守 800 行阈值，并集中「加成员」形态 |
+| `renderer/src/components/TeamDispatchPanel.tsx` | 重写 | 单职责「选团队」；props 收敛 `onClose/activeTeamId/onSelectTeam`；删四块表单与一键创建 Lead | 需求⑤：面板不必那么复杂 |
+| `renderer/src/components/PlusMenu.jsx` | 修改 | 军团面板透传 `activeTeamId` / `onSelectTeam`，删除 `threadId`/`projectPath` | 承接面板简化后的新契约 |
+| `renderer/src/components/Composer.tsx` | 修改 | 新增团队名徽标（`IconUsers` + × 取消 + 忙态 spinner）与 `teamErr` 错误条；`hasTaskBadges` 纳入 `activeTeam` | 需求⑤：选中后上方显示团队名 |
+| `renderer/src/components/ChatArea.jsx` | 修改 | 新增 `activeTeam`/`teamErr`/`teamBusy` 与 `sendOrDispatch()`（发送即派活、`LEAD_MISSING` 回写警示） | 需求⑤：按输入内容自动激活员工任务 |
+| `main/teamStore.js` | 修改 | `MAX_MEMBERS_PER_TEAM` 8 → 20 | 需求③：最多 20 个员工 |
+| `main/ipc/teams.js` | 修改 | `teams:list`/`teams:get` 下发 `maxMembers`；`teams:dispatch` 模式/预算改缺省回落 | 上限单一事实来源 + 派活免填表单 |
+| `i18n/locales/{zh-CN,en-US}/teams.json` | 修改 | 新增 13 键（`projectGlobalOption`/`nameRequired`/`descRequired`/`dispatchPickHint`/`dispatched`/`needLeadFirst`/`noDescription`/`rosterTitle`/`rosterCount`/`rosterEmpty`/`rosterFull`/`membersFull`/`done`） | 新界面文案双语一致 |
+| `i18n/locales/{zh-CN,en-US}/composer.json` | 修改 | 新增 `teamTip` / `removeTeam` | 团队徽标提示与取消选中 |
+| `docs/harness-r7/legacy-ledger.json`、`docs/harness-r7/存量收敛台账.md` | 修改 | 重生成：死 bridge 48/219 → **50/219**（裸 button 258 不变） | `teams:archive`、`teams:createLead` 失去渲染层引用 |
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md`（仓库根） | 修改 | 新增 v1.3 修订记录；同步 §4 T5-4、§5 表 1/表 2/归档语义、§6 F1/F2、§11 T5-4 | 设计稿与实现口径一致，避免再次漂移 |
+| `CHANGELOG.md` | 修改 | `[未发布]` 顶部新增本轮五条修正条目（含验证结论） | 变更日志累积 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（每次会话结束 Append 结构化总结） |
+
+### 门禁结果
+`typecheck` **0 error** · `lint` **159 warning / 0 error**（棘轮 161 内）· `npm test` **240/240 通过 0 失败** · `doc-fact-check` 一致 · `harness-r7:check` **76 PASS / 0 FAIL** · `legacy-ledger` 20/20（死桥 50/219、裸 button 258）· `max-lines` 3/3 · `layout-tokens` 2/2 · 渲染层 `vite build` 成功。
+
+### 尚存问题与推荐下一步
+- **待真机目视验证（无法自动化代跑）**：招募弹窗不关窗连续添加、新建员工自动成标签、工作目录下拉候选与顺序、团队徽标与「发送即自动派活」回显、缺统筹警示回写。
+- **待用户确认的口径**：归档后端语义已无界面入口，若后续确定彻底不再需要，可另行裁决是否删除 `archived_at` / `teams:archive`（本轮按「保留后端」处理）。
+- **推荐下一步**：按依赖链进入 **T5-5（团队记忆 scope=team）**，仍过五道门禁并同步会漂移的权威数字。
+
+
+---
+
+## 会话总结：M5 团队层 T5-5 团队记忆模块落地 · 2026-10-20（第十二轮）
+
+### 会话背景
+M5 军团团队层按 T5-1 → T5-2 → T5-3 → T5-4 → T5-7 → 前置修正 的顺序推进完毕。本轮按依赖链进入 **T5-5（团队记忆 + per-agent 长期记忆）**，须与既有 `scope='team'` 归属、共享/私有可见范围、提名制晋升（U5 定案）的设计口径完全一致，且**不新建存储**——只扩展既有 `memories` 表。
+
+### 会话主要目的
+1. 数据层落地 `team_id` / `agent_id` 两列（迁移 v11），支撑「团队共享 = `agent_id IS NULL`、成员私有 = `agent_id = 成员 id`」的归属判定；
+2. `MemoryManager` 团队感知：作用域扩为四层、团队容量闸与半衰期、分层召回装配；
+3. U5 提名制：团队→项目**默认不自动写入**，命中阈值达标后进「待晋升候选」由用户一键确认；
+4. IPC 桥与记忆面板 UI（team 域筛选 + 候选区块），双语 key 双向一致；
+5. 全量门禁 + 会漂移的权威数字同步，向 README / CHANGELOG 累积追加总结（**不 commit**）。
+
+### 完成的主要任务
+- **T5-5-1 数据层**：`main/db/index.js` 迁移链新增 v11（`memories` 增 `team_id` / `agent_id` + `idx_memories_team` 索引），并与 `_ensureScopeColumns` 惰性列补齐同步登记。
+- **T5-5-2 MemoryManager 团队感知**：`SCOPES` 三作用域 → **四作用域** `['session','team','project','global']`；`LAYER_QUOTA` 新增 `team: 3`（合计 10 条预算不变）；`resolveScope` 增 team 分支（**缺 `teamId` 拒绝并回落 project**）；去重键随 scope 分化（team 含 `team_id` + `agent_id`）；新增 `MAX_TEAM_MEMORIES = 200` 与 `_enforceTeamCap`，纳入 `_enforceCap` 统一淘汰口径；`scorer.HALF_LIFE_DAYS_BY_SCOPE` 增 `team: 30`（与 project 同档）。
+- **T5-5-3 提名制（U5）**：`PROMOTE_TEAM_MIN_HITS = 3`；`listTeamPromotionCandidates`（阈值 + `is_valid=1` + **归档团队排除** + 宿主注入 `excludeNames` 过滤含团队名/Lead 名的条目）+ `promoteTeamMemoryToProject`（一键确认后才写 L2）。
+- **T5-5-4 IPC / 桥**：`memory:list` 支持 `scope` / `teamId` / `agentId` 过滤；新增 `memory:teamPromotionCandidates` / `memory:confirmTeamPromotion` 两通道 + 两 preload 桥；`resetScope` 白名单纳入 `'team'`；写入通道走 `ipc-write-guard` 清单登记。
+- **T5-5-5 运行期集成**：`teamStore.findTeamByRun`（runId → 团队 + 成员身份）；worker prompt 按「团队共享 ∪ 自身私有」注入团队层召回；子任务结论沉淀走宿主 `autoCapture` 开关、**归档团队不写**。
+- **T5-5-6 UI / i18n**：`MemorySection.tsx` 补 team 域筛选与「待晋升候选」区块（「提升为项目记忆」按钮），`teams.json` / `settings.json` 双语 key 双向一致。
+- **T5-5-7 门禁与文档**：新增 `test/memory-team.test.mjs`；修复 `memory-m4-hardening` / `memory-file-channel` / `docs-consistency` 三处因权威变更导致的断言失配；同步技术设计文档 5 项数字、harness-r7 契约台账、legacy-ledger 台账与说明文档、`REFERENCE_COUNT_BASELINE`。
+
+### 会话中主要使用的技术栈
+Node.js（CommonJS 主进程 / ESM 引擎与测试）· SQLite（sql.js 驱动 + 迁移链 v11）· Electron（主进程 / preload / utilityProcess）· React + TypeScript（渲染层记忆面板）· Mermaid（文档内架构图）· 依赖注入工厂模式（`createRecallMethods` / `createTeamMethods`）· 双语文案（zh-CN / en-US）。
+
+### 关键决策和解决方案
+1. **不新建存储，扩既有表**：团队记忆复用 `memories` 表，新增 `team_id` / `agent_id` 两列承载归属；共享/私有靠 `agent_id IS NULL` 一元判定，避免第二套「团队表」与跨表一致性成本。
+2. **team 置于 project 之下**：`SCOPES` 顺序即层级优先级，团队编制活在项目内，其结论晋升方向为 team → project → global，与 `promoteScope`「只允许向上晋升」判据自洽。
+3. **提名制而非自动晋升**：团队→项目默认不自动写入，命中阈值只决定「是否被提名」，是否落 L2 永远由用户确认——防止团队专有约定（团队名 / Lead 名）污染跨项目上下文；反例清单由**宿主**注入，记忆模块保持对军团实体无感知。
+4. **模块拆分守 800 行门禁**：本轮 `memory/index.js` 膨胀至 953 raw 行越过软档门禁，按项目「先拆再合入」纪律抽出 `recall.js`（召回族）与 `team.js`（团队记忆族）；子模块经依赖注入工厂装配到 `MemoryManager.prototype`、**反向不 require 主模块**，从结构上消灭 `index ↔ 子模块` 循环依赖；index.js 降至 767 行。
+5. **门禁红 → 改权威来源而非绕行**：`LAYER_QUOTA` 扩四键属**被裁决的契约变更**，同步改 `docs/harness-r7/04-test/check.mjs` 的 A18c 并在文件头「契约变更台账」留痕；A17e/A17f/A17g 由**时点等位**改**只增不减的下界不变量**（与 A17d 同一理由：IPC / 桥方法绝对数随里程碑递增，等位会逼后人反复手改常量），放宽的是上限、下界仍严。
+6. **台账以生成器现算为准**：`legacy-ledger.json` 由 `gen-legacy-ledger.mjs --write` 重算，并用现算结果统一 2.1 汇总口径；死桥 48→50 的根因**不是新桥**，而是上一批 UI 裁决的连带（`teamsArchive` 移除归档入口、`teamsCreateLead` 派活简化后失去调用方）——已在说明文档如实写明。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 memory/scorer/scorer 表、preload 桥、渲染层引用集、docs-consistency 基线、harness-r7 断言与台账）· `Write`（新建 `recall.js` / `team.js` / `memory-team.test.mjs`）· `Edit`（内存模块装配、断言与文档数字逐处同步）· `Shell`（`tsc` / `eslint` / `run-all.mjs` / `doc-fact-check.mjs` / `harness-r7 check.mjs` / `gen-legacy-ledger --write` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/memory/recall.js` | 新增 | `createRecallMethods(deps)` 工厂，承载 `recall` / `_recallLayered` / `_layerRows` / `recallForPrompt` / `recallContents` / `relevanceFor` | 抽出召回族，护 800 行软档门禁 |
+| `desktop/main/memory/team.js` | 新增 | `createTeamMethods(deps)` 工厂，承载 `_enforceTeamCap` / `recallTeamMemories` / `listTeamPromotionCandidates` / `promoteTeamMemoryToProject` | 抽出团队记忆族，护门禁 + 收拢团队语义 |
+| `desktop/test/memory-team.test.mjs` | 新增 | 10 项团队记忆守护断言 | T5-5 回归门禁 |
+| `desktop/main/memory/index.js` | 修改 | 四作用域 + team 分支 + 团队容量闸装配 + 末尾 `Object.assign(MemoryManager.prototype, …)`；953 → 767 raw 行 | T5-5-2/3 + 拆分 |
+| `desktop/main/memory/scorer.js` | 修改 | `HALF_LIFE_DAYS_BY_SCOPE` 增 `team: 30` | team 与 project 同档半衰期 |
+| `desktop/main/db/index.js` | 修改 | 迁移链新增 v11（`team_id` / `agent_id` + 索引） | 团队归属列落地 |
+| `desktop/main/teamStore.js` | 修改 | 新增 `findTeamByRun` | 运行期按 runId 反查团队与成员身份 |
+| `desktop/main/ipc/localData.js` | 修改 | `memory:list` 增 `scope`/`teamId`/`agentId` 过滤；新增候选读取与一键确认两通道；`resetScope` 白名单纳入 `team` | IPC 面暴露团队记忆能力 |
+| `desktop/main/preload.js` | 修改 | 新增 `memoryTeamPromotionCandidates` / `memoryConfirmTeamPromotion` 两桥 | 渲染层可达 |
+| `desktop/main/agentRunner.js` / `desktop/main/workerPool.js` | 修改 | 团队层召回装配 + 子任务结论沉淀（`autoCapture` 开关、归档团队不写） | T5-5-5 运行期集成 |
+| `desktop/renderer/src/components/MemorySection.tsx` | 修改 | team 域筛选 + 「待晋升候选」区块与提升按钮 | T5-5-6 UI |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/{settings,teams}.json` | 修改 | 新增团队记忆相关 key，双语双向一致 | 新界面文案 |
+| `desktop/test/memory-m4-hardening.test.mjs` | 修改 | 半衰期表断言补 `team: 30` 与 `halfLifeDaysFor('team')` | 权威变更同步（非放宽） |
+| `desktop/test/memory-file-channel.test.mjs` | 修改 | D1 `resetScope` 白名单断言纳入 `'team'` | 同上 |
+| `desktop/test/docs-consistency.test.mjs` | 修改 | `REFERENCE_COUNT_BASELINE` 28 → **29**（棘轮，文档新增引用） | 文档新增 `memory-team.test.mjs` |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A18c 改四作用域；A17e/A17f/A17g 等位 → 下界不变量；文件头「契约变更台账」留痕 | 门禁口径随裁决变更同步 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 237→**238**、通道 208→**210**、桥 219→**221**、主进程模块 141→**143**、`main.js` raw 1820→**1863**，及三处汇总行 240→**241** | doc-fact-check 数字漂移 |
+| `docs/harness-r7/legacy-ledger.json` / `存量收敛台账.md` | 修改 | 重生成：死桥 **50/221（22.6%）**，裸 button 258 不变；新增变更记录行并修正 2.1 汇总与 `teams` 组明细 | 台账与现算一致 |
+| `MJcoder-技术流程功能文档.md` | 修改 | §1.5 记忆层行扩为四作用域 + 常量与守护测试列 | docs-consistency 校验对象 |
+| `CHANGELOG.md` | 修改 | `[未发布]` 顶部新增 T5-5 条目 | 变更日志累积 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（Append） |
+
+### 门禁结果
+`typecheck` **0 error** · `lint` **160 warning / 0 error**（棘轮 161 内）· `npm test` **241/241 通过 0 失败** · `doc-fact-check` **一致** · `harness-r7:check` **76 PASS / 0 FAIL** · `legacy-ledger` **20/20**（死桥 50/221、裸 button 258）· `max-lines` **3/3**（拆分后 `memory/index.js` 767 raw 行）· 渲染层 `vite build` **成功**。新文件 `recall.js` / `team.js` / `memory-team.test.mjs` 已 `git add`（**未 commit**）。
+
+### 尚存问题与推荐下一步
+- **待真机目视验证（无法自动化代跑）**：记忆面板 team 域筛选与「待晋升候选」区块渲染、一键「提升为项目记忆」落库回显、团队会话中 worker 结论沉淀是否按 `agent_id` 正确归属。
+- **待后续里程碑**：`team_*` 协同工具接线（T5-8）与军团群聊视图（T5-6）尚未开始；`/mem` 显式指定 `scope='team'` 的显式通道按设计保留待接。
+- **归档日志**：本轮 `CHANGELOG.md` 因 `.gitignore` 规则未被 `git add`，如需纳入版本控制需先调整忽略规则。
+- **推荐下一步**：按依赖链进入 **T5-6（军团群聊视图）** 或 **T5-8（`team_*` 协同工具接线）**，仍须每任务过五道门禁 + 8 环节完整接线，并同步会漂移的权威数字。
+
+---
+
+## 会话总结：MJ 军团设计稿 v1.5（对话内军团协同收敛定案） · 2026-10-20（第十四轮）
+
+### 会话背景
+承接 M5 团队层 T5-5 交付后的**设计对齐**：用户先质疑「按依赖链进入 T5-6/T5-8，仍须过五道门禁 + 8 环节接线」这一收尾话术的含义，随后提出**军团应"加入到当前对话界面中、在当前对话里协同"**，并给出四条调度硬约束（参与人数 ≤10、同类型不推荐 >2、串行分批 + 可并行、5s×3 探活失败则撤员降并发换批）。第二轮用户指出「你项目里早已存在主管中心化调度的多 Agent 编排」，追问 bot 该如何调整；第三轮用户给出 DS Bot 的完整机制说明（1 Bot ↔ 1 DSH Session、绑定关系存 `state.json`），要求给出主流收敛方案并写入设计稿。**全程未写任何业务代码。**
+
+### 主要目的
+把「军团 = 独立群聊页」的旧形态**推翻为「军团绑进当前对话」**，并在不写代码的前提下，产出**主流可落地**的收敛方案写回军团设计稿。
+
+### 完成的主要任务
+1. **概念纠偏**：澄清既有「编排核心（匿名机制）」与新增「军团层（有身份主体）」的分层与复用关系（[workerPool.js:34](file:///Users/jianma/Desktop/MJCode/desktop/main/workerPool.js#L34) 的 `WORKER_NAMES` 是轮转分配的匿名名，槽位键是 `groupId/taskId`，管任务数不管人），并为「bot」正名。
+2. **DS Bot 机制逐条映射 MJCode 现状**：6 条机制中 5 条已具备（富身份 / 共享+私有记忆 / handoff 摘要 / 隔离执行 / 默认交主管），**唯一缺口 = 成员持久会话**。
+3. **源码取证**：`task_groups.thread_id` 为对话绑定键（`taskStore.createGroup`）；`agentRunner` 消费 `payload.conversationId` + `resumeContext`；断点由 [`checkpointStore`](file:///Users/jianma/Desktop/MJCode/desktop/main/checkpointStore.js#L82-L108) 按 `threadKey` 落 `userData/agent-checkpoints.json` 且有 `checkpoint:clear`；worker 会话 id 为一次性 `task:{groupId}:{taskId}`（三处）且**全仓无前缀解析假设**。
+4. **四决策点定案（C1–C4）+ 调度策略层定案**。
+5. **写回设计稿 v1.5**：顶部修订记录、§1 D2、§3 架构标签与导读、§4 构件表、§11 任务与验收、新增 §13。
+
+### 会话中主要使用的技术栈
+Node/Electron 主进程（orchestrator / workerPool / checkpointStore / taskStore / agentRunner）、SQLite 与 IPC 桥接体系、Markdown 设计稿（Mermaid 架构图）；未跑构建与测试（本轮无代码改动）。
+
+### 会话中主要使用的工具
+`Read` / `Grep` / `Edit`（取证与改稿）、`Agent(Explore)`（探查派活链路与绑定键）、`AdvisorTool`（收敛前的战略校准）。
+
+### 关键决策和解决方案
+- **C1 成员会话 id 固定 `agent:{memberId}`**：不加列、不迁移；确定性 id 免去映射表（DS Bot 自身文档亦警告「不要手改映射」），复用 `checkpointStore` + `checkpoint:clear` 同时得到「持久」与「可重置」。
+- **C2 成员跨 run 不带原始对话历史**：每轮只注入角色提示词 + 团队共享记忆 + 自身私有摘要，规避 Anthropic 实测的 ~15× token 放大。
+- **C3 对话内默认只出一张 Chief 汇总卡**（含成员贡献摘要），可展开为派活/接手/handoff/汇报轨迹 —— 观感优先，轨迹需求由展开态满足。
+- **C4 Chief 每次派活都出场但只做两次轻量调用**（一次拆解出批次计划 + 一次汇总），**不做常驻进程**，守住 §5.1「不新增进程」。
+- **调度策略层**：参与人数硬闸 `MAX_ACTIVE_MEMBERS=10`（与在册 `MAX_MEMBERS_PER_TEAM=20` 分离）；同类型软闸 `MAX_PER_TYPE_IN_RUN=2`（超限须 Chief 显式理由，否则延后到下一 wave）；**wave 分批**（拆解期生成 wave1 = 可立刻开始的最小子集，运行期逐批串行、批内并行）；**`WAVE_PROBE_INTERVAL_MS=5000` × `WAVE_PROBE_MAX_MISSES=3`** 三通道无变化即撤员 → `setMaxConcurrent` 降档 → 换下一批，`MAX_WAVES=3` + G2 预算闸双兜底。
+- **主流锚点选型**：CrewAI `hierarchical` + Anthropic orchestrator-worker + LangGraph `thread_id`/checkpoint + OpenAI Agents SDK `Session` 的交集。
+- **反例排除**：不推倒层级式改群聊式；不新增第二套编排/进程/存储；T5-8 首版**不接线**（走 §5.5 路线 A）。
+- **口径重定义**：T5-6 由「军团群聊视图」→「**对话内团队协同事件流**」（不新增独立页面）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | ① 顶部新增 **v1.5 修订记录**（第十四轮）；② §1 **D2 行**改为「对话内团队协同」；③ §3 架构图 L4 标签改「对话内军团协同」+ 关键约束导读补 v1.5 调度策略层；④ §4 标题改「构件清单（T5-1…T5-10；v1.5 增补 T5-11/T5-12）」+ **T5-6 重定义** + 新增 **T5-11 / T5-12** 两行；⑤ §11 任务表 **T5-6 验收改写** + 追加 T5-11/T5-12 两行 + 新增「v1.5 门禁补充」段；⑥ 文末新增 **§13「对话内军团协同：收敛方案（v1.5 定案）」**（13.1 收敛决策表 / 13.2 四级绑定 key / 13.3 对话即容器 / 13.4 人数闸·类型闸·wave·探活降级 / 13.5 T5-6·T5-8 口径重定义 / 13.6 不降级 / 13.7 v1.5 剩余风险 R5–R8） | 用户要求「给出一个目前主流的设计方案，确认写入军团设计稿」 |
+| `README.md` | 修改 | 文末累积追加本节会话总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：本轮只改文档；工作区仍携带 T5-5 批次的未提交改动（含已 `git add` 的 `recall.js` / `team.js` / `memory-team.test.mjs`），按纪律**不 commit**，待用户指令。
+- **待实现链**：C1–C4 与策略层定案后，按 **T5-11（成员持久会话与对话绑定）→ T5-12（Chief 批次编排与降级）→ T5-6（对话内事件流）** 推进；T5-8 暂不接线。每个任务仍须过五道门禁，涉及引擎侧的才走 8 环节接线。
+- **风险跟踪**：R5 持久成员会话上下文膨胀、R6 探活「无进展」误杀、R7 wave 过多拖长总时长、R8「同类型」判据依赖 `template_ref`。
+- **推荐下一步**：待用户确认 §13 口径后开始 **T5-11** 实现（`agent:{memberId}` 会话 id + 断点恢复 + `thread_id` 贯穿至 worker）。
+
+---
+
+## 会话总结：M5 团队层 T5-11 成员持久会话与对话绑定落地 · 2026-10-20（第十五轮）
+
+### 会话背景
+设计稿 v1.5（第十四轮）已把 T5-11 口径定案（§13.2 四级 key / §13.3 对话即容器 / §13.6 L2 引擎零改动），用户给出执行指令「按这个方案开始实现 T5-11」。本轮即按该口径把「成员会话 id 由一次性 `task:{groupId}:{taskId}` 改为确定性 `agent:{memberId}`、断点跨 run 复用、`thread_id` 贯穿至 worker、重置会话端到端入口」全部落地，**不再讨论方案**。
+
+### 会话主要目的
+1. 成员会话键固定 `agent:{memberId}`（**不加列、不迁移**），并补齐 worker 侧的**断点恢复**与**完成回写**（此前 Worker 通道从不触碰断点）；
+2. 确定成员身份来源：认领时按名册 + `task.seq` 取模**落库** `owner_member_id`（顺带修复 T5-5 私有记忆归属的死链）；
+3. `task_groups.thread_id` 贯穿至 worker（落断点元数据 `threadId`）；
+4. 「重置成员会话」端到端接线：`teams:resetMemberSession` IPC（清 `agent:{memberId}` 断点 + 私有记忆降权）→ preload 桥 → 团队页成员行按钮 + 双语 key；
+5. 全量门禁 + 会漂移的权威数字同步；向设计稿标 T5-11 已交付、README 累积追加总结（**不 commit**）。
+
+### 完成的主要任务
+- **T5-11-1 会话键与成员身份**：`workerPool.pump()` 认领后按 `deps.resolveTeamRoster(group)`（= `teamStore.findTeamByRun(runId)` → `team.members`）+ `task.seq % 名册长度` 确定性指派并 `setTaskStatus(..., 'running', { ownerMemberId })` 落库（`running→running` 合法同态、COALESCE 语义不覆盖原认领者）。
+- **T5-11-2 断点读写**：`runWorkerTask` 取 `sessionKey = memberSessionKey(group, task)`（`agent:{memberId}`；无名册回落 `agent:anon:{groupId}:{taskId}`），运行前 `read(sessionKey)` → `runOpts.resumeContext`（只进本轮 system 段，引擎固定文案「断点恢复…请从待办处接续」，**不进持久历史**）；任务 done 后 `save(...)` 写回（**仅成员任务**，避免挤占 50 条 LRU）。
+- **T5-11-3 三处 `task:` 会话 id 统一替换**：[workerPool.js:275](file:///Users/jianma/Desktop/MJCode/desktop/main/workerPool.js#L275)（`runOpts.conversationId`）/ [:266](file:///Users/jianma/Desktop/MJCode/desktop/main/workerPool.js#L266)（`toolHooks` 的 `conversationId`）/ [:337](file:///Users/jianma/Desktop/MJCode/desktop/main/workerPool.js#L337)（`verifyRun.createVerificationRun` 的 `conversationId`）改同一 `sessionKey`。
+- **T5-11-4 `thread_id` 贯穿**：`group.thread_id` 写入断点元数据 `threadId`（`runOpts` 不设惰性 `threadId` 键——引擎不消费，设了是死键）。
+- **T5-11-5 重置会话链路**：`teams.js` 新增 `teams:resetMemberSession`（`clearCheckpoint('agent:{memberId}')` + 私有记忆 `importance` 减半、上限 0.2、**不删除**）；`main.js` 向 `initTeamsIpc` 注入 `clearCheckpoint` / `getMemoryManager`；`preload.js` 新增 `teamsResetMemberSession` 桥；`TeamsPage.tsx` 成员行新增「重置会话」按钮（`Button variant="ghost" size="xs"`）+ 二次确认 + busy 键 `reset:{id}`；`teams.json` 双语新增 6 key。
+- **T5-11-6 门禁与文档**：新增 `test/worker-session.test.js`（12 断言）；因新增 `main/workerSession.js` 触发 4 处权威数字漂移（模块 143→144 等）已同步；设计稿 §4/§11/§13.2/§13.3 标 T5-11 已交付 + 补实现取证表；legacy-ledger 台账与说明文档追加本轮变更行。
+
+### 会话中主要使用的技术栈
+Node.js（CommonJS 主进程 / ESM 引擎与测试）· Electron（主进程 / preload / utilityProcess）· React + TypeScript（团队页）· checkpointStore（原子写 / LRU 50 / fail-closed）· 依赖注入工厂模式（`createMemberSession`）· 双语 key（zh-CN / en-US）。
+
+### 关键决策和解决方案
+1. **workerSession.js 抽出（护 800 行软档）**：补齐断点恢复 + 完成落断点后 `workerPool.js` 一度胀到 811 raw 行越过门禁，按「先拆再合入」纪律抽出 `createMemberSession` 工厂（会话键 / 确定性指派 / 断点读写三族），经 deps 装配、缺省回落 `checkpointStore` 单例；`workerPool.js` 降至 742 行。
+2. **成员身份必须落库而非临时值**：`owner_member_id` 是成员会话 id 的唯一来源，同时被 T5-5 团队记忆归属（`agent_id`）与 worker prompt 的成员私有召回读取；不落库这两条链恒退化成「团队共享」。
+3. **`thread_id` 落点选断点元数据**：引擎 `runOpts` 不消费 `threadId`，若在 runOpts 里设就是死键；四级 key（conversationId → runId → memberId → `agent:{memberId}`）最终由断点元数据串起，供审计与后续 T5-6 事件流消费。
+4. **重置 = 清断点 + 记忆降权（不删）**：`scope='team'` 私有记忆同时承载团队视图的历史结论，删除会产生无法解释的空洞；降权是单向弱化，符合「重置后旧经验不再主导」的意图。清断点与降权必须在**同一 IPC 内**完成，避免出现「清了断点没降权」的半成品状态。
+5. **`checkpoint:clear` 复用而非新起清理通道**：与主对话「继续」共用同一存储、同一清理入口、同一 50 条 LRU——旧断点清理后不会复活。
+6. **无 `task:` 前缀解析假设**：全仓已取证无 `startsWith` / `split` 依赖，故 `task:` → `agent:` 属安全替换。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 workerPool 三处会话 id、agentRunner `resumeContext` 通道、taskStore `owner_member_id` 列、preload 桥命名、团队页成员行结构）· `Write`（新建 `main/workerSession.js`、`test/worker-session.test.js`）· `Edit`（workerPool 接线、main.js 注入、teams.js handler、preload 桥、TeamsPage + i18n、文档数字逐处同步）· `Shell`（`tsc` / `eslint` / `run-all.mjs` / `doc-fact-check.mjs` / `harness-r7 check.mjs` / `legacy-ledger.test.mjs` / `max-lines` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/workerSession.js` | 新增 | `createMemberSession(deps)` 工厂：`memberSessionKey` / `pickOwnerMember` / `save`（done 落断点，元数据含 kind/summary/threadId/runId/taskId/ownerMemberId/cwd）/ `read`（截 6000 字符）；导出 `MEMBER_SESSION_PREFIX = 'agent:'` | 承载成员会话三族逻辑，`workerPool.js` 越过 800 行软档后按纪律抽出 |
+| `desktop/main/workerPool.js` | 修改 | ① 头部署明 `createMemberSession`（删除原 `checkpointStore` require 与 ~80 行 helper）；② `initWorkerPool` 装配 `memberSession`；③ `pump()` 认领后补写 `owner_member_id`；④ `runWorkerTask` 取 `sessionKey` + 读 `resumeContext`；⑤ 三处 `conversationId` 改 `sessionKey`；⑥ done 后 `memberSession.save` | 会话 id 改 `agent:{memberId}`、断点恢复与完成回写、`thread_id` 贯穿 |
+| `desktop/main/main.js` | 修改 | `initWorkerPool` 注入 `resolveTeamRoster`（`findTeamByRun` → `team.members`，异常返回 null）；`initTeamsIpc` 注入 `clearCheckpoint` / `getMemoryManager` | 为成员指派提供名册、为重置会话提供断点清理与记忆降权能力 |
+| `desktop/main/ipc/teams.js` | 修改 | 新增 `teams:resetMemberSession` handler：校验入参 → `clearCheckpoint('agent:{memberId}')` → 私有记忆 `importance` 减半（上限 0.2）→ `audit` + `broadcastSystem`，返回 `{ ok, sessionKey, checkpointCleared, demoted }` | T5-11 §13.3 重置成员会话的入口 |
+| `desktop/main/preload.js` | 修改 | 新增桥 `teamsResetMemberSession(teamId, memberId)` | 渲染层调用入口 |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | `SYS_LABEL` 增 `memberSessionReset`；新增 `resetMemberSession(teamId, member)`（二次确认 → 调桥 → notice/error，busy `reset:{id}`）；`TeamCard` 增 `onResetSession` prop；成员行新增「重置会话」按钮（`Button variant="ghost" size="xs"`） | 提供界面入口，零新增裸 button |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` · `en-US/teams.json` | 修改 | 新增 6 key：`msgSysMemberSessionReset` / `resetSession` / `resetSessionTitle` / `resetSessionMessage` / `resetSessionNotice` / `resetSessionFailed` | 双语双向一致，避免渲染原始 key |
+| `desktop/test/worker-session.test.js` | 新增 | 12 断言：确定性指派（seq 取模）、`agent:{memberId}` 引擎/hooks 同键、断点读取注入 resumeContext、无断点空串、done 写回断点且元数据齐全、summary 前缀、无名册回落且不写断点 | T5-11 的 `checkpointStore` 键位与格式门禁断言 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | §5.3 更新 `workerPool.js:405-407`、`conversationId = agent:{memberId}` + 断点接线说明；`maxConcurrent` 引用改 `:27,52`、pump 改 `:194-251`；规模数字同步（模块 143→144、套件 239、通道 211、桥 222、main.js raw 1881） | 消除 doc-fact-check 的数字漂移 |
+| `docs/harness-r7/存量收敛台账.md` · `legacy-ledger.json` | 修改 | 死桥 `50/221` → `50/222（22.5%）`；2.1 口径 221→222、引用集 171→172；追加 T5-11 变更行 | 新增 1 个 preload 桥（`teamsResetMemberSession`）为活桥，分母上升 |
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | §4/§11 的 T5-11 行标「v1.5 起已交付」并改写验收要点；§13.2 补 T5-11 实现取证表（6 环节落点）；§13.3 重置会话注「已交付界面入口」；§13 文末追加交付记录 | 设计稿与实现对齐 |
+| `README.md` | 修改 | 文末累积追加本节（第十五轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；本轮新增的 `main/workerSession.js` / `test/worker-session.test.js` 因 `untracked-deps` 门禁要求「干净 clone 可构建」已 `git add`（未提交），其余改动仍留在工作区待用户指令。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **242/242** · doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · 渲染层构建成功 · max-lines 3/3。
+- **链式后续**：按依赖链进入 **T5-12（Chief 运行期批次编排与降级：wave / 人数闸 / 同类型软闸 / 探活撤员）**，其后是 **T5-6（对话内团队协同事件流）**；T5-8 首版不接线。
+- **风险跟踪**：R5 持久成员会话上下文膨胀（已由「只注入摘要 + 50 条 LRU」缓解）；R6 探活误杀留待 T5-12 处理。
+- **推荐下一步**：开始 **T5-12** 实现（拆解产出 wave 计划 → 逐批串行推进 → 探活撤员与降并发换批，含注入可控时钟的确定性单测）。
+
+---
+
+## 会话总结：M5 团队层 T5-12 Chief 运行期批次编排与降级落地 · 2026-10-20（第十六轮）
+
+### 会话背景
+上一轮（第十五轮）已交付 T5-11 成员持久会话与对话绑定，按设计稿 v1.5 §13.4 与依赖链（T5-11 → **T5-12** → T5-6），用户给出「下一步」指令。本轮即按 §13.4 已定案口径把「wave 分批串行推进 / 人数与同类型闸 / 5s×3 探活撤员 / 降并发换批」落地，不再讨论方案。
+
+### 会话主要目的
+1. 拆解阶段产出 **wave 计划**（人数闸 `MAX_ACTIVE_MEMBERS=10` + 同类型软闸 `MAX_PER_TYPE_IN_RUN=2` + `MAX_WAVES=3` 尾部合并），并随既有 `dag_json` 落库（不新增列、不迁移）；
+2. 运行期**逐批串行、批内并行**：只在「入队门控」放行当前批，后批保持 `pending` 不占槽位；
+3. **探活降级**：每 5s 采样三通道（`traceSeq` / `team_messages` `seq` / 子任务状态签名），连续 3 次全无变化 ⇒ 撤员改用同类型备用成员，无备用则标 `failed`，同时并发减半、处理完一批换下一批；
+4. 常量单一事实来源 + 全量门禁 + 权威数字同步 + 设计稿标交付 + README 累积追加（**不 commit**）。
+
+### 完成的主要任务
+- **T5-12-1 策略层纯函数**：新建 `main/teamWaves.js`（277 行）——五个常量、类型判据三级回落（`template_ref` → `tool_names` 排序签名 → `role_kind`）、`selectActiveMembers`、`computeLevels`、`planWaves`、`normalizeWaves`、`currentWave`、`allowedTaskIds`、`createWaveProbe`、`startWaveProbe`、`pickBackupMember`。
+- **T5-12-2 批次运行时引擎**：新建 `main/waveEngine.js`（222 行）——`attach/detach`、`allowOf`、`preferredOwnerOf`、`eligibleRoster`、`countTrace`、`handleStall`（撤员 + 并发减半 + 事件留痕）、`ensureTimer`（单一 5s 定时器、unref）、`consumeStall`（在收尾终态落库前消费撤员意图）。
+- **T5-12-3 状态存储能力**：`taskStore.enqueueReady(groupId, { allowIds })` 支持批次门控；新增 `taskStore.reassignTask(groupId, taskId, ownerMemberId, { error })`（`done`/`skipped` 拒绝重派，否则先回 `queued` 再直写 `owner_member_id`）；`teamStore.latestSeqForRun(runId)` 提供 O(1) 消息通道。
+- **T5-12-4 编排与派活接线**：`orchestrator.planGoal` 接受 `planWaves` 钩子，在 `topoLevels` 之后、`createGroup` 之前生成计划并写入 `dag: { levels, waves, assignments }`；`ipc/teams.js` 的 `teams:dispatch` 按被选中成员构造 `roster` 注入钩子，消息 payload 增 `waves` 摘要与 `caps`。
+- **T5-12-5 Worker 池接入**：`runGroup` 对存在 `waves` 的组装配批次运行时并发 `wave_started`；`pump` 只放行当前批、优先用计划指派；收尾发 `wave_completed`；`runWorkerTask` 在终态落库前 `consumeStall`；`finalizeGroup` / `abortGroup` 统一 `waveDetach`。普通编排组（无 waves）行为零变化。
+- **T5-12-6 事件与文案**：`main.js` 注入 `getTeamMessageSeq`；`taskBroadcast.js` 抽出两条纯事件映射供池与引擎共用；`runtime.json` 双语新增 `workerStalled` / `workerReassigned`。
+- **T5-12-7 测试与门禁**：新增 `test/team-waves.test.js`（51 断言，探活注入假定时器）；`workerPool.js` 966 → 794 行（护 800 行软档）。
+
+### 会话中主要使用的技术栈
+Node.js（CommonJS 主进程）· Electron 主进程 · SQLite（`task_groups` / `sub_tasks` / `team_messages`）· 依赖注入工厂（`createWaveEngine(host)`）· 确定性假时钟单测 · i18n 双语 key。
+
+### 关键决策和解决方案
+1. **批间串行用「入队门控」而非改状态机**：`enqueueReady` 增加 `allowIds` 过滤，后批保持 `pending` 不占槽位；当前批全部终态后 `currentWave` 自动前移 ⇒ 天然串行，不新增状态、不加列、不迁移。
+2. **批次计划持久化复用 `dag_json`**：写入 `{ levels, waves, assignments }`，不建第二套存储，旧组（无 `waves`）自动退化为既有 DAG 调度。
+3. **撤员与终态落库的竞争**：`handleStall` 只记 `pendingReassign` 意图并 `abort`，真正改派/判失败在 `runWorkerTask` 收尾、**终态落库之前**串行消费，避免「先标 failed 再改派」的死路。
+4. **防「撤了又派回来」**：`retired` 集合记录被撤成员，`eligibleRoster` 过滤、`pickBackupMember` 排除，且 `preferredOwnerOf` 跳过已撤成员。
+5. **防探活误杀**：判定停滞时先 `probe.reset()` 再撤员，下一拍重建基准，避免同一状态连续误判。
+6. **800 行 God File 门禁**：`workerPool.js` 一度 966 行，分两步抽出 `waveEngine.js`（批次运行时域）与 `taskBroadcast.js`（纯事件映射域），最终 794 行；两处抽出均为「先拆再合入」，未改行为。
+7. **常量单一事实来源**：五个阈值只在 `teamWaves.js:16-20` 定义，引擎与 IPC 全部 import，杜绝字面量漂移。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 `orchestrator/dag.js` 上限、`taskStore` 状态机、`max-lines.test.js` 基线、`doc-fact-check` 口径）· `Write`（新建 `teamWaves.js` / `waveEngine.js` / `taskBroadcast.js` / `team-waves.test.js`）· `Edit`（`taskStore` / `orchestrator` / `ipc/teams` / `teamStore` / `workerPool` / `main.js` / 双语 `runtime.json` / 技术文档 / 设计稿）· `Shell`（`tsc` / `eslint` / `run-all.mjs` / `doc-fact-check.mjs` / `harness-r7 check.mjs` / `legacy-ledger` / `max-lines` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/teamWaves.js` | 新增（277 行） | 五常量 + `memberTypeOf` / `selectActiveMembers` / `computeLevels` / `planWaves` / `normalizeWaves` / `currentWave` / `allowedTaskIds` / `createWaveProbe` / `startWaveProbe` / `pickBackupMember` | 批次策略单一事实来源，纯函数便于确定性单测 |
+| `desktop/main/waveEngine.js` | 新增（222 行） | `createWaveEngine(host)`：批次状态、5s 探活定时器、撤员降并发、`pendingReassign` 消费 | `workerPool` 越过 800 行软档，按「先拆再合入」抽出运行时域 |
+| `desktop/main/taskBroadcast.js` | 新增 | `broadcastWaitSweep(deps, timedOut)` / `broadcastWoken(deps, groupId, woken)` | 池与引擎共用同一份事件映射，并再降 workerPool 行数 |
+| `desktop/test/team-waves.test.js` | 新增 | 51 断言：常量、类型回退、双闸、分批与尾部合并、脏数据、探活三通道与假定时器、备用成员、`enqueueReady` 门控、`reassignTask`、`dag_json` 往返 | T5-12 确定性门禁（不依赖真实计时） |
+| `desktop/main/taskStore.js` | 修改 | `enqueueReady` 增 `allowIds` 过滤；新增 `reassignTask` | 批次门控 + 撤员重派的最小存储能力 |
+| `desktop/main/orchestrator/index.js` | 修改 | `planGoal` 增 `planWaves` 钩子，`topoLevels` 后生成 waves 并写入 `dag_json`，返回值带 `waves` / `waveAssignments` | 批次计划在派活时算一次并持久化 |
+| `desktop/main/ipc/teams.js` | 修改 | 引入 `teamWaves`，`teams:dispatch` 按 roster 注入 `planWaves`，payload 增 `waves` / `caps`，audit 与事件同步 | 团队派活是批次计划的入口 |
+| `desktop/main/teamStore.js` | 修改 | 新增 `latestSeqForRun(runId)` | 探活第二通道需要 O(1) 的 `MAX(seq)` |
+| `desktop/main/workerPool.js` | 修改（966→794 行） | 装配 `waveEngine`；`runGroup` 装配并广播 `wave_started`；`pump` 批次门控 + 计划指派；收尾广播 `wave_completed`；`runWorkerTask` 消费撤员意图；删除本地两条广播改引 `taskBroadcast` | 把 T5-12 接入既有调度链路，普通组零行为变化 |
+| `desktop/main/main.js` | 修改 | `initWorkerPool` 注入 `getTeamMessageSeq` | 为探活提供 `team_messages` 序号通道 |
+| `desktop/renderer/src/i18n/locales/zh-CN/runtime.json` · `en-US/runtime.json` | 修改 | 新增 `workerStalled` / `workerReassigned` 两 key | 撤员与改派事件需要可见文案，双语一致 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 239→240、用例 237→238、条目 246→247、汇总 242→243、主进程模块 144→147、`main.js` raw 1881→1886 / code 1222→1278 | 消除 doc-fact-check 的三项数字漂移 |
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | §11 的 T5-12 行标「v1.5 起已交付（2026-10-20）」并改写验收要点；§13.4 末补 12 行实现取证表 | 设计稿与实现对齐，逐条可复跑 |
+| `README.md` | 修改 | 文末累积追加本节（第十六轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；本轮 4 个新文件（`teamWaves.js` / `waveEngine.js` / `taskBroadcast.js` / `team-waves.test.js`）已 `git add`（`untracked-deps` 门禁要求），其余改动留在工作区待用户指令。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **243/243** · doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · 渲染层构建成功 · max-lines 3/3（`workerPool.js` 794 行）。
+- **风险跟踪**：R6 探活误杀已用「先复位再撤员 + 三通道判据」缓解，但长思考模型仍可能在 15s 内零事件；R7 已由 `MAX_WAVES=3` + G2 兜底。
+- **链式后续**：按依赖链进入 **T5-6（对话内团队协同事件流：`team_messages` 按 `seq` 投影为对话内折叠卡片）**；T5-8 首版仍不接线。
+- **推荐下一步**：开始 **T5-6** 实现（事件流投影组件 + `seq` 增量拉取 + 折叠/展开轨迹），复用本轮 `wave_started` / `wave_completed` 与既有 `task_*` 事件。
+
+## 会话总结：M5 团队层 T5-6 对话内团队协同事件流落地 · 2026-10-20（第十七轮）
+
+### 会话背景
+上一轮（第十六轮）已交付 T5-12 Chief 运行期批次编排与降级，依赖链（T5-11 → T5-12 → **T5-6**）走到末位。用户给出「继续」指令，本轮按设计稿 v1.5 §13.5 已定案口径实现「对话内团队协同事件流」：**不新增独立群聊页**，`team_messages` 按 `seq` 投影为对话内折叠卡片，T5-8 仍走路线 A（不接线）。
+
+### 会话主要目的
+1. 让「本会话派过的团队 run」连同协同消息与看板任务一起回流到**当前对话流**，默认只出一张汇总卡、可展开轨迹；
+2. 会话 ↔ run 的关联只用既有 `task_groups.thread_id`，**不新增列、不建第二套存储**；
+3. 纯投影层与宿主解耦（Node 可直接单测），展示口径收敛为单一事实来源；
+4. 全量门禁 + 权威数字同步 + 设计稿标交付 + README 累积追加（**不 commit**）。
+
+### 完成的主要任务
+- **T5-6-1 纯投影/装配内核**：新建 `desktop/shared/teamStream.mjs`——`normalizeTeamMessage` / `taskProgress` / `projectTeamRuns` / `memberLabel` / `assembleThreadRuns`；确定性排序（卡片按建组时间升序、消息按 `seq` 升序）、按 id 去重、未知 kind 回落 `system`、成员名一次解析。
+- **T5-6-2 展示口径单一事实来源**：新建 `desktop/shared/teamLabels.mjs`——`KIND_LABEL` / `SYS_LABEL` / `kindKey` / `messageText`；团队详情页与对话卡共用，避免新增系统留痕只改一处导致裸 key。
+- **T5-6-3 主进程只读入口**：`teamStore.listMessagesByRuns`（一条 `run_id IN (...)` 批量取，避免 N 次查询/IPC）、`taskStore.listGroupsByThread`（`thread_id` 唯一事实源）、`teams:listThreadRuns` IPC（过滤普通编排组与孤儿组、按建组时间倒序）、`getTaskStore` 注入、preload `teamsListThreadRuns` 桥。
+- **T5-6-4 对话内卡片组件**：新建 `TeamRunStream.tsx`——原生 `<details>/<summary>` 默认折叠；折叠态＝团队名＋目标＋批次数＋进度＋组状态；展开态＝聚合摘要＋任务轨迹（负责人/结论摘要）＋协同消息（种类/收发方/正文）＋引用。订阅 `teams:event` 与 `tasks:event`，500ms 防抖刷新。
+- **T5-6-5 接线**：`MessageStream` 在本轮正文之后、收尾条之前渲染 `<TeamRunStream threadId={...} />`；`ChatArea` 下发会话 id，跨会话不串卡；`TeamsPage` 改用共享标签模块。
+- **T5-6-6 测试与门禁**：新增 `test/team-stream.test.mjs`（**57 断言**）——纯投影、装配分支、真实 IPC handler 真调、接线静态断言、双语 i18n key、存储读入口，并含「主进程禁止 `require` ESM」反模式断言。
+
+### 会话中主要使用的技术栈
+Node.js ESM（`shared/*.mjs` 双端共用）· Electron 主进程 IPC 域 · React + TypeScript · SQLite（`task_groups` / `sub_tasks` / `team_messages`）· 纯函数投影 · 原生 `<details>` 折叠 · i18n 双语 key。
+
+### 关键决策和解决方案
+1. **会话归属不新增列**：`task_groups.thread_id` 就是「run 属于哪个会话」的唯一事实源；`team_messages` 只有 `run_id`，若再加会话列即出现第二事实源。
+2. **过滤普通编排组**：普通 DAG 组同样写 `thread_id`，故只保留「存在 `team_messages`」的组为团队 run，否则对话里会冒出一堆与军团无关的任务卡。
+3. **孤儿卡跳过**：组或团队任一已删则不出卡，避免「点开即空」。
+4. **轨迹权威事实 = 看板**：不新增重复的 `handoff` / `report` 消息写入；「谁接手、干到哪、结论」直接读 `sub_tasks.owner_member_id` / `status` / `result.summary`，从源头避免上下文膨胀与崩溃重放。
+5. **发现并修掉一个真机致命隐患**：主进程原用 `require('../../shared/teamStream.mjs')`。本机 Node 26 可跑、单测全绿，但 Electron 33 内嵌 Node 20.18 会抛 `ERR_REQUIRE_ESM`，把整个 `teams:*` IPC 域在启动时打挂。改为与 `mcpToolCache.js` 同款的「动态 `import()` + 成功即缓存」，并加源码反模式断言守住。
+6. **默认折叠不引入裸 button**：用原生 `<details>/<summary>`，既不进裸 button 台账，也天然满足「默认只出一张汇总卡」。
+7. **双事件源刷新**：只订阅 `teams:event` 会「消息到了、状态还停在运行中」，只订阅 `tasks:event` 会漏系统留痕；两者合并 500ms 防抖才是完整口径。
+8. **门禁修正**：新组件两处 0.5 档间距（`py-1.5` / `space-y-0.5`）触发 layout-tokens 半档收敛门禁，改为 `py-1` / `space-y-1`，零行为差异。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 `teamStore` / `taskStore` / `ipc/teams` / `MessageStream` / `TeamsPage` / `mcpToolCache` / 设计稿 §13.5）· `Write`（新建 `teamStream.mjs` / `teamLabels.mjs` / `TeamRunStream.tsx` / `team-stream.test.mjs`）· `Edit`（主进程三处存储/IPC、`main.js`、`preload.js`、`MessageStream` / `ChatArea` / `TeamsPage`、双语 `teams.json`、技术文档、设计稿、存量台账、README）· `Shell`（`tsc` / `eslint` / `run-all.mjs` / `doc-fact-check.mjs` / `harness-r7 check.mjs` / `legacy-ledger` / `max-lines` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/shared/teamStream.mjs` | 新增 | `TEAM_MESSAGE_KINDS` / `normalizeTeamMessage` / `taskProgress` / `projectTeamRuns` / `memberLabel` / `assembleThreadRuns` | 投影与装配的纯函数内核，主进程与渲染层共用、Node 可直测 |
+| `desktop/shared/teamLabels.mjs` | 新增 | `KIND_LABEL` / `SYS_LABEL` / `kindKey` / `messageText` | 消息展示口径单一事实来源（详情页 + 对话卡） |
+| `desktop/renderer/src/components/TeamRunStream.tsx` | 新增 | 折叠卡片（团队名/目标/批次/进度/状态）；展开态摘要 + 任务轨迹 + 协同消息 + 引用；双事件 500ms 防抖 | T5-6 对话内事件流 UI |
+| `desktop/test/team-stream.test.mjs` | 新增 | 57 断言：投影/装配/IPC 真调/接线静态断言/双语 i18n/存储读入口/禁 require ESM | T5-6 的可复跑门禁 |
+| `desktop/main/teamStore.js` | 修改 | 新增 `listMessagesByRuns(runIds, { limit })` | 一个会话多次派活时批量取消息，避免 N 次查询与 IPC |
+| `desktop/main/taskStore.js` | 修改 | 新增 `listGroupsByThread(threadId, { limit })` | 会话 ↔ run 关联唯一事实源（`thread_id`） |
+| `desktop/main/ipc/teams.js` | 修改 | 新增 `THREAD_RUN_LIMIT` / `THREAD_MESSAGE_LIMIT`、动态 import 加载 shared 模块、`teams:listThreadRuns` handler | 渲染层一次取回本会话团队 run + 消息 + 任务；规避 Electron 33 的 `ERR_REQUIRE_ESM` |
+| `desktop/main/main.js` | 修改 | `initTeamsIpc` 注入 `getTaskStore: () => taskStore` | 避免装配顺序耦合（与 `getTeamStore` 同款 getter） |
+| `desktop/main/preload.js` | 修改 | 新增桥 `teamsListThreadRuns` | T5-6 渲染层读取入口（桥 222→223） |
+| `desktop/renderer/src/components/TeamsPage.tsx` | 修改 | 删除本地 `KIND_LABEL` / `SYS_LABEL` / `kindKey` / `messageText`，改引共享模块 | 与对话卡共用一份口径，防裸 key |
+| `desktop/renderer/src/components/MessageStream.tsx` | 修改 | 新增 `threadId` 入参；在正文之后、收尾条之前渲染 `<TeamRunStream />` | 团队卡片并入当前对话流 |
+| `desktop/renderer/src/components/ChatArea.jsx` | 修改 | 向 `MessageStream` 传 `threadId={thread?.id}` | 按会话隔离团队卡，跨会话不串卡 |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/teams.json` | 修改 | 新增 `streamTitle` / `streamTasks` / `streamMessages` / `streamRefs` / `streamTask*` 等 18 个 key | 双语必须同步登记，避免 UI 渲染裸 key |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 240→241、用例 238→239、条目 247→248、汇总 243→244、通道 211→212、桥 222→223、`main.js` raw 1886→1889 / code 1278→1279 | 消除 doc-fact-check 的四项数字漂移 |
+| `docs/harness-r7/存量收敛台账.md` · `legacy-ledger.json` | 修改 | 台账新增 T5-6 行；2.1 汇总改为 `50 / 223（22.4%）`；JSON 由生成器重新落盘 | 新增 used bridge 后分母变化，文档不得撒谎 |
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | §11 T5-6 行标「v1.5 起已交付（2026-10-20）」；§13.5 末补 8 行实现取证表 | 设计稿与实现对齐，逐条可复跑 |
+| `README.md` | 修改 | 文末累积追加本节（第十七轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；本轮 4 个新文件（`teamStream.mjs` / `teamLabels.mjs` / `TeamRunStream.tsx` / `team-stream.test.mjs`）已 `git add`（`untracked-deps` 门禁要求），其余改动留在工作区待用户指令。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **244/244**（241 套件 + 3 前置门禁）· doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · max-lines 3/3 · 渲染层构建成功。
+- **已知边界**：对话内团队卡不展示层级视图（Agent 胶囊 / 子任务树仍在右栏，刻意不重复渲染）；T5-8 未接线，成员无法主动发消息，协同轨迹目前只有派活与系统留痕 + 看板任务状态；卡片展开态的消息溯源不支持点击跳转（refs 仅作文本展示）。
+- **推荐下一步**：进入 **T5-8（`team_*` 协同工具按 8 环节接线）**，或先做 T5-6 的真机验收（派活 → 折叠卡 → 展开轨迹 → 状态随 `tasks:event` 推进），确认交互后再决定是否补齐「refs 点击打开产物」。
+
+---
+
+## 会话总结：M5 团队层 T5-8 协同工具接线落地 · 2026-10-20（第十八轮）
+
+### 会话背景
+上一轮（第十七轮）交付 T5-6 对话内团队协同事件流，设计稿 v1.5 曾把 T5-8 定为「首版不接线（§5.5 路线 A）」。用户给出明确指令「进入 T5-8 协同工具接线」，即**推翻路线 A**：按设计稿 §8 把 `team_*` 工具按 8 环节接线清单落到模型工具面。
+
+### 会话主要目的
+1. 让军团成员在任务执行中能**主动**查名册 / 看看板 / 发消息 / 登记等待，而不是只靠统筹在主进程内部代劳；
+2. 严格走项目既有 8 环节接线清单（引擎 schema · 审批透传 · handler 映射 · 超时配置 · 主进程接线 · 审批分级 · 可补偿性 · UI 轨迹标签）+ 防漏登记回归断言；
+3. 明确并落地**范围偏离**：只接协作层 4 个，控制层 4 个不接，并把理由写进设计稿；
+4. 全量门禁 + 权威数字同步 + README 累积追加（**不 commit**）。
+
+### 完成的主要任务
+- **T5-8-1 工具实现本体**：新建 `desktop/main/teamTools.js`——四个 handler（`teamListMembers` / `teamSendMessage` / `teamBoard` / `teamWait`）；`fromMemberId` 与 `runId` 一律取自 `teamContext`（模型传参不可伪造）；`toMemberId` 必须命中本团队名册；`kind` 拒绝 `system`；缺上下文 / 团队不存在 / 已归档 / 存储异常全部返回结构化错误而非抛异常。
+- **T5-8-2 条件注册**：`scheduledTools.js` 新增 `teamTools` 入参，非空才展开四个**字面量键**（登记矩阵的 handler 扫描区间只覆盖 main.js `createToolHandlers` + 本文件）；非成员任务（普通 Worker / 定时任务 / 主会话）模型看不到 schema。
+- **T5-8-3 引擎侧**：`agent-core/index.js` 新增 `TEAM_TOOLS`（4 个 schema）与 `TEAM_PROMPT_SECTION`，共用 `teamContext && !customTools` 门控（不被 `customSystemPrompt` 挤掉）；`TOOL_HANDLER_NAMES` 补 4 键；`TOOL_TIMEOUT_OVERRIDES` 补 list/board/send 30s、wait 60s；`runAgent` 透传 `teamContext`。
+- **T5-8-4 上下文注入链路**：`workerPool.runWorkerTask` 调用宿主注入的 `deps.resolveTeamContext(group, task)`，并把 `teamContext` 同时传给 `createToolHandlers` 与 `runOpts`；`main.js` 用 `teamStore.findTeamByRun` 反查，判据为「团队存在 + 未归档 + `task.ownerMemberId` 在名册内」。
+- **T5-8-5 白名单与审批**：`registry.js` 的 `TOOL_CHANNELS` 52 → 56；`approval.js` 中 `team_send_message` / `team_wait` → L2，`team_list_members` / `team_board` → 只读免审批，`REVERSIBILITY` 补 4 条（发消息不可逆）。
+- **T5-8-6 G4 体积闸透传**：`ipc/teams.js` 抽出 `postTeamMessage` 返回 `{message, gated, reason}`（gated 时落审计 + 广播），`postMessage` 仅取其 `message`；`team_send_message` 在 gated 时向模型如实说明 payload 已丢弃、summary 已截断。
+- **T5-8-7 UI 轨迹与 i18n**：`ToolTrace.tsx` 补 4 个工具名映射与参数摘要（`team_wait` 显示等待数），双语 `toolTrace.json` 各补 5 个 key。
+- **T5-8-8 测试与门禁**：新增 `test/team-tools.test.mjs`（**54 断言**：条件注册 / 安全边界 / G4 透传 / 看板投影 / wait 语义 / 装配静态断言）；同步 `tool-registration-matrix.test.mjs` 的 `RUNTIME_SCHEMA_TOOLS`、`engine-process.test.mjs` 的通道数 56、`scheduled-tool-surfaces.test.mjs` 的接线正则（允许新增 `teamTools` 键）。
+
+### 会话中主要使用的技术栈
+Node.js CommonJS（主进程工具实现）· ESM（agent-core 引擎）· Electron utilityProcess RPC · React + TypeScript · SQLite（`teams` / `team_members` / `team_messages` / `sub_tasks`）· 条件工具注入 · 8 环节登记矩阵门禁 · i18n 双语 key。
+
+### 关键决策和解决方案
+1. **范围只接 4 个协作层工具**：控制层 4 个（create/update/remove_member、interrupt）不接。三条硬理由：① 成员 run 走无人值守通道（`runOpts.unattended=true`），那里没有审批通道，任何需批准的调用只能被立即拒绝——接进来就是「schema 可见、调用必失败」的死工具；② 编制变更属用户主权，且违反 §9.1「run 启动打不可变编制快照」；③ 看板写必须保持调度器单写者，worker 直写会与 `pump` / `claimNext` 竞争。该偏离已写进设计稿 §8.1。
+2. **handler 落位由门禁扫描区间决定**：登记矩阵的 `handlerRegion` 只覆盖 `main.js` 的 `createToolHandlers` + `scheduledTools.js`，而 Worker 的工具工厂在 `agent:run` 之后不在区间内；因此实现本体放 `teamTools.js`，由 `scheduledTools.js` 展开四个字面量键，否则门禁会误报「有通道无 handler」。
+3. **身份与 run 不可伪造**：`fromMemberId` / `runId` 一律取上下文；模型即便传了也忽略。跨团队 `toMemberId`、`kind=system` 全部拒绝——系统事实不允许模型冒充。
+4. **看板投影做减法**：`team_board` 只回 `taskId/title/status/ownerMemberId/dependsOn/critical`，**不含 prompt/result**；结论经 `team_send_message` 传递，避免把大结果塞回上下文。
+5. **wait 复用唯一入口**：`team_wait` 直接调 `workerPool.waitTask`（登记成功后由池标记 defer 并 abort 释放槽位），不新建等待实现；`waiting=true` 时明确告知模型「本次执行将立即收尾并让出槽位」。
+6. **G4 闸不静默**：`postTeamMessage` 保留 `gated/reason`，模型能知道 payload 已被丢弃，不会误以为原文已送达。
+7. **门禁连带修正**：`workerPool.js` 因新增 5 行触发 800 行软档（split 口径 801），压缩注释回到 800 以内；`scheduled-tool-surfaces` 两条正则原为「精确到参数列表尾」的写法，新增 `teamTools` 键后改为容忍后续参数（守卫意图不变）。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 `teamStore.getTeam` / `taskStore.listTasks` / `waitOnTasks` / `workerPool.waitTask` / `approval.js` 三表 / `registry.js` 白名单 / `scheduledTools` 装配）· `Write`（新建 `teamTools.js` / `team-tools.test.mjs`）· `Edit`（引擎 schema 与提示词、Worker 上下文注入、审批三表、UI 轨迹与双语 i18n、矩阵测试、harness 台账、技术文档、设计稿、README）· `Shell`（`tsc` / `eslint` / `run-all.mjs` / `doc-fact-check.mjs` / `harness-r7 check.mjs` / `legacy-ledger` / `max-lines` / `vite build` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/teamTools.js` | 新增 | `createTeamToolHandlers`：四个协作工具；上下文自检、归档拒绝、身份/run 不可伪造、kind 白名单、G4 透传 | T5-8 工具实现本体，集中安全边界 |
+| `desktop/test/team-tools.test.mjs` | 新增 | 54 断言：条件注册 / 无上下文与异常分支 / 投影字段白名单 / 伪造拒绝 / G4 / wait 语义 / 装配静态断言 | T5-8 可复跑门禁 |
+| `desktop/main/scheduledTools.js` | 修改 | 新增 `teamTools` 入参；非空时展开 `teamListMembers` / `teamSendMessage` / `teamBoard` / `teamWait` 四个字面量键 | 满足 handler 扫描区间，且非成员任务不注册 |
+| `desktop/main/ipc/teams.js` | 修改 | `postMessage` 拆为 `postTeamMessage`（返回 `{message,gated,reason}`）与薄封装；导出 `postTeamMessage` | 让模型侧拿到 G4 闸结果，不静默丢 payload |
+| `desktop/agent-core/index.js` | 修改 | 新增 `TEAM_PROMPT_SECTION` / `TEAM_TOOLS`；`runAgent` 形参补 `teamContext`；`base` 与 `effectiveBaseTools` 条件追加；`TOOL_HANDLER_NAMES` / `TOOL_TIMEOUT_OVERRIDES` 各补 4 条 | 8 环节中的 schema / 提示词 / 映射 / 超时 |
+| `desktop/main/engineProcess/registry.js` | 修改 | `TOOL_CHANNELS` 追加 4 个通道（52 → 56） | 子进程白名单，漏登记即「未知工具」 |
+| `desktop/main/approval.js` | 修改 | `TOOL_LEVEL` 补 send/wait L2；`READONLY_TOOLS` 补 list/board；`REVERSIBILITY` 补 4 条 | 审批分级与可补偿性两环节 |
+| `desktop/main/workerPool.js` | 修改 | 新增 `teamContext = deps.resolveTeamContext(group, task)`；传给 `createToolHandlers` 与 `runOpts`；压缩注释守住 800 行 | 主进程接线；成员任务才注入团队上下文 |
+| `desktop/main/main.js` | 修改 | 顶部引入 `createTeamToolHandlers` / `postTeamMessage`；Worker 装配新增 `resolveTeamContext`（`findTeamByRun` 反查 + 名册校验）；注入 `teamTools` | 把上下文与实现接到 Worker 通道 |
+| `desktop/renderer/src/components/tools/ToolTrace.tsx` | 修改 | 4 个工具名 → i18n key；`team_send_message` / `team_wait` 参数摘要 | 8 环节最后一环：UI 轨迹可读 |
+| `desktop/renderer/src/i18n/locales/{zh-CN,en-US}/toolTrace.json` | 修改 | 各补 `teamListMembers` / `teamSendMessage` / `teamBoard` / `teamWait` / `teamWaitCount` | 双语 key 必须齐全，防裸 key |
+| `desktop/test/tool-registration-matrix.test.mjs` | 修改 | `RUNTIME_SCHEMA_TOOLS` 补 4 项 | 运行时条件工具需在矩阵中可见 |
+| `desktop/test/engine-process.test.mjs` | 修改 | 通道数 52 → 56 | 与白名单同步 |
+| `desktop/test/scheduled-tool-surfaces.test.mjs` | 修改 | Worker 两条接线正则允许 `teamTools` 等后续参数 | 守卫「unattended/contextCwd 仍在」的原意，不被新增键误伤 |
+| `docs/harness-r7/04-test/check.mjs` | 修改 | A17a 52 → 56、A18b 51 → 55（总数仍 76）；「契约变更台账」补 T5-8 条目 | 契约数字同步且留痕 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 套件 241 → 242、用例 239 → 240、条目 248 → 249、汇总 244 → 245、主进程 JS 147 → 148、`main.js` raw 1889 → 1924 | 消除 doc-fact-check 的数字漂移 |
+| `MJcoder-技术流程功能文档.md` | 修改 | 引擎层行 `TOOL_CHANNELS` 52 → **56 条** | docs-consistency 数字一致 |
+| `MJCode-MJ军团团队层设计逻辑-v1-2026-10-20.md` | 修改 | 新增 §8.1 范围定案 + 8 环节取证表；§4 T5-8 行、§11 验收要点、§13.5 口径改为「只接协作层 4 个」；文末补 T5-8 交付记录 | 设计稿与实现对齐，偏离讲清楚 |
+| `README.md` | 修改 | 文末累积追加本节（第十八轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；本轮 2 个新文件（`teamTools.js` / `team-tools.test.mjs`）已 `git add`（`untracked-deps` 门禁要求），其余改动留在工作区。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **245/245**（242 套件 + 3 前置门禁）· doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · max-lines 3/3 · 渲染层构建成功。
+- **已知边界**：控制层 4 个工具仍未接给模型（前提是成员 run 具备审批通道）；`team_board` 只读、写操作仍由调度器单写者完成；团队协同的「成员主动求助」目前靠 `team_send_message` 广播 / 定向，尚无消息回复线程模型。
+- **推荐下一步**：做 T5-8 真机验收（派活 → 成员调用 `team_board` / `team_send_message` → 统筹汇总卡可见协同消息与等待轨迹）；若通过，再评估是否为成员 run 开放受控审批通道，从而解禁控制层工具。
+
+---
+
+## 会话总结：M5 团队层 T5-8 真机验收缺陷修复 + 对话内团队看板落地 · 2026-10-20（第十九轮）
+
+### 会话的背景
+T5-8 协同工具接线交付后进入真机验收。用户实测「选中军团 → 输入目标 → 点发送」连续遇到两道断点：第一次点按钮**完全没有反应**；修复后能弹出「已派活，6 个任务已进入看板」提示，但**对话区完全空白**，也无从看到后台到底在做什么，用户明确反馈「所以算是黑盒了，请要有具体的行为在对话界面能够展示以及对应的看板界面」。
+
+### 会话的主要目的
+1. 定位并彻底修复「点发送无反应」的根因（不是按钮事件丢失，而是取值为空后静默 return）；
+2. 定位并彻底修复「派活成功但对话区空白」的根因（团队 run 的 `thread_id` 为空，卡片按会话反查永远查不到）；
+3. 消除黑盒：对话内必须能看到**具体行为**（谁认领、做到哪一步、依赖谁、协同消息），并补一个**可打开的看板界面**；
+4. 全量门禁回归 + README 累积追加（**不 commit**）。
+
+### 完成的主要任务
+- **真机修复①：无参发送回落输入框**。`Composer` 的发送按钮是 `onClick={() => onSend()}`（无参），而 `sendOrDispatch` 此前只读入参 `text`，导致选了军团后点按钮 `goal=''` 被静默 `return`——表现就是「按钮点了没反应」。改为 `const goal = String(text || input || '').trim()`，与 `useAgentRun.send` 同一口径。
+- **真机修复②：派活前先落库会话与目标消息**。新会话直接派活时 `thread` 为 `null`，主进程建组写入的 `task_groups.thread_id` 为空，`teams:listThreadRuns` 按 `thread_id` 反查永远返回空 → 对话区只剩一句 toast。现在派活前先 `api.createThread`（并 `onNewMessage` + `onThreadCreated` 切到新会话）+ `api.sendMessage(runThreadId, {role:'user', content: goal})`，再以 `runThreadId` 调 `teamsDispatch`；既有会话则就地补一条用户气泡。
+- **消除黑盒①：最新在跑的 run 默认展开**。此前所有团队卡一律折叠，用户只看到一行摘要。现改为仅「最新一次 + 状态为 ready/running/paused」的卡片默认展开，历史与终态卡片仍折叠，避免刷屏；展开态受控（`useState(defaultOpen)`），刷新不会把用户手动收起的卡片重新拉开。
+- **消除黑盒②：卡片头部显示实时计数**。新增「执行中 {n}」「等待 {n}」两个紧凑徽标，与既有 `{done}/{total} 已完成` 并列，折叠态也能看出推进。
+- **消除黑盒③：五列看板弹层**。新增 `TeamBoard.tsx`——按任务生命周期摊成「待开始 / 执行中 / 等待中 / 已完成 / 失败」五列，每张卡显示认领人、统筹标记、依赖指向、运行期等待边、产出摘要与错误；顶部显示总数与各状态计数。卡片头部新增「看板」按钮打开弹层，弹层数据跟随父层 500ms 防抖刷新实时重渲染（不自建轮询），且完全复用 `teams:listThreadRuns` 的既有投影，不新增第二套查询、不暴露 prompt。
+- **投影补字段**：`shared/teamStream.mjs` 两处任务投影（`assembleThreadRuns` / `projectTeamRuns`）补 `dependsOn` / `critical` / `waitingOn`，让「任务为什么还没开始」在界面上有据可查。
+- **i18n 双语**：`teams.json`（zh-CN / en-US）各补 16 个 key（看板标题、五列、总数、依赖/等待/产出/错误、执行中/等待计数、看板按钮）。
+- **测试与台账**：`team-stream.test.mjs` 折叠断言改新口径，并新增两条真机事故回归断言（无参发送必须回落输入框且派活前先落库；传给主进程的 `threadId` 必须是落库后的 `runThreadId`）；`legacy-ledger.json` 重生成（scannedFiles 113 → 114）。
+
+### 会话中主要使用的技术栈
+React + TypeScript（`TeamBoard.tsx` / `TeamRunStream.tsx`）· Electron IPC（`teams:dispatch` / `teams:listThreadRuns` / `teams:event` / `tasks:event`）· 纯函数投影层（`shared/teamStream.mjs`）· `Modal` / `Button` UI 原语 · i18n 双语 key · 源码级回归断言门禁。
+
+### 关键决策和解决方案
+1. **无参调用必须显式回落**：`Composer` 的 `onSend` 与 `useAgentRun.send` 两套调用形态并存，军团派活入口必须自己兜底输入框，不能依赖上游传参——否则失败形态是「无提示、无动作」，最难排查。
+2. **会话先落库，再派活**：`task_groups.thread_id` 是「run 属于哪个对话」的唯一事实源，为空即等于卡片不可归属。把「建会话 + 写用户消息」前置到派活之前，既修好归属，也让刷新/切回后对话仍有上下文。
+3. **看板只做投影的另一种排布**：五列看板不新建查询、不请求模型，直接用 `listThreadRuns` 已装配的任务数组按状态分组；这样「聊天气泡里的任务行」和「看板列」永远是同一份事实，不会出现两处状态打架。
+4. **默认展开只给最新在跑的 run**：全展开会刷屏，全折叠即黑盒。用「最新 + 非终态」双条件收敛，并把展开态改成受控本地状态，避免刷新把手动收起的卡片再次拉开。
+5. **看板按钮走 UI 原语**：新增裸 `<button>` 会触发 `ui-conventions` 的 258 基线上涨（规则禁止调高），故改用 `<Button variant="ghost" size="xs">` + 内层 `text-accent`，视觉一致且计数不漂移。
+6. **文案零裸中文**：`TeamBoard` 内的分隔符从「、」改为 `', '`——i18n 门禁禁止 renderer 源码出现裸中文（含中文标点）。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 `Composer` 的 `onSend()` 调用形态、`useAgentRun.send` 的建会话模板、`ipc/teams.js` 的派活与反查链路、`taskStore.getGroup` 的任务字段、`Modal` / `Button` 契约、i18n 既有 key）· `Write`（新建 `TeamBoard.tsx`）· `Edit`（`ChatArea.jsx` 派活链路、`TeamRunStream.tsx` 展开与看板入口、`shared/teamStream.mjs` 投影字段、双语 `teams.json`、`team-stream.test.mjs` 断言）· `Shell`（`typecheck` / `eslint` / `run-all.mjs` / `gen-legacy-ledger.mjs` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/renderer/src/components/ChatArea.jsx` | 修改 | `goal` 回落输入框；派活前 `api.createThread` + `onThreadCreated` + `api.sendMessage`；`teamsDispatch` 改用 `runThreadId` | 修复「点发送无反应」与「派活后对话空白」两个真机断点 |
+| `desktop/renderer/src/components/TeamRunStream.tsx` | 修改 | 最新在跑的 run 默认展开；头部新增执行中/等待计数；新增「看板」按钮并渲染 `TeamBoard`；受控展开 | 折叠态即黑盒，需在对话内直接可见推进 |
+| `desktop/renderer/src/components/TeamBoard.tsx` | 新增 | 五列看板弹层：任务卡显示认领人、统筹标记、依赖、等待边、产出、错误；顶部状态计数 | 提供「对应的看板界面」，复用既有投影不新增查询 |
+| `desktop/shared/teamStream.mjs` | 修改 | 两处任务投影补 `dependsOn` / `critical` / `waitingOn` | 让「为什么还没开始」在看板上可解释 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | 补 16 个 key（看板标题/五列/总数/依赖/等待/产出/错误/计数/按钮） | 新增界面文案，双语必须齐全 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | 同上英文文案 | 同上 |
+| `desktop/test/team-stream.test.mjs` | 修改 | 折叠断言改新口径；新增 2 条真机事故回归断言（无参发送回落 + 派活前落库、`threadId` 必须为 `runThreadId`） | 把本轮两个断点钉成源码级门禁，防复发 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | 重生成（scannedFiles 113 → 114） | 新增源文件后台账需同步，否则 legacy-ledger 门禁失败 |
+| `README.md` | 修改 | 文末累积追加本节（第十九轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；新文件 `TeamBoard.tsx` 已 `git add`（`untracked-deps` 门禁要求）。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **245/245** · doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · max-lines 3/3 · 渲染层构建成功 · untracked-deps 6/6。
+- **已知边界**：修复前派出的旧 run（`thread_id` 为空）不会自动补显，需要重新派活一次才能看到卡片与看板；本轮改动需要**重启应用**（主进程与渲染层均有变更）后验收。
+- **推荐下一步**：重启后在军团对话里重新派活，确认「用户提问气泡 + 团队协同卡默认展开（执行中/等待计数、任务行实时推进）+ 看板弹层五列」三件套是否符合预期；随后进入 T5-9（编制快照与运行期变更语义）与 T5-10（中断权限矩阵与留痕）。
+
+## 会话总结：M5 团队层可观测性 / 执行效率修复 + T5-9 / T5-10 补齐 · 2026-10-20（第二十轮）
+
+### 会话的背景
+第十九轮的团队卡与看板落地后，用户真机验收又暴露三个问题：① 每个被派活的员工只能看到「执行中」，看不到具体处理流程；② 项目编排里「软件工程师」被反复派发又被撤下，体感极慢（日志 `scheduledAgentChat` 首字节 8159ms / 8124ms，远超 3000ms 目标），最后直接失败；③ 用户希望「普通任务编排」与「军团 bot 派活」共用同一套对话内卡片，并且每个分派任务都能再次展开看具体输出。同时要求补完 T5-9（编制快照）、T5-10（中断权限矩阵与留痕）以及 T5-6 遗留的「引用可点击打开产物」。
+
+### 会话的主要目的
+1. 修复探活误判导致的「反复派发 / 撤员」抖动与执行极慢；
+2. 让每个被派任务都有可查看的处理轨迹（工具调用、改派、等待、撤员），不再只有「执行中」；
+3. 编排任务与军团派活统一到同一套对话内团队卡，任务可展开看输出、引用可点击打开产物；
+4. 补齐 T5-9 编制快照与 T5-10 中断权限矩阵（三主体、Lead 留痕、L1 逐次确认）；
+5. 全量门禁跑绿（typecheck / lint / 全量测试 / doc-fact-check / harness-r7 / legacy-ledger / max-lines / layout-tokens / 渲染层构建）+ README 累积追加（**不 commit**）。
+
+### 完成的主要任务
+- **P1 探活误判与撤员抖动**：`teamWaves` 增加「静止时间窗」（120s），不再把「任务刚派发、模型还在首字节等待」误判为无进展；`waveEngine` 改为按**任务**计活跃、单任务改派上限收敛为 1 次、并发只降一次，杜绝同一成员被反复派发/撤下；`workerPool` 在组中止时补发 `board_task_settled`，避免看板永久转圈。
+- **P2 处理过程可见**：新增 `task_events` 表（迁移 + `idx_task_events_group`）与 `TaskStore.appendTaskEvent/listTaskEvents`，`workerPool` 在工具调用、等待、改派、撤员、收尾等节点落事件；`shared/teamTrace.mjs` 负责把事件聚合成「轨迹/结果/产物」三段，`TeamRunStream` 与 `TeamBoard` 展开区展示每个任务的处理流程。
+- **P3 统一显示**：`shared/teamStream.mjs` 的 `assembleThreadRuns` 把普通编排组（`auto` 组）与军团 run 一并纳入同一投影，对话内只保留一种团队卡形态；卡片内每个任务可再次展开查看具体输出。
+- **P4 T5-6 遗留**：团队卡与看板里的「引用」支持点击打开产物（本地文件走 `shell.openPath` 路径语义，不存在则提示），不再只显示纯文本。
+- **P5 T5-9 编制快照**：派活时把当时的编制写入 `dag_json.roster`；`workerPool` / 主进程 `resolveTeamRoster` 优先读快照，运行中增删成员只影响后续 run；成员被实时下架后，本 run 内仍按快照身份识别（只下架不物理删）；组中止时补发 settled 事件。
+- **P6 T5-10 中断权限矩阵**：新增 `desktop/main/teamInterrupt.js`（策略 + 执行 + 留痕）：user 可中断任意任务；lead 可中断本团队任意成员但**必须填理由 + 每次显式确认**（L1 逐次审批，无同类豁免），且禁止以「成员范围」中断自己；member 仅可中断自己认领的任务，成员范围一律拒绝。running/waiting 任务交给 `workerPool.abortTask` 收尾，queued/pending 由本模块落 `skipped` 并级联唤醒等待者；每次中断写 `kind:'system'` 消息留痕（含理由、发起方、任务 id、已有产物引用），留痕失败 fail-open 不阻断中断。新增 `teams:interrupt` IPC + `window.mjcode.teamsInterrupt` 桥；`TeamBoard` 任务卡加入行内「中断 / 确认中断 / 取消」两步确认按钮。
+- **P7 门禁收口**：`workerPool.js` 803 行超 800 软档，按「先拆再合入」把两个纯文本函数抽到 `main/workerText.js`（`summarizeArgs` / `extractPaths`）；`TeamBoard.tsx` / `TeamRunStream.tsx` 的 `mb-0.5` / `space-y-0.5` 半档间距收敛为 1 档；重生成 `legacy-ledger.json` 并在 `存量收敛台账.md` 追加本批处置（死桥 50/224、裸 button 258）；技术设计文档 5 个数字同步（套件 243 / 通道 213 / 桥 224 / 主进程模块 150 / `main.js` raw 1980）。
+
+### 会话中主要使用的技术栈
+Electron 主进程 + IPC（`teams:interrupt` / `teams:listThreadRuns` / `teams:event`）· 自研 agent-core（ESM，utilityProcess 子进程）· SQLite（sql.js）新增 `task_events` 表与索引 · 纯函数投影层（`shared/teamStream.mjs` / `teamTrace.mjs` / `teamLabels.mjs`）· React + TypeScript 团队卡与看板 · i18n 双语 key · 源码级回归门禁（node:test / 自研测试汇总器）。
+
+### 关键决策和解决方案
+1. **探活从「按时间差」改为「按任务静止窗」**：模型首字节慢不等于任务卡死，原来的粗粒度判活会把正常推理误判成失联并撤员，形成「派发→撤下→再派发」的死循环；改判据后抖动消失，也不再出现无意义的重复首字节延迟。
+2. **改派上限 1 次 + 并发只降一次**：即使真失联，也只允许一次改派，避免同一任务在成员间来回横跳；并发降档只落一次，防止阶梯式塌陷。
+3. **轨迹落库而非只走内存事件**：`task_events` 让「刷新/切回后仍能看到处理过程」成立；事件只在任务节点写，不写模型流式 token，库增长可控。
+4. **统一卡片而非两套 UI**：普通编排与军团派活共用同一投影，避免「同一个任务在编排区是 A 样式、在军团区是 B 样式」的认知分裂；也避免维护两套展开逻辑。
+5. **中断不接给模型**：`team_interrupt` 只走 `teams:interrupt` IPC（用户/看板入口），不进入工具清单，工具通道数保持 56/55，避免成员 run 无人值守时自主中断他人任务。
+6. **Lead 中断必须逐次确认**：理由必填 + `confirmed===true` 每次都校验，重复调用仍返回 `NEED_CONFIRM`，不提供「同类操作一次确认后永久放行」的豁免。
+7. **超 800 行先拆再合入**：不为 `workerPool.js` 开基线豁免，而是抽出纯函数模块，保持「God File 只减不增」的既有纪律。
+
+### 会话中主要使用的工具
+`Read` / `Grep`（取证 `workerPool.schedule/abortTask`、`waveEngine` 探活、`taskStore` 状态机与 `waitOnTasks`、`teamStore.listMembers`、`ipc/teams.js` 派活与反查、`TeamBoard` / `TeamRunStream` 既有结构、`payloadGuard` 契约）· `Write`（新建 `teamInterrupt.js`、`workerText.js`、`team-interrupt.test.js`）· `Edit`（`workerPool.js`、`waveEngine.js`、`teamWaves.js`、`taskStore.js`、`db/index.js`、`ipc/teams.js`、`main.js`、`preload.js`、`shared/*.mjs`、`TeamRunStream.tsx`、`TeamBoard.tsx`、双语 `teams.json`、测试与文档）· `Shell`（`npm run typecheck` / `npm run lint` / `node test/run-all.mjs` / `doc-fact-check` / `harness-r7 check` / `gen-legacy-ledger.mjs` / `npm run build --prefix renderer` / `git add`）。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/teamInterrupt.js` | 新增 | 中断策略矩阵（user/lead/member）+ 执行（`abortTask` / `skipped` + 级联唤醒）+ `system` 留痕 + `resolveRoster` 快照优先 | T5-10 三主体矩阵、Lead 留痕、L1 逐次确认此前完全缺失 |
+| `desktop/main/workerText.js` | 新增 | 抽出 `summarizeArgs` / `extractPaths` 两个纯函数 | `workerPool.js` 803 行越过 800 软档，按「先拆再合入」收口 |
+| `desktop/main/ipc/teams.js` | 修改 | 新增 `teams:interrupt`（参数校验、审计、`interruptTask` 注入） | 为用户/看板提供唯一中断入口 |
+| `desktop/main/main.js` | 修改 | require `teamInterrupt`、注入 `interruptTask`、`initTeamInterrupt` 装配 | 主进程接线，保持依赖注入单一入口 |
+| `desktop/main/preload.js` | 修改 | 新增 `teamsInterrupt` 桥 | 渲染层需要调用中断 IPC |
+| `desktop/main/teamWaves.js` | 修改 | 增加静止时间窗（120s）判活 | 修复慢首字节被误判为失联导致的反复撤员 |
+| `desktop/main/waveEngine.js` | 修改 | 按任务计活跃、单任务改派上限 1、并发只降一次 | 消除「派发→撤下→再派发」抖动与慢速体感 |
+| `desktop/main/workerPool.js` | 修改 | 快照优先读取编制、补 `task_events` 落点、组中止补 settled、改用 `workerText` | T5-9 快照语义 + 轨迹可见 + 看板不转圈 |
+| `desktop/main/taskStore.js` | 修改 | 新增 `appendTaskEvent` / `listTaskEvents`，组删除级联清理事件 | 处理轨迹持久化，刷新后仍可查看 |
+| `desktop/main/db/index.js` | 修改 | 新增 `task_events` 表与 `idx_task_events_group` 索引 | 事件表落库与查询性能 |
+| `desktop/shared/teamStream.mjs` | 修改 | 编排组纳入统一投影；成员列表改快照优先 | P3 统一显示 + T5-9 快照语义 |
+| `desktop/shared/teamTrace.mjs` | 新增 | 事件聚合为「轨迹/结果/产物」 | 卡片与看板共用同一份轨迹投影 |
+| `desktop/shared/teamLabels.mjs` | 修改 | 新增 `interrupt` 系统消息标签；文本拼接理由 | 中断留痕在时间轴可读 |
+| `desktop/renderer/src/components/TeamRunStream.tsx` | 修改 | 任务行展开处理轨迹/输出/产物；引用可点击打开；半档间距收敛 | P2/P4 + layout-tokens 门禁 |
+| `desktop/renderer/src/components/TeamBoard.tsx` | 修改 | 行内两步确认中断按钮；引用可点击；半档间距收敛 | T5-10 用户入口 + 门禁收口 |
+| `desktop/renderer/src/i18n/locales/zh-CN/teams.json` | 修改 | 补中断相关 6 个 key | 新增界面文案，双语必须齐全 |
+| `desktop/renderer/src/i18n/locales/en-US/teams.json` | 修改 | 同上英文文案 | 同上 |
+| `desktop/test/team-interrupt.test.js` | 新增 | 37 项：策略矩阵、终态/不存在、排队/等待中断、快照优先、Lead 确认、留痕 fail-open | 把 T5-10 每条分支钉成回归门禁 |
+| `desktop/test/team-waves.test.js` / `workerPool.test.js` / `team-stream.test.mjs` | 修改 | 同步静止窗、快照、统一投影与中断字段断言 | 行为变更必须有对应回归 |
+| `docs/MJCode-技术设计文档-2026-10-17.md` | 修改 | 同步套件 243 / 通道 213 / 桥 224 / 主进程模块 150 / `main.js` raw 1980 / code 1342 | doc-fact-check 数字必须与源码一致 |
+| `docs/harness-r7/legacy-ledger.json` | 修改 | 重生成（死桥 50/224、引用 174、ratio 0.2232） | 新增 `teamsInterrupt` 桥后分母变化 |
+| `docs/harness-r7/存量收敛台账.md` | 修改 | 更新 2.1 汇总与变更记录，追加 T5-10 批处置 | 台账数字必须与现算一致且说明处置 |
+| `README.md` | 修改 | 文末累积追加本节（第二十轮）总结 | 用户固定规则（Append） |
+
+### 尚存问题与推荐下一步
+- **未提交**：按纪律**不 commit**；新文件 `desktop/main/teamInterrupt.js`、`desktop/main/workerText.js`、`desktop/shared/teamTrace.mjs`、`desktop/test/team-interrupt.test.js` 均已 `git add`。
+- **门禁现状（全绿）**：typecheck 0 error · lint **160** warnings（棘轮 161）· 全量 **246/246** · doc-fact-check 通过 · harness-r7 **76/76** · legacy-ledger **20/20** · max-lines **3/3** · layout-tokens **2/2** · 渲染层构建成功。
+- **已知边界**：`team_interrupt` 刻意不接给模型，成员 run 无法自主中断他人任务；Lead 中断必须在界面逐次确认，不做批量豁免；`task_events` 只记录任务节点，不含模型流式 token。
+- **推荐下一步**：重启应用后真机验收——① 军团派活观察是否仍有「反复派发/撤下」与超长首字节；② 每个任务展开确认能看到工具调用轨迹与产物；③ 看板中断走两步确认并确认留痕消息出现在时间轴；④ 再进入 T5-11/T5-12 的剩余体验项（批次串行可视化、成员超时提示文案）。

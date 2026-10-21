@@ -236,7 +236,8 @@ const tmp = (pfx) => fs.mkdtempSync(path.join(os.tmpdir(), pfx));
     /const \{ SCOPES \} = require\('\.\.\/memory'\)/.test(localData));
   check('D1 新增 local:memories/syncFile 与 memory:resetScope 通道',
     /local:memories\/syncFile/.test(localData) && /memory:resetScope/.test(localData)
-    && /assertEnum\(\{ scope \}, 'scope', \['session', 'project', 'global'\]\)/.test(localData));
+    // M5 / T5-5：resetScope 白名单纳入 'team'（团队层清空需携带 teamId，见 localData 守卫）
+    && /assertEnum\(\{ scope \}, 'scope', \['session', 'team', 'project', 'global'\]\)/.test(localData));
 
   const preload = read('main/preload.js');
   check('D2 preload 暴露 memorySyncFile / memoryResetScope',

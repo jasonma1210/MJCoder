@@ -49,6 +49,11 @@ let lastBudgetState = null;
 // 导致用户选「全部询问」时子任务仍自动放行（产品对用户设置撒谎）。
 // 现抽到 approvalPolicy.js 作为唯一事实源，本文件与 workerPool.js 共用，杜绝再次分叉。
 const { stricterApproval, stricterSandbox } = require('./approvalPolicy');
+// 第八轮 B-01 / D-808：rolePreset 的宿主侧应用统一走 rolePresetApply —— 与 Worker 通道
+// 共用同一份实现，避免「同一份能力两条链路两种行为」（A-01/B-01 的病根）。
+const { applyRolePreset } = require('./rolePresetApply');
+// T5-7：per-agent 模型绑定——引用串解析出的扁平形模型对象转嵌套形的工作已收敛到
+// rolePresetApply（第八轮 D-808），本文件不再直接引入 modelShape，避免同一转换出现第二处。
 // G-CUA：无人值守/交互路径的「界面自动化 opt-in」来源——与审批档/沙箱同源（用户设置）。
 const approvalSettings = require('./approvalSettings');
 
@@ -375,17 +380,14 @@ function startAgentRun(payload, sender) {
       // 会整体丢弃未登记参数 ⇒ 单测直调 runAgent 全绿、真机全废，故必须显式放行。
       computerUseEnabled: process.platform === 'darwin' && approvalSettings.getComputerUseEnabled(),
     };
-    if (payload.rolePreset) {
-      engineParams.approvalMode = stricterApproval(engineParams.approvalMode, payload.rolePreset.approvalMode);
-      engineParams.sandboxPolicy = stricterSandbox(engineParams.sandboxPolicy, payload.rolePreset.sandboxPolicy);
-      // T4-3 技能接线：数字员工 starter_skills → 本地 SKILL.md 内容（按名装载）注入引擎；
-      // 内容安全处置统一在引擎侧不可信内容管道（guardUntrusted），此处只按名装载
-      if (Array.isArray(payload.rolePreset.skillNames) && payload.rolePreset.skillNames.length
-          && typeof deps.loadSkillContents === 'function') {
-        const employeeSkills = deps.loadSkillContents(payload.rolePreset.skillNames);
-        engineParams.skills = [...engineParams.skills, ...employeeSkills];
-      }
-    }
+    // 第八轮 B-01 / D-808：rolePreset 的宿主侧应用（审批档/沙箱取更严、per-agent 模型绑定、
+    // 技能按名装载）统一收敛在 rolePresetApply —— 与 Worker 通道同一份实现。
+    // 人格（systemPrompt）与工具子集（toolNames）不在此处落地，由引擎消费 rolePreset 本身：
+    // 前者过 guardUntrusted 注入检测，后者走交集裁剪 + 空交集 fail-closed。
+    applyRolePreset(engineParams, payload.rolePreset, {
+      resolveModelRef: deps.resolveModelRef,
+      loadSkillContents: deps.loadSkillContents,
+    }, `runId=${runId}`);
     try {
       const rawHandlers = deps.createToolHandlers({
         sender, signal: controller.signal, runId,

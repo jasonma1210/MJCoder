@@ -30,6 +30,8 @@ export const IconPlug = (p) => <S {...p}><path d="M9 2v6M15 2v6" /><path d="M6 8
 export const IconZap = (p) => <S {...p}><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></S>;
 export const IconPalette = (p) => <S {...p}><path d="M12 3a9 9 0 1 0 0 18c1.1 0 2-.9 2-2v-1a2 2 0 0 1 2-2h2a3 3 0 0 0 3-3 9 9 0 0 0-9-10z" /><circle cx="8" cy="10" r="1" /><circle cx="12" cy="7.5" r="1" /><circle cx="16" cy="10" r="1" /></S>;
 export const IconUser = (p) => <S {...p}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></S>;
+// M5 / T5-1：军团（多 Agent 团队）语义图标——两人剪影，避免与单人的 IconUser 混淆
+export const IconUsers = (p) => <S {...p}><circle cx="9" cy="8" r="3.2" /><path d="M3 20a6 6 0 0 1 12 0" /><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" /><path d="M17.5 14.3A6 6 0 0 1 21 20" /></S>;
 export const IconMessage = (p) => <S {...p}><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z" /></S>;
 export const IconMail = (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></S>;
 export const IconDownload = (p) => <S {...p}><path d="M12 3v12" /><path d="m7 12 5 5 5-5" /><path d="M4 21h16" /></S>;

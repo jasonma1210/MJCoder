@@ -57,16 +57,21 @@ check('编排：单任务默认 10min（与 UI 文案「单任务预算」一致
   T.ORCHESTRATE_TASK_DEFAULT_MS === 10 * 60 * 1000);
 
 // ── ④ 接线事实：不允许回落字面量 ────────────────
+// 2026-10-20：写实现本体（executeWriteTool 等）抽至 main/tools/execWrite.js（exec.js 800 软档
+// 只剩 0 行余量，台账 D-13-b）。PATCH_IMPL_TIMEOUT_MS 随实现迁过去，故断言**随实现下移**：
+// 两个文件都必须在场（少读一个 = 另一半超时数字失去守护），与「架构变更后断言随实现走」同律。
 const read = (p) => fs.readFileSync(path.join(DESKTOP, p), 'utf8');
 const exec = read('main/tools/exec.js');
+const execWrite = read('main/tools/execWrite.js');
 const dag = read('main/orchestrator/dag.js');
 const invoke = read('main/orchestrator/invoke.js');
 
-check('exec.js 引用 timeouts 常量（不再硬编码）',
-  /require\('\.\/timeouts'\)/.test(exec) && /PATCH_IMPL_TIMEOUT_MS/.test(exec));
-check('exec.js 无残留 `timeout: <数字>` 字面量',
-  !/timeout:\s*\d/.test(exec),
-  (exec.match(/timeout:\s*\d/g) || []).join(','));
+check('exec.js / execWrite.js 引用 timeouts 常量（不再硬编码）',
+  /require\('\.\/timeouts'\)/.test(exec) && /SHELL_DEFAULT_TIMEOUT_MS/.test(exec)
+  && /require\('\.\/timeouts'\)/.test(execWrite) && /PATCH_IMPL_TIMEOUT_MS/.test(execWrite));
+check('exec.js / execWrite.js 无残留 `timeout: <数字>` 字面量',
+  !/timeout:\s*\d/.test(exec) && !/timeout:\s*\d/.test(execWrite),
+  [...(exec.match(/timeout:\s*\d/g) || []), ...(execWrite.match(/timeout:\s*\d/g) || [])].join(','));
 check('dag.js 引用编排常量',
   /ORCHESTRATE_TASK_(MIN|DEFAULT|MAX)_MS/.test(dag) && /require\('\.\.\/tools\/timeouts'\)/.test(dag));
 check('invoke.js 引用组等待常量',

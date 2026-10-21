@@ -46,8 +46,21 @@ const skipped = [];  // C2（2026-10-16）：套件内明确声明的「跳过/�
 // 事故背景：`npm run eval` 存在但无任何自动触发方（CI 与 npm test 都不过它），评估任务集/schema
 // 腐化、fail-to-pass 基线失效都无人发现。这里作为「前置门禁」在套件之前跑，零成本（不出网、不调模型），
 // 非零退出计入失败清单（与套件同口径）。
+//
+// 2026-10-20（第七轮收口）新增两项，理由与 G11 完全同型——「只能靠人记得手动跑」等于没有门禁：
+//   · doc-fact-check：技术设计文档数字/引用核对。本轮它因文档数字漂移**红了一整轮没人发现**，
+//     因为除了我没人记得跑它。
+//   · harness-r7:check：第七轮审查的 76 条断言（缺陷存在性 + 结构不变量），是本轮全部修复的
+//     契约基线；它退出码为 1 时=有真问题，别静默跳过。
+// 已知软点（记账，不硬凑）：harness-r7:check 的 BLOCKED（前置 import 失败）按设计**不判红**——
+// 那是「没验成」而非「通过」，判据逻辑见该脚本末尾的判读段。
+// 两个脚本都住在 `docs/harness-r7/` 与 `desktop/scripts/`，**刻意不进 `test/`**（发现式扫描会把
+// 它们计入套件基线，制造假回归）；这里按绝对路径显式引用，不计入 suites.length。
+const REPO_ROOT = path.resolve(ROOT, '..');
 const GATES = [
   { label: 'eval:check（离线评估自检）', args: ['eval/run-eval.mjs', '--check'] },
+  { label: 'doc-fact-check（技术设计文档数字核对）', args: [path.join(ROOT, 'scripts/doc-fact-check.mjs')] },
+  { label: 'harness-r7:check（第七轮审查判据 76 断言）', args: [path.join(REPO_ROOT, 'docs/harness-r7/04-test/check.mjs'), REPO_ROOT] },
 ];
 
 console.log(`前置门禁 ${GATES.length} 项（外部命令级，非 test/*.test.*）\n`);
