@@ -16,7 +16,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const MOD = path.resolve('/Users/jianma/Desktop/MJCode/desktop/shared/untrustedContent.mjs');
+// 2026-10-21：此前这里是写死的本机绝对路径（/Users/...），CI（Linux runner）直接
+// ERR_MODULE_NOT_FOUND。改为相对本测试文件定位——测试必须能在任意 checkout 路径下运行。
+const MOD = path.resolve(import.meta.dirname, '..', 'shared', 'untrustedContent.mjs');
 const { detectPromptInjection } = await import(MOD);
 
 let pass = 0;

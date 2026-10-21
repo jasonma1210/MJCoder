@@ -161,4 +161,33 @@ check('三个源码根下的全部源文件都已入库（含 glob 加载的语�
   }
 });
 
+// 2026-10-21（首次真实 CI）：`injection-precision.test.mjs` 里写死了 `/Users/...` 绝对路径，
+// 本机全绿、Linux runner 直接 ERR_MODULE_NOT_FOUND。这是「我这台能跑 ≠ clone 下来能跑」的
+// 第四种发作形态，必须机器可查：源码里不得出现指向用户主目录的绝对路径字面量。
+check('源码不得写死用户主目录绝对路径（跨机器/CI 可移植）', () => {
+  const BAD = /(?:file:\/\/\/|\bpath\.(?:resolve|join)\(\s*)['"]\/(?:Users|home)\//;
+  const roots = [...SCAN_ROOTS, path.join(DESKTOP, 'test'), path.join(DESKTOP, 'shared'), path.join(DESKTOP, 'scripts')];
+  const hits = [];
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!CODE_EXT.has(path.extname(e.name))) continue;
+      const src = fs.readFileSync(full, 'utf8');
+      const m = BAD.exec(src);
+      if (m) {
+        const line = src.slice(0, m.index).split('\n').length;
+        hits.push(`${path.relative(DESKTOP, full)}:${line} ${m[0]}`);
+      }
+    }
+  };
+  roots.forEach(walk);
+  if (hits.length) {
+    throw new Error(`发现写死的用户主目录路径（换机器/CI 必断）:\n  ${hits.join('\n  ')}\n`
+      + '  修法：用 import.meta.dirname / __dirname 相对定位，或 process.env.HOME');
+  }
+});
+
 console.log(`\n总计 ${total} · 通过 ${pass} · 源文件 ${allSources.length} · 静态引用 ${specCount}`);
