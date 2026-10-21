@@ -46,6 +46,11 @@ desktop/eval/results/
 *.md
 !/README.md
 !/README.zh-CN.md
+# 例外：发版更新日志（版本历史 + Keep a Changelog 基线声明）。X1 同根因的又一次发作：
+# 它在本地一直存在、且被 release 流程持续维护，却因 *.md 从未入库 —— 冷检出后
+# test/release-update.test.js 的「CHANGELOG 存在且含当前版本段」必红，本地却永远绿。
+# 2026-10-21 在干净 worktree 里复现到这条红，故补此否定规则。
+!/CHANGELOG.md
 # 例外：内置技能实体（package.json 的 extraResources 会把 ecosystem/ 打进安装包）。
 # 若不入库，CI 检出后 ecosystem/skills 为空 → 打包产物的「技能」是空的，
 # 而本地打包正常 —— 同一个版本号两个产品（技术设计文档 X1）。
