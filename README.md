@@ -4824,3 +4824,56 @@ Electron 45 / Chromium 156 / Node 24.22.0 · electron-builder 26 · Electron `ut
 - **复跑验证（run `39575512467`，commit `931f937`）**：CI **全绿**，`总计 266 · 通过 265 · 失败 0 · 跳过 1`；`team-store` 由 `180043ms` 降至 **208ms**，`memory-salvage` 降至 **214ms**。
 - **修改文件**：`desktop/test/team-store.test.js`、`desktop/test/memory-salvage.test.mjs`（各 6 行，仅退出前关闭连接 + 注释）。
 - **遗留**：首次 CI 触发的旧 run 仍在 GitHub 队列中（`head_sha=8080f42`），不影响新提交的绿色结论；GitHub runner 队列与 `github.com:443` 连通性本轮出现过短暂异常，已恢复。
+
+## 会话总结：军团任务「显示完成但无产出」修复 · 2026-10-21（第二十七轮）
+
+### 会话的背景
+用户反馈「使用团队来完成任务，会出现任务无人认领的情况」，并附团队看板截图：4 个任务全部显示「完成」，其中 2 张卡片的结果却是「任务尚未完成（上下文已到模型窗口，累计 69401 / 72889 tokens）」。
+
+### 会话的主要目的
+先核实「无人认领」是否真实存在，再定位「卡片显示完成但实际没有产出」的根因并修复，避免团队 run 继续产生假完成结果。
+
+### 完成的主要任务
+- **数据取证**：只读查询用户任务库 `mjcode-tasks.db`，定位到截图对应的 run `tg-mvhjxx0j-d44c21`：
+  - 4 个任务的 `owner_member_id` 均非空（项目经理 / 软件工程师 / 产品经理 / 软件工程师），**不存在真的未认领**；
+  - t2 / t4 的 `result_json.summary` 正是「任务尚未完成。……上下文已到模型窗口……」，但 `status='done'`；
+  - 该成员的 12 个技能 SKILL.md 合计约 127KB（diagrams-generator 27KB、docx 20KB、cloudq 19KB…）。
+- **根因 1（误判完成）**：`agent-core` 的 `buildExhaustedNotice` 在「上下文压不动」分支只输出「任务尚未完成。」，而 `workerPool` 的未完成判定正则只认「已主动停止|任务未完全完成」——标记不一致，导致空产出被落库为 `done`。
+- **根因 2（上下文耗尽）**：`rolePresetApply` 把成员全部技能正文注入 system（full 模式），每轮重发；一个「报数」级任务两轮即烧到 69k tokens。
+- **修复**：成员技能默认走 `skillDisclosure='summary'`（索引 + `load_skill` 按需加载）；收尾文案统一补「任务未完全完成」；未完成判定兼容历史文案「任务尚未完成」。
+- **验证**：`member-runtime-config` 14/14、`exhausted-notice` 22/22、`workerPool` 28/28、`skill-disclosure` 22/22；`typecheck` 0 error；`lint` 159 warning / 0 error；全量测试 **266 总 / 263 通过 / 0 失败 / 3 跳过**。
+
+### 会话中主要使用的技术栈
+SQLite（sql.js 落库格式）只读取证 · Electron 军团调度（waveEngine / workerPool / taskStore）· agent-core 技能披露（summary / full + load_skill）· Node 测试套件。
+
+### 关键决策和解决方案
+1. **先证伪「无人认领」再改代码**：以数据库 `owner_member_id` 与 `claimed_at` 为准，确认本轮用户场景是「假完成」而非「未认领」，避免照着错误描述改错地方。
+2. **修根因而不是只改状态**：仅把完成判定改严会让任务变红但仍旧因技能注入耗尽上下文；先降上下文占用，再让未完成正确落 failed/queued。
+3. **summary 披露放在 `applyRolePreset`**：主对话与 Worker 两条通道共用同一份实现，避免只修 Worker、员工在对话里仍被技能正文撑爆。
+4. **保留显式覆盖**：调用方显式指定 `skillDisclosure='full'` 时不覆盖，保持既有能力可回退。
+
+### 会话中主要使用的工具
+`Shell`（sqlite3 只读查询 / node 测试）· `Read` / `Edit` / `Grep` · 图片查看。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `desktop/main/rolePresetApply.js` | 修改 | 装载成员技能后默认 `skillDisclosure='summary'` | 避免 10+ 技能正文全量注入撑爆上下文 |
+| `desktop/agent-core/index.js` | 修改 | context-stuck 收尾补「任务未完全完成」 | 统一宿主未完成判定标记 |
+| `desktop/main/workerPool.js` | 修改 | 未完成正则兼容「任务尚未完成」 | 修正用户实测文案被误判 done |
+| `desktop/test/member-runtime-config.test.js` | 修改 | 断言 summary 披露与零回归 | 防回退到 full |
+| `desktop/test/exhausted-notice.test.mjs` | 修改 | 断言上下文分支带未完成标记 | 防文案再漂移 |
+| `desktop/test/workerPool.test.js` | 修改 | 增用户原文案的 done→failed 回归用例 | 覆盖真实事故形态 |
+| `CHANGELOG.md` / `README.md` | 修改 | 记录修复与总结 | 用户固定规则 |
+
+### 文件修改的详细内容
+- `rolePresetApply.js`：技能装载成功后 `if (!engineParams.skillDisclosure) engineParams.skillDisclosure='summary'`；正文仍传入 `engineParams.skills` 供 `load_skill` 回退读取。
+- `agent-core/index.js`：`buildExhaustedNotice` 的 `contextStuck` 分支（有人值守 / 无人值守两种文案）都补「任务未完全完成」。
+- `workerPool.js`：`const incomplete = /已主动停止|任务未完全完成|任务尚未完成/.test(...)`。
+- 三个测试文件仅新增断言/用例，未改动既有断言口径。
+
+### 尚存问题与推荐下一步
+- **历史 run 不会自动重判**：已经落库为 `done` 的 t2/t4 不会被追溯改写；如需重做，建议在看板对这两个任务手动重试（或重新派活）。
+- **需重启应用生效**：当前运行中的应用/开发进程仍持有旧代码，重启后再派一次团队任务验证。
+- **若仍看到字面「未认领」**：本轮数据未见真实未认领；若后续界面出现该标签，请提供对应 run 的 group_id 与截图，按 `owner_member_id` 为空的具体路径再排查。
+- **推荐下一步**：重启应用后重跑同一「报数」团队任务，确认 4 个任务产出均有实际文件、且无 69k tokens 类收尾。

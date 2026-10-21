@@ -74,6 +74,13 @@ function applyRolePreset(engineParams, rolePreset, deps = {}, label = '') {
     try {
       const loaded = deps.loadSkillContents(rolePreset.skillNames) || [];
       engineParams.skills = [...(engineParams.skills || []), ...loaded];
+      // 2026-10-21 真机事故修复：军团成员动辄挂载 10+ 个技能（实测某成员 12 个 SKILL.md
+      // 合计约 127KB ≈ 数万 tokens）。full 模式会把全部正文拼进 system，每轮重发，
+      // 于是一个「报数」级子任务在 2 轮内就烧到 69k tokens 并触发上下文收尾。
+      // 统一改走引擎的「索引 + load_skill 按需加载」：system 只留 name/description，
+      // 正文由引擎从本次已装载的 skills[].content 回退读取（宿主无需额外通道）。
+      // 调用方显式指定 full 时尊重显式值，不在这里覆盖。
+      if (!engineParams.skillDisclosure) engineParams.skillDisclosure = 'summary';
     } catch (e) {
       console.warn(`[rolePreset] 技能装载失败（该成员本轮无技能）${where}:`, e.message);
     }

@@ -521,7 +521,10 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
       } else {
         // Agent 引擎的「未完成收尾」标记（重复失败熔断 / 预算耗尽）→ 任务判 failed，
         // 走失败处置（重试回队 / 关键失败暂停组），不得伪装成 done
-        const incomplete = /已主动停止|任务未完全完成/.test(String(result.summary || ''));
+        // 2026-10-21 真机事故修复：上下文压不动的收尾文案历史上是「任务尚未完成。」，
+        // 而这里只认「任务未完全完成」——于是 t2/t4 在看板显示「完成」、产出却是空。
+        // 引擎侧已统一补上规范标记，这里同时接受两种措辞，避免旧文案/新文案任一侧再漏判。
+        const incomplete = /已主动停止|任务未完全完成|任务尚未完成/.test(String(result.summary || ''));
         if (incomplete) {
           const { retried } = deps.store.handleFailure(group.group_id, task.taskId, 'Agent 未完成收尾（重复失败熔断或预算耗尽）', { summary: result.summary, artifacts: result.artifacts });
           deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: retried ? 'queued' : 'failed', error: 'Agent 未完成收尾' });

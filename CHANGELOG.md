@@ -6,6 +6,17 @@ desktop / server / renderer 三个 package.json 的 version 必须保持一致�
 
 ## [未发布]
 
+### 修复（军团任务「看板显示完成、实际没有产出」+ 成员技能全量注入导致上下文耗尽，2026-10-21）
+- **现象（用户实测 run `tg-mvhjxx0j-d44c21`）**：看板 4 个任务全部显示「完成」，但其中 2 个任务的结果是「任务尚未完成（上下文已到模型窗口，累计 69401 / 72889 tokens）」；数据库核对显示 4 个任务**都有 owner_member_id**（并非真的无人认领）
+- **根因 1（误判完成）**：引擎 `buildExhaustedNotice` 的「上下文压不动」分支只输出「任务尚未完成。」，而 `workerPool` 的未完成判定只认「已主动停止|任务未完全完成」——标记不一致 ⇒ 上下文耗尽的空产出被落库为 `done`
+- **根因 2（上下文耗尽）**：军团成员挂载了 12 个技能（SKILL.md 合计约 127KB ≈ 数万 tokens），`applyRolePreset` 走 full 模式把所有正文拼进 system 并每轮重发；一个「报数」级子任务 2 轮即烧到 69k tokens
+- **修复**：
+  - `main/rolePresetApply.js`：装载成员技能后默认 `skillDisclosure='summary'`（system 只留 name/description，正文经引擎 `load_skill` 从已装载内容按需读取；调用方显式指定 full 时尊重显式值）
+  - `agent-core/index.js`：`buildExhaustedNotice` 的 context-stuck 分支补「任务未完全完成」，三种收尾分支统一带宿主判定标记
+  - `main/workerPool.js`：未完成判定同时接受「任务未完全完成」与历史文案「任务尚未完成」，避免任一侧再漏判
+- **守护测试**：`member-runtime-config` 增「装载技能必须 summary / 未装载不得强加」；`exhausted-notice` 增「上下文压不动必须明示任务未完全完成」；`workerPool` 场景 8 增用户实测原文案的回归用例
+- **验证**：受影响的 4 个套件全通过；`typecheck` 0 error；`lint` 159 warning / 0 error；全量 `npm test` **266 总 / 263 通过 / 0 失败 / 3 跳过**
+
 ### 变更（运行时升级：Electron 33.4.11 → 45.0.0 + electron-builder 25 → 26.15.3，2026-10-21）
 - **运行时**：Electron `45.0.0`（Chromium `156.0.8078.48` / 内置 Node `24.22.0` / ABI `150`）；产物 `LSMinimumSystemVersion=13.0`，macOS 12 及更早不再支持
 - **打包**：electron-builder `26.15.3`。按「先升打包器、再升运行时」分两步：先用 Electron 33 跑 `--dir` 确认打包链未坏，再升 Electron，避免两个变量同时变化无法归因

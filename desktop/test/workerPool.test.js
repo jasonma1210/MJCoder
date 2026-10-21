@@ -210,7 +210,11 @@ const events = [];
 
   // ── 场景 8：Agent 未完成收尾（熔断/预算文案）→ 任务判 failed 走失败处置，不得伪装 done ──
   initWorkerPool({
-    loadAgentCore: async () => makeFakeCore({ '会熔断': { text: '（已主动停止：工具 shell 用相同参数连续失败 4 次……）（单任务执行轮次预算已用尽，任务未完全完成。）' } }),
+    loadAgentCore: async () => makeFakeCore({
+      '会熔断': { text: '（已主动停止：工具 shell 用相同参数连续失败 4 次……）（单任务执行轮次预算已用尽，任务未完全完成。）' },
+      // 2026-10-21 真机事故原始文案：上下文压不动时是「任务尚未完成。」
+      '上下文耗尽': { text: '任务尚未完成。\n\n（上下文已到模型窗口（累计 69401 tokens），已自动换新窗口续跑 2 次仍不够，继续跑只会空转。）' },
+    }),
     createToolHandlers: () => ({}),
     store, maxConcurrent: 1, emit: () => {},
     resolveModel: () => ({ providerId: 1, isGlobal: false, baseUrl: '', model: 'test-model' }),
@@ -218,13 +222,18 @@ const events = [];
   });
   store.createGroup({ groupId: 'w8', goal: '未完成收尾判定', cwd: '', dag: null, tasks: [
     { id: 'u1', title: '会熔断', prompt: 'x', dependsOn: [], maxRetry: 0 },
+    { id: 'u2', title: '上下文耗尽', prompt: 'x', dependsOn: [], maxRetry: 0 },
   ] });
   await runGroup('w8');
   const g8 = await waitSettled(store, 'w8', 8000);
-  const u1 = g8.tasks[0];
+  const u1 = g8.tasks.find((t) => t.taskId === 'u1');
+  const u2 = g8.tasks.find((t) => t.taskId === 'u2');
   check('未完成收尾 → failed 且保留部分结论', g8.status === 'done'
     && u1.status === 'failed' && u1.error.includes('未完成收尾')
     && typeof u1.result?.summary === 'string' && u1.result.summary.includes('已主动停止'));
+  // 回归：用户实测 t2/t4 的产出就是这段文案，此前被标成 done（看板「完成」但实际没产出）。
+  check('上下文压不动的「任务尚未完成」不得伪装 done', u2.status === 'failed' && u2.error.includes('未完成收尾'),
+    `${u2.status} / ${u2.error}`);
 
   // ── 并发上限可配置 ──
   setMaxConcurrent(5);

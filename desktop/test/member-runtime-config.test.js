@@ -70,6 +70,7 @@ async function waitSettled(store, groupId, timeoutMs = 8000) {
           sandboxPolicy: opts.sandboxPolicy,
           systemPrompt: opts.systemPrompt,
           skills: opts.skills,
+          skillDisclosure: opts.skillDisclosure,
           rolePreset: opts.rolePreset,
         });
         return '已完成本子任务';
@@ -133,6 +134,12 @@ async function waitSettled(store, groupId, timeoutMs = 8000) {
   check('成员 skillNames 按名装载后进 skills',
     !!r1 && Array.isArray(r1.skills) && r1.skills.includes('SKILL:arch-review'),
     JSON.stringify(r1?.skills || null));
+  // 2026-10-21 真机事故：成员挂 12 个技能（≈127KB）走 full 模式 → 一个报数任务烧到 69k tokens。
+  // 装载了技能就必须改走「索引 + load_skill 按需加载」，否则 system 每轮重发全部正文。
+  check('装载成员技能时使用 summary 披露（正文不进 system）',
+    r1?.skillDisclosure === 'summary', String(r1?.skillDisclosure));
+  check('未装载技能时不强加披露模式（零回归）',
+    r2?.skillDisclosure === undefined, String(r2?.skillDisclosure));
 
   // ⑤ 治理档取更严（always 严于 auto-safe 地板；read-only 严于组快照）
   check('成员 approvalMode 与基线取更严者（always 胜出）', r1?.approvalMode === 'always', r1?.approvalMode);
