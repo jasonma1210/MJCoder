@@ -14,6 +14,7 @@
 //   · fail-open —— 读取失败/文件损坏一律按空处理，绝不阻塞启动或调用。
 
 const fs = require('fs');
+const crypto = require('crypto');
 const { writeFileDurableWithMode } = require('./data/durableWrite');
 
 // 第七轮 F-007 / B1-B-06：定义侧预算闸的**唯一常量源**是 shared/contextBudget.mjs。
@@ -69,13 +70,41 @@ function slimTools(tools, budget) {
 }
 
 /**
+ * 工具清单指纹（第八轮 L-3 补：把「定义钉定」从口头承诺变成可核对的事实）。
+ *
+ * 为什么需要：缓存此前只存 `{tools, updatedAt}`，没有指纹也没有版本号。于是第三方 server
+ * **静默改定义**（加一个必填参数、改描述、删一个工具）时：磁盘清单被直接覆盖，没有任何事件可查；
+ * 而模型侧看到的是**变了字节的工具表**——前缀缓存被打掉、行为也可能变，排查时无从判断
+ * 「是服务端改了定义」还是「我们改了下发逻辑」。这与「定义侧已有三道闸」的成熟度不匹配：
+ * 那三道闸管的是**体积/注入**，管不了**漂移**。
+ *
+ * 口径：排序后逐工具取 `name \0 description \0 inputSchema(JSON)`，整体 SHA-256。
+ *   · 用**落盘后的 slim 形态**计算（不是服务端原始体）——因为模型看到的就是这一份；
+ *   · 排序使结果与 server 返回顺序无关；同一份定义重连两次必须得到同一指纹（有测试钉住）。
+ *
+ * @param {Array<object>} tools slim 形态的工具清单
+ * @returns {string} 十六进制指纹；空清单也返回确定值（sha256('')）
+ */
+function fingerprintOf(tools) {
+  const list = (Array.isArray(tools) ? tools : [])
+    .filter((t) => t && typeof t === 'object' && t.name)
+    .map((t) => [String(t.name), String(t.description || ''), JSON.stringify(t.inputSchema || {})])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const h = crypto.createHash('sha256');
+  for (const [name, desc, schema] of list) h.update(`${name}\u0000${desc}\u0000${schema}\u0000`);
+  return h.digest('hex');
+}
+
+/**
  * @param {{filePath: string,
  *          log?: (msg: string, detail?: unknown) => void,
  *          audit?: (event: string, payload: object) => void}} opts
- *   audit —— 可选审计通道（未注入即零开销）。本轮唯一事件：
+ *   audit —— 可选审计通道（未注入即零开销）。事件：
  *     `audit('mcp_tool_def_limited', { server, tool, descriptionChars, descriptionTruncated,
  *                                      schemaBytes, schemaDepth, schemaTooLarge, limits, reason })`
  *     口径：**只记超限**（未超限的工具不产生事件，避免把审计日志刷成工具清单副本）。
+ *     `audit('mcp_tool_defs_changed', { server, before, after, added, removed, tools })`
+ *     —— 第八轮 L-3：定义漂移事件，只在指纹变化时记（首次写入不记）。
  */
 function createMcpToolCache({ filePath, log = console.warn, audit } = {}) {
   if (!filePath) throw new Error('createMcpToolCache 需要 filePath');
@@ -177,15 +206,47 @@ function createMcpToolCache({ filePath, log = console.warn, audit } = {}) {
     } catch (e) {
       logWarn('[mcp] 预算模块不可用，工具描述按原样落盘（未截断）:', e && e.message ? e.message : String(e));
     }
-    const entry = { tools: slimTools(raw, budgetMod), updatedAt: Date.now() };
+    const slim = slimTools(raw, budgetMod);
+    const fingerprint = fingerprintOf(slim);
+    // 漂移检测（第八轮 L-3）：只在**已有指纹且变了**时才记事件——首次写入不算漂移，
+    // 否则每个新服务都会先刷一条无意义记录。这里读的是**写前**的磁盘状态，
+    // 因此必须在 enqueue 之前取（写链内部再去读就已经被覆盖了）。
+    const prev = loadAll()[String(name)] || null;
+    const prevFp = prev && typeof prev.fingerprint === 'string' ? prev.fingerprint : '';
+    const entry = { tools: slim, updatedAt: Date.now(), fingerprint };
     // 落盘与审计并行：审计既不在写链里（不拖慢落盘），也不会因自己的错误让落盘失败。
     // 返回 promise 仍只代表「这次 save 处理完」（落盘 + 审计都结束），解析值维持 undefined。
     // 注意：审计拿到的是 raw（原始清单）—— 审计里的 descriptionChars 必须是**服务端给的原始值**，
     // 用落盘后的截断体去算，会让「原始有多大」这个唯一有排障价值的事实丢失。
     const written = enqueue((all) => { all[String(name)] = entry; });
+    if (prevFp && prevFp !== fingerprint) reportDefDrift(name, prev, slim, prevFp, fingerprint);
     return Promise.all([written, auditToolDefs(name, raw)])
       .then(() => undefined)
       .catch(() => undefined); // 两者内部都已各自兜错；这里只保证调用方 await 永不抛
+  }
+
+  /**
+   * 定义漂移上报（第八轮 L-3）：日志 + 审计双写，失败均不影响缓存落盘。
+   * 只上报**差异摘要**（新增/消失的工具名），不把两份完整清单塞进审计——
+   * 审计是排障线索，不是工具清单的副本。
+   */
+  function reportDefDrift(serverName, prev, next, before, after) {
+    const prevNames = new Set((prev?.tools || []).map((t) => String(t?.name || '')).filter(Boolean));
+    const nextNames = new Set((next || []).map((t) => String(t?.name || '')).filter(Boolean));
+    const added = [...nextNames].filter((n) => !prevNames.has(n));
+    const removed = [...prevNames].filter((n) => !nextNames.has(n));
+    const sameSet = added.length === 0 && removed.length === 0;
+    logWarn(`[mcp] 服务「${serverName}」的工具定义发生变化（指纹 ${before.slice(0, 12)} → ${after.slice(0, 12)}`
+      + `${sameSet ? '，工具名集合未变但描述/schema 已变' : `，新增 ${added.length} 个 / 移除 ${removed.length} 个`}）`);
+    if (!auditFn) return;
+    try {
+      auditFn('mcp_tool_defs_changed', {
+        server: String(serverName), before, after, added, removed,
+        toolsBefore: prevNames.size, toolsAfter: nextNames.size, schemaOnly: sameSet,
+      });
+    } catch (e) {
+      logWarn('[mcp] 定义漂移审计写入失败（不影响缓存）:', e && e.message ? e.message : String(e));
+    }
   }
 
   /** 移除某服务清单（用户断开/删除该服务时调用）。 */
@@ -203,4 +264,4 @@ function createMcpToolCache({ filePath, log = console.warn, audit } = {}) {
   return { saveManifest, removeManifest, getManifest, loadAll };
 }
 
-module.exports = { createMcpToolCache, slimTools };
+module.exports = { createMcpToolCache, slimTools, fingerprintOf };

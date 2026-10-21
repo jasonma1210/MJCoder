@@ -157,6 +157,9 @@ function planWaves({ tasks, members, maxWaves = MAX_WAVES } = {}) {
     assignments,
     activeMemberIds: active.map((m) => String(m.id)),
     deferredMembers: deferred,
+    // 第八轮 B-05：把「闸门取值」随计划一起返回，让落库的 deferred 名单旁边就有可解释的口径
+    // （否则界面只能说「3 人未参与」，说不出「因为同类型上限 2」）。
+    caps: { maxActive: MAX_ACTIVE_MEMBERS, maxPerType: MAX_PER_TYPE_IN_RUN },
   };
 }
 

@@ -21,6 +21,29 @@ function asString(v) {
 }
 
 /**
+ * 派活计划的可观测部分（第八轮 B-05）：`dag.runMeta.dispatch` → 卡片字段。
+ *
+ * 为什么读 `dag.runMeta` 而不是读派活消息的 payload：
+ *   payload 是「当时说了什么」，runMeta 是「当时计划了什么」，而卡片要解释的是后者；
+ *   且 runMeta 随 dag_json 一次落库，历史 run 重放得到同一结果（消息可能被截断/裁剪）。
+ * 缺键 → 全 0 / 空数组（旧 run、普通编排组都是这个形态），不造字段、不抛错。
+ * @param {any} full taskStore.getGroup 的返回值
+ * @returns {{mode:string, active:number, deferred:number, deferredReasons:string[]}}
+ */
+function dispatchInfoOf(full) {
+  const d = full && full.dag && full.dag.runMeta && full.dag.runMeta.dispatch;
+  if (!d || typeof d !== 'object') return { mode: '', active: 0, deferred: 0, deferredReasons: [] };
+  const deferred = Array.isArray(d.deferredMembers) ? d.deferredMembers : [];
+  const reasons = [...new Set(deferred.map((x) => asString(x && x.reason)).filter(Boolean))];
+  return {
+    mode: asString(d.mode),
+    active: Array.isArray(d.activeMemberIds) ? d.activeMemberIds.length : 0,
+    deferred: deferred.length,
+    deferredReasons: reasons,
+  };
+}
+
+/**
  * 任务活动轨迹归一（M5 / T5-6，2026-10-21）：来自 `task_events` 表 / 运行期事件。
  * 只保留渲染需要的字段；payload 原样透传（写入侧已做长度裁剪）。
  */
@@ -75,6 +98,7 @@ export function taskProgress(tasks) {
  *
  * 输入 run 形状（ipc/teams.js `teams:listThreadRuns`）：
  *   { runId, teamId, teamName, status, goal, summary, error, waves, createdAt,
+ *     dispatch:{mode,active,deferred,deferredReasons},
  *     members:[{id,name,roleKind,avatar,enabled}], tasks:[{taskId,title,status,ownerMemberId,resultSummary,error}],
  *     messages:[...] }
  * 输出卡片额外带：
@@ -148,6 +172,16 @@ export function projectTeamRuns(runs) {
       summary: String(raw.summary == null ? '' : raw.summary),
       error: String(raw.error == null ? '' : raw.error),
       waves: Number.isFinite(Number(raw.waves)) ? Number(raw.waves) : 0,
+      // 第八轮 B-05：派活计划口径（谁被闸门挡下、为什么）。缺键给零值，渲染层按 0 不展示。
+      dispatch: (raw.dispatch && typeof raw.dispatch === 'object')
+        ? {
+          mode: asString(raw.dispatch.mode),
+          active: Number(raw.dispatch.active) || 0,
+          deferred: Number(raw.dispatch.deferred) || 0,
+          deferredReasons: Array.isArray(raw.dispatch.deferredReasons)
+            ? raw.dispatch.deferredReasons.map(asString).filter(Boolean) : [],
+        }
+        : { mode: '', active: 0, deferred: 0, deferredReasons: [] },
       createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : 0,
       updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
       lastActivityAt: Math.max(Number(raw.updatedAt) || 0, lastMessageAt),
@@ -234,6 +268,10 @@ export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam
       summary: (full.result && full.result.summary) || '',
       error: full.error || '',
       waves: full.dag && Array.isArray(full.dag.waves) ? full.dag.waves.length : 0,
+      // 第八轮 B-05：类型闸/人数闸挡下的成员数（用户在派活卡上要能看见「派了 10 人、3 人没上」
+      // 以及原因）。数据源是 dag.runMeta.dispatch（随计划一起落库，run 级快照，可复现）；
+      // 读不到就是 0（旧 run / 普通编排组没有这个键），不抛错、不造字段。
+      dispatch: dispatchInfoOf(full),
       // M5 / T5-9：成员列表与运行期同口径——run 快照优先，缺失才回落实时名册。
       // 若这里读实时名册，中途被下架的成员会在历史卡上「消失」，而任务 owner 仍指向他，
       // 表现为「未认领的任务却有产出」；快照优先保证历史 run 可复现、可审计。

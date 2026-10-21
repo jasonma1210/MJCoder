@@ -93,7 +93,7 @@ React 渲染界面，对标 codex app 等主流桌面 Agent，**排除云与在�
 │   ├── renderer/            # React + TypeScript 渲染层（Vite 打包）
 │   ├── shared/              # 主进程/引擎/渲染层共享的纯函数模块（ESM）
 │   ├── shared-ipc/          # IPC 契约（zod 校验）
-│   ├── test/                # 发现式全量测试（*.test.{js,mjs} + 2 个 smoke；第八轮实测 241 + 2 = 243 suite，另 3 个 GATES → 合计 246 个检查项）
+│   ├── test/                # 发现式全量测试（*.test.{js,mjs} + 2 个 smoke；第八轮实测 259 + 2 = 261 suite，另 5 个 GATES → 合计 266 个检查项）
 │   └── eval/                # 离线评估任务集与自检脚本
 ├── ecosystem/               # 生态目录（数字员工、MCP 连接器、技能）
 ├── miniprogram/             # 微信小程序（功能开关默认冻结）
@@ -197,7 +197,7 @@ flowchart TB
 |---|---|---|---|---|---|
 | ① 交付层 · 渲染层（React + TS · Vite） | `renderer/src/components/ChatArea.jsx`（分层召回装配）、`ApprovalCard.jsx`、`MessageStream.tsx`、`renderer/src/hooks/useAgentRun.ts`、`renderer/src/i18n/locales/{zh-CN,en-US}/` | 分层召回前缀 `[本次会话] / [项目] / [个人]`；i18n **仅 zh-CN + en-US**；记忆归档空间键 = `projectPath`（≠ `cwd`） | `ui-conventions.test.js`（界面一致性基线）、`i18n.test.mjs`（双语包 key 完整性）、`smoke-load.mjs` / `render-smoke.mjs`（冒烟） | 改动 `renderer/src/**`（组件 / hooks / i18n 语言包），或新增 / 变更任一 UI 文案 key 时 | 总览图 ① · 图 4 |
 | ② 编排层 · 任务与 Worker 池（宿主） | `main/orchestrator/index.js`、`main/orchestrator/dag.js`、`main/workerPool.js`、`main/workerIsolation.js`、`main/worktree.js`、`main/aggregator/merge.js`、`main/taskStore.js` | `MIN_TASKS = 2` / `MAX_TASKS = 8`（提示词与 DAG 校验**共用同一常量**）；迁移 v7 `task_groups.project_path`；召回键 `group.project_path \|\| group.cwd`；建组即快照 `approvalMode` / `sandboxPolicy` | `orchestrator.test.js`（拆解 / DAG / 规模常量）、`workerPool.test.js`（派发 / 组收尾）、`tasks-ipc-wiring.test.mjs`（`tasks:*` deps 契约 + 治理快照接线） | 改动 `main/orchestrator/**`、`workerPool.js`、`taskStore.js`，或 `tasks:*` IPC 通道契约时 | 总览图 ② · 图 5 |
-| ③ 引擎层 · Agent Harness（utilityProcess 子进程） | `agent-core/index.js`、`main/agentRunner.js`、`main/engineProcess/{host.js,childEntry.js,registry.js,transport.js}`、`main/modelShape.js`、`main/runTrace.js`、`main/streamGuard.js`、`main/bigPayload.js` | `BASE_TOOLS` 52 / `TOOL_HANDLER_NAMES` 55 / **两者并集 57** / `TOOL_CHANNELS` **56**（均为第八轮工作区实测）；`TOOL_TIMEOUT_OVERRIDES`（引擎侧超时）；`runAgent(...)`；`NOTIFY_CBS` 8 条 / `REQUEST_CBS` 1 条（`onSuspend`）；`runId` + `AsyncLocalStorage runScope` | `engine-process.test.mjs`（子进程 RPC / 通道白名单）、`tool-registration-matrix.test.mjs`（**8 环节双向差集断言**，实跑 143/143；扫字面量键，看不见条件展开，见 A-03） | 改动 `agent-core/**` 或 `main/engineProcess/**`，尤其**新增 / 改名任一原生工具**时（须同步 8 环节接线 + 白名单登记） | 总览图 ③ · 图 1 · 图 2 |
+| ③ 引擎层 · Agent Harness（utilityProcess 子进程） | `agent-core/index.js`、`main/agentRunner.js`、`main/engineProcess/{host.js,childEntry.js,registry.js,transport.js}`、`main/modelShape.js`、`main/runTrace.js`、`main/streamGuard.js`、`main/bigPayload.js` | `BASE_TOOLS` 52 / `TOOL_HANDLER_NAMES` 56 / **两者并集 58** / `TOOL_CHANNELS` **57**（均为第八轮工作区实测）；`TOOL_TIMEOUT_OVERRIDES`（引擎侧超时）；`runAgent(...)`；`NOTIFY_CBS` 8 条 / `REQUEST_CBS` 1 条（`onSuspend`）；`runId` + `AsyncLocalStorage runScope` | `engine-process.test.mjs`（子进程 RPC / 通道白名单）、`tool-registration-matrix.test.mjs`（**8 环节双向差集断言**，实跑 150/150；第三环节按调用形态求值，条件注册也在判据内，见 A-03） | 改动 `agent-core/**` 或 `main/engineProcess/**`，尤其**新增 / 改名任一原生工具**时（须同步 8 环节接线 + 白名单登记） | 总览图 ③ · 图 1 · 图 2 |
 | ④ 闸门层 · 审批 / 沙箱（宿主） | `main/approval.js`、`main/approvalChannel.js`、`main/approvalPolicy.js`、`main/approvalSettings.js`、`main/sandbox.js`、`main/sandboxLinux.js`、`main/sandboxWindows.js`、`main/dangerousPatterns.js`、`main/computerUse.js`、`main/cuaProcess/` | `LEVELS = { L1: danger-command, L2: file-write, L3: mcp-tool }`；`APPROVAL_MODES = { never, auto-safe, on-request（默认）, always }`；**L1 不可豁免** + 非法决策 / 超时 **fail-closed → deny**；`TOOL_LEVEL` 43 / `READONLY_TOOLS` 10 / `SPECIAL_CASED_TOOLS` 10（三对交集全空，死条目 0 条）；沙箱三档 `read-only / workspace-write / full-access`；规则库 `userData/approval-rules.json`（可撤销） | `approval.test.js`（分级 / `needsApproval` / 可补偿性）、`approvalChannel.test.js` / `approval-queue.test.js`（按 `approvalId` 分发 / fail-closed）、`exec-governance.test.mjs`（载荷只能收紧不能放宽）、`computer-use-wiring.test.mjs`（CUA 强门控） | 改动审批档位 / 分级 / `needsApproval` / 沙箱策略，或新增「可被审批」的工具时 | 总览图 ④ · 图 6 |
 | ⑤ 能力层 · 原生工具 + MCP tier（宿主） | `main/nativeTools.js`、`main/codeTools.js`、`main/codeProcess/`、`main/nativeSandbox/`、`main/webTools.js`、`main/docTools.js`、`main/latexTools.js`、`main/mcpPrewarm.js`、`main/intentMcpPrewarm.js`、`main/mcpClient.js`、`main/mcpHttpTransport.js`、`main/mcpProtocol.js`、`main/mcpAutoReconnect.js`、`main/mcpToolCache.js`、`main/tools/timeouts.js` | `TIER = { auto-start, whitelist, manual }`；`PREWARM_NAMES = { filesystem, time, fetch }`；`DEVELOPER_AUTO_START_NAMES = { git, git-mcp }`；`MANUAL_NAMES`；灰度开关 `MJCODE_MCP_LAZY`；`PROTOCOL_VERSION = '2025-11-25'`；`SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25','2025-06-18','2025-03-26','2024-11-05']`（**不含 `2026-07-28`**）；`SHELL_DEFAULT_TIMEOUT_MS = 480000` / `SHELL_WATCHDOG_TIMEOUT_MS = 600000` | `mcp-lazy-prewarm.test.mjs`（tier 判定 / 懒启动）、`mcp-governance.test.mjs`（三层治理）、`timeouts-contract.test.mjs`（超时常量契约）、`native-tools-p3.test.mjs` / `native-doc-tools.test.mjs` / `native-latex-tools.test.mjs`（原生工具接线）、`code-mode.test.mjs`（Code Mode） | 改动原生工具实现、超时常量、MCP tier 判定 / 懒启动灰度开关 / 协议版本与时 | 总览图 ⑤ · 图 3 |
 | ⑥ 记忆层 · 四作用域记忆（SQLite 唯一事实源） | `main/memory/index.js`、`main/memory/scorer.js`、`main/memory/recall.js`、`main/memory/team.js`、`main/memory/memoryFile.js`、`main/memory/bgScheduler.js`、`main/db/index.js` | `SCOPES = ['session','team','project','global']`；`SOURCE_DEFAULT_SCOPE`（来源 → 默认作用域，`resolveScope` 为唯一事实来源，`team` 需归属键 `teamId`）；`LAYER_QUOTA = { session: 2, team: 3, project: 3, global: 2 }`（合计 10）；半衰期 session 7 / team 30 / project 30 / global 90 天（未知回落 14）；`SALVAGE_MIN_HITS = 3` / `PROMOTE_L1_MIN_HITS = 3` / `PROMOTE_L2_MIN_HITS = 5` / `PROMOTE_TEAM_MIN_HITS = 3`（团队提名制阈值）；`MAX_MEMORIES_PER_SPACE = 500` / `MAX_GLOBAL_MEMORIES = 300` / `MAX_TEAM_MEMORIES = 200` / `RECALL_TOP_K_MAX = 50` | `memory.test.js`（写入 / 去重 / 容量闸）、`memory-scope.test.mjs`（`resolveScope` 分流）、`memory-salvage.test.mjs`（salvage + 晋升阈值）、`memory-m4-hardening.test.mjs`（半衰期 / 全局硬闸）、`memory-file-channel.test.mjs`（文件只读双通道）、`memory-mem-command.test.mjs`（`/mem` 分流）、`memory-team.test.mjs`（团队记忆共享/私有/提名制门禁） | 改动记忆写入 / 召回装配 / 晋升阈值 / 半衰期 / 容量闸，或 `/mem` 分流规则时 | 总览图 ⑥ · 图 4 |
@@ -212,7 +212,7 @@ flowchart TB
 
 | 命令 | 作用 | 通过标准 |
 |---|---|---|
-| `npm test` | 发现式全量测试（`test/run-all.mjs` 自动扫描 `test/**/*.test.*`），已把 3 个外部前置门禁并入 | 全量检查项全绿（第八轮实测 **246 项 / EXIT=0**，见 §12.1） |
+| `npm test` | 发现式全量测试（`test/run-all.mjs` 自动扫描 `test/**/*.test.*`），已把 3 个外部前置门禁并入 | 全量检查项全绿（第八轮三次收尾实测 **266 项 / EXIT=0**，见 §12.1） |
 | `npm run typecheck` | 全量 TS/JSX 类型检查 | **零错误** |
 | `npm run lint` | 静态规则检查（棘轮） | **0 error / ≤161 warnings**，警告数不得反弹 |
 | `npm run eval:check` | 离线评估自检（`eval/run-eval.mjs --check`） | 自检通过（亦为 `npm test` 前置门禁之一） |
@@ -444,7 +444,7 @@ sequenceDiagram
 
 - 单一事实来源：`BASE_TOOLS ∪ TOOL_HANDLER_NAMES` 派生出「模型可见工具清单」（第八轮为 **57**）。
 - 双向差集断言：对 8 环节逐一做覆盖差集检查，配合显式白名单承载合理豁免，避免聚合断言恒绿。
-- 测试文件：`desktop/test/tool-registration-matrix.test.mjs`；第八轮实测 **143/143 通过**（57 工具 × 8 环节）。
+- 测试文件：`desktop/test/tool-registration-matrix.test.mjs`；第八轮三次收尾实测 **150/150 通过**（58 工具 × 8 环节 + 4 条按调用形态的聚合断言）。
 
 ### 4.4 `team_*` 四工具的条件展开注册（登记矩阵的已知盲区）
 
@@ -1252,7 +1252,7 @@ flowchart TB
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
 | SL-1 | 审批三表零死条目 | **已完成**（正面结论，勿当问题重报） | `TOOL_LEVEL` 43 / `READONLY_TOOLS` 10 / `SPECIAL_CASED_TOOLS` 10；三对交集全空；逐工具比对「登记 ≠ 生效」= **0 条**（报告 §1.5 D-01 ~ D-05） |
-| SL-2 | 工具登记矩阵（8 环节逐项全覆盖） | **已完成（含一处盲区）** | `tool-registration-matrix.test.mjs` 实跑 **143/143**（57 工具 × 8 环节）；矩阵扫字面量键，看不见 `scheduledTools.js` 中 `...(teamTools ? {...} : {})` 的条件展开（`A-03`） |
+| SL-2 | 工具登记矩阵（8 环节逐项全覆盖 + 条件注册可判） | **已完成**（第八轮 A-03 收口） | `tool-registration-matrix.test.mjs` 实跑 **150/150**（58 工具 × 8 环节）。第三环节不再 grep 源码文本，而是**实跑两种调用形态**比对键集合：`scheduledToolHandlers({})`（交互式）vs 注入 `teamTools`（成员任务）。条件展开集合必须**精确等于** `registry.MEMBER_TASK_ONLY_CHANNELS`（不多不少），交互式形态下一个都不许出现——已做变异自证（删掉一个条件键 ⇒ 4 条红） |
 | SL-3 | Linux 沙箱 fail-closed | **已完成（已落在 HEAD）** | 提交 `2f9ece4` 的真探测 + TTL 60s 缓存已合入 HEAD（`git merge-base --is-ancestor 2f9ece4 HEAD` → YES） |
 | SL-4 | `toolLevel()` 兜底方向 | **已完成**（第八轮 D-801 收口） | 兜底为 `\|\| 'L3'`：未知工具**需审批、可被规则豁免**（与 `code_exec` 普通代码、`mcp__` 同档），不再是「回落 L2 → auto-safe 档静默放行」。反向断言见 `tool-registration-matrix.test.mjs` ⑤-d |
 | SL-5 | SSRF 判定强度 | **已完成**（第八轮 D-802 收口） | `main/ssrfGuard.js` 是唯一判据：字面量层做 IPv4 宽松归一（十/十六/八进制、1~3 段）+ IPv6 去括号展开（回环/ULA/链路本地/IPv4-mapped），解析层由 `guardedLookup` 做 resolve-then-validate。**实测更正**：十进制/十六进制/八进制三种写法在当前调用链上本就被 URL 归一拦住；真正漏掉的是**整个带括号的 IPv6 地址族**，已闭合。守护测试 `ssrf-guard.test.js`（41 条） |
@@ -1267,15 +1267,15 @@ flowchart TB
 | GL-3 | i18n 扫描进入门禁 | **已完成**（第八轮 D-807② 收口） | 两条同时接入：`i18n-scan` 扫 `renderer/src`（注释剥离后的裸中文，当前 0 残留）、`i18n-modcheck` 查 42 个语言包模块的中英键集与 `{var}` 插值一致性。两条都**自证会红**（无参 exit 2、有残留或缺键 exit 1），并有变异验证：裸中文必红、**只出现在注释里的中文必绿**、不存在的模块必红 |
 | GL-4 | 汇总口径把「跳过」计入「通过」 | **已完成**（第八轮 C-04 收口） | 汇总改为三数齐全：`通过 = 总计 − 失败 − 仅跳过`，口径落在 `test/helpers/summary.mjs` 纯函数。跳过**不影响退出码**（平台限制不是缺陷），但已从「通过」里扣出；一项目既失败又跳过只计失败（否则等式会破）。守护 18 条，含「旧公式已删除」反向断言 |
 | GL-5 | lint 警告棘轮 | **已完成** | 阈值 161，配套棘轮守护单元测试，不得反弹 |
-| GL-6 | 行数软档白名单「只减不增」 | **已完成（张力已缓解）** | `BASELINE_800` 保持 3 条不变；`ipc/teams.js` 由 799 → **783 行**（余量 17），靠拆模块而非加白名单解决（D-811） |
-| GL-7 | 冷检出可复现性（新） | **部分** | 已修「`CHANGELOG.md` 被 `*.md` 排除导致冷检出必红」（提交 `bf423fa`）；但**仅在本机用 `git worktree` 复核过**，CI 运行历史仍未查（`L-1`）。复核方法：干净 worktree + 两个 `node_modules` 软链 + `NODE_OPTIONS=--preserve-symlinks`（报告 §8.4） |
+| GL-6 | 行数软档白名单「只减不增」 | **已完成（张力已缓解）** | `BASELINE_800` 保持 3 条不变；`ipc/teams.js` 由 799 → **790 行**（余量 10），靠拆模块而非加白名单解决（D-811 抽 `teamRoster.js`，第八轮三次收尾抽 `teamDispatchPlan.js`） |
+| GL-7 | 冷检出可复现性（新） | **本机已完成 / CI 无证据** | 已修「`CHANGELOG.md` 被 `*.md` 排除导致冷检出必红」（提交 `bf423fa`），并用干净 worktree 复核（两个 `node_modules` 软链 + `NODE_OPTIONS=--preserve-symlinks`，报告 §8.4）。**CI 运行历史已查：0 次运行**（`gh run list` 空 / 工作流 state=active / 运行记录 total_count=0）⇒ 「以 CI 为准」这句话当前**没有证据**，只能是待办检查项（`L-1`） |
 
 ### 13.6 上下文工程
 
 | 项 | 主题 | 状态 | 判定依据 |
 |---|---|---|---|
 | CL-1 | 三级降级压缩 + offload 可取回 | **已完成** | `compactHistory` → `trimHistoryForRun` / `splitFixedHead` → `new-window`；`bigPayload.offloadToolCall` + `bigPayload:fetch` 分页取回；顺序正确（先 offload 再 summarize） |
-| CL-2 | offload 落盘的可恢复性 | **部分（P2）** | 落盘目录为 `${TMPDIR}/mjcode-tool-outputs/`，会话内可被系统回收且无清理 ⇒ 「会话内可失效」与「磁盘泄漏」两面（`B-13`） |
+| CL-2 | offload 落盘的可恢复性 | **已完成**（第八轮 B-13 收口） | 目录由宿主注入（`userData/tool-outputs/`，环境变量 `MJCODE_TOOL_OUTPUT_DIR`，子进程天然继承 ⇒ in-process 与子进程两条路径同值），按 mtime 保留 24h 自动清（`MJCODE_TOOL_OUTPUT_TTL_H` 可调，上限 30 天）；落盘后**回读确认存在**，落不了盘时文案明示「不会被保存」。守护测试 `tool-outputs.test.mjs`（25 条） |
 | CL-3 | 分层召回覆盖全部模型入口 | **已完成**（第八轮 B-11 收口） | `buildTaskPrompt` 现按 `group.thread_id` 传 `scopes`（有会话 `session/project/global`，无会话 `project/global`）与 `conversationId`。此前不传 `scopes` ⇒ 走单空间全量旧路径：**没有 scope 过滤**，别的会话的 session 记忆会漏进无人值守 Worker（已用行为对照断言钉死：旧路径 5 条含他人会话、分层路径 4 条不含） |
 | CL-4 | 派生深度硬上限 | **已完成（结构性）** | `SUBAGENT_TOOL_NAMES` 7 个只读工具不含 `spawn_subagent`；`scheduledToolHandlers` 亦不含 `orchestrate_task` ⇒ 深度**恒为 1**，由工具集而非计数保证 |
 | CL-5 | 子代理结论回传的截断与取回 | **已完成**（第八轮 D-806 收口） | 回传**有** 15000 字符硬截（`TOOL_RESULT_MAX_CHARS`，`truncateToolResult` 在工具分派 switch 之后无条件执行），并非「未截断」；此前 `summarizeToolOutput` 的字段白名单只认 `stdout` / `content`，子代理回传键 `result` 因此**不走头尾保留、不落盘**，尾部永久丢失。**修法是把 `result` 纳入摘要化（阈值取 `TOOL_RESULT_MAX_CHARS`，8k~15k 段保持无损）**，超阈值即头尾保留 + 原文落盘并给出可读路径，模型用 `read_file` 取回尾部。守护测试 `subagent-result-offload.test.mjs`（11 条，含「落盘内容 = 原文全文」的实证） |
@@ -1294,53 +1294,55 @@ flowchart TB
   | 内置技能实体 **100** | **随包发布**的 `SKILL.md` | `ecosystem/skills/**/SKILL.md` |
   | 工作区已安装 **154** | **本机装了多少**（2026-10-21 实测） | `~/.mjcode/skills/**/SKILL.md` |
   单一事实源 = `desktop/scripts/gen-ecosystem-counts.mjs`（**没有第二份脚本**），守护套件会拿它的输出与技术设计文档「生态资产」行逐值对账，并做变异自证（喂错数字必须红）。
-- 幂等键、工具定义钉定、审计不可改写：**未核**（报告 §7.2 L-3）。
-- CI 历史绿红：第八轮只跑了本机，**未查 CI 运行历史**（报告 §7.2 L-1）。
+- 幂等键：**已核，明确不做**（全仓确认不存在；理由见 13.9 表末三行）。
+- 工具定义钉定 / 审计不可改写：**已核并加固**——清单指纹 + 定义漂移审计；审计哈希链 + `verifyAuditChain()`（见 13.9）。
+- CI 历史绿红：**已查，结论是「从未运行过」**（`gh run list` 空、运行记录 0、工作流 state=active）。
+  因此「Linux 隔离以 CI 为准」这句话目前**没有证据支撑**，只能表述为「无验证证据」。
 
-### 13.8 第八轮落地后仍未完成的事（按优先级，别当已做完）
+### 13.8 第八轮落地后仍未完成的事（2026-10-21 三次收尾：已清零）
 
-> **大白话**：上一节说的是「本来就不打算做」，这一节说的是「打算做、但**这一轮没做完**」。
+> **大白话**：上一节说的是「本来就不打算做」，这一节说的是「打算做、但**还没做完**」。
 > 两件事必须分开记，否则下次复用这套材料时会误以为已经齐了。
-> 逐条的判定依据与复现命令在报告 `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 的 **§8.2 / §8.7**。
+> 逐条的判定依据与复现命令在报告 `docs/MJCode-AgentHarness第八轮全量审查报告与调整实现方案-2026-10-21.md` 的 **§8.2 / §8.7 / §8.9 / §8.10**。
 >
-> **2026-10-21 二次收尾更新**：原 11 行已销账 **8 行**（涉及 9 项）——取消信号穿透（D-805）、i18n 进 `GATES`（D-807②）、
-> 生态数字单一事实源（D-812）、MCP 双栈（D-804）、D-806 的两条（Worker 分层召回 B-11 + 团队记忆解耦 B-12）、
-> 模型侧读消息（B-04）、汇总口径把跳过计绿（C-04）、探活撤员端到端。
-> **第八轮已无「不做就无法发布」的遗留项**；下表是剩下的 2 行 + 1 行记账项。
+> **销账轨迹**：11 行 → 8 行（D-805 / D-807② / D-812）→ 5 行（D-804 / D-806 / B-04）→
+> 3 行（C-04 汇总口径 + 探活撤员端到端）→ **0 行（本轮：推送已在每批后完成；七条 P2/P3 小账全闭；三项未核已核清，两项落地加固、一项明确不做）**。
 
-| 优先级 | 没做完的事 | 一句话说明为什么现在还不行 |
+**现在剩下的不是「欠账」，而是三类性质不同的东西**（写在这里防误读）：
+
+| 类别 | 具体 | 为什么不算欠账 |
 |---|---|---|
-| **发布前必做** | 推送远端 | 改动只在本地。不 push，打包出来的制品还是旧代码，前面做的全白费 |
-| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
-| P3 | 未核项（要么核、要么明确不核） | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核；MCP 新版的附加能力（MRTR / 可缓存 list / 正式扩展框架）未实现 |
+| 未逐条展开的 P3（14 条） | `B-10` / `B-14` ~ `B-19`、`A-05` ~ `A-09`、`C-05` | 它们从未进过处置清单，属「下一轮要不要看」的取舍。要动哪条，先在报告 §3 里认领再改 |
+| 判据随主流移动 | MCP 协议代际（`2025-11-25` → `2026-07-28`） | 规范一年一代，**不可能修到归零**。已建「状态字段 + 到期日 + 双向门禁」，把「追不上」变成「有账可查」 |
+| 环境不可验证 | Linux 沙箱真实隔离 | 需要 CI 的 ubuntu runner，而 **CI 至今 0 次运行**（见 `13.5` GL-7）。诚实的表述只能是「无验证证据」 |
 
----|---|---|
-| **发布前必做** | 推送远端 | 改动只在本地。不 push，打包出来的制品还是旧代码，前面做的全白费 |
-| P2 | 探活撤员只有单模块测试 | 端到端跑一次要 ≥15 秒（5 秒 × 3 次探活），不适合逐次提交都跑；要覆盖得先给波次引擎开时序注入点 |
-| P3 | 汇总公式把「跳过」算成「通过」 | 本机有 3 个沙箱套件没真跑却显示绿；Linux 真机隔离要以 CI 的 ubuntu 为准，不能拿这个绿当结论 |
-| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
-| P3 | 未核项（要么核、要么明确不核） | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核；MCP 新版的附加能力（MRTR / 可缓存 list / 正式扩展框架）未实现 |
+### 13.9 三次收尾：七条小账 + 三项未核（大白话版）
 
----|---|---|
-| **发布前必做** | 推送远端 | 改动只在本地（多轮提交未推送）。不 push，打包出来的制品还是旧代码，前面做的全白费 |
-| P2 | Worker 侧「分层召回」没启用 | 主对话会按会话/项目/团队分层捞记忆，Worker 派出去的任务不会 → 派出去的成员相当于「失忆上岗」 |
-| P2 | 团队记忆链默认不生效 | 写入仍挂在一个默认关闭的总开关（`memory.autoCapture`）下 → 默认配置下这条链是空转的 |
-| P2 | 模型没有「读消息」的工具 | 只有 4 个协同工具（看名册 / 看看板 / 发消息 / 登记等待），**没有读消息**的 → 别人发来的 `question` / `handoff` 模型收不到，等于发了个寂寞 |
-| P2 | MCP 新协议只做了「记账」没做「实现」 | 现在只把「下一代协议 + 到期日」写成状态字段并加门禁双向锁住；真正切过去（无状态路径 / 双栈协商 / 能力声明分叉）是排期项 |
-| P2 | 探活撤员只有单模块测试 | 端到端跑一次要 ≥15 秒（5 秒 × 3 次探活），不适合逐次提交都跑；要覆盖得先给波次引擎开时序注入点 |
-| P3 | 汇总公式把「跳过」算成「通过」 | 本机有 3 个沙箱套件没真跑却显示绿；Linux 真机隔离要以 CI 的 ubuntu 为准，不能拿这个绿当结论 |
-| P3 | 还有一批 P2/P3 小账 | 类型闸在延迟执行时被绕过、中断矩阵两条分支生产不可达、协作模式无运行期分支、`findTeamByRun` 走单列索引导致全表扫、offload 落盘目录可能被系统回收、`filesystem` MCP 默认自启与「原生优先」冲突、登记矩阵看不见条件展开 |
+这批活儿的共同点是**「说的和做的不一致」**——没有一条会让功能不能用，但每一条都让系统对自己的描述不够诚实。
 
----
+| 编号 | 大白话：原来哪里不对 | 现在怎么改的 | 守护 |
+|---|---|---|---|
+| `B-09` | 团队↔run 的反查用 `run_id` 单列过滤，可索引最左列是 `team_id`，等于**每次都在翻整张表**；每个任务翻 4 次，探活还每 5 秒翻一遍 | 加一条 `(run_id, seq)` 索引（迁移 v13）。**没有动原索引**——原索引服务的是「按团队看消息」这条主查询，挪了列序会让那条反过来变慢 | `team-waves` / `team-store` 既有套件 |
+| `B-07` | 中断权限矩阵写了「用户 / 主管 / 成员」三套规则，可入口把身份**写死成用户**，于是主管和成员两条分支、连同「必须填理由」「必须逐次确认」两条判据，**从来没被执行过** | 入口改成读调用方声明的身份（`resolveActor`）：没声明或写了非法值都按「用户」处理（用户本来就是权限最宽的主体，这个回落方向不会放大权限）；显式声明时才走那两条更窄的分支 | `team-interrupt-actor.test.js`（23 条，含端到端拦截验证） |
+| `B-08` | 「协作模式」两个选项只改了一句提示词，代码里**一个分支都没有**——用户以为能改行为，其实改不了 | `select` 模式不再预先生成「谁干哪个任务」的指派表，改成成员按能力自己认领；`lead` 模式保留预置指派。模式从一个说法变成了**可断言的事实**（有没有指派表） | `team-dispatch-plan.test.js`（18 条） |
+| `B-05` | 同类型成员上限挡下的那些人，名单算出来**转身就丢了**；更糟的是快照存的是**全员**，所以被挡下的人照样会被派活 | 快照只存真正参与的人（统筹恒留——因为中断判定、审计署名、成员会话键三处都要在快照里找到它）；被挡下的人和原因进 `runMeta.dispatch` 并随派活消息回传 | 同上（含「统筹被挡仍在册」「收窄为空要回退全员」两条边界） |
+| `B-13` | 超长工具输出的原文写到系统临时目录：macOS 会定期清、重启就空 → 摘要里那句「完整原文已落盘」**可能变成一句空话**；而且永不删除 | 改写到用户数据目录（宿主管），保留 24 小时自动清（`MJCODE_TOOL_OUTPUT_TTL_H` 可调，上限 30 天）。落盘后**回读确认文件真存在**；落不了盘时文案改成「**不会被保存**」，不再含糊 | `tool-outputs.test.mjs`（25 条，含原文逐字节一致） |
+| `A-04` | 「原生优先」只拦「新拉起的 MCP」，而 `filesystem` 是默认常驻的 → 它的读写工具每轮都跟原生文件工具**同框**（白占上下文，还让模型二选一） | 把「原生已覆盖就下架」扩到**已连接**的服务：新增一张显式对照表，组装工具表时把重复的那份摘掉。三条保险：表外一律保留、只列「有同名原生工具」的（`move_file` 不列）、`MJCODE_MCP_NATIVE_OVERLAP=0` 可一键关掉 | `mcp-native-overlap.test.mjs`（19 条，含端到端比对模型真的收到了什么） |
+| `A-03` | 登记矩阵查「实现里有没有这个名字」，而团队工具是**条件注册**的 → 四个工具「登记表全有、交互式运行时一个都没有」，矩阵却判全绿 | 不改匹配串（下次条件注册还会再骗一次），改成**把作用域写成机器可读的声明**，矩阵**实跑两种调用形态**比对键集合：条件注册的集合必须等于声明表（不多不少）、交互式形态下一个都不许出现 | `tool-registration-matrix.test.mjs`（143 → **150** 条） |
+| `L-3` ①审计 | 审计文件「写入侧只能追加」，但**谁都能用编辑器改一行**，改完看不出来——而审计的全部价值就是「事后能证明它没被动过」 | 每行加 `seq` / `prev` / `hash` 组成哈希链，`verifyAuditChain()` 可判定「改过 / 删过 / 插过」。老文件照样能读（记为 legacy，不误报） | `audit-chain-and-defs-pin.test.mjs`（22 条，用**真实篡改**验证） |
+| `L-3` ②定义钉定 | MCP 服务端改了工具定义（加个必填参数、删个工具）时，缓存被直接覆盖，**没有事件可查**，而模型看到的工具表字节变了（前缀缓存被打掉） | 清单记指纹；指纹变了就记一条「定义已变化」审计（含前后指纹 + 新增/移除的工具名）；只在变化时记，不刷噪声 | 同上 |
+| `L-3` ③幂等键 | 全仓确实**没有**幂等键 | **明确不做**：幂等该落在工具级/任务级/请求级是产品决策；本产品实际的重复风险路径是模型重试循环，那条已被「同签名连续失败 4 次强制收尾」+ 写工具审批覆盖。留一条「确认不存在」的断言，防止将来有人**以为**它有 | 同上 |
+| `L-1` CI | 文档说「Linux 隔离以 CI 的 ubuntu 为准」，可 CI **从来没跑过**（`gh run list` 返回空、运行记录 0） | 不伪造结论：改成「无任何验证证据，待 CI 首次运行」，并把复算命令写进文档。**下一轮把它当发布前检查项** | 无法用测试钉（环境事实） |
+
 
 ## 附：关键设计原则速查
 
 1. **单一事实来源**：工具映射、模型形状、审批规则、容量闸、晋升阈值、记忆作用域、工具 assistant 发布路径，均收敛到唯一实现，禁止多分支重复判断。
 2. **fail-closed vs fail-open**：安全类（审批无窗口、非法决策、无人值守交付、工具定义超限时标记不可用）fail-closed；体验类（记忆归档、MCP 预热、salvage）fail-open，不阻塞主任务。**曾经的反例已消除**：`toolLevel()` 的兜底方向原为 fail-open（`|| 'L2'`），第八轮 D-801 已改为 `|| 'L3'` 并由矩阵 ⑤-d 反向断言钉住（见 9.3 节）。
-3. **原生优先**：同能力有原生实现则不拉起 MCP，保证同一次运行两套实现永不同框。**当前有例外**：默认自启的 `filesystem` MCP 与原生读写同框（见 5.3 节）。
+3. **原生优先**：同能力有原生实现则不拉起 MCP，保证同一次运行两套实现永不同框。**已覆盖两条路径**：意图预热（新连接不拉）+ 组装期下架（已连接服务里与原生重复的工具摘掉，`MJCODE_MCP_NATIVE_OVERLAP=0` 可关；见 13.9 的 `A-04`）。
 4. **默认最小权限**：默认自启只含低风险能力；高权能力一律 opt-in。
 5. **进程隔离**：引擎、CUA、沙盒代码各自独立进程，控制崩溃半径。
-6. **门禁即契约**：新增能力必须在引擎 / 通道 / 主进程 / 审批 / 超时 / UI 等环节全量接线，并由登记矩阵测试守护。**已知盲区**：条件展开注册（见 4.4 节）。
-7. **登记 ≠ 生效**：任何登记表、配置表、承诺性的注释，都要有一处机器可读的检查去验证「运行时真的是这样」。未obody 有检查的地方，就是下一次事故的入口。
+6. **门禁即契约**：新增能力必须在引擎 / 通道 / 主进程 / 审批 / 超时 / UI 等环节全量接线，并由登记矩阵测试守护。**条件注册不再是盲区**：作用域登记表 + 按调用形态求值（第八轮 `A-03`）。
+7. **登记 ≠ 生效**：任何登记表、配置表、承诺性的注释，都要有一处机器可读的检查去验证「运行时真的是这样」。没有检查的地方，就是下一次事故的入口。
 8. **宁可承认空转，不要假装生效**：`B-01`（成员配置不生效）、`B-12`（团队记忆链默认空转）、`C-03`（i18n 扫描从未触发）都是同一族问题——它们不报错、不失败，只是悄悄什么都不做。写文档时把这种状态显式标出来。
 9. **快照 vs 事实源**：一切「当前是 N」的表述在活跃开发轮次里都会失真。写进文档的数字必须能指出它的取法命令；拿不出命令的数字不许写。

@@ -154,6 +154,7 @@
   "streamRunFallbackGoal": "（未记录任务目标）",
   "streamProgress": "{done}/{total} 已完成",
   "streamWaves": "{n} 批",
+  "streamDeferred": "{n} 人未参与",
   "streamTasks": "任务轨迹",
   "streamTaskTrace": "处理轨迹",
   "streamTraceCount": "{n} 条轨迹",

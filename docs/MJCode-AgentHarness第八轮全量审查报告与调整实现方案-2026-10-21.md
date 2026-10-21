@@ -195,9 +195,9 @@
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **A-01** | Worker / 定时任务通道的「停止」无法穿透到在途模型请求。工具工厂解构了 `signal` 却从未使用；`scheduledAgentChat(payload)` 单形参、内部自建 controller。交互式通道是对的（`chatStreamOnce(payload, sender, signal, runId)`）→ **是漏接不是设计取舍**。后果：abort 后 in-flight fetch 要等内部流式守卫（最长 15min）才停 |
 | **B-03** | 团队层零端到端 eval。11 个新增测试 100% 是单模块确定性单测，`runGroup` / `finalizeGroup` 在所有 team-* 测试中 0 命中。三条**顺序敏感**不变量无覆盖：探活撤员 vs 失败分支、`team_wait` defer vs 失败分支、组收尾                                                                                  |
-| **B-05** | 类型闸在 deferred 运行期被绕过                                                                                                                                                                                                               |
-| **B-07** | 中断矩阵 lead/member 分支生产不可达（`main.js` 硬编码 `actorKind:'user'`，`reason` / `confirmed` 成惰性参数）                                                                                                                                            |
-| **B-08** | 协作模式 `lead` / `select` 无任何运行期分支                                                                                                                                                                                                    |
+| **B-05** | 类型闸在 deferred 运行期被绕过                                                                                                                                                                                                               （三次收尾已修，见 §8.9） |
+| **B-07** | 中断矩阵 lead/member 分支生产不可达（`main.js` 硬编码 `actorKind:'user'`，`reason` / `confirmed` 成惰性参数）                                                                                                                                            （三次收尾已修，见 §8.9） |
+| **B-08** | 协作模式 `lead` / `select` 无任何运行期分支                                                                                                                                                                                                    （三次收尾已修，见 §8.9） |
 | **C-01** | 军团协同持久化层全部只在未提交工作区。`MIGRATIONS` HEAD=7 / 工作区=12，v8–v12 五个迁移 153 行未提交。按 HEAD 打包，`teams` / `team_members` / `team_messages` / `sub_tasks` 团队列 / `memories` 团队列 / `task_events` **六组结构全部不存在**                                         |
 
 ### 3.3 P2（19 条，摘要）
@@ -891,19 +891,72 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 3. **一轮审查内冻结判据集合**：先按冻结的判据审完、出账，再讨论「要不要加判据」。本轮把「加严」和
    「审查」混在一起做，结果是同一批事实被记了两次（一次当问题、一次当门禁变更）。
 
-### 8.7 项目当前仍未完成的清单（2026-10-21 二次收尾：11 → 3 条）
+### 8.7 项目当前仍未完成的清单（2026-10-21 三次收尾：11 → 8 → 5 → 3 → **0 条**）
 
 > 口径：**只列有明确落点的事**，每条都能指到文件/常量。不含「待讨论」。
-> 销账轨迹：11 条 → 8 条（D-805 / D-807② / D-812）→ 5 条（D-804 / D-806 / B-04）→ **3 条（C-04 + 探活撤员端到端）**。
+> 销账轨迹：11 条 → 8 条（D-805 / D-807② / D-812）→ 5 条（D-804 / D-806 / B-04）→
+> 3 条（C-04 + 探活撤员端到端）→ **0 条（本轮：#1 推送已在每批后完成；#2 七条小账全闭；#3 三项未核已核清并落地两处加固）**。
 
-| # | 事项 | 级别 | 落点 | 现状证据 |
+| # | 事项 | 级别 | 落点 | 收口证据 |
 | --- | --- | --- | --- | --- |
-| 1 | **推送 `origin/main`** | 发布阻塞 | `git push` | 不 push 则制品按旧 HEAD 构建 |
-| 2 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §3.2 / §3.3 | 类型闸 deferred 绕过 / 中断矩阵 lead·member 分支不可达 / 协作模式无运行期分支 / `findTeamByRun` 走 `run_id` 单列但索引左前缀是 `team_id` / offload 落盘目录可被系统回收 / `filesystem` MCP 默认自启与「原生优先」冲突 / 登记矩阵看不见条件展开 |
-| 3 | **L-1 / L-3 未核项 + MCP 新版的附加能力** | P3 | — | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核；MRTR 多轮往返 / 可缓存 list / 正式扩展框架未实现（D-804 的明确非目标） |
+| 1 | 推送 `origin/main` | 发布阻塞 | `git push` | 已在每批提交后执行；`main` 与 `origin/main` 齐平（见 §8.1） |
+| 2 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §8.9 | 七条各自的落点与守护测试见 §8.9（新增 5 个套件） |
+| 3 | **L-1 / L-3 未核项** | P3 | 见 §8.10 | L-1 结论为「CI 从未运行」，如实标注为**不可验证项**；L-3 三项已核清，两项加固、一项明确不做 |
 
-> **最短的一条路**：先做 #1（否则前功尽弃）；#2 按小账逐条收（每条都能独立成 PR）；
-> #3 是「要么核、要么明确不核」的记账项。第八轮已经**没有**「不做就无法发布」的遗留项。
+> **第八轮至此没有任何「有明确落点却未处理」的事项**。仍然存在的只有三类：
+> ①**未逐条展开的 P3**（B-10/B-14/B-15~B-19、A-05~A-09、C-05，共 14 条，见 §3 表尾）——
+> 它们从未进过处置清单，属于「下一轮要不要看」的取舍，不是欠账；
+> ②**判据随主流移动**（MCP 代际，状态字段 + 到期日已建）；
+> ③**环境不可验证**（Linux 沙箱隔离需 CI，而 CI 从未运行，见 §8.10）。
+
+### 8.9 第三条收尾：七条 P2/P3 小账（2026-10-21 三次收尾）
+
+这批的共同特征是「**声明与实现不符**」或「**产出了但没落地**」——没有一条会导致功能不可用，
+但每一条都让系统对自己的描述不够诚实。逐条改法与落点：
+
+| 编号 | 缺陷（一句话） | 改法（关键决策） | 落点 | 守护 |
+| --- | --- | --- | --- | --- |
+| **B-09** | `findTeamByRun` 走 `run_id` 单列过滤，而索引左前缀是 `team_id` ⇒ 全表扫；每任务 4 次 + 探活每 5s×每组 | 新增迁移 v13 `idx_team_messages_run(run_id, seq)`。**不动原索引**：`idx_team_messages_bus` 服务的是「按团队取总线」主查询，挪走 `team_id` 会让那条反过来退化。带 `seq` 是为了让「取最新一条 / MAX(seq)」只读索引不回表 | `main/db/index.js` | `team-waves` / `team-store` 既有套件 |
+| **B-07** | 中断矩阵的 `lead`/`member` 分支**生产不可达**（入口硬编码 `actorKind:'user'`），理由/逐次确认两处判据是死代码 | 新增 `resolveActor(payload)`：**显式声明式**解析（未声明/非法回落 `user`）。回落方向是刻意的——`teams:interrupt` 是用户点按钮的通道，判不出来必须按最宽主体，否则用户自己的中断会被矩阵拒掉；而「允许声明 lead/member」不提权（渲染层本就能声明 user） | `main/teamInterrupt.js`、`main/main.js` | `team-interrupt-actor.test.js`（23 条，含端到端：无理由⇒`REASON_REQUIRED`／未确认⇒`NEED_CONFIRM`／自我中止⇒`LEAD_SELF_FORBIDDEN`） |
+| **B-08** | 协作模式 `lead`/`select` 只影响提示词一句话，**零运行期分支** | `select` ⇒ **不产出预置指派表** ⇒ `preferredOwnerOf` 返回 null ⇒ `workerPool` 走 `pickOwnerMember` 被动认领。模式从「一句话」变成「有没有指派表」这个**可断言的事实** | `main/teamDispatchPlan.js`（新增） | `team-dispatch-plan.test.js`（18 条，含两模式批次计划一致） |
+| **B-05** | 类型闸 `deferred` 产出即丢弃；更实质的是**快照用全量名册** ⇒ 被挡住的人运行期照样被派活 | 快照只装参与成员（`activeMemberIds` 子集），**统筹恒留**——不是特权：中断矩阵的 `actorRoleKind`、审计名解析、成员会话键三处都从快照取它；`deferred` + `caps` 进 `runMeta.dispatch` 并回传派活消息 | `main/teamDispatchPlan.js`、`main/ipc/teams.js`、`main/teamWaves.js` | 同上（`typeCap` 挡下者不在快照内／统筹被挡仍在册／收窄为空回退全量） |
+| **B-13** | 长输出 offload 落 `$TMPDIR`：**会话内可失效**（系统清理/重启），且永不删除 | 目录改由宿主注入 `MJCODE_TOOL_OUTPUT_DIR`（userData 下），**用环境变量而不是 `runAgent` 新参数**——引擎有 in-process 与子进程两条装配路径，加参数就多一个可能失配的接缝；子进程天然继承环境。写后**自检存在性**（写成功≠可读），落盘失败文案改成「**不会被保存**」而不是含糊的「无法落盘」；保留期 24h（`MJCODE_TOOL_OUTPUT_TTL_H` 可调，上限 30 天） | `main/toolOutputs.js`（新增）、`agent-core/index.js`、`main/main.js` | `tool-outputs.test.mjs`（25 条，含「原文逐字节一致」「过期删/未过期留」两方向） |
+| **A-04** | `filesystem` MCP 默认常驻已连接，「原生优先」只拦新连接 ⇒ 与原生文件工具**同 run 同框** | 把「原生覆盖下架」扩到**已连接**服务：`shared/mcpNativeOverlap.mjs` 声明「哪些 server 的哪些 tool 已被原生覆盖」，在 allTools 组装处与 `__blocked__` 同机制下架（只减不增、绝不抛异常，日志与「太大」分开打）。三条约束：**只认显式声明**（表外一律保留）、**只列有一对一原生对应**（`move_file` 不列，shell 能做不算覆盖）、**可回退**（`MJCODE_MCP_NATIVE_OVERLAP=0`）。显式白名单点名的工具**豁免**（显式声明优先于默认策略） | `shared/mcpNativeOverlap.mjs`（新增）、`agent-core/index.js` | `mcp-native-overlap.test.mjs`（19 条，含端到端比对下发到 `chat` 的 tools） |
+| **A-03** | 登记矩阵第③环节是「在 handler 源码区间 grep 通道名」，条件展开的字面量照样命中 ⇒ 四个 `team_*` **登记全有、交互式一个没有**，矩阵却判全绿 | 不改匹配串（下次条件展开还会再骗一次），而是把「作用域」变成**机器可读事实**（`registry.MEMBER_TASK_ONLY_CHANNELS` / `ENGINE_BUILTIN_TOOLS`），矩阵改为**实跑两种调用形态**比对键集合：`条件展开集合 === 声明表`（不多不少）+ 交互式不得出现 member-task 通道 + 成员任务形态必须真有 | `main/engineProcess/registry.js`、`test/tool-registration-matrix.test.mjs`（143 → **150** 条） | 已做变异验证：删掉 `teamReadMessages` 一行 ⇒ **4 条红**（含 ③-a/③-c），还原即绿 |
+
+两条顺带修的连带项：
+
+- `planWaves` 的返回值补 `caps`（闸门取值随计划走），否则界面只能说「3 人未参与」，说不出「因为同类型上限 2」。
+- `main/ipc/teams.js` 在装配逻辑外移后 **798 → 790 行**（`BASELINE_800` 仍 3 条，未动基线）。
+
+### 8.10 第三项：L-1 / L-3 未核项核查结论（2026-10-21）
+
+**L-1（CI 绿红）——结论：不可验证，因为它从未运行过。**
+
+```bash
+gh run list --limit 8 --json databaseId,status,conclusion   # → []
+gh api repos/jasonma1210/MJCoder/actions/workflows          # → CI / state=active
+gh api "repos/.../actions/workflows/384543797/runs"         # → {"total_count":0}
+gh api repos/jasonma1210/MJCoder/actions/permissions        # → {"enabled":true}
+```
+
+工作流存在、状态 `active`、Actions 权限开着，**运行记录为 0**。也就是说文档里那句
+「真实隔离能力以 CI 的 ubuntu-latest runner 为准」目前是**空头承诺**——没有任何一次运行可以引用。
+诚实的表述只能是：**沙箱 fail-closed 的判定逻辑本机已验证；真实命名空间隔离「无任何验证证据，待 CI 首次运行」**。
+处置：不伪造结论；把「CI 是否有史以来跑过」写成一条可现算的命令（上面的 `gh run list`），
+并在下一轮把它作为**发布前必须有一次绿色运行**的检查项（需要用户决定是否开私有仓 Actions 分钟数）。
+
+**L-3（三项属性）——结论：两项已加固、一项明确不做。**
+
+| 属性 | 核前事实 | 本轮处置 |
+| --- | --- | --- |
+| **审计不可改写** | 写入侧**只有 append**（`appendFileSync`，模块不导出 update/delete）⇒ 「不可改写」在 API 层成立；但**文件无任何防篡改证据**，改一行/删一行事后看不出来 | 补哈希链：每行 `seq` + `prev` + `hash`（`sha256(prev \| 行体)`），导出 `verifyAuditChain()`。**只加字段不改语义**：老行记为 legacy（升级不误报）；滚动到 `.1` 时新代重新起链（每代一条独立链）。用**真实篡改**验证：改内容 / 删中间行 / 链中插无 hash 行——三种全部检出并指到 `seq` |
+| **工具定义钉定** | 清单缓存只有 `{tools, updatedAt}`，无指纹无版本 ⇒ 服务端静默改定义时磁盘清单被直接覆盖、**无事件可查**，而模型看到的是变了字节的工具表（打掉前缀缓存） | `saveManifest` 记 `fingerprint`（排序后逐工具 `name\0desc\0schema` 的 SHA-256），指纹变化时记一条 `mcp_tool_defs_changed`（含前后指纹、新增/移除工具名、`schemaOnly` 标记）。只在**变化**时记，首次写入与定义未变都不产生噪声 |
+| **幂等键** | 全仓 0 命中（`main/` `agent-core/` `shared/` 全量检索 `idempotent\|idempotency_key`）⇒ **不存在** | **明确不做**，理由记在此处：幂等该落在哪一层是产品决策（工具级 / 任务级 / 请求级），而「重放同一个写操作」在本产品的实际风险路径是模型重试循环——那条已被 `REPEAT_FAIL_STOP`（同签名连续失败 4 次强制收尾）与写工具审批覆盖。在没有明确失败案例前引入幂等键，等于给所有工具加一层没人读的状态。守护套件里留一条「确认不存在」的断言，防止将来有人**以为**它有 |
+
+守护：`test/audit-chain-and-defs-pin.test.mjs`（22 条）。其中 L-1 的结论无法用测试钉住（它是环境事实），
+因此写成 §8.10 的现算命令 + 下一轮检查项。
+
 
 ### 8.8 收尾两项（C-04 汇总口径 / 探活撤员端到端，2026-10-21）
 

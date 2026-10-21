@@ -154,6 +154,7 @@
   "streamRunFallbackGoal": "(No goal recorded)",
   "streamProgress": "{done}/{total} done",
   "streamWaves": "{n} wave(s)",
+  "streamDeferred": "{n} not dispatched",
   "streamTasks": "Task trail",
   "streamTaskTrace": "Progress trace",
   "streamTraceCount": "{n} step(s)",

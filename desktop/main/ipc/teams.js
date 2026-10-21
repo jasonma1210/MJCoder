@@ -28,9 +28,10 @@ const guard = require('./payloadGuard');
 const { resolveEmployeeById } = require('./ecosystem');
 const { buildEmployeeRuntimePreset, ROLE_TOOL_ALIASES } = require('../ecosystem');
 const { normalizeMemberInput, normalizeBudget, SYSTEM_RUN_ID, dispatchGate, MAX_MEMBERS_PER_TEAM } = require('../teamStore');
-// M5 / T5-12：批次编排（§13.4）——纯策略层，派活时把名册与拆解结果交给它产出 wave 计划，
-// 运行期由 workerPool 消费 dag_json.waves 做批次门控与探活。
-const { planWaves: planTeamWaves, MAX_ACTIVE_MEMBERS, MAX_PER_TYPE_IN_RUN } = require('../teamWaves');
+// M5 / T5-12：批次编排（§13.4）——闸门取值仍取 teamWaves 这一份；计划装配本身
+// 已抽到 main/teamDispatchPlan.js（第八轮 B-05/B-08），运行期由 workerPool 消费 dag_json.waves。
+const { MAX_ACTIVE_MEMBERS, MAX_PER_TYPE_IN_RUN } = require('../teamWaves');
+const { buildDispatchPlan } = require('../teamDispatchPlan');
 const { toChatRequest, resolveModelRef, decodeModelRef } = require('../modelShape');
 // M5 / T5-6：会话团队事件流的纯装配内核（与渲染层投影共用同一份 shared 模块）。
 //
@@ -555,7 +556,11 @@ function register() {
       // M5 / T5-12（§13.4）：批次计划。参与名册 = 本次被选中的成员（受人数闸/类型闸约束），
       // 由 planWaves 决定「先起哪一小批」并把任务指派给成员；计划随 dag_json 落库，运行期读取。
       // 名册为空的极端情况（理论上 dispatchGate 已拦）由 planWaves 自己兜底，不影响拆解。
+      // 第八轮 B-05 / B-08：装配逻辑搬到 main/teamDispatchPlan.js —— 那里同时修掉
+      // 「类型闸 deferred 被运行期绕过」（快照收窄到参与成员）与「select 模式没有运行期分支」
+      // （不预置指派表 ⇒ 走被动认领）。本文件只负责把结果交给编排器并留下可观测记录。
       const roster = (team.members || []).filter((m) => memberIds.includes(m.id));
+      let dispatchPlan = null;
       const r = await deps.orchestrator.planGoal({
         goal,
         cwd: projectPath,
@@ -563,15 +568,10 @@ function register() {
         contextBlock,
         threadId: payload.threadId,
         // T5-9：批次计划与**编制快照**同批产出；快照随 dag_json 落库，运行期不再读实时名册。
-        planWaves: ({ tasks }) => ({
-          ...planTeamWaves({ tasks, members: roster }),
-          roster: snapshotRoster(roster),
-          // 第八轮 B-02 / D-809：组级三键预算随 dag_json 落库。
-          // 此前 budget **只进了派活消息与提示词文案**，runGroup 根本读不到 ⇒ 运行期零强制点。
-          // 走 runMeta（不透明元数据）而不是新增 group 列：编排器零改动、无需迁移、
-          // 且与 roster 同一条落库路径（run 级快照，运行期只读，保证可复现）。
-          runMeta: { budget },
-        }),
+        planWaves: ({ tasks }) => {
+          dispatchPlan = buildDispatchPlan({ tasks, roster, budget, mode });
+          return dispatchPlan;
+        },
       });
       if (!r.ok) return { ok: false, code: 'PLAN_FAILED', error: `${DISPATCH_ERRORS.PLAN_FAILED}：${r.error}` };
 
@@ -594,13 +594,21 @@ function register() {
             ? r.waves.map((w) => ({ index: w.index, tasks: w.taskIds.length }))
             : null,
           caps: { maxActive: MAX_ACTIVE_MEMBERS, maxPerType: MAX_PER_TYPE_IN_RUN },
+          // 第八轮 B-05：类型闸/人数闸挡下的成员与原因。此前 this 信息产出即丢弃，
+          // 用户永远看不到「20 人里只派了 10 人、其中 3 人同类型超限」——可观测性空洞。
+          active: dispatchPlan ? dispatchPlan.activeMemberIds.length : null,
+          deferred: dispatchPlan ? dispatchPlan.deferredMembers : null,
         },
       });
       audit('team_dispatch', payload.teamId, `run=${r.groupId} mode=${mode} tasks=${r.tasks.length}`
-        + `${Array.isArray(r.waves) ? ` waves=${r.waves.length}` : ''}`);
+        + `${Array.isArray(r.waves) ? ` waves=${r.waves.length}` : ''}`
+        + `${dispatchPlan?.deferredMembers?.length ? ` deferred=${dispatchPlan.deferredMembers.length}` : ''}`);
       emitTeamsEvent({
         type: 'team_dispatch', teamId: payload.teamId, runId: r.groupId, goal, tasks: r.tasks.length,
         waves: Array.isArray(r.waves) ? r.waves.length : 0,
+        mode,
+        active: dispatchPlan ? dispatchPlan.activeMemberIds.length : 0,
+        deferred: dispatchPlan ? dispatchPlan.deferredMembers : [],
       });
       // 后台执行（不 await）：调用方立即拿回派活结果，执行进度经既有 tasks:event 流到 AgentDock。
       Promise.resolve(deps.workerPool.runGroup(r.groupId)).catch((e) => {

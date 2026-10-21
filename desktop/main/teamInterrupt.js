@@ -19,6 +19,19 @@
 // `teams:interrupt` IPC 完成；本模块同时保留 lead/member 两条策略路径，供后续
 // 「成员 run 审批通道」落地后直接复用（策略与执行分离，避免届时重写）。
 //
+// ── 第八轮 B-07：lead / member 分支的「预置策略」标注（勿删）────────────────
+//   改前唯一入口 `main.js` 把它硬编码成 `actorKind:'user'`，于是 lead/member 两条分支、
+//   以及 `REASON_REQUIRED` / `NEED_CONFIRM` 两处判据在生产**永远走不到**，`teams:interrupt`
+//   传进来的 `confirmed` 没有人检查——治理承诺（§9.2 两条硬约束）与实现不符的死代码。
+//   现在改为**显式声明式**：入口经 `resolveActor(payload)` 解析发起方，未声明/非法一律回落
+//   `user`（fail-closed —— user 是权限最宽的主体，回落不会放大权限）；调用方显式传
+//   `actorKind:'lead'|'member'` 时两条分支立即生效，理由与逐次确认判据随之为真。
+//   安全边界：`teams:interrupt` 只有渲染层调得到，而渲染层本就能声明 `user`（全权）——
+//   所以「允许声明 lead/member」不会带来任何提权面，只是让更**窄**的主体可被表达，
+//   从而让审计串里的 actor 与真实意图一致（此前恒为 'user'，将来接通道时历史语义会漂移）。
+//   仍未接线的那一半：**模型侧**中断通道（成员 run 审批）尚未落地，届时直接把
+//   `actorKind` 从成员会话维度带进来即可，矩阵本身无需改动。
+//
 // 中断 ≠ 删除：任务产物（result.artifacts）在中断时写入审计消息的 refs，数据保留可追溯。
 const { TERMINAL_TASK_STATUSES } = require('./taskStore');
 
@@ -42,6 +55,33 @@ const INTERRUPT_ERRORS = {
 };
 
 let deps = null;
+
+/** 中断发起方白名单（§9.2 三主体）：矩阵与 IPC 共用这一份，避免两处各写一串字面量。 */
+const ACTOR_KINDS = ['user', 'lead', 'member'];
+
+/**
+ * 发起方解析（IPC 入参 → 矩阵入参）。第八轮 B-07 —— 让 lead/member 分支真正可达。
+ *
+ * 三条硬规则：
+ *   ① 未声明 `actorKind` → `'user'`。**默认值必须是最宽的那个**：本文件其它地方
+ *      随处可见的 fail-closed 是「判不出来就拒绝」，而这里是「判不出来就当作最有权限的人」——
+ *      看似相反，其实同源：`teams:interrupt` 是**用户点按钮**发起的通道，用户本来就是主权方；
+ *      把「没写 actorKind」判成 member 会让用户的正常中断被矩阵拒掉（体验事故）。
+ *   ② 声明了但不在白名单 → 同样回落 `'user'`，并由 `interruptTask` 之外的调用方决定是否拒绝。
+ *      这里不直接抛错：非法值多半是渲染层版本错位，宁可按既有语义放行用户的中断。
+ *   ③ `actorKind==='user'` 时 `actorMemberId` 一律清空 —— 审计串里不该出现「用户 + 某个成员 id」
+ *      这种自相矛盾的组合（旧实现靠入口硬编码掩盖，放开入参后必须显式清理）。
+ *
+ * @param {{actorKind?:string, actorMemberId?:string|null}} payload
+ * @returns {{actorKind:'user'|'lead'|'member', actorMemberId:string|null}}
+ */
+function resolveActor(payload = {}) {
+  const raw = payload && typeof payload === 'object' ? payload.actorKind : null;
+  const actorKind = ACTOR_KINDS.includes(raw) ? raw : 'user';
+  const memberId = actorKind === 'user' ? '' : String(payload?.actorMemberId || '');
+  return { actorKind, actorMemberId: memberId || null };
+}
+
 
 /**
  * 注入依赖（与其它主进程模块同款 initXxx 风格）。
@@ -150,7 +190,7 @@ function interruptTask({
   const taskStore = deps.getTaskStore?.();
   const teamStore = deps.getTeamStore?.();
   if (!taskStore || !teamStore) return fail('UNAVAILABLE');
-  if (!['user', 'lead', 'member'].includes(actorKind)) return fail('INVALID_ACTOR');
+  if (!ACTOR_KINDS.includes(actorKind)) return fail('INVALID_ACTOR');
 
   const group = taskStore.getGroup?.(runId);
   if (!group) return fail('RUN_NOT_FOUND');
@@ -237,5 +277,6 @@ function interruptTask({
 }
 
 module.exports = {
-  initTeamInterrupt, checkInterruptPermit, interruptTask, resolveRoster, INTERRUPT_ERRORS,
+  initTeamInterrupt, checkInterruptPermit, resolveActor, interruptTask, resolveRoster,
+  ACTOR_KINDS, INTERRUPT_ERRORS,
 };

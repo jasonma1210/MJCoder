@@ -92,6 +92,9 @@ interface TeamStreamCard {
   summary: string;
   error: string;
   waves: number;
+  // 第八轮 B-05：派活计划口径——参与人数 / 被闸门挡下的人数 / 挡下的原因码（typeCap|memberCap）。
+  // 缺键（旧 run、普通编排组）时全为 0 / 空，界面按 0 不展示。
+  dispatch?: { mode: string; active: number; deferred: number; deferredReasons: string[] };
   createdAt: number;
   updatedAt: number;
   lastActivityAt: number;
@@ -244,6 +247,10 @@ function TeamRunCard({ card, defaultOpen, onOpenBoard, onOpenFile }: {
   const running = card.progress.running || 0;
   const waiting = card.progress.waiting || 0;
   const waves = card.waves > 0 ? t('teams.streamWaves', { n: card.waves }) : '';
+  // 第八轮 B-05：被人数闸/类型闸挡下的成员数。只显示人数，原因码（typeCap / memberCap）
+  // 走 title 提示——折叠态挤不下第三种文案，而「有几个没上」才是用户第一眼要看的。
+  const deferred = card.dispatch?.deferred || 0;
+  const deferredHint = (card.dispatch?.deferredReasons || []).join(' / ');
 
   return (
     <details
@@ -262,6 +269,11 @@ function TeamRunCard({ card, defaultOpen, onOpenBoard, onOpenFile }: {
           {card.goal || t('teams.streamRunFallbackGoal')}
         </span>
         {waves && <span className="text-caption text-text2 shrink-0">{waves}</span>}
+        {deferred > 0 && (
+          <span className="text-caption text-text2 shrink-0" title={deferredHint || undefined}>
+            {t('teams.streamDeferred', { n: deferred })}
+          </span>
+        )}
         {running > 0 && (
           <span className="text-caption text-accent shrink-0">{t('teams.streamRunning', { n: running })}</span>
         )}

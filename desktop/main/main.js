@@ -287,6 +287,8 @@ registerDiagExportIpc();
 // T3-1：大消息 IPC 可靠传输——超限工具结果落临时文件+句柄分页（agentRunner 发送前卸载）；
 // 大文件预览改 mjpreview:// 流式协议（scheme 特权注册必须早于 app ready）
 const bigPayload = require('./bigPayload');
+// 第八轮 B-13：工具长输出落盘目录（userData/tool-outputs + TTL 清扫）
+const toolOutputs = require('./toolOutputs');
 // T1（2026-10-17）：流式三层守卫（首字节 / 空闲 / 单轮总时长）。
 // 替代原来的 AbortSignal.timeout(125000)——那是「总时长」语义，会把推理模型
 // （mimo 等思考阶段长时间无正文）误判成「无响应」并整轮杀掉。
@@ -299,6 +301,15 @@ streamSettings.initStreamSettings({ getLocalStore: () => localStore });
 const { createScheduledChannels } = require('./scheduledChannels');
 bigPayload.initBigPayload({ dataDir: app.getPath('userData') });
 bigPayload.registerBigPayloadIpc(ipcMain);
+// 第八轮 B-13：工具长输出的落盘目录（会话级、可回收）。
+// 必须早于任何 runAgent 初始化：引擎读 `MJCODE_TOOL_OUTPUT_DIR` 决定落盘位置，
+// 而子进程继承父进程环境变量——在这里设一次，in-process 与子进程两条路径同值。
+try {
+  toolOutputs.initToolOutputs({ dataDir: app.getPath('userData') });
+} catch (e) {
+  // 目录不可用不得阻断启动：引擎会回落到系统临时目录（旧行为），只是「会话内可失效」的风险回来。
+  console.warn('[toolOutputs] 初始化失败（工具长输出回落系统临时目录）:', e?.message || e);
+}
 const previewScheme = require('./previewScheme');
 previewScheme.registerPreviewSchemePrivileges();
 ipcMain.handle('checkpoint:get', (_, threadKey) => checkpointStore.getCheckpoint(threadKey));
@@ -1588,7 +1599,9 @@ initTeamsIpc({
   getMemoryManager: () => memoryManager,
   // M5 / T5-10：中断入口（teams:interrupt）。用户主体经此进入统一矩阵；
   // 策略/执行/留痕全在 teamInterrupt 内，IPC 层不复制任何权限判断。
-  interruptTask: (p) => teamInterrupt.interruptTask({ ...p, actorKind: 'user' }),
+  // 第八轮 B-07：不再硬编码 'user' —— 交 `resolveActor` 解析（未声明/非法回落 user，fail-closed），
+  // 否则 lead/member 两条分支与理由/逐次确认两处判据在生产永远走不到（治理承诺变死代码）。
+  interruptTask: (p) => teamInterrupt.interruptTask({ ...p, ...teamInterrupt.resolveActor(p) }),
 });
 
 // M5 / T5-10：中断模块依赖注入（必须在 initTeamsIpc 之后——postTeamMessage 的 deps 即由

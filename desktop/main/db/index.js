@@ -336,6 +336,27 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    // 第八轮 B-09（2026-10-21）：`run_id` 单列反查的索引。
+    //
+    // 缺陷：唯一索引是 idx_team_messages_bus(team_id, run_id, seq)，最左列是 team_id；
+    //   而 `findTeamByRun` / `latestSeqForRun` / `listMessagesByRuns` 全部按 `WHERE run_id = ?`
+    //   过滤 —— 用不上该索引的最左前缀，退化为全表扫。`findTeamByRun` 在**每个 Worker 任务**
+    //   上被调用 4 次（名册/上下文/提示词/记忆），探活还每 5 秒对每个在跑组调一次
+    //   `latestSeqForRun`，形成「每 5 秒 × 每组 × 全表扫」的固定负载。
+    //
+    // 为什么另建一条而不是改原索引：原索引服务的是「按团队取总线」这条主查询（团队看板/消息流），
+    //   它的列序是对的；把 team_id 从最左列挪走会让那条查询反过来退化。两条各服务一条查询形态，
+    //   写入成本增加有限（消息总线是低频写入，seq 单调无随机页分裂）。
+    //
+    // (run_id, seq) 而非只 run_id：查询都是「取最新一条」（ORDER BY seq DESC LIMIT 1）或
+    //   `MAX(seq)`，带 seq 可让这两类查询只读索引、不回表。
+    version: 13,
+    name: 'team-message-run-index',
+    up: (db) => {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_team_messages_run ON team_messages(run_id, seq)');
+    },
+  },
 ];
 
 function openDb(dataDir) {

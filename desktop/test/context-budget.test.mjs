@@ -312,9 +312,11 @@ await checkAsync('③c 缺口1：**每次** run 的 run_start 都带采样，且
   const tools = [fnTool('tiny')];
   // 混用「编码后」与「改前格式」的同一个服务名（两代拼名必须去重成 1 个服务），
   // 外加一个服务名自身含 `__` 的服务（编码后为 my%5F%5Fsvc）——服务数按 decodeToolName 反推。
+  // 第八轮 A-04 注意：这里**不能**用 read_file / list_dir 这类被原生覆盖的工具名 ——
+  // 它们会被「原生优先」下架，工具表字节与条数都不再等于本测试独立现算的值（测量对象换了）。
   const mcpTools = [
-    fnTool(buildToolName('filesystem', 'read_file')),
-    fnTool('mcp__filesystem__list_dir'),
+    fnTool(buildToolName('filesystem', 'move_file')),
+    fnTool('mcp__filesystem__move_file'),
     fnTool(buildToolName('my__svc', 'x')),
   ];
   const expectedBytes = toolTableByteSize([...tools, ...mcpTools]); // 独立现算，不复用引擎内部值

@@ -1541,6 +1541,9 @@ import {
 // `mcp__my__svc__x` 被解成 server=`my` / tool=`svc__x` —— 工具调用被**静默路由到另一个服务**。
 // 现在唯一编解码实现来自 shared/mcpNameCodec.mjs（服务名片段编码后不含 `_`，分隔符唯一）。
 import { decodeToolName } from '../shared/mcpNameCodec.mjs';
+// 第八轮 A-04：原生已覆盖的 MCP 能力表（纯常量 + 纯函数，零依赖，与 contextBudget 同构）。
+// 只在这里使用「过滤」部分：判定谁重复由 shared 模块说，何时下架由本文件的组装点决定。
+import { filterNativeOverlapped, NATIVE_OVERLAP_ENV } from '../shared/mcpNativeOverlap.mjs';
 
 // P2-8 / V-L1（N1/N3）：工具执行事实台账的构造器与规则引擎——与 shared/untrustedContent.mjs
 // 同一「跨宿主共享单一事实来源」模式：桌面端/CLI/eval 都从这里取同一份判定与同一种记录形状。
@@ -2105,6 +2108,43 @@ export const TOOL_OUTPUT_HEAD = 2500;
 export const TOOL_OUTPUT_TAIL = 3500;
 export const PASS_COLLAPSE_RUN = 20;
 
+// ── 第八轮 B-13：落盘目录（会话级、可回收）──────────────────────────────────
+// 改前固定写 `${TMPDIR}/mjcode-tool-outputs`，有两个问题：
+//   ① **会话内可失效**：macOS 会周期性清理 `$TMPDIR`、重启即清空。分层压缩（先 offload
+//      再 summarize）的**前提**是「原文在整个会话生命周期内能被 read_file 取回」——
+//      路径中途变成 ENOENT 时，模型分不清「本来就没这个文件」和「已经没了」，
+//      表现就是「摘要说详情见某路径，去读却报不存在」。
+//   ② **反向的磁盘泄漏**：长会话反复落盘且永不删除。
+// 修法：目录不再由引擎自己拍，改由宿主决定（`main/toolOutputs.js` 在启动时把
+//   userData 下的持久目录写进 `MJCODE_TOOL_OUTPUT_DIR`），本模块只读环境变量。
+//   为什么用环境变量而不是新增 `runAgent` 参数：引擎有 in-process 与子进程**两条**装配路径，
+//   加参数要同时改两处序列化（engineParams / childEntry），等于多一个可能失配的接缝；
+//   环境变量被子进程天然继承，一处设置两条路径同值。
+//   「永不删除」那一半由宿主侧的 TTL 清扫兜住（保留期见 main/toolOutputs.js）。
+export const TOOL_OUTPUT_DIR_ENV = 'MJCODE_TOOL_OUTPUT_DIR';
+
+/**
+ * 长输出落盘的根目录。
+ * 未注入（渲染层直连引擎 / 单测）时回落系统临时目录——保持旧行为，绝不因缺配置抛错。
+ * @param {Record<string,string>} [env]
+ * @returns {string}
+ */
+export function toolOutputBaseDir(env = globalThis.process?.env || {}) {
+  const configured = String(env[TOOL_OUTPUT_DIR_ENV] || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  const tmp = String(env.TMPDIR || env.TEMP || '/tmp').trim() || '/tmp';
+  return `${tmp.replace(/\/+$/, '')}/mjcode-tool-outputs`;
+}
+
+/** 落盘文件名片段：只留安全字符，压缩连续点（`../` 清洗后仍可能剩 `..`）。 */
+function safeFileSegment(input, maxLen) {
+  return String(input == null ? '' : input)
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/\.{2,}/g, '_')
+    .slice(0, maxLen);
+}
+
+
 // 折叠连续「通过用例」行（✓/✅/PASS/ok/通过…）：超过 maxRun 连续命中 → 中段折叠为一行汇总
 export function collapsePassLines(text, maxRun = PASS_COLLAPSE_RUN) {
   const lines = String(text ?? '').split('\n');
@@ -2131,7 +2171,8 @@ export function collapsePassLines(text, maxRun = PASS_COLLAPSE_RUN) {
 
 // 长输出摘要化入口。仅处理纯字符串结果，或带 stdout/content/result 字段的对象结果；
 // 其余结构原样返回（走既有 truncateToolResult 兜底）。fs 不可用时只折叠不落盘。
-export async function summarizeToolOutput(result, toolName = 'tool') {
+// opts.scope：落盘文件的作用域前缀（会话/任务 id）。只影响文件名，不改变目录策略。
+export async function summarizeToolOutput(result, toolName = 'tool', { scope = '' } = {}) {
   const pick = (r) => {
     if (typeof r === 'string') return { obj: null, field: null, text: r };
     if (r && typeof r === 'object') {
@@ -2169,10 +2210,16 @@ export async function summarizeToolOutput(result, toolName = 'tool') {
   try {
     const fs = await ensureNodeFs();
     if (fs) {
-      const dir = `${process.env.TMPDIR || process.env.TEMP || '/tmp'}/mjcode-tool-outputs`;
+      const dir = toolOutputBaseDir();
       fs.mkdirSync(dir, { recursive: true });
-      fullOutputPath = `${dir}/${Date.now()}-${String(toolName).replace(/[^\w-]/g, '_')}.txt`;
+      const scopeSeg = safeFileSegment(scope || 'default', 64) || 'default';
+      const toolSeg = safeFileSegment(toolName, 60) || 'tool';
+      fullOutputPath = `${dir}/${scopeSeg}__${Date.now()}-${toolSeg}.txt`;
       fs.writeFileSync(fullOutputPath, hit.text, 'utf8');
+      // 写后自检：`writeFileSync` 不抛 ≠ 文件可读（目录被替换、FS 延迟落盘、只读挂载都可能
+      // 静默产出空壳）。摘要里给出的路径是**对模型的承诺**，兑现不了就必须在前面说清楚，
+      // 不能让模型拿着一句「已落盘」跑到 read_file 里撞 ENOENT。
+      if (!fs.existsSync(fullOutputPath)) fullOutputPath = '';
     }
   } catch (e) {
     console.warn('[agent] 长输出落盘失败（仅头尾保留）:', e.message);
@@ -2183,7 +2230,9 @@ export async function summarizeToolOutput(result, toolName = 'tool') {
   const tail = folded.slice(-TOOL_OUTPUT_TAIL);
   const note = [
     `……[长输出摘要化：原文共 ${hit.text.length} 字符，仅保留折叠后头 ${head.length} + 尾 ${tail.length} 字符。`,
-    fullOutputPath ? `完整原文已落盘：${fullOutputPath}（需要细节时用 read_file 读取该路径）` : '（当前环境无法落盘，如需更多内容请用 grep/offset 分段获取）',
+    fullOutputPath
+      ? `完整原文已落盘：${fullOutputPath}（需要细节时用 read_file 读取该路径；该文件在本机保留期内有效，过期会被自动清理）`
+      : '（当前环境未能落盘：这段原文**不会被保存**，需要更多内容请现在就用 grep / offset 分段获取）',
     ']……',
   ].join(' ');
   const summarized = `${head}\n${note}\n${tail}`;
@@ -2594,6 +2643,26 @@ export async function runAgent({
       usableMcpTools = mcpTools.filter((t) => !blocked.includes(t));
       const names = blocked.slice(0, 5).map((t) => t?.function?.name).filter(Boolean);
       console.warn(`[agent] 因 schema 超限下架 ${blocked.length} 个 MCP 工具（${names.join(',') || '名称缺失'}）：工具定义不进模型上下文，调用会被拒绝`);
+    }
+  }
+  // ── 第八轮 A-04：把「原生优先」从意图预热扩展到**已连接**的服务 ──
+  // 改前只拦「意图预热时新增的连接」，而 `filesystem` 属懒启动白名单、默认常驻连接，
+  // 于是它的 read/write/list 工具每轮与原生 `read_file/write_file/edit_file/list_dir/grep/glob`
+  // 同框（上下文税 + 模型选择歧义，写入台账口径也可能因此漏计）。
+  // 与上面 schema 超限下架**同一处、同一纪律**（只减不增、绝不抛异常），但理由与日志分开打：
+  // 排查时要能一眼区分「太大」与「重复」。关闭本机制：MJCODE_MCP_NATIVE_OVERLAP=0。
+  if (Array.isArray(usableMcpTools) && usableMcpTools.length) {
+    // 显式豁免：角色白名单里点名的 MCP 工具不按「重复」删——显式声明优先于默认策略。
+    const explicit = new Set(
+      (Array.isArray(rolePreset?.toolNames) ? rolePreset.toolNames : []).map(String),
+    );
+    const { kept, removed } = filterNativeOverlapped(usableMcpTools, decodeToolName, {
+      exempt: (fullName) => explicit.has(fullName),
+    });
+    if (removed.length) {
+      usableMcpTools = kept;
+      const names = removed.slice(0, 5).map((r) => `${r.server}.${r.tool}→${r.native}`);
+      console.warn(`[agent] 因原生工具已覆盖下架 ${removed.length} 个 MCP 工具（${names.join(',')}）：同一次 run 内不与原生实现同框（关闭本机制设 ${NATIVE_OVERLAP_ENV}=0）`);
     }
   }
   let allTools = [...effectiveBaseTools, ...usableMcpTools];
@@ -3652,7 +3721,11 @@ export async function runAgent({
         onToolCall?.({ name: tc.function.name, args: toolArgs, result: toolResult });
         // P1-B：截断带标记；对象结果逐字段裁剪保持 JSON 完整，不在中间下刀
         // Phase 3-3：超长输出先摘要化（PASS 折叠 + 头尾保留 + 原文落盘），再走截断兜底
-        const rawToolContent = truncateToolResult(await summarizeToolOutput(toolResult, tc.function.name));
+        // 第八轮 B-13：落盘文件名带会话作用域前缀——同一目录下多会话的输出互不覆盖，
+        // 排查时也能一眼看出「这条 offload 属于哪次会话」。
+        const rawToolContent = truncateToolResult(
+          await summarizeToolOutput(toolResult, tc.function.name, { scope: conversationId }),
+        );
         // A1：工具结果是最主要的间接注入面（shell / read_file / grep / web / MCP 返回的第三方内容）。
         //
         // 处置取舍（重要）：**不改写正常输出**。工具结果常是 JSON / 代码 / 文件内容，模型必须原样消费；

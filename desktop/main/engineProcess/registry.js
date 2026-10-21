@@ -43,9 +43,31 @@ const TOOL_CHANNELS = [
   // B-04（2026-10-21）补入 teamReadMessages：模型侧读消息
   'teamListMembers', 'teamSendMessage', 'teamBoard', 'teamWait', 'teamReadMessages',
 ];
+// ── 作用域登记（第八轮 A-03）────────────────────────────────────────────────
+// 缺陷：三处登记（TOOL_CHANNELS / TOOL_HANDLER_NAMES / createToolHandlers）**全都有**，
+//   而交互式运行时**一个都没有**——四个 team_* 键在 `scheduledTools.js` 里由
+//   `...(teamTools ? {...} : {})` 条件展开，交互式调用 `scheduledToolHandlers()` 时不带 teamTools，
+//   于是键根本不出现。可登记矩阵第③环节是「在 handler 源码区间里 grep 通道名」，
+//   条件展开的字面量照样命中 ⇒ **判全绿**。这是「假闭环」的第三种形态：
+//   不是漏登记、也不是孤儿，而是「条件注册被当成无条件注册」。
+//
+// 修法不是改矩阵的匹配串（那只会在下一次条件展开时再骗一次），而是把「作用域」变成
+//   **机器可读事实**：哪些通道只在「成员任务」形态下存在。矩阵据此**按调用形态求值**
+//   （实跑 `scheduledToolHandlers()` 的两种入参，比对键集合），而不是 grep 源码文本。
+// 维护规则：新增条件展开的工具时，必须把它加进本表——否则矩阵会按「交互式也应该有」判红
+//   （这是想要的失败方向：宁愿被门禁问一句，也不要再出现「登记了但调不到」）。
+const MEMBER_TASK_ONLY_CHANNELS = [
+  // M5 / T5-8 / B-04：军团协同五工具，只在成员任务（注入 teamTools + teamContext）时出现。
+  'teamListMembers', 'teamSendMessage', 'teamBoard', 'teamWait', 'teamReadMessages',
+];
+// 引擎内部显式分支处理的工具：不经 RPC、无通道义务（此前只存在于 agent-core 的注释里，
+// A-03 建议把它与上面的作用域一起变成可断言的事实）。
+const ENGINE_BUILTIN_TOOLS = ['todoWrite'];
 // 通知型回调（fire-and-forget，单向序列化即可）
 const NOTIFY_CBS = ['onStream', 'onToolCall', 'onMessage', 'onTodos', 'onSubagentEvent', 'onBudget', 'onTrace', 'onDone'];
 // 请求-响应型回调（需要返回值语义：onSuspend 返回断点是否保存成功）
 const REQUEST_CBS = ['onSuspend'];
 
-module.exports = { TOOL_CHANNELS, NOTIFY_CBS, REQUEST_CBS };
+module.exports = {
+  TOOL_CHANNELS, MEMBER_TASK_ONLY_CHANNELS, ENGINE_BUILTIN_TOOLS, NOTIFY_CBS, REQUEST_CBS,
+};

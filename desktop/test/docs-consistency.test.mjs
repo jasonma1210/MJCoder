@@ -75,7 +75,13 @@ const DOC = process.env.MJCODE_DOC_PATH
 //   覆盖字面量层与解析层双闸），故引用文件数 44 → 45。
 // R8-D804 收口（2026-10-21）再 45 → 46：§5.6 引用 `mcp-protocol-roadmap.test.mjs`
 //   （10 条，双向锁定「声称的协议代际」与「实际支持集」一致），故引用文件数 45 → 46。
-const REFERENCE_COUNT_BASELINE = 46;
+// 第八轮三次收尾（2026-10-21）再 46 → 51：§13.8/§13.9 记七条 P2/P3 小账 + 三项未核时，
+//   逐条写出守护测试，新增 5 个引用——`team-interrupt-actor.test.js`（B-07 中断主体可达）、
+//   `team-dispatch-plan.test.js`（B-05/B-08 派活计划）、`tool-outputs.test.mjs`（B-13 落盘目录）、
+//   `mcp-native-overlap.test.mjs`（A-04 原生优先扩到已连接服务）、
+//   `audit-chain-and-defs-pin.test.mjs`（L-3 审计哈希链 + 定义指纹）。
+//   引用数 46 → 51。判据本身不变：精确相等 + 逐个存在性校验，禁止用 >= 放宽。
+const REFERENCE_COUNT_BASELINE = 51;
 
 let pass = 0;
 let fail = 0;

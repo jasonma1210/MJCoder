@@ -134,6 +134,24 @@ const CWD = asSet(extractSetLiteral(indexSrc, 'CWD_TOOLS'));
 const APPR = asSet(extractSetLiteral(indexSrc, 'APPROVAL_TOOLS'));
 const TIMEOUT = asSet(Object.keys(core.TOOL_TIMEOUT_OVERRIDES));
 const CHANNELS = asSet(registry.TOOL_CHANNELS);
+// ── 第八轮 A-03：按**调用形态**求值（而不是 grep 源码文本）──────────────────
+// 缺陷回顾：四个 team_* 键在 scheduledTools.js 里由 `...(teamTools ? {...} : {})` 条件展开，
+// 交互式 `scheduledToolHandlers()` 根本拿不到它们；而第③环节是「在 handler 源码区间里
+// grep 通道名」，条件分支里的字面量照样命中 ⇒ 矩阵判全绿（假闭环的第三种形态）。
+// 修法：把「作用域」变成登记表里的机器可读事实（registry.MEMBER_TASK_ONLY_CHANNELS），
+// 再**实跑两种入参**比对键集合——这样「条件展开」本身就是被断言的对象，不再靠文本猜。
+const scheduledTools = require(path.join(ROOT, 'main/scheduledTools.js'));
+const MEMBER_ONLY = Array.isArray(registry.MEMBER_TASK_ONLY_CHANNELS) ? registry.MEMBER_TASK_ONLY_CHANNELS : null;
+const MEMBER_ONLY_SET = asSet(MEMBER_ONLY || []);
+const STUB_TEAM_TOOLS = Object.fromEntries((MEMBER_ONLY || []).map((c) => [c, () => ({ ok: true })]));
+// prTools 是本模块里唯一「被立即取成员」的依赖（withCtx(prTools.prList)），其余全是闭包内延迟访问。
+const STUB_PR = Object.fromEntries(['prList', 'prView', 'prDiff', 'prReview', 'prComment'].map((k) => [k, () => ({})]));
+/** 交互式形态：main.js 的 createToolHandlers 就是 `...scheduledToolHandlers()`（不带参）。 */
+const INTERACTIVE_KEYS = asSet(Object.keys(scheduledTools.scheduledToolHandlers({ prTools: STUB_PR })));
+/** 成员任务形态：Worker 工厂注入 teamTools。 */
+const MEMBER_TASK_KEYS = asSet(Object.keys(scheduledTools.scheduledToolHandlers({ prTools: STUB_PR, teamTools: STUB_TEAM_TOOLS })));
+/** 某通道在「它该出现的形态」下的 handler 键集合；非条件展开的通道返回 null（沿用源码区间判据）。 */
+const shapeKeysOf = (channel) => (MEMBER_ONLY_SET.has(channel) ? MEMBER_TASK_KEYS : null);
 const bpMatch = indexSrc.match(/const BASE_PROMPT = `([\s\S]*?)`;/);
 const PROMPT = bpMatch ? bpMatch[1] : '';
 
@@ -154,10 +172,14 @@ for (const t of ALL_TOOLS) {
   const okSchema = BASE_NAMES.includes(t) || RUNTIME_SCHEMA_TOOLS.includes(t);
   // ② RPC 通道白名单（引擎内部工具不过 RPC，无通道义务）
   const okChan = engineInternal ? true : (channel != null && CHANNELS.has(channel));
-  // ③ handler：引擎内部工具由 agent-core 显式分支处理；其余必须在主进程 createToolHandlers 注册
+  // ③ handler：引擎内部工具由 agent-core 显式分支处理；其余必须在**它该出现的调用形态**里
+  // 真有这个键。条件展开的通道（member-task）查「成员任务形态」，其余查「交互式形态 ∪ main.js 区间」。
+  const shapeKeys = engineInternal ? null : shapeKeysOf(channel);
   const okHandler = engineInternal
     ? new RegExp(`['"\`]${t}['"\`]`).test(indexSrc)
-    : (channel != null && new RegExp(`\\b${channel}\\b`).test(handlerRegion));
+    : (channel != null && (shapeKeys
+      ? shapeKeys.has(channel)
+      : new RegExp(`\\b${channel}\\b`).test(handlerRegion)));
   // ④ 超时/CWD/审批透传：**集合包含性**环节，不是逐工具义务（并非每个工具都需要 CWD 注入或超时覆盖）。
   //    逐工具侧只记录「是否登记」，越界（登记了不存在的工具名）由下方 4 条反向断言守。
   const regs = [];
@@ -222,9 +244,46 @@ console.log('');
 {
   check('③ 主进程 handler：createToolHandlers 区间可定位', hStart !== -1 && hEnd > hStart, `start=${hStart} end=${hEnd}`);
   const needHandler = ALL_TOOLS.filter((t) => !ENGINE_INTERNAL_TOOLS.includes(t));
-  const missing = needHandler.filter((t) => !new RegExp(`\\b${core.TOOL_HANDLER_NAMES[t]}\\b`).test(handlerRegion));
-  check('③ 主进程 handler：每个非引擎内部工具均有注册（createToolHandlers / scheduledToolHandlers 区域）', missing.length === 0,
+  const missing = needHandler.filter((t) => {
+    const ch = core.TOOL_HANDLER_NAMES[t];
+    const shapeKeys = shapeKeysOf(ch);
+    if (shapeKeys) return !shapeKeys.has(ch);
+    return !new RegExp(`\\b${ch}\\b`).test(handlerRegion);
+  });
+  check('③ 主进程 handler：每个非引擎内部工具均在**其调用形态**下注册', missing.length === 0,
     missing.length ? `未注册：${missing.join(', ')}` : `${needHandler.length} 个工具全覆盖`);
+
+  // ── A-03 核心：把「条件展开」本身变成被断言的对象 ──────────────────────────
+  // ① 声明表必须覆盖全部条件展开键（差异集 ⇔ 声明表，双向）：漏登记 → 红，
+  //    多登记一个其实无条件存在的键 → 也红（否则声明表会慢慢变成「随便写写」）。
+  const conditionalKeys = [...MEMBER_TASK_KEYS].filter((k) => !INTERACTIVE_KEYS.has(k));
+  const declaredNotConditional = [...MEMBER_ONLY_SET].filter((k) => !conditionalKeys.includes(k));
+  const undeclaredConditional = conditionalKeys.filter((k) => !MEMBER_ONLY_SET.has(k));
+  check('③-a 条件展开集合 === registry.MEMBER_TASK_ONLY_CHANNELS（不多不少）',
+    declaredNotConditional.length === 0 && undeclaredConditional.length === 0,
+    `实际条件键 ${conditionalKeys.length} 个 / 声明 ${MEMBER_ONLY_SET.size} 个`
+    + (declaredNotConditional.length ? `；声明了但并非条件展开：${declaredNotConditional.join(',')}` : '')
+    + (undeclaredConditional.length ? `；条件展开但未声明：${undeclaredConditional.join(',')}` : ''));
+
+  // ② 交互式形态下 member-task 通道必须一个都不出现——这是 A-03 的原始事实：
+  //    登记表全有、运行时一个没有。它现在被**显式断言**成「预期行为」，而不是被 grep 掩盖。
+  const leakedIntoInteractive = [...MEMBER_ONLY_SET].filter((k) => INTERACTIVE_KEYS.has(k));
+  check('③-b 交互式形态（scheduledToolHandlers 不带参）不出现 member-task 通道',
+    leakedIntoInteractive.length === 0,
+    leakedIntoInteractive.length ? `意外出现：${leakedIntoInteractive.join(',')}` : `${MEMBER_ONLY_SET.size} 个通道均只在成员任务形态出现`);
+
+  // ③ 反向（防「全都没注册也算过」）：成员任务形态必须真的多出这 5 个键。
+  const missingInMemberShape = [...MEMBER_ONLY_SET].filter((k) => !MEMBER_TASK_KEYS.has(k));
+  check('③-c 成员任务形态（注入 teamTools）确有全部 member-task 通道',
+    missingInMemberShape.length === 0,
+    missingInMemberShape.length ? `缺失：${missingInMemberShape.join(',')}` : `${MEMBER_ONLY_SET.size} 个通道到位`);
+}
+{
+  // ③-d 声明的通道名必须是**真实 RPC 通道**（防作用域表写了不存在/拼错的通道名，
+  // 那样 ③-a 会因为它不产生差异而判「不多不少」通过——空表也能自洽）。
+  const orphanScope = [...MEMBER_ONLY_SET].filter((c) => !CHANNELS.has(c));
+  check('③-d 作用域表条目均为已登记 RPC 通道', orphanScope.length === 0,
+    orphanScope.length ? `孤儿：${orphanScope.join(',')}` : `${MEMBER_ONLY_SET.size} 条有效`);
 }
 {
   // ④ 集合包含性：登记表里的每一项都必须是真实工具（防「登记了不存在的工具」= 死配置/错别字）
