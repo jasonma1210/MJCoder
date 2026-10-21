@@ -69,7 +69,7 @@
 > | 口径 | HEAD | 未提交 | 主进程模块 | 测试文件 | 套件 | `npm test` 总计 |
 > | --- | --- | ---: | ---: | ---: | ---: | ---: |
 > | 审查时点 | `24acc15` | 99 | 150 | 241 | 243 | 246 |
-> | **落地后（当前）** | **`bf423fa`** | **0** | **156** | **247** | **249** | **252** |
+> | **落地后（D-805/D-807②/D-812 之后）** | 见 §8.1 | **0** | **156** | **249** | **251** | **256** |
 >
 > 完整台账与复现命令见 **§8**。
 
@@ -335,6 +335,18 @@
 | 推荐理由 | 交互式通道已做对（`chatStreamOnce(payload, sender, signal, runId)`），说明这是**漏接**而非取舍，修复成本低、无架构争议                                                                        |
 | 连带改动 | 工具工厂、`scheduledTools.js`、`resolveChannel`；补一条「abort 后在途请求立即停止」的断言                                                                                            |
 
+**实施结果（2026-10-21 已完成）**
+
+| 项 | 结论 |
+|---|---|
+| 落点 | `main/scheduledChannels.js` 的 `scheduledAgentChat(payload, opts)` 接 `opts.signal`；`main.js` 的 Worker 工具工厂 `chat: (payload) => scheduledAgentChat(payload, { signal })`；`agent-core` 的 `resolveChannel` 改为透传第二参 ctx、`chatWithRetry` 改成 `chatFn(params, { signal })`、decompose 调用点同步 |
+| 合并语义 | 外部取消与内部超时用 `AbortSignal.any([controller.signal, external])` 合并，**任一触发即中断在途 fetch**（不是等它自己结束） |
+| 返回形态 | 取消返回 `{ content:'', tool_calls:[], usage:null, finish_reason:'aborted', aborted:true }` —— 与交互式 `chatStreamOnce` 的 `{aborted:true}` **同款**，引擎据此 break，任务终态是「已取消」而不是「失败」 |
+| 为什么不抛错 | 取消不是故障：抛错会进 `chatWithRetry` 的失败路径、被配额记成 provider 失败、并被写进失败复盘 |
+| 两处早退 | ① 进函数即判（已取消就不必去排 fg 槽位）；② 拿到槽位后再判一次（排队期间被取消，此时一次请求都不能发） |
+| 守护测试 | `test/scheduled-cancel.test.js` **20 条**：在途中止（含「fetch 收到的 signal 确实变 aborted」）/ 排队取消零请求 / 取消不记失败也不虚报成功 / 未取消零回归 / 超时不得被误判成取消 / 三处接线（含**反向**：吞 ctx 的旧写法不得回流） |
+| 一个测试坑（记账） | `streamGuard` 的定时器刻意 `unref()`（「不阻止进程退出」）。测试若只 await 一个不持有 handle 的 promise，node 会在定时器触发前退出 ⇒ 表现为「不红也不打印总结行」。必须加 keep-alive 定时器——这类「测试自己跑不完」比红更危险 |
+
 #### D-806 · 上下文与记忆：补齐 Worker 路径的两处空转
 
 | 项                     | 内容                                                                                                                                                                                                                                           |
@@ -367,7 +379,7 @@
 
 ### 第三步：收敛团队层（D-808 ~ D-812）
 
-**D-807 的实施结果（2026-10-21 已完成 ①，② 仍未做）**
+**D-807 的实施结果（2026-10-21 已完成 ①②）**
 
 | 项 | 结论 |
 |---|---|
@@ -377,7 +389,8 @@
 | 覆盖「组收尾」 | 全成功组 `done` + `result` 结构化写入 + 依赖链按序；关键任务失败 → 下游 `skipped`、组 `failed/paused`（不误报 done） |
 | 顺带发现（已写进测试注释） | `waitOnTasks` 的 `timeoutMs` 有硬下限 **1000ms**（`WAIT_TIMEOUT_MIN_MS` 夹紧），传更小的值无效 —— 按「40ms 超时」设计这类测试会误判成「sweep 失效」 |
 | 定位说明 | 「探活撤员 vs 失败分支」这条的**顺序保证**由源码既有分支顺序承担（`consumeStall` 早于失败分支），但其触发依赖 `WAVE_PROBE_INTERVAL_MS=5000` × 3 次 + 空闲窗，端到端跑一次 ≥15s，不适合进逐 PR 套件；本轮以 defer/超时/收尾三条（同为顺序敏感）作为接缝覆盖。**这条是明确的遗留项，不假装已覆盖。** |
-| 仍未做 | ② `i18n-scan` / `i18n-modcheck` 收进 `GATES`（属 C-03，独立于本决策） |
+| ② 也已落地 | `GATES` 由 **3 → 5** 项：新增 `i18n-scan`（扫 `renderer/src` 注释剥离后的裸中文）与 `i18n-modcheck`（42 个语言包模块的中英键集 / 叶子类型 / `{var}` 插值一致性）。两者都**自证会红**：无参 exit 2、有残留或缺键 exit 1；套件 `i18n-gates.test.mjs` 做变异验证（裸中文必红、**只有注释含中文必绿**、不存在的模块必红） |
+| 一个设计要点 | 门禁的「目标」必须在 `run-all.mjs` 里现算并显式传参（`i18nModules` 从 `locales/zh-CN/*.json` 读），否则目录改名后门禁会退化成「扫了 0 个文件 → 恒绿」——这正是 C-03 的同族陷阱 |
 
 
 > **前提判定（本轮最重要的一条）**：团队层的**拓扑是对齐的**——`orchestrator.planGoal` + `workerPool` 构成确定性编排权威，工作单元是一次性隔离 Worker 只回传 summary，`teamTools` 明确保持「调度器单写者」。它是 **orchestrator-worker**，不是 swarm / handoff 流水线。  
@@ -520,6 +533,17 @@
 | 现状   | 实测（工作区）：员工 51 / 连接器 291（精选 77 + workbuddy 214）/ `skills.json` 219 / 磁盘真实 `SKILL.md` 154 —— **与既有文档全部对不上**（第七轮 F-021 的延续） |
 | 推荐理由 | 这是「文档声称」与「机器可查」落差的一个具体实例，也是判据 10.6（声称与守护一一对应）的直接命中点                                                                      |
 | 连带改动 | 新增/更新一处口径声明文件；各文档改为引用                                                                                                    |
+
+**实施结果（2026-10-21 已完成；并推翻「对不上」这个提法本身）**
+
+| 项 | 结论 |
+|---|---|
+| 裁定（关键） | **「四组数字对不上」是假冲突**。实测四个数字量的是四件事：`skills.json` 条目 **219**（含索引/分类，可安装目录）、`ecosystem/skills/**/SKILL.md` **100**（**随包发布**的实体）、`~/.mjcode/skills/**/SKILL.md` **154**（**本机已安装**，2026-10-21 实测）、连接器 **291 = 精选 77 + WorkBuddy 导入 214**（实测 id **零重叠**）。219 ≠ 100 ≠ 154 **本来就不该相等**，互相校验才是错的 |
+| 单一事实源 | **复用既有的** `desktop/scripts/gen-ecosystem-counts.mjs`，**没有新建第二个脚本**——建第二份正是 D-812 要消除的病。给脚本加两个**命名口径**：`skillsCatalog`(219) 与 `workspaceSkills`(154 或 `null`)；目录不存在时返回 `null` 而**不是 0**（「没装」≠「装了 0 个」） |
+| 文档对账 | `ecosystem-counts` 套件新增「技术设计文档『生态资产』行必须含全部 6 个现算值」+ **变异自证**（喂错数字文本必须抛、缺该行必须抛）。不做变异自证的话，「对账一致」可能只是函数什么都没查 |
+| 口径混用防线 | README 的 `N skills` 必须等于 **100**；工作区数字（本机 154）**不得**作为技能数出现在 README（中英双语各一条断言） |
+| 保留的既有防线 | 双语 README 逐处数字审计、WorkBuddy 零重叠断言、「已证伪旧数字（80 / 50 / 230）不得回流」全部原样保留；套件从 **17 → 22 条** |
+| 教训 | **先查有没有现成事实源，再动手建**。我第一版新建了 `scripts/ecosystem-counts.mjs`，写完才发现既有 `gen-ecosystem-counts.mjs` + 同名套件已经把这活干了七成 —— 那一步若留着，就是把「单一事实源」做成了「第三个源」 |
 
 ---
 
@@ -699,8 +723,8 @@ cd /Users/jianma/Desktop/MJCode/desktop && node test/run-all.mjs
 | B0 | D-803 提交 v8–v12 | ✅ 已完成 | `9de20ca`；`MIGRATIONS.length` = **12** |
 | B1 | D-801 `toolLevel` 兜底 L3 | ✅ 已完成 | `tool-registration-matrix` ⑤-d 反向断言 |
 | B1 | D-802① 字面量归一 | ✅ 已完成 | `ssrf-guard.test.js` 41 条 |
-| B1 | D-807② i18n 进 `GATES` | ❌ **未做** | `run-all.mjs` 的 `GATES` 仍 3 项（eval / doc-fact / harness-r7），无 i18n |
-| B2 | D-805 取消通道接 `signal` | ❌ **未做** | `main/scheduledChannels.js:69` 仍是 `scheduledAgentChat(payload)` 单形参，`scheduledTools.js` 无 `signal` 形参 |
+| B1 | D-807② i18n 进 `GATES` | ✅ 已完成 | `GATES` 3 → **5** 项（新增 `i18n-scan` / `i18n-modcheck`）；守护套件做**变异验证**（裸中文必红、注释中文必绿、无参 exit 2） |
+| B2 | D-805 取消通道接 `signal` | ✅ 已完成 | `scheduledAgentChat(payload, { signal })` + `AbortSignal.any`；引擎 `resolveChannel` 透传 ctx；守护套件 20 条 |
 | B2 | D-807① 团队端到端 eval | ✅ 已完成 | `team-e2e-invariants.test.js` 14 条（真实 `runGroup`→`finalizeGroup`） |
 | B2 | D-810 载荷类型化 | ✅ 已完成 | `team-tools.test.mjs` D-810 段 11 条 |
 | B3 | D-808 成员配置真生效（方案 A） | ✅ 已完成 | `rolePresetApply.js` + `member-runtime-config.test.js` 12 条 |
@@ -710,9 +734,9 @@ cd /Users/jianma/Desktop/MJCode/desktop && node test/run-all.mjs
 | B4 | D-804 MCP 双栈 | 🟡 **部分**（S1 状态化） | `MCP_PROTOCOL_ROADMAP` + `mcp-protocol-roadmap.test.mjs` 10 条；**S2–S5 未做** |
 | B4 | D-806 Worker 召回 / 团队记忆链 | 🟡 **部分**（只做了 B-20） | B-11（§13.3 CL-3）、B-12（§13.1 M5）**未动** |
 | B4 | D-802② resolve-then-validate | ✅ 已完成（提前） | `guardedLookup` 挂 `http.request` 的 `lookup` |
-| — | D-812 生态数字 SSOT | ❌ **未做** | 四组数字仍无单一事实源（§7.2 L-2） |
+| — | D-812 生态数字 SSOT | ✅ 已完成 | `gen-ecosystem-counts.mjs` 增 `skillsCatalog`(219) / `workspaceSkills`(154 或 null) 两个命名口径；`ecosystem-counts` 套件 17 → **22 条**，含技术设计文档对账与变异自证 |
 
-**合计 15 行：✅ 10 · 🟡 2 · ❌ 3。** 这就是「第八轮到底做完了多少」的准确答案——不是「全做完了」，也不是「只做了一点」。
+**合计 15 行：✅ 13 · 🟡 2 · ❌ 0。** 剩余两条部分项是 **D-804（MCP S2–S5 排期）** 与 **D-806（B-11 / B-12）**——它们是**排期项**，不是「漏做」。
 
 ### 8.3 偏差：为什么最终是 1 条集成提交，而不是计划里的 2 条
 
@@ -798,7 +822,7 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 
 | 指标 | 定义 | 本轮取值 |
 | --- | --- | --- |
-| **存量未闭环数** | 只数「老代码里的问题」且尚未修复 | 12 条存量中已闭环 **4** 条（B-20 / C-02 / C-06 / C-07），**剩 8 条开放**（A-01、A-02、A-04、B-05、B-11、B-12、C-03、C-04） |
+| **存量未闭环数** | 只数「老代码里的问题」且尚未修复 | 12 条存量中已闭环 **7** 条（A-01 / A-02 / B-20 / C-02 / C-03 / C-06 / C-07），**剩 5 条开放**（A-04、B-05、B-11、B-12、C-04） |
 | **新代码首审缺陷率** | 新功能第一次进审查时的 P0/P1 条数 | 团队层：P0 **2** + P1 **2**（B-03/C-01）⇒ **首审不合格** |
 
 据此给三条可执行的收敛规则（建议写进下一轮的做法）：
@@ -810,27 +834,24 @@ cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mj
 3. **一轮审查内冻结判据集合**：先按冻结的判据审完、出账，再讨论「要不要加判据」。本轮把「加严」和
    「审查」混在一起做，结果是同一批事实被记了两次（一次当问题、一次当门禁变更）。
 
-### 8.7 项目当前仍未完成的清单（按「能不能被别人接着做」排序）
+### 8.7 项目当前仍未完成的清单（2026-10-21 晚更新：D-805 / D-807② / D-812 已销账）
 
 > 口径：**只列有明确落点的事**，每条都能指到文件/常量。不含「待讨论」。
+> 本节曾是 11 条，D-805 / D-807② / D-812 落地后剩 **8 条**（原 #2 / #5 / #9 销账，其余重编号）。
 
 | # | 事项 | 级别 | 落点 | 现状证据 |
 | --- | --- | --- | --- | --- |
-| 1 | **推送 `origin/main`** | 发布阻塞 | `git push` | 本地 ahead 2，`origin/main` 仍 `24acc15`；不 push 则制品按旧 HEAD 构建 |
-| 2 | **D-805 取消信号穿透** Worker / 定时通道 | P1 | `main/scheduledChannels.js:69` `scheduledAgentChat(payload)` | 单形参，无 `signal`；`scheduledTools.js` 无 `signal`。abort 后在途请求要等内部流式守卫（最长 15min） |
-| 3 | **D-806 剩余两条**：B-11 Worker 分层召回、B-12 团队记忆链解耦 | P2 | `main/workerPool.js` 无 `recall`/`scopes`；`main.js:1455` 仍以 `memory.autoCapture` 为总闸 | Worker 路径召回未启用；默认配置下团队记忆链空转 |
-| 4 | **B-04 模型侧读消息工具** | P2 | `agent-core/index.js` 仅 4 个 `team_*` 工具 | 无「读消息」原语 ⇒ `kind=question/handoff` 是死语义，模型无法消费别人发来的消息 |
-| 5 | **D-807② i18n 进 `GATES`** | P2 | `test/run-all.mjs` 的 `GATES` | 仍 3 项；`i18n-scan.mjs` / `i18n-modcheck.mjs` 存在但无人自动触发 |
-| 6 | **D-804 的 S2–S5** | P2（战略） | `main/mcpProtocol.js` 的 `MCP_PROTOCOL_ROADMAP.nextStatus` | `not-implemented`；无状态路径 / 双栈协商 / 能力声明分叉 / 收尾改状态均未做 |
-| 7 | **探活撤员端到端** | P2 | `waveEngine` 的 `WAVE_PROBE_INTERVAL_MS=5000` × 3 | 只有 `team-waves.test.js` 的单模块覆盖；e2e 单次 ≥15s，需先给 `createWaveEngine` 开时序注入点 |
-| 8 | **C-04 汇总口径把 skipped 计绿** | P3 | `test/run-all.mjs:122` 的 `通过 = total − failed` | 公式未减 skipped；darwin 上 3 个沙箱套件未真跑却计绿 |
-| 9 | **D-812 生态四组数字 SSOT** | P3 | `ecosystem/` + 文档 | 51 / 291 / 219 / 154 四组数与既有文档对不上，未裁定 |
-| 10 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §3.2 / §3.3 | 类型闸 deferred 绕过 / 中断矩阵 lead·member 分支不可达 / 协作模式无运行期分支 / `findTeamByRun` 走 `run_id` 单列但索引左前缀是 `team_id` / offload 落盘目录可被系统回收 / `filesystem` MCP 默认自启与「原生优先」冲突 / 登记矩阵看不见条件展开 |
-| 11 | **L-1 / L-3 未核项** | P3 | — | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核 |
+| 1 | **推送 `origin/main`** | 发布阻塞 | `git push` | 本地领先远端（多轮提交未推）；不 push 则制品按旧 HEAD 构建 |
+| 2 | **D-806 剩余两条**：B-11 Worker 分层召回、B-12 团队记忆链解耦 | P2 | `main/workerPool.js` 无 `recall`/`scopes`；`main.js` 仍以 `memory.autoCapture` 为总闸 | Worker 路径召回未启用；默认配置下团队记忆链空转 |
+| 3 | **B-04 模型侧读消息工具** | P2 | `agent-core/index.js` 仅 4 个 `team_*` 工具 | 无「读消息」原语 ⇒ `kind=question/handoff` 是死语义，模型无法消费别人发来的消息 |
+| 4 | **D-804 的 S2–S5** | P2（战略） | `main/mcpProtocol.js` 的 `MCP_PROTOCOL_ROADMAP.nextStatus` | `not-implemented`；无状态路径 / 双栈协商 / 能力声明分叉 / 收尾改状态均未做 |
+| 5 | **探活撤员端到端** | P2 | `waveEngine` 的 `WAVE_PROBE_INTERVAL_MS=5000` × 3 | 只有 `team-waves.test.js` 的单模块覆盖；e2e 单次 ≥15s，需先给 `createWaveEngine` 开时序注入点 |
+| 6 | **C-04 汇总口径把 skipped 计绿** | P3 | `test/run-all.mjs` 的 `通过 = total − failed` | 公式未减 skipped；darwin 上 3 个沙箱套件未真跑却计绿 |
+| 7 | **B-05 / B-07 / B-08 / B-09 / B-13 / A-04 / A-03** | P2/P3 | 见 §3.2 / §3.3 | 类型闸 deferred 绕过 / 中断矩阵 lead·member 分支不可达 / 协作模式无运行期分支 / `findTeamByRun` 走 `run_id` 单列但索引左前缀是 `team_id` / offload 落盘目录可被系统回收 / `filesystem` MCP 默认自启与「原生优先」冲突 / 登记矩阵看不见条件展开 |
+| 8 | **L-1 / L-3 未核项** | P3 | — | CI 历史绿红未查；工具定义钉定、审计不可改写、幂等键未核 |
 
-> **最短的一条路**：先做 #1（一行命令，否则前功尽弃），再做 #2（P1，且是「漏接」不是设计取舍，成本低），
-> 然后 #3 + #4（同一族：Worker 侧的上下文与协同是「只写不读」的单向通道），最后 #5（一个 `GATES` 条目）。
-> #6 与 #7 属排期项，不进逐 PR 节奏。
+> **最短的一条路**：先做 #1（一行命令，否则前功尽弃），再做 #2 + #3（同一族：Worker 侧的上下文与协同
+> 目前是「只写不读」的单向通道），然后 #6（一处汇总公式）。#4 与 #5 属排期项，不进逐 PR 节奏；#7 按小账逐条收。
 
 ---
 

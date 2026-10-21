@@ -1389,8 +1389,11 @@ function setupTaskOrchestration(db) {
             waitTask: workerPool.waitTask,
           }) : null,
         }),
-        // Worker 的 chat 走非流式直连（无 UI 消费流式 token），运行中止由池的 controller 级联
-        chat: (payload) => scheduledAgentChat(payload),
+        // Worker 的 chat 走非流式直连（无 UI 消费流式 token）。
+        // D-805（2026-10-21）：**必须把池的取消信号透传下去**——此前写成 scheduledAgentChat(payload)，
+        // 注释却写「运行中止由池的 controller 级联」，实际只级联到工具层、没级联到模型请求，
+        // 于是点「停止」后在途模型调用要等内部守卫到点（最长 15min）才停。
+        chat: (payload) => scheduledAgentChat(payload, { signal }),
         // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）
         webSearch: (args) => webTools.webSearch(args),
         webFetch: (args) => webTools.webFetch(args),

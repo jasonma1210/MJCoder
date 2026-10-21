@@ -28,6 +28,15 @@
 //   运行时不合并、不去重，故不计入 README 的 228。若把它加进来会得到 442，
 //   对外宣称「生态有 442 个 MCP 连接器」即与产品实际可用能力不符。
 //
+// ── D-812（2026-10-21）追加两个口径，专治「同一句话里混用不同口径」──
+// 4. `skillsCatalog` = `ecosystem/skills.json` 的条目数（219）。它是**可安装目录条目**，
+//    含索引/分类等非目录项，与口径 1 的 100 永远不相等。两个数字都算并各自命名，
+//    引用时带名字 = 结构约束，不必靠人记得。
+// 5. `workspaceSkills` = 用户工作区 `~/.mjcode/skills/**/SKILL.md` 的数量（本机 2026-10-21 为 154）。
+//    这是「这台机器上装了」，与口径 1 的「随包发布」是两件事，**不可互相校验**。
+//    目录不存在返回 `null` 而不是 0：全新机器/CI 上「没装」≠「装了 0 个」。
+//    历史上的 L-2「四组数字对不上」正是把 219 / 100 / 154 当成同一件事比较所致，结论是假冲突。
+//
 // ── 用法 ──
 //   node desktop/scripts/gen-ecosystem-counts.mjs           # 人类可读 + JSON
 //   node desktop/scripts/gen-ecosystem-counts.mjs --json     # 仅 JSON（供测试/CI 消费）
@@ -40,6 +49,7 @@
 // `REFERENCE_COUNT_BASELINE` 改为新值**并在回传说明原因；若只是想让人知道有这个门禁，改 README 即可
 // （README 不受该棘轮约束，且已写明本脚本与守护测试的路径）。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,6 +88,13 @@ export function collectEcosystemCounts() {
     .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
     .length;
 
+  // 口径 1′（D-812，2026-10-21）：`skills.json` 的**目录条目数**。
+  // 它与口径 1 **刻意分开并存**，因为二者永远不相等：219 条含索引/分类等非目录条目，
+  // 磁盘真实技能包是 100 个。历史上的「154 / 100 / 219 三个数字对不上」就是这么来的——
+  // 不是谁写错了，而是**同一句话里混了三个口径**。这里把两个都算出来、都带名字输出，
+  // 让「引用时必须写口径」成为结构约束，而不是纪律要求。
+  const skillsCatalog = arrayAt(readJson('skills.json'), '', 'skills.json').length;
+
   // 口径 2：顶层是对象，取 .connectors
   const mcpFile = 'mcp-connectors.json';
   const mcp = arrayAt(readJson(mcpFile), 'connectors', mcpFile).length;
@@ -98,7 +115,32 @@ export function collectEcosystemCounts() {
     workbuddyRaw = null;
   }
 
-  return { skills, mcp, digitalEmployees, total, workbuddyRaw, excludedFromTotal: workbuddyRaw != null ? [ 'mcp-connectors-workbuddy.json' ] : [] };
+  // 口径 4（D-812）：**用户工作区**已安装技能数（`~/.mjcode/skills/**/SKILL.md`）。
+  // 与本仓库内置的 `skills`（100）不是一件事：那是「随包发布」，这是「这台机器上装了」。
+  // 目录不存在时返回 null 而**不是 0**——全新机器/CI 上「没装」和「装了 0 个」是两回事，
+  // 用 0 会让人误以为资产为空。测试里对此有显式断言。
+  const workspaceDir = process.env.MJCODE_SKILLS_DIR || path.join(os.homedir(), '.mjcode', 'skills');
+  let workspaceSkills = null;
+  if (fs.existsSync(workspaceDir)) {
+    let n = 0;
+    const walk = (d) => {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const ent of entries) {
+        const p = path.join(d, ent.name);
+        if (ent.isDirectory()) walk(p);
+        else if (ent.name === 'SKILL.md') n++;
+      }
+    };
+    walk(workspaceDir);
+    workspaceSkills = n;
+  }
+
+  return {
+    skills, mcp, digitalEmployees, total, workbuddyRaw,
+    skillsCatalog, workspaceSkills, workspaceDir,
+    excludedFromTotal: workbuddyRaw != null ? ['mcp-connectors-workbuddy.json'] : [],
+  };
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -108,7 +150,8 @@ if (isMain) {
     console.log(JSON.stringify(counts, null, 2));
   } else {
     console.log('生态资产计数（源码现算）');
-    console.log(`  skills              = ${counts.skills}   （ecosystem/skills/ 一级子目录）`);
+    console.log(`  skills              = ${counts.skills}   （ecosystem/skills/ 一级子目录＝随包发布的实体）`);
+    console.log(`  skillsCatalog       = ${counts.skillsCatalog}   （ecosystem/skills.json 目录条目；含索引/分类，≠ 上一条）`);
     console.log(`  mcp connectors      = ${counts.mcp}   （ecosystem/mcp-connectors.json → .connectors）`);
     console.log(`  digital employees   = ${counts.digitalEmployees}   （ecosystem/digital-employees.json 顶层数组）`);
     console.log(`  ─────────────────────────────`);
@@ -117,6 +160,9 @@ if (isMain) {
       console.log(`\n  不计入合计：mcp-connectors-workbuddy.json → .connectors = ${counts.workbuddyRaw}`);
       console.log('  （WorkBuddy 原始导入清单，与精选清单零重叠，两套独立命名空间，运行时不合并去重）');
     }
+    console.log(`\n  参考口径（不参与任何合计）：用户工作区 SKILL.md = ${counts.workspaceSkills === null ? 'n/a（目录不存在）' : counts.workspaceSkills}`);
+    console.log(`  目录：${counts.workspaceDir}`);
+    console.log('  ⚠ 该数字与内置 skills 不可互相校验：「随包发布」与「本机已安装」是两件事。');
     console.log('\nJSON:');
     console.log(JSON.stringify(counts));
   }

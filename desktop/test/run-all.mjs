@@ -57,10 +57,28 @@ const skipped = [];  // C2（2026-10-16）：套件内明确声明的「跳过/�
 // 两个脚本都住在 `docs/harness-r7/` 与 `desktop/scripts/`，**刻意不进 `test/`**（发现式扫描会把
 // 它们计入套件基线，制造假回归）；这里按绝对路径显式引用，不计入 suites.length。
 const REPO_ROOT = path.resolve(ROOT, '..');
+
+// 2026-10-21（第八轮 D-807② / C-03）：i18n 两条检查也属于「存在却无人自动触发」的假绿 ——
+//   脚本一直在 `scripts/` 里躺着，CI 与 npm test 都不过它，于是「硬编码中文」「中英键集漂移」
+//   只能靠人肉发现。与上面两项完全同型，故一并纳入前置门禁：
+//   · i18n-scan：扫「注释剥离后」的裸中文残留（UI 文案必须走 i18n key，不许硬编码）；
+//   · i18n-modcheck：中英双侧语言包的键集 / 叶子类型 / `{var}` 插值参数一致性，逐模块查。
+// **两条都自证会红**（这是它们能当门禁的前提，别改成恒绿）：无参调用 exit 2（用法错误），
+// 有残留或缺键 exit 1。套件 `test/i18n-gates.test.mjs` 对这两条做了变异式反向验证。
+// 与上面两项同纪律：脚本刻意不进 `test/`（发现式扫描会把它们计入套件基线），
+// 这里按绝对路径显式引用，不计入 suites.length。
+const I18N_ZH_DIR = path.join(ROOT, 'renderer/src/i18n/locales/zh-CN');
+const i18nModules = readdirSync(I18N_ZH_DIR)
+  .filter((f) => f.endsWith('.json'))
+  .map((f) => f.replace(/\.json$/, ''))
+  .sort();
+
 const GATES = [
   { label: 'eval:check（离线评估自检）', args: ['eval/run-eval.mjs', '--check'] },
   { label: 'doc-fact-check（技术设计文档数字核对）', args: [path.join(ROOT, 'scripts/doc-fact-check.mjs')] },
   { label: 'harness-r7:check（第七轮审查判据 76 断言）', args: [path.join(REPO_ROOT, 'docs/harness-r7/04-test/check.mjs'), REPO_ROOT] },
+  { label: 'i18n-scan（renderer 裸中文残留）', args: [path.join(ROOT, 'scripts/i18n-scan.mjs'), path.join(ROOT, 'renderer/src')] },
+  { label: `i18n-modcheck（${i18nModules.length} 个模块双侧键集）`, args: [path.join(ROOT, 'scripts/i18n-modcheck.mjs'), ...i18nModules] },
 ];
 
 console.log(`前置门禁 ${GATES.length} 项（外部命令级，非 test/*.test.*）\n`);

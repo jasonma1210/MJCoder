@@ -1643,13 +1643,18 @@ export function normalizeMessages(messages) {
 
 // 解析调用通道：优先 toolHandlers，回落 window.mjcode（旧调用方兼容）
 // 每次调用时惰性解析，保证旧测试中途替换 window.mjcode.mock 的行为不变
+//
+// D-805（2026-10-21）：第二参 `ctx` **必须透传**。此前写成 `(args) => handler(args)`，
+// 把宿主传进来的 `{ signal }` 吞掉了 —— 这是「停止键对 Worker / 定时任务无效」的引擎侧一半成因
+// （宿主侧另一半见 main.js 的 Worker 工具工厂）。少传一个参数不报错、行为静默退化，
+// 所以这里允许透传任意 ctx，由宿主自行决定用哪些字段。
 function resolveChannel(toolHandlers, camelName) {
   if (toolHandlers && typeof toolHandlers[camelName] === 'function') {
-    return (args) => toolHandlers[camelName](args);
+    return (args, ctx) => toolHandlers[camelName](args, ctx);
   }
   const mj = globalThis.window?.mjcode;
   if (mj && typeof mj[camelName] === 'function') {
-    return (args) => mj[camelName](args);
+    return (args, ctx) => mj[camelName](args, ctx);
   }
   return null;
 }
@@ -1778,7 +1783,7 @@ export async function decomposeTask({ messages, model, toolHandlers, signal, mod
     model: taskModel.model.model_id,
     // P0-3②：此前漏传 reasoningEffort → 拆分调用恒为默认思考强度（与 compactHistory 不一致）
     reasoningEffort: taskModel.model.reasoning_effort || '',
-  });
+  }, { signal }); // D-805：拆分调用同样可被取消，别让它成为「停止后仍在跑」的一条尾巴
   if (signal?.aborted) return { decompose: false, reason: '', tasks: [] };
   return parsePlanResponse(res?.content || '');
 }
@@ -1821,12 +1826,14 @@ export async function mapWithLimit(items, limit, fn) {
 }
 
 // opts: { maxRetries, baseMs } —— baseMs 供测试注入 0 加速；生产默认 1000ms，指数退避 + 抖动，上限 8s
+// D-805：`ctx = { signal }` 随每次调用透传给宿主通道（resolveChannel 已支持第二参），
+//   这样「停止」能真正中止在途 fetch，而不是只在下一轮循环开头看 signal.aborted。
 export async function chatWithRetry(chatFn, params, signal, opts = {}) {
   const maxRetries = opts.maxRetries ?? CHAT_MAX_RETRIES;
   const baseMs = opts.baseMs ?? 1000;
   for (let attempt = 0; ; attempt++) {
     try {
-      return await chatFn(params);
+      return await chatFn(params, { signal });
     } catch (err) {
       if (signal?.aborted || !isRetryableChatError(err) || attempt >= maxRetries) throw err;
       const delay = Math.min(baseMs * 2 ** attempt, 8000) * (0.5 + Math.random() * 0.5);

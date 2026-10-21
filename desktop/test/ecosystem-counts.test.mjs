@@ -200,5 +200,69 @@ check('已证伪的旧数字不得回流（README.zh-CN.md）', () => {
   assert.deepEqual(hits, [], `README.zh-CN.md 出现已证伪的旧数字：${hits.join(' | ')}`);
 });
 
+// ── ⑦ D-812（2026-10-21）：口径分离 + 技术设计文档「生态资产」行对账 ──
+// L-2 记录的「四组数字对不上」经实测是**假冲突**：219 / 100 / 154 量的是三件不同的事
+// （目录条目 / 随包发布实体 / 本机已安装）。真正的缺陷是「数字没有口径」，
+// 于是任何两次引用都可能被读成矛盾。这一节把它变成结构约束：口径分开算、分开命名、
+// 文档那一行必须与现算一致，且**对账逻辑本身要被变异验证**（否则它可能只是个恒真的空壳）。
+{
+  const counts = JSON.parse(execFileSync(process.execPath,
+    [path.join(DESKTOP, 'scripts', 'gen-ecosystem-counts.mjs'), '--json'],
+    { encoding: 'utf8', cwd: DESKTOP, timeout: 60_000 }));
+
+  check(`口径分离：skillsCatalog(${counts.skillsCatalog}) 与 skills(${skills}) 是两个不同数字`, () => {
+    assert.ok(Number.isInteger(counts.skillsCatalog) && counts.skillsCatalog > 0,
+      `skillsCatalog 必须是正整数，得到 ${counts.skillsCatalog}`);
+    assert.notEqual(counts.skillsCatalog, skills,
+      '两个口径相等 ⇒ 疑似把「目录条目」与「磁盘实体」合成一个来源了；'
+      + '它们本来就不该相等（条目含索引/分类等非目录项），请检查 gen-ecosystem-counts.mjs');
+  });
+
+  check('工作区口径单独存在时为 null 或正整数（不拿 0 冒充「没有技能」）', () => {
+    assert.ok(counts.workspaceSkills === null || (Number.isInteger(counts.workspaceSkills) && counts.workspaceSkills > 0),
+      `workspaceSkills 只能是 null 或正整数，得到 ${counts.workspaceSkills}`);
+  });
+
+  // 工作区口径绝不可被写进 README 的「技能数」——那会把「本机装了 154」当成「产品有 154 个技能」。
+  check('README 未把工作区安装数当技能数（口径混用回流防线）', () => {
+    const ws = counts.workspaceSkills;
+    if (!Number.isInteger(ws)) return; // 本机不存在该目录时无从回流
+    assert.ok(!new RegExp(`\\b${ws}\\s+skills\\b`, 'i').test(readme),
+      `README.md 出现「${ws} skills」——那是本机已安装数，不是随包发布的技能数（应为 ${skills}）`);
+    assert.ok(!new RegExp(`\\b${ws}\\s*个技能`).test(readmeZh),
+      `README.zh-CN.md 出现「${ws} 个技能」——同上`);
+  });
+
+  // 技术设计文档的「生态资产」行参与对账：它是给内部看的总账，最容易被写成「哪个数看起来对就用哪个」。
+  const DESIGN_DOC = path.join(ROOT, 'docs', 'MJCode-技术设计文档-2026-10-17.md');
+  const docText = fs.readFileSync(DESIGN_DOC, 'utf8');
+  function auditEcosystemRow(text) {
+    // 必须锚定「首列是生态资产」的表格行：全文提到「生态资产」的行不止一处（R28 已知问题行也提到），
+    // 用 includes 会抓错行 —— 这是本门禁第一版真实犯过的错，故此处保留锚定写法。
+    const row = text.split('\n').find((l) => /^\|\s*生态资产\s*\|/.test(l));
+    assert.ok(row, '技术设计文档缺少「| 生态资产 |」行（章节被改名或整行删除）');
+    const nums = new Set(row.match(/\d+/g) || []);
+    const expect = [
+      ['数字员工', counts.digitalEmployees],
+      ['技能目录条目', counts.skillsCatalog],
+      ['内置技能实体', skills],
+      ['连接器双清单合计', counts.mcp + counts.workbuddyRaw],
+      ['精选清单', counts.mcp],
+      ['WorkBuddy 导入', counts.workbuddyRaw],
+    ];
+    const missing = expect.filter(([, v]) => !nums.has(String(v))).map(([k, v]) => `${k}=${v}`);
+    assert.deepEqual(missing, [],
+      `文档该行缺少现算值：${missing.join('、')}；当前行：${row.trim().slice(0, 160)}`);
+  }
+  check(`技术设计文档「生态资产」行含全部现算值（6 个口径）`, () => auditEcosystemRow(docText));
+
+  // 变异自证：同一个审计函数喂一份错数字的文本，必须抛错。
+  // 不做这步，「对账一致」可能只是因为函数什么都没查（空过比红更危险）。
+  check('变异自证：错数字的「生态资产」行必须被拒（对账不是空转）', () => {
+    assert.throws(() => auditEcosystemRow('| 生态资产 | 数字员工 999、技能目录条目 1 |'), /缺少现算值/);
+    assert.throws(() => auditEcosystemRow('| 别的行 | 1 |'), /缺少「\| 生态资产 \|」行/);
+  });
+}
+
 console.log(`\necosystem-counts: ${pass}/${total} 通过`);
 if (process.exitCode) console.error('（存在失败项：README 与 ecosystem/ 源码已漂移，请按提示更新 README 或核对口径）');
