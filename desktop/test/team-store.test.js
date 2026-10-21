@@ -140,6 +140,13 @@ function check(name, ok, detail = '') {
   check('重启后成员数保持', tplTeam.members.length === MAX_MEMBERS_PER_TEAM);
   check('重启后归档状态保持', reloaded.archivedAt !== null && reloaded.archivedAt !== undefined);
 
+  // 显式关闭两个连接再退出（与 taskStore.test.js 同纪律）：
+  // sqljsDb 在 process 'exit' 里挂了一次兜底 flush，而 Linux CI runner 上
+  // 「退出期 flush + fsync」曾把本套件稳定卡到 180s 超时（断言其实早已全部跑完）。
+  // 这里先把 db / db2 的脏数据同步落盘并释放 WASM，退出路径不再有 IO。
+  db.close();
+  db2.close();
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

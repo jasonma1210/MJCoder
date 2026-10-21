@@ -168,6 +168,11 @@ const ok = (name) => { n += 1; console.log(`  ✓ ${name}`); };
   assert.ok(!r2.salvage, 'salvage 失败时不返回统计（不阻断）');
   ok('IPC：salvage 失败 fail-open（不阻断会话删除）');
 
+  // 显式关闭两个连接再退出：避免 process 'exit' 兜底 flush 在 Linux CI runner 上
+  // 触发 180s 超时（同 team-store.test.js / taskStore.test.js 的处理纪律）。
+  db.close();
+  db2.close();
+
   console.log(`\n三层记忆 M2 晋升链门禁：${n} 组全部通过`);
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
