@@ -4715,3 +4715,45 @@ GitHub Actions（push / workflow_dispatch、ubuntu-latest、Node 22）· Electro
 - **L-1 部分销账**：CI 已有绿色运行，但 Linux 真实命名空间隔离仍未验证（runner 缺 `bwrap`）；需在 CI 安装 bubblewrap 后重跑两个沙箱套件。
 - **push 事件未触发运行**：本仓库 push 后仍无运行记录（本轮均为 workflow_dispatch）；建议后续排查仓库 Webhook/Actions 触发配置。
 - **推荐下一步**：在 CI 增加 `apt-get install -y bubblewrap` 并重跑，关闭 L-1 的最后一格。
+
+## 会话总结：Electron 升级前的版本备份 · 2026-10-21（第二十五轮）
+
+### 会话的背景
+在评估 Electron 33 → 45 升级风险后，用户要求先备份当前版本，避免升级引入连锁问题后无法快速回退。
+
+### 会话的主要目的
+把当前「Electron 33 基线」固化成可回退的版本快照，并保留离线副本。
+
+### 完成的主要任务
+- **对齐本地与远端**：`git fetch` 后将本地 `main` 对齐到 `13c69d3`，工作区 0 dirty。
+- **创建并推送备份标签**：`v0.6.1-beta-e33-backup`（annotated tag，含版本/运行时/最后绿色 CI 信息）。
+- **创建并推送备份分支**：`backup/electron33`（与标签指向同一提交）。
+- **生成离线 bundle**：`/Users/jianma/Desktop/MJCode-backups/mjcode-electron33-20261021.bundle`（8.5MB，`--all` 全量）。
+
+### 会话中主要使用的技术栈
+Git tag / branch / bundle · GitHub 远端引用 · CI 运行记录（run `39556290703` 为最后一次绿色）。
+
+### 关键决策和解决方案
+1. **双保险**：远端 tag + branch 可在线恢复，本地 bundle 可在远端不可用时恢复。
+2. **记录真实基线**：标签注明 Electron `33.4.11`、electron-builder `25`、CI Node `22`、sql.js `1.13.0`、better-sqlite3 `11.10.0`（仅开发可选）。
+3. **如实标注 CI 状态**：当前提交 `13c69d3` 的两次失败均为 runner 偶发超时（不同套件），最后绿色为 `6df150f`（run `39556290703`），不把「红」写成「绿」。
+4. **回退口径**：`git checkout v0.6.1-beta-e33-backup`（或 `backup/electron33`）；离线恢复用 `git clone <bundle>`。
+
+### 会话中主要使用的工具
+`Shell`（git / curl / ls）/ `Edit`。
+
+### 修改了哪些文件
+| 文件 | 类型 | 修改内容 | 原因 |
+|---|---|---|---|
+| `README.md` | 修改 | 追加本节总结 | 用户固定规则 |
+| 远端 `v0.6.1-beta-e33-backup` | 新增引用 | 指向 `13c69d3` 的 annotated tag | 版本备份 |
+| 远端 `backup/electron33` | 新增引用 | 指向 `13c69d3` 的分支 | 版本备份 |
+| `/Users/jianma/Desktop/MJCode-backups/mjcode-electron33-20261021.bundle` | 新增文件（仓库外） | `git bundle --all` | 离线备份 |
+
+### 文件修改的详细内容
+- 标签与分支：未改动任何源码；仅新增 git 引用。
+- 离线 bundle：包含仓库全部引用与历史，可用于在无远端时完整恢复。
+
+### 尚存问题与推荐下一步
+- 备份已完成；升级前建议先在 `feat/electron-45` 分支操作，并按风险清单逐项验收。
+- **推荐下一步**：先升 electron-builder 25 → 26（单独验证 33 仍可打包），再升 Electron 45 并补 `ELECTRON_RUN_AS_NODE` 门禁。
