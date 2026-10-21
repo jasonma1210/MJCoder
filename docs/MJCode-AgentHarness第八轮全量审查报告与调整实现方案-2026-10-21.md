@@ -713,8 +713,10 @@ cd /Users/jianma/Desktop/MJCode/desktop && node test/run-all.mjs
 | --- | --- | --- | --- |
 | `9de20ca` | `feat(team+platform)` 军团团队层 + 第八轮平台治理 + 文档/门禁同步 | 122 文件 / +17107 / −681 | 干净 worktree：**252 / 252 / 0 红** |
 | `bf423fa` | `fix(release)` CHANGELOG 入库（见 §8.5 N-2） | 2 文件 / +249 | 同上；`release-update` 由 9/10 → **10/10** |
+| `2d81e18` | `docs(r8)` 报告补落地实录与提交台账 + 技术文档里程碑同步 | 2 文件 / +… | docs-consistency 23/23、doc-fact-check ✓ |
+| `7ebba4d` | `feat(r8)` 收口 **D-805 / D-807② / D-812** | 11 文件 / +529 / −46 | **256 / 256 / 0 红**；新增套件分别 20 / 11 条，生态套件 17 → 22 条 |
 
-`origin/main` 仍为 `24acc15`，本地 **ahead 2 未推送**。
+`origin/main` 仍为 `24acc15`，本地 **ahead 4 未推送**（发布前必须 push，否则制品按旧 HEAD 构建）。
 
 ### 8.2 §5 批次表的执行状态（逐项对账，不按计划口径写）
 
@@ -892,10 +894,11 @@ ln -sfn $PWD/desktop/node_modules /tmp/wt-v2/desktop/node_modules
 ln -sfn $PWD/desktop/renderer/node_modules /tmp/wt-v2/desktop/renderer/node_modules
 cd /tmp/wt-v2/desktop && NODE_OPTIONS="--preserve-symlinks" node test/run-all.mjs
 
-# 落地后基线（2026-10-21）
-git rev-parse --short HEAD          # bf423fa
+# 落地后基线（2026-10-21 收尾，commit 7ebba4d）
+git rev-parse --short HEAD          # 7ebba4d
 git status --porcelain | wc -l      # 0
-ls test | grep -cE '\.test\.(js|mjs)$'   # 247 个文件 ⇒ 249 套件（+2 smoke），+3 GATES = 252
+ls test | grep -cE '\.test\.(js|mjs)$'   # 249 个文件 ⇒ 251 套件（+2 smoke），+5 GATES = 256
+node scripts/gen-ecosystem-counts.mjs --json   # 生态口径（skills/mcp/employees/skillsCatalog/workspaceSkills）
 ```
 
 ---
