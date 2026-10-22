@@ -175,16 +175,38 @@ jobs:
     env:
       # electron-builder 走 GitHub Releases 时需要 token；不注入则 --publish always 必失败
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # 签名证书按平台分流：mac 的 p12 与 win 的 pfx 不能共用一个变量名，
-      # 否则三平台矩阵并行时互相覆盖，只能有一个平台真正签上（技术设计文档 X19）。
-      # 兼容旧配置：未配置分平台变量时回落到原来的 CSC_LINK / CSC_KEY_PASSWORD。
-      CSC_LINK: ${{ matrix.os == 'macos-latest' && (secrets.CSC_LINK_MAC || secrets.CSC_LINK) || matrix.os == 'windows-latest' && (secrets.CSC_LINK_WIN || secrets.CSC_LINK) || '' }}
-      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && (secrets.CSC_KEY_PASSWORD_MAC || secrets.CSC_KEY_PASSWORD) || matrix.os == 'windows-latest' && (secrets.CSC_KEY_PASSWORD_WIN || secrets.CSC_KEY_PASSWORD) || '' }}
+      # 签名证书不再写进矩阵 env：空串会被 electron-builder 当成证书文件路径
+      # （报错「<cwd> not a file」），故改为在「配置签名密钥」步骤里**仅当密钥存在时**
+      # 才 export 到 GITHUB_ENV；无密钥时 CSC_LINK 完全不出现，electron-builder 走
+      # 自动发现 → 无密钥则产出未签名包（warning，不致命）。
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
+
+      # 配置签名密钥（平台分流）：仅当对应密钥非空才 export CSC_LINK / CSC_KEY_PASSWORD
+      # 到 GITHUB_ENV，避免空串触发 electron-builder 的「not a file」致命错误。
+      # mac 优先 CSC_LINK_MAC / CSC_KEY_PASSWORD_MAC，win 优先 CSC_LINK_WIN /
+      # CSC_KEY_PASSWORD_WIN，均无则回落通用 CSC_LINK / CSC_KEY_PASSWORD。
+      - name: Configure code signing from secrets
+        shell: bash
+        env:
+          M_LINK: ${{ matrix.os == 'macos-latest' && secrets.CSC_LINK_MAC || '' }}
+          M_PWD: ${{ matrix.os == 'macos-latest' && secrets.CSC_KEY_PASSWORD_MAC || '' }}
+          W_LINK: ${{ matrix.os == 'windows-latest' && secrets.CSC_LINK_WIN || '' }}
+          W_PWD: ${{ matrix.os == 'windows-latest' && secrets.CSC_KEY_PASSWORD_WIN || '' }}
+          GENERIC_LINK: ${{ secrets.CSC_LINK }}
+          GENERIC_PWD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          CSC_LINK="${M_LINK:-${W_LINK:-${GENERIC_LINK:-}}}"
+          CSC_PWD="${M_PWD:-${W_PWD:-${GENERIC_PWD:-}}}"
+          if [ -n "$CSC_LINK" ]; then
+            echo "CSC_LINK=$CSC_LINK" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$CSC_PWD" >> "$GITHUB_ENV"
+          else
+            echo "build 无签名密钥，产出未签名包（CSC_LINK 不设置）"
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -204,6 +226,7 @@ jobs:
       - name: Sync version from tag
         id: channel
         working-directory: desktop
+        shell: bash
         run: |
           set -euo pipefail
           # 先捕获再 eval：`eval "$(cmd)"` 在 cmd 失败时会 eval 空串并返回 0，
@@ -245,6 +268,7 @@ jobs:
       #   保留它是为了「若将来换 generic/S3 发布源仍能一次产全通道 yml」，属显式声明意图。
       - name: Package
         working-directory: desktop
+        shell: bash
         # 显式从解析 step 的 outputs 取通道变量，不依赖 GITHUB_ENV 的隐式传播
         # （脚本虽写了 GITHUB_ENV，但显式 env 让本步骤自解释，也避免 step 重排后静默拿空值）。
         env:
