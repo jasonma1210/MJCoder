@@ -88,8 +88,8 @@ const events = [];
   ] });
   await runGroup('w2');
   const g2 = await waitSettled(store, 'w2');
-  check('非关键失败不阻塞组（组 done）', g2.status === 'done');
-  check('降级警告进入组结果 warnings', g2.result.warnings.length === 1 && g2.result.warnings[0].includes('会失败'));
+  check('非关键失败也不再伪装 done（2026-10-21 收口）', g2.status === 'failed', g2.status);
+  check('降级警告进入组结果 warnings', g2.result.warnings.some((w) => w.includes('会失败')), JSON.stringify(g2.result.warnings));
 
   // ── 场景 3：关键失败 → 下游跳过 → 组 paused ──
   initWorkerPool({
@@ -202,7 +202,7 @@ const events = [];
   const aborted = abortTask('w7', 'm1');
   const g7 = await waitSettled(store, 'w7', 8000);
   check('abortTask 命中在役运行', aborted === true);
-  check('强制关闭：failed 且不重试（retryCount=0）', g7.status === 'done'
+  check('强制关闭：任务 failed 且不重试，组同样 failed（不伪装 done）', g7.status === 'failed'
     && g7.tasks[0].status === 'failed'
     && g7.tasks[0].error === '已手动强制关闭'
     && g7.tasks[0].retryCount === 0);
@@ -228,7 +228,7 @@ const events = [];
   const g8 = await waitSettled(store, 'w8', 8000);
   const u1 = g8.tasks.find((t) => t.taskId === 'u1');
   const u2 = g8.tasks.find((t) => t.taskId === 'u2');
-  check('未完成收尾 → failed 且保留部分结论', g8.status === 'done'
+  check('未完成收尾 → 任务 failed 且保留部分结论，组 failed', g8.status === 'failed'
     && u1.status === 'failed' && u1.error.includes('未完成收尾')
     && typeof u1.result?.summary === 'string' && u1.result.summary.includes('已主动停止'));
   // 回归：用户实测 t2/t4 的产出就是这段文案，此前被标成 done（看板「完成」但实际没产出）。

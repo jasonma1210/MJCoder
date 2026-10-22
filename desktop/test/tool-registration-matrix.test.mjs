@@ -67,7 +67,9 @@ const TOOL_SET = new Set(ALL_TOOLS);
 // 允许的「非静态 schema」工具：运行时条件追加，不进 BASE_TOOLS（其条数被基线条数测试钉死）。
 // M5 / T5-8：team_* 只在成员任务（宿主注入 teamContext）时追加，故同属运行时 schema。
 // B-04（2026-10-21）新增 team_read_messages：模型侧读消息。
-const RUNTIME_SCHEMA_TOOLS = ['computer_use', 'team_list_members', 'team_send_message', 'team_board', 'team_wait', 'team_read_messages'];
+// DS Bots / T6-6：artifact_* 只在宿主注入 artifactContext（会话绑定项目空间）时追加，同属运行时 schema。
+const RUNTIME_SCHEMA_TOOLS = ['computer_use', 'team_list_members', 'team_send_message', 'team_board', 'team_wait', 'team_read_messages',
+  'artifact_index', 'artifact_get_section', 'artifact_patch_section', 'artifact_get_diff'];
 // 「无 UI 轨迹标签」允许清单：编排/插件/定时/PR 类工具在其它视图展示，无 toolTrace.* 条目。
 const NO_LABEL_TOOLS = ['orchestrate_task', 'search_plugins', 'install_plugin', 'scheduled_create',
   'pr_list', 'pr_view', 'pr_diff', 'pr_review', 'pr_comment'];
@@ -165,8 +167,19 @@ const STUB_PR = Object.fromEntries(['prList', 'prView', 'prDiff', 'prReview', 'p
 const INTERACTIVE_KEYS = asSet(Object.keys(scheduledTools.scheduledToolHandlers({ prTools: STUB_PR })));
 /** 成员任务形态：Worker 工厂注入 teamTools。 */
 const MEMBER_TASK_KEYS = asSet(Object.keys(scheduledTools.scheduledToolHandlers({ prTools: STUB_PR, teamTools: STUB_TEAM_TOOLS })));
+// T6-6：artifact_* 由独立工厂 `createArtifactToolHandlers` 以展开字面量注入（两形态都注入），
+// 故它不在 scheduledTools 的键集里。这里**实跑工厂**取键集（与 team_* 的「实跑形态」同一判据），
+// 而不是去 main.js 里 grep 通道名——展开语法下 grep 只会命中工厂源码，等于自证。
+const artifactTools = require(path.join(ROOT, 'main/artifactTools.js'));
+const ARTIFACT_KEYS = asSet(Object.keys(artifactTools.createArtifactToolHandlers({
+  artifactContext: { projectId: 'prj_probe' },
+})));
 /** 某通道在「它该出现的形态」下的 handler 键集合；非条件展开的通道返回 null（沿用源码区间判据）。 */
-const shapeKeysOf = (channel) => (MEMBER_ONLY_SET.has(channel) ? MEMBER_TASK_KEYS : null);
+const shapeKeysOf = (channel) => {
+  if (MEMBER_ONLY_SET.has(channel)) return MEMBER_TASK_KEYS;
+  if (ARTIFACT_KEYS.has(channel)) return ARTIFACT_KEYS;
+  return null;
+};
 const bpMatch = indexSrc.match(/const BASE_PROMPT = `([\s\S]*?)`;/);
 const PROMPT = bpMatch ? bpMatch[1] : '';
 
@@ -292,6 +305,16 @@ console.log('');
   check('③-c 成员任务形态（注入 teamTools）确有全部 member-task 通道',
     missingInMemberShape.length === 0,
     missingInMemberShape.length ? `缺失：${missingInMemberShape.join(',')}` : `${MEMBER_ONLY_SET.size} 个通道到位`);
+
+  // ③-e（T6-6）：工件工厂产出的键必须与引擎映射的四个通道**双向一致**——
+  // 少一个 ⇒ 引擎通告了模型却调不到；多一个 ⇒ 工厂里有死键（审批/超时/标签全无归属）。
+  const artifactChannels = ['artifact_index', 'artifact_get_section', 'artifact_patch_section', 'artifact_get_diff']
+    .map((t) => core.TOOL_HANDLER_NAMES[t]).filter(Boolean);
+  const artifactExtra = [...ARTIFACT_KEYS].filter((k) => !artifactChannels.includes(k));
+  const artifactMissing = artifactChannels.filter((k) => !ARTIFACT_KEYS.has(k));
+  check('③-e 工件工厂键集 === 引擎映射的 4 个工件通道',
+    artifactChannels.length === 4 && artifactExtra.length === 0 && artifactMissing.length === 0,
+    `factory=${[...ARTIFACT_KEYS].join(',')} 缺=${artifactMissing.join(',') || '无'} 多=${artifactExtra.join(',') || '无'}`);
 }
 {
   // ③-d 声明的通道名必须是**真实 RPC 通道**（防作用域表写了不存在/拼错的通道名，

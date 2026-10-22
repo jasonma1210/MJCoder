@@ -101,14 +101,14 @@ function computeLevels(tasks) {
  * @returns {{ok:boolean, waves:Array<{index:number,level:number,taskIds:string[]}>, assignments:Object,
  *   activeMemberIds:string[], deferredMembers:Array, reason?:string}}
  */
-function planWaves({ tasks, members, maxWaves = MAX_WAVES } = {}) {
+function planWaves({ tasks, members, maxWaves = MAX_WAVES, maxPerType = MAX_PER_TYPE_IN_RUN } = {}) {
   const list = (Array.isArray(tasks) ? tasks : [])
     .filter((t) => t && t.id)
     .map((t, i) => ({ ...t, __order: i }));
   if (!list.length) {
     return { ok: false, reason: 'empty_tasks', waves: [], assignments: {}, activeMemberIds: [], deferredMembers: [] };
   }
-  const { active, deferred } = selectActiveMembers(members);
+  const { active, deferred } = selectActiveMembers(members, { maxPerType });
   const levels = computeLevels(list);
   const byLevel = new Map();
   for (const t of list) {

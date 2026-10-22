@@ -277,7 +277,7 @@
   "memoryAutoCaptureDesc": "开启后每轮对话结束自动留存「问题 → 结论」摘要到项目记忆（模型结论档可信度）；默认关闭，可用 /mem 指令主动留存。",
   "memoryAutoOn": "已开启自动沉淀",
   "memoryAutoOff": "已关闭自动沉淀",
-  "memoryTeamAutoLabel": "沉淀军团团队记忆",
+  "memoryTeamAutoLabel": "沉淀团队层记忆",
   "memoryTeamAutoDesc": "子任务成功完成后，把结论留存为团队记忆（仅本团队可见，上限 200 条）。与上面的「自动沉淀会话记忆」相互独立：默认开启，关闭它不影响主对话记忆，反之亦然。",
   "memoryTeamAutoOn": "已开启团队沉淀",
   "memoryTeamAutoOff": "已关闭团队沉淀",

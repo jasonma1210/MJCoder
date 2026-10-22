@@ -120,12 +120,32 @@ function humanizeGroupResult(group) {
     lines.push(`降级警告 ${result.warnings.length} 条：${result.warnings.slice(0, 3).join('；')}${result.warnings.length > 3 ? ' 等' : ''}`);
   }
   if (result.summary) {
-    lines.push(`各子任务结论摘要：\n${String(result.summary).slice(0, 4000)}`);
+    // 2026-10-22：组聚合摘要是结构化对象数组（aggregator/merge.js），直接 String() 会得到
+    // `[object Object]`，重规划提示词因此拿不到任何有效结论。这里按「标题：正文」归一。
+    lines.push(`各子任务结论摘要：\n${summaryTextOf(result.summary).slice(0, 4000)}`);
   }
   if (group.status === 'paused' || group.status === 'failed' || failed.length > 0) {
     lines.push('建议：并发 Agent 出现问题时，把 max_agents 调小（如 1 个串行重试）再次调用 orchestrate_task；已完成的子任务结论可直接复用，不必重复执行。');
   }
   return lines.filter(Boolean).join('\n');
+}
+
+/** 组摘要 → 可读文本（兼容字符串 / `[{title,text}]` / 字符串数组；与 shared/teamStream.mjs 同口径）。 */
+function summaryTextOf(raw) {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    return raw.map((it) => {
+      if (it == null) return '';
+      if (typeof it === 'string') return it;
+      if (typeof it !== 'object') return String(it);
+      const text = String(it.text == null ? '' : it.text).trim();
+      if (!text) return '';
+      return it.title ? `${it.title}：${text}` : text;
+    }).filter(Boolean).join('\n');
+  }
+  if (typeof raw === 'object') return String(raw.text == null ? (raw.summary == null ? '' : raw.summary) : raw.text);
+  return String(raw);
 }
 
 module.exports = { waitGroupSettled, humanizeGroupResult, diffGroupEvents, DEFAULT_TIMEOUT_MS };

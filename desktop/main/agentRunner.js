@@ -375,6 +375,9 @@ function startAgentRun(payload, sender) {
       runWallClockMs: Number(payload.runWallClockMs) > 0 ? Number(payload.runWallClockMs) : undefined,
       // Phase 3-1：断点恢复上下文（渲染层「继续」时从 checkpointStore 取回注入）
       resumeContext: payload.resumeContext || '',
+      // 2026-10-21 P0：上下文策略（压缩阈值/尾部保留/工具输出裁剪）——白名单放行，
+      // 未下发时引擎用 DEFAULT_COMPACT_POLICY，不会因缺省把闸门弄失效。
+      compactPolicy: payload.compactPolicy || undefined,
       // 2026-10-19：任务收尾描述粒度——渲染层设置经 payload 下发，白名单必须放行，
       // 否则「单测直接调 runAgent 全绿、真机全废」（本文件历史教训，见上方注释）。
       responseStyle: payload.responseStyle || undefined,
@@ -382,6 +385,10 @@ function startAgentRun(payload, sender) {
       // 引擎才会把 computer_use 放进 tools 数组（V02 白名单守卫兜底）。此前本白名单
       // 会整体丢弃未登记参数 ⇒ 单测直调 runAgent 全绿、真机全废，故必须显式放行。
       computerUseEnabled: process.platform === 'darwin' && approvalSettings.getComputerUseEnabled(),
+      // T6-6：工件上下文（宿主按会话反查 project_spaces 后随 payload 下发）。
+      // 与 teamContext 同构：只有宿主提供了项目绑定，引擎才通告 4 个工件工具；
+      // 缺省 undefined ⇒ 引擎不暴露任何工件工具（无项目上下文的普通对话零侵入）。
+      artifactContext: payload.artifactContext || undefined,
     };
     // 第八轮 B-01 / D-808：rolePreset 的宿主侧应用（审批档/沙箱取更严、per-agent 模型绑定、
     // 技能按名装载）统一收敛在 rolePresetApply —— 与 Worker 通道同一份实现。

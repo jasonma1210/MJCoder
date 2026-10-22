@@ -14,10 +14,45 @@
 
 export const TEAM_MESSAGE_KINDS = ['assign', 'handoff', 'question', 'report', 'artifact_ref', 'system'];
 
-const TASK_PROGRESS_KEYS = ['done', 'failed', 'running', 'waiting', 'queued', 'pending', 'skipped'];
+// T6-4（§5.1）：quota_suspend 必须进入进度口径——否则暂停期间卡片计数里「少了这批任务」，
+// 用户看到 total 与实际任务数不符。它是非终态，但也不是 running/queued，需要独立分组。
+const TASK_PROGRESS_KEYS = ['done', 'failed', 'running', 'waiting', 'queued', 'pending', 'skipped', 'quota_suspend'];
 
 function asString(v) {
   return String(v == null ? '' : v).trim();
+}
+
+/**
+ * 摘要归一为可读文本（2026-10-22 真机反馈：对话卡出现 `[object Object],...`）。
+ *
+ * 为什么需要：`aggregator/merge.js` 的 `merged.summary` 是**结构化对象数组**
+ * `[{taskId,title,text}]`（供程序消费），组终态直接原样落到 `task_groups.result_json`。
+ * 渲染层此前 `String(array)` 得到 `[object Object]`，用户看到的就是一串乱码。
+ * 归一放在投影层（唯一渲染口径）：存储保持结构化不变，历史 run 重放也能正确显示。
+ *
+ * 兼容三种历史形态：字符串 / 对象数组 / 纯字符串数组；无法识别的对象回落 `text|summary`。
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function summaryTextOf(raw) {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((it) => {
+        if (it == null) return '';
+        if (typeof it === 'string') return it;
+        if (typeof it !== 'object') return String(it);
+        const text = String(it.text == null ? '' : it.text).trim();
+        if (!text) return '';
+        const title = asString(it.title);
+        return title ? `${title}：${text}` : text;
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof raw === 'object') return String(raw.text == null ? (raw.summary == null ? '' : raw.summary) : raw.text);
+  return String(raw);
 }
 
 /**
@@ -40,6 +75,65 @@ function dispatchInfoOf(full) {
     active: Array.isArray(d.activeMemberIds) ? d.activeMemberIds.length : 0,
     deferred: deferred.length,
     deferredReasons: reasons,
+  };
+}
+
+/**
+ * 组预算视图（2026-10-21 用户需求：预算可视化）。
+ *
+ * 数据源有两条，各管一段，不互相替代：
+ *   · `dag.runMeta.budget` —— 计划口径（上限），随 dag_json 落库，历史 run 可复现；
+ *   · `task.result.tokensUsed` —— 已结算的实际用量（任务结束才有值）；
+ *   · `live` —— 主进程内存账本 `groupBudget.snapshotOf`（含在途结算值），仅当次进程有效。
+ *     历史卡没有 live 也能显示（用量来自任务结果），因此 live 是**增强**不是必需。
+ *
+ * 四条边界：无预算 → 返回 null（普通编排组不该显示 0/0 的假预算条）；
+ * 上限非数字 → 0；用量取「已结算」与「内存账本」的较大值，避免两账不同步时显示回退；
+ * 百分比夹在 0~100（软上限下实际用量可能超额，界面不画超 100% 的条）。
+ * @param {any} full taskStore.getGroup 的返回值
+ * @param {{tokens?:number, elapsedMs?:number}|null} live groupBudget.snapshotOf 的产物
+ * @returns {{maxTokens:number, maxRounds:number, maxWallMs:number, usedTokens:number,
+ *   remainingTokens:number, percent:number, elapsedMs:number, byTask:Record<string,number>}|null}
+ */
+export function budgetInfoOf(full, live) {
+  const b = full && full.dag && full.dag.runMeta && full.dag.runMeta.budget;
+  if (!b || typeof b !== 'object') return null;
+  const maxTokens = Math.max(0, Number(b.max_tokens) || 0);
+  const maxRounds = Math.max(0, Number(b.max_rounds) || 0);
+  const maxWallMs = Math.max(0, Number(b.max_wall_ms) || 0);
+  const byTask = {};
+  let persisted = 0;
+  for (const t of (Array.isArray(full.tasks) ? full.tasks : [])) {
+    const id = asString(t && t.taskId);
+    const n = Math.max(0, Number(t && t.result && t.result.tokensUsed) || 0);
+    if (id) byTask[id] = n;
+    persisted += n;
+  }
+  const usedTokens = Math.max(persisted, Math.max(0, Number(live && live.tokens) || 0));
+  return {
+    maxTokens,
+    maxRounds,
+    maxWallMs,
+    usedTokens,
+    remainingTokens: Math.max(0, maxTokens - usedTokens),
+    percent: maxTokens > 0 ? Math.min(100, Math.round((usedTokens / maxTokens) * 100)) : 0,
+    elapsedMs: Math.max(0, Number(live && live.elapsedMs) || 0),
+    byTask,
+  };
+}
+
+/** 渲染层投影用的预算归一（缺键返回 null；字段一律数字，避免界面出现 NaN）。 */
+function normalizeBudgetView(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    maxTokens: Math.max(0, Number(raw.maxTokens) || 0),
+    maxRounds: Math.max(0, Number(raw.maxRounds) || 0),
+    maxWallMs: Math.max(0, Number(raw.maxWallMs) || 0),
+    usedTokens: Math.max(0, Number(raw.usedTokens) || 0),
+    remainingTokens: Math.max(0, Number(raw.remainingTokens) || 0),
+    percent: Math.max(0, Math.min(100, Number(raw.percent) || 0)),
+    elapsedMs: Math.max(0, Number(raw.elapsedMs) || 0),
+    byTask: raw.byTask && typeof raw.byTask === 'object' ? { ...raw.byTask } : {},
   };
 }
 
@@ -144,7 +238,7 @@ export function projectTeamRuns(runs) {
         status: asString(t.status),
         ownerMemberId: asString(t.ownerMemberId) || null,
         ownerName: nameById.get(asString(t.ownerMemberId)) || '',
-        resultSummary: String(t.resultSummary == null ? '' : t.resultSummary),
+        resultSummary: summaryTextOf(t.resultSummary),
         // 产物路径（任务 result.artifacts）：对话卡/看板可点击打开（T5-6 遗留项）
         artifacts: Array.isArray(t.artifacts) ? t.artifacts.map(asString).filter(Boolean) : [],
         error: String(t.error == null ? '' : t.error),
@@ -154,6 +248,8 @@ export function projectTeamRuns(runs) {
         waitingOn: Array.isArray(t.waitingOn) ? t.waitingOn.map(asString).filter(Boolean) : [],
         // 处理流程（T5-6，2026-10-21）：该任务的工具调用/撤员/改派/等待轨迹
         events: (Array.isArray(t.events) ? t.events : []).map(normalizeTaskEvent),
+        // 预算可视化：该任务实际消耗（任务结束才有值，运行中为 0）
+        tokensUsed: Math.max(0, Number(t.tokensUsed) || 0),
       }));
 
     const counts = { total: messages.length, byKind: {} };
@@ -169,7 +265,7 @@ export function projectTeamRuns(runs) {
       teamName: asString(raw.teamName) || asString(raw.teamId),
       status: asString(raw.status) || 'ready',
       goal: String(raw.goal == null ? '' : raw.goal),
-      summary: String(raw.summary == null ? '' : raw.summary),
+      summary: summaryTextOf(raw.summary),
       error: String(raw.error == null ? '' : raw.error),
       waves: Number.isFinite(Number(raw.waves)) ? Number(raw.waves) : 0,
       // 第八轮 B-05：派活计划口径（谁被闸门挡下、为什么）。缺键给零值，渲染层按 0 不展示。
@@ -182,6 +278,8 @@ export function projectTeamRuns(runs) {
             ? raw.dispatch.deferredReasons.map(asString).filter(Boolean) : [],
         }
         : { mode: '', active: 0, deferred: 0, deferredReasons: [] },
+      // 预算可视化（2026-10-21）：无预算的组（普通编排 / 旧 run）为 null，界面不画预算条。
+      budget: normalizeBudgetView(raw.budget),
       createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : 0,
       updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
       lastActivityAt: Math.max(Number(raw.updatedAt) || 0, lastMessageAt),
@@ -220,7 +318,7 @@ export function memberLabel(card, memberId) {
  *
  * 输出按建组时间倒序（最新在前），渲染层投影时再统一转成对话顺序（旧 → 新）。
  */
-export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam }) {
+export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam, getBudgetLive }) {
   const groupList = (Array.isArray(groups) ? groups : []).filter((g) => asString(g && g.group_id));
   const msgList = Array.isArray(messages) ? messages : [];
   const eventList = (Array.isArray(events) ? events : []).map(normalizeTaskEvent);
@@ -244,7 +342,7 @@ export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam
       title: String(t.title == null ? '' : t.title),
       status: asString(t.status),
       ownerMemberId: asString(t.ownerMemberId) || null,
-      resultSummary: (t.result && t.result.summary) || '',
+      resultSummary: summaryTextOf(t.result && t.result.summary),
       // 产物路径：对话卡/看板「引用」可点击打开（T5-6 遗留项）
       artifacts: Array.isArray(t.result && t.result.artifacts) ? t.result.artifacts.map(asString).filter(Boolean) : [],
       error: t.error || '',
@@ -255,6 +353,8 @@ export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam
       waitingOn: Array.isArray(t.waitingOn) ? t.waitingOn.map(asString).filter(Boolean) : [],
       // 该任务的处理轨迹（工具调用/撤员/改派/等待），按发生顺序
       events: (eventsByRun.get(runId) || []).filter((e) => e.taskId === asString(t.taskId)),
+      // 预算可视化：任务已结算的实际消耗（未结束为 0）
+      tokensUsed: Math.max(0, Number(t && t.result && t.result.tokensUsed) || 0),
     }));
     runs.push({
       runId,
@@ -265,13 +365,16 @@ export function assembleThreadRuns({ groups, messages, events, getGroup, getTeam
       goal: String(full.goal == null ? '' : full.goal),
       createdAt: Number(full.created_at) || 0,
       updatedAt: Number(full.updated_at) || 0,
-      summary: (full.result && full.result.summary) || '',
+      summary: summaryTextOf(full.result && full.result.summary),
       error: full.error || '',
       waves: full.dag && Array.isArray(full.dag.waves) ? full.dag.waves.length : 0,
       // 第八轮 B-05：类型闸/人数闸挡下的成员数（用户在派活卡上要能看见「派了 10 人、3 人没上」
       // 以及原因）。数据源是 dag.runMeta.dispatch（随计划一起落库，run 级快照，可复现）；
       // 读不到就是 0（旧 run / 普通编排组没有这个键），不抛错、不造字段。
       dispatch: dispatchInfoOf(full),
+      // 预算可视化：上限来自计划快照，实时用量由宿主注入（groupBudget.snapshotOf）。
+      // 注入缺失（历史 run / 普通编排）时仅按已结算任务用量计算，界面仍可读。
+      budget: budgetInfoOf(full, typeof getBudgetLive === 'function' ? getBudgetLive(runId) : null),
       // M5 / T5-9：成员列表与运行期同口径——run 快照优先，缺失才回落实时名册。
       // 若这里读实时名册，中途被下架的成员会在历史卡上「消失」，而任务 owner 仍指向他，
       // 表现为「未认领的任务却有产出」；快照优先保证历史 run 可复现、可审计。

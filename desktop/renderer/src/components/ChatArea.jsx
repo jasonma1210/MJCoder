@@ -149,6 +149,11 @@ export default function ChatArea({
     }
   }, [initialPrompt]);
 
+  // R-15/R-5：sendOrDispatch 的 latest-ref——useAgentRun 的轮末接力经 relayRef 读它，
+  // 选中军团时入队消息也走派活分流；未选中时 sendOrDispatch 内部即回落 send，行为不变。
+  const sendOrDispatchRef = useRef(null);
+  sendOrDispatchRef.current = sendOrDispatch;
+
   // 加载已启用的文件技能内容（~/.mjcode/skills）
   useEffect(() => {
     let cancelled = false;
@@ -414,16 +419,21 @@ export default function ChatArea({
     setWindowStart, setCompacting, setPlanMode, setRunMode, setModeMsg, setWorktree,
     abortRef, activeThreadIdRef, activeRunIdRef, runStartRef, agentFilesRef, messagesRef, steerPendingRef,
     onNewMessage, onThreadStatus, onAgentFilesChange, onThreadCreated, onAutoProject, onSubagentEvent,
+    // R-15/R-5：轮末接力分流（latest-ref 持 sendOrDispatch；未选中军团时内部回落 send）
+    relayRef: sendOrDispatchRef,
   });
 
-  // 排队卡片「立即执行」：stop() 之后等 loading 归零（中止收尾完成）再发这条。
+  // 排队卡片「直接发送」：stop() 之后等 loading 归零（中止收尾完成）再发这条。
   // 直接在 stop() 后面调 send() 会与收尾抢状态：收尾分支会把 loading 置 false、把线程置 idle，
-  // 结果新任务刚起就被写成「空闲」。
+  // 结果新任务刚起就被写成「空闲」。本轮正常结束后的「暂缓发送」接力由 useAgentRun 统一负责
+  // （中止不接力，见 queued-message.test.mjs），这里只承接用户显式点「直接发送」的挂起项。
+  // R-15/R-5（2026-10-22）：两处挂起发送都走 sendOrDispatch——选中军团时入队消息同样派活，
+  // 不再静默降级成普通 send（此前 relayRef 未注入时的行为对非军团用户逐字节一致）。
   useEffect(() => {
     if (!pendingRun || loading) return;
     const text = pendingRun;
     setPendingRun(null);
-    send(text);
+    sendOrDispatch(text);
     // send 每次渲染重建；此处只在「挂起项就绪且已空闲」时触发一次，故意不列依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingRun, loading]);
@@ -449,6 +459,9 @@ export default function ChatArea({
   // 派活参数按缺省回落：模式取团队 defaultMode、预算取团队 budget、成员取全队（都由主进程承担单一事实来源）。
   // 边界：① 未选团队 → 走普通 send；② 计划分步（opts.planStep 三参调用）→ 仍走普通 send（分步是既有编排，不走军团）。
   // 缺统筹：本地预检先拦（activeTeam.leadMissing），主进程 LEAD_MISSING 是权威兜底判据。
+  // R-15/R-5（2026-10-22）：本函数是**全部发送路径的唯一分流点**——除输入框直接发送外，
+  // 「排队卡片立即执行」与「轮末自动接力」（useAgentRun 经 relayRef）也汇到这里，
+  // 选中军团时入队消息同样派活（此前这两条路直调 send，静默丢失派活语义）。
   async function sendOrDispatch(text, forcedThread, opts) {
     // Composer 的发送按钮是**无参**调用（onSend()），与 useAgentRun.send 不同、这里不会自动回落 input；
     // 此前只读 text 导致选了军团后点按钮 goal='' 直接 return（输入框不清空、无任何反馈）。
@@ -465,6 +478,39 @@ export default function ChatArea({
       // 因此派活前先把会话落库（与 useAgentRun.send 同一口径），并把目标作为用户消息持久化，
       // 这样对话里能同时看到「用户提问 + 团队协同卡」，刷新/切回也不会丢。
       let runThreadId = thread?.id != null ? String(thread.id) : null;
+      // 2026-10-21 真机修复：团队派活此前直接复用 cwd/currentProject——新建会话时若用户
+      // 没有主动选目录（projectPicked=false），activeProject 是上次任务的残留，团队任务
+      // 会落进上一个工作区（用户反馈「新建任务默认绑定工作区 10-13」）。
+      // 与 useAgentRun.send 同一口径：新会话且未主动选目录 → 自动创建时间戳目录；
+      // 创建失败直接阻断派活（不回落旧目录），避免产物写错位置。
+      let dispatchCwd = cwd;
+      let dispatchProjectPath = project?.path || '';
+      if (runThreadId == null && !projectPicked) {
+        let dirError = '';
+        try {
+          const r = await window.mjcode?.createProject?.({ name: '' });
+          if (r?.ok && r.path) {
+            dispatchCwd = r.path;
+            dispatchProjectPath = r.path;
+            onAutoProject?.({
+              id: r.path,
+              name: r.name || String(r.path).split('/').filter(Boolean).pop() || r.path,
+              path: r.path,
+              branch: '',
+            });
+          } else {
+            dirError = String(r?.error || t('runtime.unknownError'));
+          }
+        } catch (err) {
+          dirError = String(err?.message || err);
+        }
+        if (dirError) {
+          console.error('[chat] auto task dir creation failed, dispatch blocked:', dirError);
+          setTeamErr(t('runtime.taskDirCreateFailed', { error: dirError }));
+          setTeamBusy(false);
+          return;
+        }
+      }
       if (runThreadId == null) {
         try {
           const nt = await api.createThread({
@@ -472,8 +518,8 @@ export default function ChatArea({
             model_id: selectedModel?.model?.id,
             provider_name: selectedModel?.provider?.name,
             model_name: selectedModel?.model?.model_id,
-            cwd,
-            project_path: project?.path || '',
+            cwd: dispatchCwd,
+            project_path: dispatchProjectPath,
             title: goal.slice(0, 50),
           });
           if (!nt?.id) throw new Error('no thread id');
@@ -491,12 +537,24 @@ export default function ChatArea({
       // 既有会话不会因 thread.id 变化触发消息重拉，就地补气泡；新建会话由切换后的拉取结果覆盖（同一条，不重复）
       if (thread?.id != null) setMessages((m) => [...m, { role: 'user', content: goal }]);
 
+      // 2026-10-21 调试日志：用户点「派活」的渲染层事实（与主进程 ipc/dispatch 日志同一时间线）
+      window.mjcode?.teamsDebugAppend?.({
+        action: 'team_dispatch_click',
+        threadId: runThreadId,
+        detail: { teamId: activeTeam.id, goalLength: goal.length, projectPath: dispatchCwd || dispatchProjectPath || '' },
+      });
       const r = await window.mjcode?.teamsDispatch({
         teamId: activeTeam.id,
         goal,
         threadId: runThreadId,
-        // 工作目录回落：全局团队不带 project_path，用当前会话工作目录（cwd）兜底，worker 才有真实落点
-        projectPath: cwd || project?.path || '',
+        // 工作目录回落：全局团队不带 project_path，用本条任务实际解析出的工作目录兜底，
+        // worker 才有真实落点（新建任务已在上方解析为自建时间戳目录）。
+        projectPath: dispatchCwd || dispatchProjectPath || '',
+      });
+      window.mjcode?.teamsDebugAppend?.({
+        action: 'team_dispatch_result',
+        threadId: runThreadId,
+        detail: { ok: !!r?.ok, code: r?.code || null, tasks: r?.tasks || 0, runId: r?.runId || null, error: r?.error || null },
       });
       if (r?.ok) {
         setInput('');

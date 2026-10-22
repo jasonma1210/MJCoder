@@ -357,6 +357,127 @@ const MIGRATIONS = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_team_messages_run ON team_messages(run_id, seq)');
     },
   },
+  {
+    // DS Bots / T6-1（2026-10-22）：项目空间 · 工件库 · 滑动配额账本（设计稿 §4，7 张表）。
+    //
+    // 为什么全部新建、不改既有表：三层数据必须解耦——
+    //   ① 项目身份（project_spaces）：稳定 ID 承载，不用 cwd / thread 临时值当空间键
+    //      （记忆归档曾因拿临时工作目录当空间键导致项目级记忆召回不到）；
+    //   ② 工件正文（project_artifacts / artifact_sections / artifact_section_versions）：
+    //      独立持久层，模型只能通过工具按片段读写，正文永不进 messages；
+    //   ③ 成本账本（quota_buckets / quota_consumptions）：跨 run / 跨天统计，
+    //      groupBudget 只在一个 run 内有效、run 结束即 clear，无法回答「过去 6 小时花了多少」。
+    //
+    // 状态机唯一侵入点：`sub_tasks.status='quota_suspend'`（TEXT 无 CHECK 约束，本迁移不需要 DDL）。
+    // 版本表只存**变更章节的完整内容**（增量快照），不做全量复制；Vn 由「version ≤ Vn 的最新一行」
+    // 重建。archived 位服务 retain_versions 超限归档（设计稿 §4.2：同表加位，不另建表）。
+    //
+    // 扣费流水是单 Bot 熔断的唯一事实来源（10 分钟窗口实时聚合），故不建 breaker 表——
+    // 多一份持久态就多一处与流水不同步的可能，重启后也从流水自然恢复。
+    version: 14,
+    name: 'project-space-artifact-quota',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_spaces (
+          project_id  TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          category    TEXT NOT NULL DEFAULT 'custom',
+          objective   TEXT NOT NULL DEFAULT '',
+          cwd         TEXT,
+          thread_id   TEXT UNIQUE,
+          team_id     TEXT,
+          artifact_id TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          meta_json   TEXT NOT NULL DEFAULT '{}',
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_spaces_status ON project_spaces(status, updated_at);
+
+        CREATE TABLE IF NOT EXISTS project_artifacts (
+          id              TEXT PRIMARY KEY,
+          project_id      TEXT NOT NULL,
+          kind            TEXT NOT NULL DEFAULT 'document',
+          title           TEXT NOT NULL DEFAULT '',
+          outline_json    TEXT NOT NULL DEFAULT '[]',
+          current_version TEXT NOT NULL DEFAULT 'V0.0',
+          snapshot_policy TEXT NOT NULL DEFAULT 'per_patch',
+          retain_versions INTEGER NOT NULL DEFAULT 10,
+          size_bytes      INTEGER NOT NULL DEFAULT 0,
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_artifacts_project ON project_artifacts(project_id);
+
+        CREATE TABLE IF NOT EXISTS artifact_sections (
+          artifact_id TEXT NOT NULL,
+          section_key TEXT NOT NULL,
+          title       TEXT NOT NULL DEFAULT '',
+          content     TEXT NOT NULL DEFAULT '',
+          version     TEXT NOT NULL DEFAULT 'V0.0',
+          updated_by  TEXT,
+          updated_at  INTEGER NOT NULL,
+          PRIMARY KEY (artifact_id, section_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS artifact_section_versions (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          artifact_id      TEXT NOT NULL,
+          section_key      TEXT NOT NULL,
+          version          TEXT NOT NULL,
+          content          TEXT NOT NULL DEFAULT '',
+          change_summary   TEXT NOT NULL DEFAULT '',
+          author_member_id TEXT,
+          run_id           TEXT,
+          archived         INTEGER NOT NULL DEFAULT 0,
+          created_at       INTEGER NOT NULL,
+          UNIQUE (artifact_id, section_key, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_versions_retention
+          ON artifact_section_versions(artifact_id, archived, id);
+
+        CREATE TABLE IF NOT EXISTS quota_buckets (
+          project_id              TEXT PRIMARY KEY,
+          total_limit             INTEGER NOT NULL DEFAULT 3000000,
+          window_seconds          INTEGER NOT NULL DEFAULT 21600,
+          warn_ratio              REAL NOT NULL DEFAULT 0.7,
+          throttle_ratio          REAL NOT NULL DEFAULT 0.9,
+          resume_min_tokens       INTEGER NOT NULL DEFAULT 100000,
+          resume_hysteresis_ratio REAL NOT NULL DEFAULT 0.85,
+          tier                    TEXT NOT NULL DEFAULT 'standard',
+          created_at              INTEGER NOT NULL,
+          updated_at              INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS quota_consumptions (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id TEXT NOT NULL,
+          run_id     TEXT,
+          task_id    TEXT,
+          member_id  TEXT,
+          tokens     INTEGER NOT NULL,
+          source     TEXT NOT NULL DEFAULT 'round',
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_quota_consumptions_window
+          ON quota_consumptions(project_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_quota_consumptions_member
+          ON quota_consumptions(project_id, member_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS project_runs (
+          run_id       TEXT PRIMARY KEY,
+          project_id   TEXT NOT NULL,
+          thread_id    TEXT,
+          quota_state  TEXT NOT NULL DEFAULT 'ok',
+          summary_json TEXT NOT NULL DEFAULT '{}',
+          summary_at   INTEGER,
+          created_at   INTEGER NOT NULL,
+          updated_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_runs_project ON project_runs(project_id, created_at);
+      `);
+    },
+  },
 ];
 
 function openDb(dataDir) {

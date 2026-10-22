@@ -177,7 +177,7 @@ async function runShellTool(args) {
       fallbackReason = belt.reason;
       console.warn(`[sandbox] Seatbelt 不可真实应用（${belt.reason}），落到统一兜底`);
     } else {
-      const profile = sandbox.buildSeatbeltProfile(policy, cwd, writeGuard.protectedPathsFor(cwd));
+      const profile = sandbox.buildSeatbeltProfileAuto(policy, cwd, writeGuard.protectedPathsFor(cwd));
       // N2：argv 优先——sandbox-exec 支持直接传程序 argv（不经过 /bin/zsh -c，无 shell 面）
       const sbArgv = argvList
         ? ['-p', profile, ...argvList]

@@ -886,7 +886,17 @@ const { scheduledToolHandlers: buildScheduledToolHandlers, scheduledCreate: sche
 // 提前 require（而非在 initTeamsIpc 处）是为了让下方 Worker 工具工厂的闭包在模块解析阶段就有绑定；
 // ipc/teams 模块本身的 deps 在 initTeamsIpc 之后才生效，此处只取函数引用，不触发任何 IO。
 const { createTeamToolHandlers } = require('./teamTools');
+// DS Bots / T6-6：工件协同工具（模型侧四原语）——交互式与成员任务两条通道共用同一工厂，
+// 项目身份一律由宿主经会话绑定反查后注入（模型参数不可伪造）。
+const { createArtifactToolHandlers } = require('./artifactTools');
 const { initTeamsIpc, postTeamMessage } = require('./ipc/teams');
+// DS Bots / T6-2：项目空间 IPC 域（projects:create/list/get/updateStatus）
+const { initProjectsIpc } = require('./ipc/projects');
+// DS Bots / T6-10：工件只读 IPC 域（侧面板订阅）；写通道仍只有模型侧 artifact_* 原生工具
+const { initArtifactsIpc } = require('./ipc/artifacts');
+// 2026-10-21 团队调试日志：初始化与 IPC 域（teams:debug*）。
+const teamDebug = require('./teamDebugLog');
+const { initTeamDebugIpc } = require('./ipc/teamDebug');
 // M5 / T5-10：中断权限矩阵与留痕（§9.2）——策略/执行/审计收敛在单一入口，
 // 与 ipc/teams 的 teams:interrupt 通过 deps.interruptTask 接线（本模块只取函数引用，不触发 IO）。
 const teamInterrupt = require('./teamInterrupt');
@@ -898,6 +908,26 @@ const scheduledToolHandlers = () => buildScheduledToolHandlers({
 });
 // 待确认动作的一键执行：拿**未包装**的原始工具表（用户点「执行」= 这次批准）
 const replayScheduledAction = createScheduledReplay({ getHandlers: scheduledToolHandlers });
+
+// DS Bots / T6-6：宿主侧工件上下文解析（**唯一入口**）——threadId → project_spaces → artifactId。
+// 模型不可自行指定项目：这里解析出的 projectId 同时下发给引擎（决定是否通告工具）与工具处理器
+// （做一致性校验），两处同源，杜绝「引擎通告了、handler 却读别的项目」的错位。
+// 未绑定项目/未建工件 ⇒ 返回 null（引擎不暴露 artifact 工具，handler 也不会被调到）。
+function resolveArtifactContext(threadId) {
+  try {
+    if (!projectStore) return null;
+    const p = projectStore.getProjectByThread(String(threadId || '').trim());
+    if (!p || !p.projectId) return null;
+    return {
+      projectId: p.projectId,
+      ...(p.artifactId ? { artifactId: p.artifactId } : {}),
+      ...(p.teamId ? { teamId: p.teamId } : {}),
+    };
+  } catch (e) {
+    console.warn('[artifact] 工件上下文解析失败（本次不暴露工件工具）:', e.message);
+    return null;
+  }
+}
 
 // P0-4：主进程 Agent 运行器——交互式会话工具循环迁移至主进程。
 // 渲染层只负责发起（agent:run）、订阅事件（agent:event）、中止（agent:abort）；
@@ -1120,9 +1150,30 @@ agentRunner.initAgentRunner({
       approvalMode: runApprovalMode || 'on-request',
       conversationId: conversationId || '',
     }),
+    // DS Bots / T6-6：工件协同四工具。项目身份按本 run 的会话绑定反查（resolveArtifactContext
+    // 是唯一入口）；未绑定项目时引擎不通告 schema，handler 也不会被调到。
+    // 交互式会话没有团队总线，postMessage 传 null（不写 artifact_ref）。
+    ...createArtifactToolHandlers({
+      artifactContext: resolveArtifactContext(conversationId),
+      getArtifactStore: () => artifactStore,
+      approvalDeps: {
+        requestApproval, applyApprovalDecision, getAlwaysRules: () => alwaysRules, conversationRules,
+        // V01：审批档/对话 id 由宿主绑定（本 run 的钳制后档位），模型参数不可信
+        approvalMode: runApprovalMode || 'on-request', conversationId: conversationId || '',
+      },
+    }),
   }),
 });
-ipcMain.handle('agent:run', (event, payload) => agentRunner.startAgentRunWhenReady(payload || {}, event.sender));
+// DS Bots / T6-6：进引擎前注入工件上下文（引擎据此通告 artifact_* schema；handler 侧用同一
+// resolveArtifactContext 再做一致性校验）。解析失败不阻塞运行，只是本轮没有工件能力。
+ipcMain.handle('agent:run', (event, rawPayload) => {
+  const payload = { ...(rawPayload || {}) };
+  if (payload.artifactContext === undefined) {
+    const ctx = resolveArtifactContext(payload.conversationId);
+    if (ctx) payload.artifactContext = ctx;
+  }
+  return agentRunner.startAgentRunWhenReady(payload, event.sender);
+});
 ipcMain.handle('agent:abort', (_, { runId } = {}) => ({ ok: agentRunner.abortRun(runId) }));
 
 // 定时任务 Agent 入口：scheduler.runTask 到点调用
@@ -1197,6 +1248,18 @@ const dbStatus = require('./dbStatus');
 const { TaskStore } = require('./taskStore');
 // M5 / T5-1：MJ 军团团队层——团队编制（与任务编排共用同一 SQLite 底座）
 const { TeamStore } = require('./teamStore');
+// DS Bots / T6-2：项目空间仓储（项目身份唯一事实来源，与团队/任务同库）
+const { ProjectStore } = require('./projectStore');
+// DS Bots / T6-3：项目级滑动配额账本（唯一配额判定入口）
+const { QuotaLedger } = require('./quotaLedger');
+// DS Bots / T6-7：配额闸调度侧接线（泵前置闸 / 开跑预留 / 60s 恢复轮询）
+const { createQuotaGate } = require('./quotaGate');
+// DS Bots / T6-8：单 Bot 熔断（10 分钟窗口聚合 + half-open，只锁单一成员）
+const { createMemberBreaker } = require('./memberBreaker');
+// DS Bots / T6-11：项目上下文装配（objective + summary + todo + index，正文不进装配）
+const projectContext = require('./projectContext');
+// DS Bots / T6-5：工件版本库（长文档唯一事实来源，正文永不进消息链）
+const { ArtifactStore } = require('./artifactStore');
 const { MemoryManager } = require('./memory');
 // D-806 / B-12：团队记忆沉淀闸（默认开的独立开关，与 memory.autoCapture 解耦）
 const { teamCaptureEnabled } = require('./teamMemoryGate');
@@ -1208,6 +1271,11 @@ const orchestrator = require('./orchestrator');
 
 let taskStore = null;
 let teamStore = null; // M5 / T5-1：军团编制（teams / team_members）
+let projectStore = null; // DS Bots / T6-2：项目空间（project_spaces）
+let quotaLedger = null; // DS Bots / T6-3：项目配额账本（quota_buckets / quota_consumptions）
+let quotaGate = null; // DS Bots / T6-7：配额闸（workerPool 泵 / 开跑预留 / 恢复轮询共用同一实例）
+let quotaTickTimer = null; // DS Bots / T6-7：60s 老化恢复轮询（单实例，重复初始化不叠加）
+let artifactStore = null; // DS Bots / T6-5：工件版本库（project_artifacts / artifact_sections / *_versions）
 let taskDb = null;
 let memoryManager = null;   // P2-1：记忆唯一写入入口（SQLite，五域四层）
 let memoryScheduler = null; // P2-5：记忆后台任务调度器
@@ -1303,6 +1371,25 @@ function setupTaskOrchestration(db) {
     taskStore = new TaskStore(db);
     // M5 / T5-1：军团编制与任务编排同库同事务底座（切项目各看各的，按 project_path 过滤）
     teamStore = new TeamStore(db);
+    // DS Bots / T6-2：项目空间与任务编排同库——项目是 thread/团队/工件的稳定锚点
+    projectStore = new ProjectStore(db);
+    // DS Bots / T6-5：工件版本库同库——不依赖 projectStore（只校验 project_spaces 存在性），
+    // 故初始化顺序与 T6-9 的「项目→工件→配额桶」编排无关（那只是业务顺序，不是装配顺序）。
+    artifactStore = new ArtifactStore(db);
+    // DS Bots / T6-7：配额账本 + 闸。组↔项目只按 thread_id 反查（project_spaces 单一事实源）；
+    // 无项目组一律 fail-open，普通编排组的调度行为与 T6-7 之前完全一致。
+    quotaLedger = new QuotaLedger(db);
+    // T6-8：熔断器只读账本的内存/DB 聚合，不新增持久表——重启后按窗口自然重算。
+    const breaker = createMemberBreaker({ ledger: quotaLedger });
+    quotaGate = createQuotaGate({
+      ledger: quotaLedger,
+      store: taskStore,
+      db,
+      projectOfThread: (threadId) => projectStore?.getProjectByThread(threadId) || null,
+      emit: emitTaskEvent,
+      onResumed: () => workerPool.schedule(),
+      breaker,
+    });
 
     // P2：记忆体系初始化（与任务编排共用 SQLite 底座）
     // M3：文件双通道先于 manager 装配——sync 以 lazy getter 反向引用 manager（循环依赖），
@@ -1335,6 +1422,8 @@ function setupTaskOrchestration(db) {
     workerPool.initWorkerPool({
       loadAgentCore,
       store: taskStore,
+      // DS Bots / T6-7：项目配额闸（泵前置拦截 + 开跑预留 + 结算释放；无项目组为 no-op）
+      quotaGate,
       maxConcurrent: Number(localStore?.getPreference('tasks.max_concurrent')) || 4,
       // 2026-10-16：子任务继承用户当前审批档（此前硬编码 auto-safe，用户设 always 时被静默忽略）
       getApprovalMode: () => approvalSettings.getUserApprovalMode(),
@@ -1395,29 +1484,51 @@ function setupTaskOrchestration(db) {
           return null;
         }
       },
-      createToolHandlers: ({ signal, cwd, teamContext }) => ({
-        ...scheduledToolHandlers({
-          unattended: true, contextCwd: cwd, // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
-          // M5 / T5-8：协同四工具只在成员任务注入。四表写入/看板/等待全部复用既有单例：
-          // 总线走 postTeamMessage（G4 体积闸 + 审计 + 广播），看板走 taskStore，
-          // 等待走 workerPool.waitTask（唯一入口，登记后由池中止本 run 释放槽位）。
-          teamTools: teamContext ? createTeamToolHandlers({
-            teamContext,
-            getTeamStore: () => teamStore,
-            getTaskStore: () => taskStore,
+      // T6-6：成员任务同样注入工件四工具——项目上下文按组的 thread_id 反查（项目空间单一事实源），
+      // 并叠加团队上下文（teamId/runId/memberId）用于作者留痕与 artifact_ref 总线广播。
+      createToolHandlers: ({ signal, cwd, teamContext, threadId }) => {
+        const artifactCtx = resolveArtifactContext(threadId);
+        if (artifactCtx && teamContext) {
+          Object.assign(artifactCtx, {
+            teamId: teamContext.teamId, runId: teamContext.runId, memberId: teamContext.memberId,
+          });
+        }
+        return {
+          ...scheduledToolHandlers({
+            unattended: true, contextCwd: cwd, // Worker 也无人值守：审批立即 deny；git/读类需要项目 cwd
+            // M5 / T5-8：协同四工具只在成员任务注入。四表写入/看板/等待全部复用既有单例：
+            // 总线走 postTeamMessage（G4 体积闸 + 审计 + 广播），看板走 taskStore，
+            // 等待走 workerPool.waitTask（唯一入口，登记后由池中止本 run 释放槽位）。
+            teamTools: teamContext ? createTeamToolHandlers({
+              teamContext,
+              getTeamStore: () => teamStore,
+              getTaskStore: () => taskStore,
+              postMessage: postTeamMessage,
+              waitTask: workerPool.waitTask,
+            }) : null,
+          }),
+          // Worker 的 chat 走非流式直连（无 UI 消费流式 token）。
+          // D-805（2026-10-21）：**必须把池的取消信号透传下去**——此前写成 scheduledAgentChat(payload)，
+          // 注释却写「运行中止由池的 controller 级联」，实际只级联到工具层、没级联到模型请求，
+          // 于是点「停止」后在途模型调用要等内部守卫到点（最长 15min）才停。
+          chat: (payload) => scheduledAgentChat(payload, { signal }),
+          // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）
+          webSearch: (args) => webTools.webSearch(args),
+          webFetch: (args) => webTools.webFetch(args),
+          // T6-6：工件工具。无人值守通道没有审批 UI ⇒ 档位取 auto-safe（L2 写入自动放行，
+          // 与 Worker 既有的文件写入语义一致），若仍被判定需要人工确认则直接 deny（fail-closed）。
+          ...createArtifactToolHandlers({
+            artifactContext: artifactCtx,
+            getArtifactStore: () => artifactStore,
             postMessage: postTeamMessage,
-            waitTask: workerPool.waitTask,
-          }) : null,
-        }),
-        // Worker 的 chat 走非流式直连（无 UI 消费流式 token）。
-        // D-805（2026-10-21）：**必须把池的取消信号透传下去**——此前写成 scheduledAgentChat(payload)，
-        // 注释却写「运行中止由池的 controller 级联」，实际只级联到工具层、没级联到模型请求，
-        // 于是点「停止」后在途模型调用要等内部守卫到点（最长 15min）才停。
-        chat: (payload) => scheduledAgentChat(payload, { signal }),
-        // P0-A：Worker 同样需要 Web 能力（子任务常需查文档/查报错）
-        webSearch: (args) => webTools.webSearch(args),
-        webFetch: (args) => webTools.webFetch(args),
-      }),
+            approvalDeps: {
+              approvalMode: 'auto-safe',
+              conversationId: teamContext?.memberId ? `agent:${teamContext.memberId}` : '',
+              requestApproval: () => Promise.resolve('deny'),
+            },
+          }),
+        };
+      },
       // P0-2c：转异步——记忆块经 shared/untrustedContent 结构性隔离后再注入
       // （Worker prompt 是模型上下文的一部分，历史沉淀可能已被污染，与 agent-core 注入口同处置）
       buildTaskPrompt: async (group, task) => {
@@ -1473,12 +1584,38 @@ function setupTaskOrchestration(db) {
           }
           memoryBlock = blocks.join('\n\n');
         } catch (e) { console.warn('[worker] 记忆召回/隔离失败，本任务不带记忆块:', e.message); }
+        // DS Bots / T6-11（§6.4 / §10.1）：项目会话只装配四项——固定目标 + 上次摘要 +
+        // 未完成待办 + 工件索引；工件正文不进装配（只能用工具按需读）。无项目绑定的普通组返回空串。
+        let projectBlock = '';
+        try {
+          const project = group.thread_id && projectStore?.getProjectByThread
+            ? projectStore.getProjectByThread(group.thread_id) : null;
+          if (project) {
+            projectBlock = projectContext.collectProjectContext({
+              project, db: projectStore.db || null, artifactStore, group: gNow,
+              currentTaskId: task.taskId,
+            });
+          }
+        } catch (e) { console.warn('[worker] 项目上下文装配失败（fail-open）:', e.message); }
         return [
           `【总体目标】\n${group.goal}`,
+          projectBlock,
           doneSiblings.length ? `【已完成前置任务的结论摘要】\n${doneSiblings.join('\n')}` : '',
           memoryBlock,
           `【你的子任务】${task.title}\n${task.prompt}\n\n只完成该子任务，产出可执行的结论；工作目录即项目目录。`,
         ].filter(Boolean).join('\n\n');
+      },
+      // DS Bots / T6-11（§10.2）：Worker 压缩摘要落 project_runs.summary_json（run_id=group_id），
+      // 供下一次装配直接读取；无项目绑定 / 表不可用一律静默跳过。
+      saveProjectSummary: (group, summary) => {
+        try {
+          const project = group && group.thread_id && projectStore?.getProjectByThread
+            ? projectStore.getProjectByThread(group.thread_id) : null;
+          if (!project) return;
+          projectContext.saveRunSummary(projectStore.db || null, {
+            runId: group.group_id, projectId: project.projectId, threadId: group.thread_id, summary,
+          });
+        } catch (e) { console.warn('[worker] 摘要落库异常（不阻塞）:', e.message); }
       },
       // M5 / T5-5：子任务成功结论 → 团队记忆沉淀（宿主侧收口，worker 只透传事实）。
       //   三道闸：① **团队记忆专属开关 `memory.teamAutoCapture`（D-806 / B-12，2026-10-21 解耦）**；
@@ -1516,6 +1653,16 @@ function setupTaskOrchestration(db) {
         } catch (e) { console.warn('[team-memory] 子任务结论沉淀失败（不阻塞）:', e.message); }
       },
     });
+
+    // DS Bots / T6-7（§6.3）：后台每 60s 做一次滑动老化判定——额度回到下限且利用率低于迟滞水位，
+    // 就小批量把 quota_suspend 任务放回 queued 并踢一脚调度（断点续跑，无需用户重述需求）。
+    // 单实例：重复初始化（热重启）不叠加定时器；unref 保证定时器不阻止进程退出。
+    if (!quotaTickTimer && typeof setInterval === 'function') {
+      quotaTickTimer = setInterval(() => {
+        try { quotaGate?.tickAll(); } catch (e) { console.warn('[quota] 恢复轮询异常:', e.message); }
+      }, 60 * 1000);
+      if (typeof quotaTickTimer.unref === 'function') quotaTickTimer.unref();
+    }
 
     orchestrator.initOrchestrator({
       loadAgentCore,
@@ -1573,6 +1720,37 @@ initTasksIpc({
 // M5 / T5-1：MJ 军团团队层 IPC 域（teams:*）——团队编制读写 + AI 角色草稿。
 // chatOnce/resolveModel 与编排/定时任务同源：AI 草稿走既有模型通道，不新起调用路径。
 // 模块引用已在上方（T5-8 工具工厂需要 postTeamMessage）；此处只做依赖注入。
+// 2026-10-21 团队调试日志：团队链路的日志目录与运行时元信息在此注入（whenReady 后 getPath 才可靠）。
+// 默认开启记录 + 详细模式；用户可在团队页随时关闭，导出走 teams:debugExport。
+teamDebug.initTeamDebugLog({
+  dir: path.join(app.getPath('userData'), 'logs'),
+  meta: {
+    // app.getVersion 在部分测试宿主 / 旧版 mock 上不存在 → 防御式取值（与启动横幅同口径），
+    // 否则顶层直接调用会让整个 main.js 在 require 阶段抛错（真机则表现为启动即崩）。
+    version: typeof app.getVersion === 'function' ? app.getVersion() : 'unknown',
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    node: process.versions.node,
+  },
+});
+initTeamDebugIpc();
+// DS Bots / T6-2：项目空间 IPC——getter 注入与 getTeamStore 同款，装配顺序无关
+initProjectsIpc({
+  getProjectStore: () => projectStore,
+  // T6-9：初始化链路需要协作的四个子系统，同样用 getter 注入避免装配顺序耦合；
+  // localStore 在 whenReady 后赋值，调用发生在渲染层点击时，无需等待。
+  getArtifactStore: () => artifactStore,
+  getQuotaLedger: () => quotaLedger,
+  getTeamStore: () => teamStore,
+  getLocalStore: () => localStore,
+  audit,
+});
+// DS Bots / T6-10：工件只读域装配（与 projects 同源 getter，不引入新存储实例）
+initArtifactsIpc({
+  getArtifactStore: () => artifactStore,
+  getProjectStore: () => projectStore,
+});
 initTeamsIpc({
   getTeamStore: () => teamStore,
   // M5 / T5-6：对话内团队事件流按 thread_id 反查 run（task_groups 是「run 属于哪个会话」的

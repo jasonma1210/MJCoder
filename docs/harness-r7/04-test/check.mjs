@@ -124,6 +124,26 @@
  *        → A18g：LINT_WARNINGS_BASELINE 161 → **159**（棘轮只降不升：D-804 的赋值改用
  *          Object.assign 不再触发 require-atomic-updates，团队记忆开关改用 ui/Button 原语）。
  *        → BASE_TOOLS 仍 52（新工具同样属运行时条件追加，不进静态清单）。
+ *      · 团队派活拆解修复批（2026-10-21，**未提交工作区**）—— 一条断言**原地重写**（总数仍 76）：
+ *        → A14e：`DAG MAX_DEPS = 4` → 「DAG 不再设人工 fan-in 上限（依赖数上限已移除）」。
+ *          触发：真机「基于 Spring Boot 的商城系统设计文档」被 `任务 t6 依赖数超过 4` 整份拒掉
+ *          （PLAN_FAILED，一个任务都没派）。「汇总任务依赖全部章节」是合法 DAG，fan-in 的自然
+ *          上界由 MAX_TASKS（≤7）给出；4 这个数字写进提示词了吗？没有——模型无从遵守，
+ *          所以它是**误杀契约**，不是可执行约束。真正保留的校验：依赖存在性 / 自依赖 / 环。
+ *          行为守卫改由 `desktop/test/dag.test.js` 的「6 依赖汇总任务通过校验」承担。
+ *      · DS Bots T6-6 工件协同工具批（2026-10-22，**未提交工作区**）—— 两条等位数字**原地重写**
+ *        （总数仍 76，不触发 T01）：
+ *        → A17a：TOOL_CHANNELS 57 → **61**（新增 artifactIndex / artifactGetSection /
+ *          artifactPatchSection / artifactGetDiff）；
+ *        → A18b：TOOL_HANDLER_NAMES 56 → **60**（新增 artifact_* 四个映射）。
+ *        → BASE_TOOLS 仍 52：工件工具属**运行时条件追加**（宿主注入 artifactContext 才通告），
+ *          与 team_* / computer_use 同纪律，不进静态清单。
+ *      · 0.7.0-beta 发版批（2026-10-22，**未提交工作区**）—— 一条版本钉值**原地重写**（总数仍 76）：
+ *        → A15b：desktop/package.json version `0.6.1-beta` → **`0.7.0-beta`**。
+ *          触发：发版提升三包版本（desktop / renderer / server 同步，由
+ *          `test/release-update.test.js` 的「三包版本一致」守护）；本条的钉值口径不变
+ *          （仍与 package.json 实读值严格相等），只随发版推进期望值。A15a/A15c 不受影响
+ *          （CLIENT_INFO 与 package.json 同源，无第二版本字面量）。
  *
  * 5) 检索类断言一律在 `stripComments()` 后的**代码正文**上计数：注释里出现标识符既能让
  *    「应当成立」的断言假红，也能让「应当不成立」的断言假绿（注释喂饱）。
@@ -733,7 +753,8 @@ function httpHeaderSegments() {
   const dag = stripComments(read('desktop/main/orchestrator/dag.js'));
   okTrue('A14c', 'DAG MAX_TASKS = 8', /const MAX_TASKS = 8;/.test(dag));
   okTrue('A14d', 'DAG MIN_TASKS = 2', /const MIN_TASKS = 2;/.test(dag));
-  okTrue('A14e', 'DAG MAX_DEPS = 4', /const MAX_DEPS = 4;/.test(dag));
+  okTrue('A14e', 'DAG 不再设人工 fan-in 上限（依赖数上限已移除）',
+    (dag.match(/MAX_DEPS|依赖数超过/g) || []).length === 0);
 }
 
 // ── A15  F-013 握手自报版本 ──────────────────────────────────────────────
@@ -741,7 +762,7 @@ function httpHeaderSegments() {
   const proto = stripComments(read('desktop/main/mcpProtocol.js'));
   okTrue('A15a', "已修复：CLIENT_INFO version 不再硬编码 '1.0'（与 package.json 同源）",
     !/CLIENT_INFO\s*=\s*Object\.freeze\(\{[^}]*version:\s*'1\.0'/s.test(proto));
-  ok('A15b', 'desktop/package.json version', JSON.parse(read('desktop/package.json')).version, '0.6.1-beta');
+  ok('A15b', 'desktop/package.json version', JSON.parse(read('desktop/package.json')).version, '0.7.0-beta');
   okTrue('A15c', 'mcpClient 每次 initialize 都发 clientInfo',
     /clientInfo:\s*\{\s*\.\.\.CLIENT_INFO\s*\}/.test(stripComments(read('desktop/main/mcpClient.js'))));
 }
@@ -882,11 +903,11 @@ function httpHeaderSegments() {
   // 清扫记录（本轮）：原先 else 分支只补了一条 A17a —— registry require 失败时
   //   A17b/A17c **既不出现也不计 SKIP**，总数静默少 2。同样的病，同样的治法：BLOCKED 出声。
   if (!regErr) {
-    ok('A17a', 'TOOL_CHANNELS = 57', TOOL_CHANNELS.length, 57);
+    ok('A17a', 'TOOL_CHANNELS = 61', TOOL_CHANNELS.length, 61);
     ok('A17b', 'NOTIFY_CBS = 8', NOTIFY_CBS.length, 8);
     ok('A17c', 'REQUEST_CBS = 1', REQUEST_CBS.length, 1);
   } else {
-    ok('A17a', 'registry.js 可 require（=57 的值因此无从判定）', `ERR: ${regErr}`, 57);
+    ok('A17a', 'registry.js 可 require（=61 的值因此无从判定）', `ERR: ${regErr}`, 61);
     blockedAssert('A17b', 'NOTIFY_CBS = 8', `registry require 失败：${regErr}`);
     blockedAssert('A17c', 'REQUEST_CBS = 1', `registry require 失败：${regErr}`);
   }
@@ -941,8 +962,8 @@ function httpHeaderSegments() {
   } catch (e) { /* ignore */ }
   if (baseTools) ok('A18a', 'BASE_TOOLS = 52（真实 ESM import）', baseTools.length, 52);
   else ok('A18a', 'BASE_TOOLS 可导入', 'IMPORT_FAILED', 52);
-  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 56', Object.keys(handlerNames).length, 56);
-  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 56);
+  if (handlerNames) ok('A18b', 'TOOL_HANDLER_NAMES = 60', Object.keys(handlerNames).length, 60);
+  else ok('A18b', 'TOOL_HANDLER_NAMES 可导入', 'IMPORT_FAILED', 60);
 
   // A18c~g 全是「常量是否按契约写」的**代码**事实：注释里抄一遍同样的字面量
   //   就能把任何一条喂绿，故统一去注释。

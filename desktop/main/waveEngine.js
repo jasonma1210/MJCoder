@@ -13,6 +13,8 @@
 //   · 撤员 = 中止本批最早在役 run + 记重派意图（真正的 requeue 由 workerPool 收尾消费，避免竞争）。
 
 const teamWaves = require('./teamWaves');
+// 2026-10-21 团队调试日志：批次推进 / 探活判定 / 撤员重派（「任务卡住不动」的第一现场）。
+const teamDebug = require('./teamDebugLog');
 
 /**
  * @param {object} host 宿主回调（workerPool 在 initWorkerPool 时注入）
@@ -109,6 +111,17 @@ function createWaveEngine(host) {
     const backup = typeKey
       ? teamWaves.pickBackupMember({ members: roster, typeKey, excludeIds: [...rt.retired, ownerId], busyIds: [...busy] })
       : null;
+    teamDebug.log('wave', 'stall_retire', {
+      groupId,
+      victimTaskId: victim.taskId,
+      victimOwner: owner?.name || ownerId || null,
+      typeKey,
+      backup: backup || null,
+      sameMember: !backup,
+      retireCount: rt.reassign.get(victim.taskId) || 0,
+      running: running.map((r) => r.taskId),
+      rosterSize: roster.length,
+    });
     if (ownerId) rt.retired.add(ownerId);
     rt.reassign.set(victim.taskId, (rt.reassign.get(victim.taskId) || 0) + 1);
 
@@ -156,6 +169,7 @@ function createWaveEngine(host) {
       let r = null;
       try { r = rt.probe.sample(sampleSignals(gid)); } catch { continue; }
       if (!r.stalled) continue;
+      teamDebug.log('wave', 'probe_stalled', { groupId: gid, waves: rt.waves?.length || 0, result: r }, { level: 'verbose' });
       rt.probe.reset(); // 先复位：撤员动作本身可能不被三通道捕捉，避免下一拍连杀
       try { if (handleStall(gid)) stalledGroups.push(gid); }
       catch (e) { console.warn('[waveEngine] 探活撤员失败:', e?.message || e); }
@@ -199,6 +213,7 @@ function createWaveEngine(host) {
       retired: new Set(),
       pendingReassign: new Map(),
     });
+    teamDebug.log('wave', 'attach', { groupId, waves });
     ensureTimer();
   }
 

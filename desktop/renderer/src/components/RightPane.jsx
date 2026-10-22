@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  IconBot, IconFileDiff, IconFolderOpen, IconGlobe, IconMessage,
+  IconBot, IconFile, IconFileDiff, IconFolderOpen, IconGlobe, IconMessage,
   IconMaximize, IconMinimize, IconPlus, IconTerminal, IconX,
 } from './icons';
 import { useI18n } from '../i18n';
@@ -16,6 +16,7 @@ import { useI18n } from '../i18n';
 export const PANEL_TABS = [
   { id: 'diff', labelKey: 'rightPane.tabDiff', Icon: IconFileDiff },
   { id: 'files', labelKey: 'rightPane.tabFiles', Icon: IconFolderOpen },
+  { id: 'artifact', labelKey: 'rightPane.tabArtifact', Icon: IconFile },
   { id: 'subtasks', labelKey: 'rightPane.tabSubtasks', Icon: IconBot },
   { id: 'terminal', labelKey: 'rightPane.tabTerminal', Icon: IconTerminal },
   { id: 'browser', labelKey: 'rightPane.panelBrowser', Icon: IconGlobe },
@@ -24,6 +25,7 @@ export const PANEL_TABS = [
 
 // 「+」菜单清单（对齐 Codex）：所有面板均已实现，点击即切到对应 tab。
 export const ADDABLE_PANELS = [
+  { id: 'artifact', labelKey: 'rightPane.tabArtifact', Icon: IconFile, supported: true },
   { id: 'files', labelKey: 'rightPane.tabFiles', Icon: IconFolderOpen, supported: true },
   { id: 'terminal', labelKey: 'rightPane.tabTerminal', Icon: IconTerminal, supported: true },
   { id: 'browser', labelKey: 'rightPane.panelBrowser', Icon: IconGlobe, supported: true },
@@ -51,6 +53,7 @@ export default function RightPane({
   onClose,
   diffPanel,
   filesPanel,
+  artifactPanel,
   subtasksPanel,
   terminalPanel,
   browserPanel,
@@ -210,6 +213,9 @@ export default function RightPane({
         <div className="flex-1 min-h-0 flex flex-col">
           {active.id === 'diff' && diffPanel}
           {active.id === 'files' && filesPanel}
+          {/* T6-10：工件面板常驻挂载（非激活时隐藏）——它负责「首次生成工件 → 自动展开一次」，
+              卸载会让这个一次性触发点永远不执行 */}
+          <div className={active.id === 'artifact' ? 'contents' : 'hidden'}>{artifactPanel}</div>
           {active.id === 'subtasks' && subtasksPanel}
           {active.id === 'terminal' && terminalPanel}
           {active.id === 'browser' && browserPanel}

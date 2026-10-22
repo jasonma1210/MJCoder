@@ -8,6 +8,7 @@ import DiffReviewPanel from './components/DiffReviewPanel';
 import ScheduledTasks from './components/ScheduledTasks';
 import TeamsPage from './components/TeamsPage';
 import ProjectPicker from './components/ProjectPicker';
+import ProjectCreateModal from './components/ProjectCreateModal';
 import Onboarding from './components/Onboarding';
 import SplashScreen from './components/SplashScreen';
 import EcosystemModal from './components/EcosystemModal';
@@ -19,8 +20,9 @@ import TerminalPanel from './components/TerminalPanel';
 import TaskSummaryPanel from './components/TaskSummaryPanel';
 import BrowserPanel from './components/BrowserPanel';
 import SideChatPanel from './components/SideChatPanel';
+import ArtifactPanel from './components/ArtifactPanel';
 import ArchiveModal from './components/ArchiveModal';
-import { IconChart, IconCheck, IconFilter, IconPalette, IconPanelRight, IconSearch, IconSidebar } from './components/icons';
+import { IconChart, IconPalette, IconPanelRight, IconSearch, IconSidebar } from './components/icons';
 import { api, setLocalMode, isLocalMode } from './lib/api';
 import { restoreMcpTools } from './lib/mcpTools';
 import { loadAgentsMd } from './lib/agentsMd';
@@ -58,6 +60,8 @@ export default function App() {
   const [showEcosystem, setShowEcosystem] = useState(false); // 生态中心（侧栏一级导航，对标 Codex Plugins）
   const [showTeams, setShowTeams] = useState(false); // M5 / T5-1：MJ 军团（团队编制页，侧栏一级导航）
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  // T6-9：项目空间创建（+ 菜单入口派发 mjcode:new-project-space）
+  const [showProjectSpace, setShowProjectSpace] = useState(false);
   const [activeProject, setActiveProject] = useState(() => loadJSON('mj_active_project', getDefaultProject()));
   // Bug2 + P0-D：当前选中模型与项目目录实时推送主进程定时任务调度器
   // （到点执行时复用同一凭证/模型；项目目录决定 Agent 通道的 cwd 与沙箱档位：
@@ -126,22 +130,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => loadJSON('mj_sidebar_open', true));
   const [paneOpen, setPaneOpen] = useState(() => loadJSON('mj_pane_open', false));
   const [paneTab, setPaneTab] = useState('diff'); // diff | files | subtasks | terminal | browser | sidechat
-  // 顶栏筛选：按状态过滤左栏会话（对标 WorkBuddy 头部第三枚左键）；默认不过滤
-  const [threadFilter, setThreadFilter] = useState('all'); // all | running | awaiting
-  // 顶栏筛选弹层（点击外部 / Esc 关闭）
-  const [filterOpen, setFilterOpen] = useState(false);
-  const filterRef = useRef(null);
-  useEffect(() => {
-    if (!filterOpen) return undefined;
-    const onDown = (e) => { if (!filterRef.current?.contains(e.target)) setFilterOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setFilterOpen(false); };
-    document.addEventListener('mousedown', onDown, true);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [filterOpen]);
   const [agentFiles, setAgentFiles] = useState([]); // 本轮 Agent 改动的文件（Diff 面板「上一轮」筛选）
   // T1-4：子任务事件按会话分桶（threadId -> 事件流），后台会话的子任务照常入桶，切回仍可见
   const [subagentsByThread, setSubagentsByThread] = useState({});
@@ -231,6 +219,13 @@ export default function App() {
     const open = () => setShowEcosystem(true);
     window.addEventListener('mjcode:open-ecosystem', open);
     return () => window.removeEventListener('mjcode:open-ecosystem', open);
+  }, []);
+
+  // T6-9：「+」菜单新建项目空间（CustomEvent 解耦，避免 PlusMenu → ChatArea → App 层层传 prop）
+  useEffect(() => {
+    const open = () => setShowProjectSpace(true);
+    window.addEventListener('mjcode:new-project-space', open);
+    return () => window.removeEventListener('mjcode:new-project-space', open);
   }, []);
 
   // 生态中心「招募」：开新会话并关闭设置/生态页，待 ChatArea 切到新会话
@@ -518,43 +513,6 @@ export default function App() {
         >
           <IconSearch size={16} />
         </button>
-        {/* 顶栏筛选（对标 WorkBuddy 头部第三枚左键）：按状态过滤左栏会话 */}
-        <div className="relative" ref={filterRef}>
-          <button
-            onClick={() => setFilterOpen((v) => !v)}
-            className={`p-1 rounded-lg ${threadFilter !== 'all' ? 'text-text bg-hover' : 'text-text2 hover:text-text'}`}
-            title={tr('app.filterTitle')}
-            aria-label={tr('app.filter')}
-            aria-expanded={filterOpen}
-          >
-            <IconFilter size={16} />
-          </button>
-          {filterOpen && (
-            <div
-              role="menu"
-              className="absolute left-0 top-full mt-1 z-menu w-[168px] py-1 bg-raise border border-border rounded-xl shadow-[var(--shadow-menu)]"
-            >
-              {[
-                { id: 'all', labelKey: 'app.filterAll' },
-                { id: 'running', labelKey: 'app.filterRunning' },
-                { id: 'awaiting', labelKey: 'app.filterAwaiting' },
-              ].map((opt) => (
-                <button
-                  key={opt.id}
-                  role="menuitem"
-                  onClick={() => { setThreadFilter(opt.id); setFilterOpen(false); }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-hover ${threadFilter === opt.id ? 'text-text' : 'text-text2'}`}
-                >
-                  <span>{tr(opt.labelKey)}</span>
-                  {threadFilter === opt.id && <IconCheck size={13} className="text-accent" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <span className="text-xs text-text2 truncate min-w-0 max-w-[38%]" title={activeProject?.path || ''}>
-          {activeProject?.path ? projectDisplayName(activeProject) : tr('app.noProject')}
-        </span>
         <div className="ml-auto flex items-center gap-2">
           {/* 右栏开关常驻（与左栏开关对称）：开/关都在，状态用高亮区分 */}
           <button
@@ -640,7 +598,6 @@ export default function App() {
         onSelectProject={selectProject}
         onRemoveProject={removeProject}
         onRenameProject={renameProject}
-        filter={threadFilter}
       />
       )}
       <div className="flex-1 min-w-0 flex flex-col">
@@ -703,6 +660,14 @@ export default function App() {
             onOpenFile={openFileInPane}
           />
         }
+        artifactPanel={
+          // T6-10：项目工件侧面板——默认收起；首次生成工件时由面板回调自动展开一次
+          <ArtifactPanel
+            threadId={activeThreadId}
+            onOpenFile={openFileInPane}
+            onAutoOpen={() => { setPaneTab('artifact'); setPaneOpen(true); }}
+          />
+        }
         subtasksPanel={
           <TaskSummaryPanel
             threadId={activeThreadId}
@@ -748,6 +713,37 @@ export default function App() {
           onSelectProject={(p) => { selectProject(p); setShowProjectPicker(false); }}
         />
       )}
+      {/* T6-9：初始化成功后会话已由主进程创建，直接切到该会话（与 selectThread 同语义）。
+          T6-13（真机反馈）：建项目时已经选了团队，「目标已锁定」之后必须直接开工——
+          此前只切会话不派活，用户看到一条 0 token 的系统消息，以为运行结束了。 */}
+      <ProjectCreateModal
+        open={showProjectSpace}
+        onClose={() => setShowProjectSpace(false)}
+        projects={projects}
+        onCreated={async (r) => {
+          const thread = r?.thread;
+          if (!thread) { setActiveThread(null); resetView(); loadData(); return; }
+          const threadId = String(thread.id);
+          const objective = String(r?.project?.objective || '').trim();
+          const teamId = String(r?.team?.id || '');
+          // 团队 run 不产生 assistant 消息：目标必须先落成 user 消息（与 ChatArea 派活同一口径）
+          if (teamId && objective) {
+            try { await api.sendMessage(threadId, { role: 'user', content: objective }); }
+            catch (e) { toast({ message: tr('teams.dispatchFailed', { msg: String(e?.message || e) }) }); }
+          }
+          selectThread(thread);
+          loadData();
+          if (!teamId || !objective) return;
+          try {
+            const d = await window.mjcode?.teamsDispatch?.({
+              teamId, goal: objective, threadId,
+              // 本次项目空间的目录（主进程优先用 payload.projectPath，见 teams.js）
+              projectPath: String(r?.project?.cwd || thread?.project_path || thread?.projectPath || ''),
+            });
+            if (d && d.ok === false) toast({ message: tr('teams.dispatchFailed', { msg: d.error || '' }) });
+          } catch (e) { toast({ message: tr('teams.dispatchFailed', { msg: String(e?.message || e) }) }); }
+        }}
+      />
       </div>
       <StatusBar
         localMode={localMode}

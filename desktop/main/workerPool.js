@@ -15,12 +15,11 @@ const { stricterApproval, sandboxTierForCwd } = require('./approvalPolicy');
 // 第八轮 B-01 / D-808：军团成员的运行期配置（DS Bot 的 per-bot 特性）在此落地。
 // 宿主侧应用逻辑与主会话通道共用 rolePresetApply —— 单一事实来源，不再各写一套。
 const { applyMemberRuntimeConfig } = require('./rolePresetApply');
+const { resolveOwnerMember, buildWorkerSystemPrompt } = require('./workerIdentity');
 // 第八轮 B-02 / D-809：组级三键预算闸（此前三键只进提示词文案，运行期零强制点）。
 const groupBudget = require('./groupBudget');
 const path = require('path');
-// P2-8 / V-L1：V 层（评估接口）宿主侧编排。P1-2 后本通道**默认 l1**（此前默认 off）：
-// L1 是零网络、零边际成本的确定性对账，子任务没有理由不对账；
-// L3 由 deps.getVerifyConfig() 显式下发 level='l3' 才可能触发（风险门放行时）。
+// P2-8 / V-L1：V 层宿主侧编排，本通道默认 l1（零网络确定性对账）；L3 仅在风险门放行时触发。
 const { createWorkerVerifyRun } = require('./workerVerify');
 // M5 / T5-11：成员断点读写门面（内部复用 checkpointStore 单例——与主对话「继续」共用同一存储、
 // 同一 `checkpoint:clear` 清理入口、同一 50 条 LRU 上限，不新起第二套持久化）。
@@ -33,20 +32,19 @@ const { pauseOnCriticalFailure } = require('./workerCritical');
 const { broadcastWaitSweep, broadcastWoken } = require('./taskBroadcast');
 // 活动流文本工具（参数摘要 / 产物路径粗提取）——纯函数，已抽出到 workerText.js
 const { summarizeArgs, extractPaths } = require('./workerText');
+// 2026-10-21 团队调试日志：认领/派发/引擎/终态的事实装配（内联会越过 800 行软档，故抽出）。
+const teamTrace = require('./teamWorkerTrace');
 
 let deps = null;
 let maxConcurrent = 4; // 默认并发 4：主流大模型服务普遍支持 4 路并发请求
 // runKey `${groupId}/${taskId}` -> { controller, name, manual }
 const activeRuns = new Map();
 let pumping = false;
-// M5 / T5-12：批次（wave）运行时。实现已抽出至 `main/waveEngine.js`（2026-10-20：批次状态 +
-// 探活定时器 + 撤员降级使本文件越过 800 行软档，按「先拆再合入」纪律抽出）。
-// 本文件只保留**接入点**：attach / detach / allowOf / preferredOwnerOf / takeStall。
-// 未装配（普通编排组）时全部接入点退化为空操作 —— 调度行为与 T5-12 之前完全一致。
+// M5 / T5-12：批次运行时（实现见 main/waveEngine.js）。本文件只保留接入点：
+// attach / detach / allowOf / preferredOwnerOf / takeStall；未装配时全部退化为空操作。
 let waveEngine = null;
-// M5 / T5-3：等待态心跳。当组内任务**全部**处于 waiting 时，没有任何 run 在跑 ⇒ 没有事件
-// 触发 schedule() ⇒ 泵不会运行 ⇒ 等待超时永远不会被判定（任务白等到天荒地老）。
-// 这个定时器只负责「定期踢一脚调度」，超时判定逻辑仍收敛在 pump 顶部的 sweepWaitTimeouts。
+// M5 / T5-3：等待态心跳——全组都在 waiting 时没有 run 触发 schedule，等待超时永远判不到。
+// 本定时器只负责定期踢一脚调度，超时判定仍收敛在 pump 顶部的 sweepWaitTimeouts。
 const WAIT_SWEEP_INTERVAL_MS = 30 * 1000;
 let waitSweepTimer = null;
 
@@ -149,6 +147,7 @@ async function runGroup(groupId) {
   // M5 / T5-12：团队派活组（dag_json.waves 存在）装配批次运行时 + 探活定时器。
   // 普通编排组没有 waves ⇒ 不装配任何东西，调度行为与 T5-12 之前完全一致（零回归面）。
   const waves = teamWaves.normalizeWaves(g);
+  teamTrace.runGroup(g, waves);
   if (waves) {
     waveAttach(groupId, waves);
     deps.emit?.({ type: 'wave_started', groupId, waveIndex: 1, waves: waves.length });
@@ -197,14 +196,13 @@ async function pump() {
         // M5 / T5-12：团队派活组只放行**当前批次**（批间串行）；普通组 allow 为 null = 不限制。
         const allow = waveAllowOf(g);
         deps.store.enqueueReady(g.group_id, allow ? { allowIds: allow } : {});
+        // T6-7（§7.1）：入队后、认领前过配额闸——只把 queued 转 quota_suspend，不碰在途 running。
+        if (deps.quotaGate?.blocked(g)) continue;
         let task = deps.store.claimNext(g.group_id, `w-${Date.now().toString(36)}`);
-        // M5 / T5-11：认领即定「谁在做」——owner_member_id 是成员会话 id 的成员来源（§13.2）。
-        // 必须**落库**（而非运行期临时值）：T5-5 的团队记忆归属（agent_id）与 buildTaskPrompt 的
-        // 成员私有记忆召回都读 task.ownerMemberId，不落库这两条链恒退化成「团队共享」。
-        // claimNext 先占位 running，此处按认领者补写；running→running 是合法同态迁移，
-        // owner_member_id 用 COALESCE 语义，重跑/续跑不会覆盖原认领者。
-        // M5 / T5-12：团队组优先用批次计划的指派（派活时已按人数/类型闸分配），
-        // 计划缺失（旧组/手工建组）才回落 seq 取模的确定性指派。
+        // M5 / T5-11：owner_member_id 必须**落库**——T5-5 团队记忆归属（agent_id）与 buildTaskPrompt
+        // 的成员私有记忆召回都读它，不落库两条链恒退化成「团队共享」。claimNext 先占位 running，
+        // 此处按认领者补写；running→running 属合法同态迁移，COALESCE 语义保证重跑/续跑不覆盖原认领者。
+        // M5 / T5-12：团队组优先用批次计划的指派，计划缺失（旧组/手工建组）才回落 seq 取模。
         if (task && !task.ownerMemberId) {
           try {
             const planned = preferredOwnerOf(g, task);
@@ -218,10 +216,16 @@ async function pump() {
               task = deps.store.setTaskStatus(g.group_id, task.taskId, 'running',
                 { workerId: task.workerId, ownerMemberId: owner }) || task;
             }
+            teamTrace.claim(g, task, { planned, owner, roster });
           } catch (e) {
+            teamTrace.claimFailed(g, task, e);
             console.warn('[workerPool] 认领者落库失败（本轮按无成员身份运行）:', e.message);
           }
+        } else if (task) {
+          teamTrace.claimReused(g, task, preferredOwnerOf(g, task));
         }
+        // T6-8（§5.3）：单成员熔断在 owner 落库之后判定——只拦本成员的任务，其他成员照常派发。
+        if (task && deps.quotaGate?.breakerBlocked(g, task)) continue;
         if (task) {
           allIdle = false;
           dispatch(g, task);
@@ -270,6 +274,7 @@ function dispatch(group, task) {
   // shared/rolePolicyData.json）——此前是第三处手抄的 `group.cwd ? 'workspace-write' : 'read-only'`。
   const groupSandboxPolicy = group.sandbox_policy || sandboxTierForCwd(group.cwd);
   const wantsIsolation = !!group.cwd && groupSandboxPolicy !== 'read-only';
+  teamTrace.dispatch(runKey, group, task, name, groupSandboxPolicy, wantsIsolation, activeRuns.size, maxConcurrent);
   (async () => {
     let iso = null;
     if (wantsIsolation) {
@@ -317,12 +322,9 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
   {
     let result = null;
     let errorMsg = null;
-    // P1-9：捕获中止原因——runAgent 被中止后可能带部分产出**正常返回**（不抛错），
-    // 此前终态判定只看 summary 里的引擎标记正则，墙钟超时的部分产出被伪装成 done。
+    // P1-9：runAgent 被中止后可能带部分产出**正常返回**；只看 summary 正则会把超时伪装成 done。
     let abortReason = null;
-    // M5 / T5-11：本任务的成员会话键（`agent:{memberId}`；非军团组回落 anon 命名空间）。
-    // 三处消费者（工具 hooks / V 层 / 引擎 runOpts）共用同一键 —— 此前是各自手抄的
-    // `task:${groupId}:${taskId}`，三份实现漂移时表现是「审批规则按 A 会话记、断点落 B 会话」。
+    // M5 / T5-11：成员会话键（`agent:{memberId}`）——工具 hooks / V 层 / 引擎 runOpts 三处共用。
     const sessionKey = memberSession.memberSessionKey(group, task);
     // 断点在**运行前**读取：恢复上下文只注入本轮 system（agent-core 的 resumeContext 通道），
     // 不进持久化历史 —— 成员跨 run 复用的正是这一段摘要（§13.3）。
@@ -330,23 +332,29 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
     // M5 / T5-8：军团协同上下文（成员任务才非空）；团队↔run 反查在宿主（findTeamByRun 为唯一事实来源）。
     const teamContext = typeof deps.resolveTeamContext === 'function'
       ? deps.resolveTeamContext(group, task) : null;
+    // 2026-10-21 对话型目标（团队「报数」等）：必须**实际**收掉工具与轮次——提示词挡不住模型。
+    const chatOnly = !!(group && group.dag && group.dag.runMeta && group.dag.runMeta.chatOnly);
+    let budgetPlan = null; // 在 try 内装配、在 finally 结算（异常路径也必须把实际用量入账）
+    // T6-7（§7.1）：开跑前配额预留授予；无项目组为 null（普通编排组零回归）。授予失败已被闸置 quota_suspend。
+    const qrun = deps.quotaGate?.beginRun(group, task) || null;
+    if (qrun && !qrun.ok) { activeRuns.delete(runKey); schedule(); return; }
     try {
       const core = await deps.loadAgentCore();
-      const rawHandlers = deps.createToolHandlers({ signal: controller.signal, cwd: runCwd, teamContext });
-      // P1-5：Worker 工具调用同样过用户自定义 hooks（preToolUse/postToolUse）——
-      // 无人值守不等于可以绕过用户设的校验规则（用户写一次规则，三条通道一致生效）。
-      // T5-11：会话 id = 成员会话键（审批「本对话同类」规则因此按**成员**记忆，
-      // 而不是按一次性的 group/task —— 同一成员跨 run 的同类授权不再重复弹窗）。
+      // T6-6：threadId 透传——工件项目上下文由宿主按会话反查（project_spaces 单一事实源），池不读项目表。
+      const rawHandlers = deps.createToolHandlers({
+        signal: controller.signal, cwd: runCwd, teamContext,
+        threadId: (group && group.thread_id) || '',
+      });
+      // P1-5/T5-11：Worker 同样过用户 hooks（无人值守≠可绕过规则）；会话 id = 成员会话键 ⇒ 同类审批按成员记忆。
       const handlers = deps.toolHooks
         ? deps.toolHooks.wrap(rawHandlers, { cwd: runCwd || '', conversationId: sessionKey })
         : rawHandlers;
-      // P2-8 / V-L1 + P1-2：Worker 通道 V 层装配（判定来源、默认 l1、L3 风险门全部在
-      // main/workerVerify.js —— 2026-10-21 为给 B-02 腾出 800 行软档余量而搬走，语义逐字等价）
+      // P2-8 / V-L1 + P1-2：Worker 通道 V 层装配（判定来源/默认 l1/L3 风险门全在 main/workerVerify.js，语义逐字等价）
       const vrun = createWorkerVerifyRun({ deps, runKey, sessionKey, runCwd });
       controller.signal.addEventListener('abort', () => { abortReason = controller.signal.reason?.message || String(controller.signal.reason || '运行已中止'); }, { once: true });
-      // 第八轮 B-02 / D-809：单任务预算计划（三键语义见 main/groupBudget.js）。
-      // 无预算组：maxRounds 回退 20、timeout 用任务自身值、settle 为空操作 —— 零回归。
-      const budgetPlan = groupBudget.planForTask(group, task, { maxRoundsFallback: 20 });
+      // 第八轮 B-02：单任务预算计划（无预算组 maxRounds 回退 20、timeout 用任务值、settle 空操作）。
+      // 2026-10-21：预算只做组级成本记账（软上限），不再按人头切份额——硬闸是轮次与墙钟。
+      budgetPlan = groupBudget.planForTask(deps.store.getGroup?.(group.group_id) || group, task, { maxRoundsFallback: 20 });
       // 墙钟超时：到点中止本轮 Agent（工具调用在下一轮 chat 才感知，符合设计取舍）
       const timer = setTimeout(() => controller.abort(new Error(`任务超时（${Math.round(budgetPlan.timeoutMs / 60000)} 分钟）`)), budgetPlan.timeoutMs);
       // 活动流：工具调用 → task_activity 事件（Agent 胶囊/面板实时展示执行流程）
@@ -357,22 +365,12 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
           kind: 'tool', text: `${tc?.name || ''} ${summarizeArgs(tc?.args)}`.trim(),
         });
       };
-      // T1-3/T1-4：子任务 token 用量累计（写入 result.tokensUsed，渲染层子任务树节点角标）。
-      // 与 spawn_subagent 同口径：usage 缺失时按内容长度估算（≈4 字符/token + 每次调用 60）。
+      // T1-3/T1-4：子任务 token 用量累计（result.tokensUsed）；2026-10-21 起只记账，不再按人均额度硬中止。
       let usedTokens = 0;
-      const onUsage = (m) => {
-        if (m?.role !== 'assistant') return;
-        const reported = (m.tokens_input || 0) + (m.tokens_output || 0);
-        const estimated = reported > 0 ? 0
-          : Math.ceil(String(m.content || '').length / 4)
-            + (Array.isArray(m.tool_calls) ? m.tool_calls.length * 60 : 0);
-        usedTokens += reported + estimated;
-      };
+      const onUsage = (m) => { const n = teamTrace.messageTokens(m); usedTokens += n; qrun?.note(n); };
       try {
-        // P1-11b：任务-模型分档（**可选 + 回落**）。`modelOverrides.worker` 缺省、形状不全或任何异常
-        // → 静默回落主模型（分档是成本优化，绝不能让配置错误把整组 Worker 弄崩）。
-        // 注意形态：基线**必须**保持 `model: toAgentModel(deps.resolveModel())` 这一行
-        //（test/model-shape.test.js 的源码护栏即此语义），分档在其后覆盖。
+        // P1-11b：任务-模型分档（可选 + 回落）——缺省/形状不全/异常 → 静默回落主模型（分档绝不能把整组弄崩）。
+        // 基线**必须**保持 `model: toAgentModel(deps.resolveModel())` 这一行（test/model-shape.test.js 源码护栏即此语义）。
         let workerOv = null;
         if (typeof deps.getModelOverrides === 'function') {
           const slot = (deps.getModelOverrides() || {}).worker;
@@ -381,50 +379,50 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
             else console.warn('[workerPool] modelOverrides.worker 缺少 providerId，已回落主模型');
           }
         }
+        // X-2（R-16）：成员身份前置解析（与 applyMemberRuntimeConfig 同反查口径；未认领 ⇒ null ⇒ 通用串字节不变）。
+        const ownerMember = resolveOwnerMember({ group, task, deps });
         const runOpts = {
-          messages: [{ role: 'user', content: await deps.buildTaskPrompt(group, task) }],
-          // 2026-10-15 修复：此处原先直接传 deps.resolveModel()（扁平形），而 runAgent
-        // 读 model.provider.id（嵌套形）→ 每个子任务第 1 轮即崩
-        // `Cannot read properties of undefined (reading 'id')`，整组随后降级/重规划。
-        // 转换统一走 modelShape.js，不再各调用链手抄（定时任务路径曾手抄过一份）。
-        model: toAgentModel(deps.resolveModel()),
+          // 对话型目标直接用任务 prompt（不注入总体目标/前置摘要，避免把模型推向「做产物」）
+          messages: [{ role: 'user', content: chatOnly ? String(task.prompt || '') : await deps.buildTaskPrompt(group, task) }],
+          // 2026-10-15 修复：扁平形 resolveModel() 会让 runAgent 第 1 轮即崩；转换统一走 modelShape.js。
+          model: toAgentModel(deps.resolveModel()),
           cwd: runCwd,
           signal: controller.signal,
-          // P0 治理修复（2026-10-16）：原为硬编码 'auto-safe'，后改为读全局「最近一次会话审批档」。
-          // V04 修复：子任务权限取「建组时刻的组内快照」（deps.getApprovalMode 仅作旧组兼容回退），
-          // 会话中途改审批档不再串到已在排队的组；再与 auto-safe 地板取更严者
-          //（never/full-access 是危险组合，有意抬升，UI 需明示生效值）。
+          // P0 治理修复：取「建组时刻的组内快照」（getApprovalMode 仅作旧组兼容回退），中途改档不串到排队组；
+          // 再与 auto-safe 地板取更严者（never/full-access 是危险组合，有意抬升，UI 需明示生效值）。
           // V04 沙箱：读组内快照，且不允许 worktree 存在把只读父组抬成 workspace-write。
           approvalMode: stricterApproval(group.approval_mode || deps.getApprovalMode?.() || 'on-request', 'auto-safe'),
           sandboxPolicy: runCwd ? groupSandboxPolicy : 'read-only',
           conversationId: sessionKey,
-          // M5 / T5-11：成员断点恢复上下文（跨 run 复用；空串 = 首轮，引擎自然忽略）
-          resumeContext,
+          resumeContext, // M5/T5-11：跨 run 复用；空串 = 首轮，引擎自然忽略
+          // P0：上下文策略（宿主可按团队/任务下发；缺省 null ⇒ 引擎默认）
+          compactPolicy: typeof deps.getCompactPolicy === 'function' ? deps.getCompactPolicy() : null,
           // M5 / T5-8：协同工具与提示词段的条件开关（null ⇒ 引擎不追加任何 team_* schema）
           teamContext,
-          // 说明：thread_id 不随 runOpts 下发——agent-core 只认白名单键，多传即为惰性死键；
-          // 四级 key 的「对话级归属」已落在成员断点元数据（threadId，见 saveMemberCheckpoint），
-          // 那是唯一可持久化、可断言的位置（R6.1 渲染层另有 group.thread_id 权威反查）。
-          // 第八轮 B-02 / D-809：max_rounds 从「提示词文案」变成引擎侧真实闸门。
-          maxRounds: budgetPlan.maxRounds,
-          // A-06 收口：整任务墙钟显式下发（与宿主 setTimeout 同一个预算值）。
-          // 此前引擎走 DEFAULT_RUN_WALL_CLOCK_MS、宿主走任务超时，两条路径靠默认值隐式对齐；
-          // 现在同一份 `budgetPlan.timeoutMs` 同时驱动两边，任一侧先到都按「暂停 + 断点」收尾。
+          // 说明：thread_id 不随 runOpts 下发——agent-core 只认白名单键，对话级归属已落在断点元数据。
+          // 第八轮 B-02 / D-809：引擎侧真实闸门；对话型目标压到 2 轮（一句话没有第二步）。
+          maxRounds: chatOnly ? Math.min(budgetPlan.maxRounds || 2, 2) : budgetPlan.maxRounds,
+          // A-06 收口：墙钟显式下发，与宿主 setTimeout 同一个预算值（任一侧先到都「暂停 + 断点」）。
           runWallClockMs: budgetPlan.timeoutMs,
           chatRetryBaseMs: 2000,
-          tokenBudget: 200000,
+          // 组预算：单任务取**组剩余额度**（成本信封，不按人头切份额）；有项目配额时再夹到授予额（§7.2 取最小值）。
+          tokenBudget: qrun?.grant ? Math.min(budgetPlan.tokenBudget, qrun.grant) : budgetPlan.tokenBudget,
           // Worker 也是无人值守：收尾文案不能出现「发送继续」
           unattended: true,
           toolHandlers: handlers,
           onToolCall,
-          // P2-8 / V-L1：只为收 verify_ledger（其余 trace 事件本通道不落盘，保持零额外写盘）
-          // sub:true 是子代理（spawn_subagent）的事件 —— 那批工具调用属于子代理自己的 run，
-          // 若混进 worker 的台账，L1 会把「子代理跑过测试」算成「worker 跑过测试」（R2 假绿）。
-          onTrace: (evt) => { if (evt && !evt.sub) vrun.onLedger(evt); },
+          // P2-8 / V-L1：只为收 verify_ledger；sub:true 的子代理事件不得混进 worker 台账（R2 假绿）。
+          onTrace: (evt) => {
+            if (!evt || evt.sub) return;
+            vrun.onLedger(evt);
+            // T6-11（§10.2）：压缩摘要交宿主落 project_runs.summary_json（实现自带 fail-open）。
+            if (evt.type === 'memory_saved' && String(evt.summary || '').trim()) deps.saveProjectSummary?.(group, String(evt.summary));
+          },
           onMessage: onUsage,
-          systemPrompt: '你是 MJ Coder 的并行任务 Worker：只完成分配给你的子任务，产出精炼、可执行的结论。'
-            + '完成前必须自测验证：能运行测试/命令验证的就实际运行，写完的文件就回读确认关键内容存在；验证不过要修复后再收尾。'
-            + '结束时用一段「summary」总结做了什么、验证结果与关键产物（文件路径等）；不要反问，不要输出无关寒暄。',
+          // 对话型目标下发空工具表（引擎对 customTools=[] 直接生效 ⇒ 本轮无任何工具可调用）。
+          ...(chatOnly ? { tools: [] } : {}),
+          // X-2（R-16）：首条 system 原样保留两条分支，仅在有名册归属时追加成员身份段。
+          systemPrompt: buildWorkerSystemPrompt({ chatOnly, ownerMember }),
         };
         // P1-11b：分档覆盖基线模型（形状异常 → 保持主模型）
         if (workerOv) {
@@ -439,14 +437,13 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         // 放在最后：per-bot 意图优先于 modelOverrides.worker 通用分档；治理档只会更严。
         // 未认领 / 无名册 → 空操作，非军团路径零回归（判定口径见 rolePresetApply 注释）。
         applyMemberRuntimeConfig(runOpts, { group, task, deps });
+        teamTrace.engineStart({ runKey, group, task, sessionKey, runOpts, runCwd, resumeContext });
         // P0-3①：思考强度随模型透传——agent-core 从 `model.model.reasoning_effort` 取，再下发到
         // 非流式通道的 `reasoning_effort`。分档自带则用分档的，否则沿用主模型（resolveModel 是纯 getter）。
         const effortSrc = workerOv || deps.resolveModel();
         const effort = effortSrc.reasoningEffort || effortSrc.reasoning_effort || '';
         if (effort) runOpts.model = { ...runOpts.model, model: { ...runOpts.model.model, reasoning_effort: effort } };
         const finalText = await core.runAgent(runOpts);
-        // 第八轮 B-02 / D-809：组级 token 结算（任务结束后入账，无预算组为空操作）
-        budgetPlan.settle(usedTokens);
         // P2-8 / V-L1：off 时 finish 直接返回原文（零行为变化）；开启后 BLOCK 只在
         // summary 末尾追加对账提示——**不改变任务成败判据**（改判据会让无人值守任务
         // 因为一句自述措辞反复重试，成本远大于收益；是否升级为失败留给后续批次决定）。
@@ -462,13 +459,19 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         result = { summary: String(summaryText || ''), artifacts: extractPaths(summaryText), tokensUsed: usedTokens };
       } finally {
         clearTimeout(timer);
+        // 第八轮 B-02 / D-809：组级 token 结算。T6-7（§7.1）：项目配额同时补差并释放预留。放在 finally ——
+        // 抛错/中止/超时同样要入账并释放预留，否则一次异常就会让账本永久少一份额度（后续任务被误判「预算不足」而跳过）。
+        try { budgetPlan?.settle(usedTokens); qrun?.settle(usedTokens); } catch (e) { console.warn('[workerPool] 结算失败（不阻塞）:', e?.message || e); }
       }
     } catch (err) {
-      errorMsg = String(err?.message || err);
+      // 装配阶段就抛错（尚未进入 run 的 finally）时预留无人释放——配额会永久泄漏，必须在此兜住
+      errorMsg = String(err?.message || err); try { qrun?.release(); } catch (e2) { console.warn('[workerPool] 配额预留释放失败:', e2?.message || e2); }
     }
 
     const entry = activeRuns.get(runKey);
     activeRuns.delete(runKey);
+
+    teamTrace.engineDone({ runKey, group, task, abortReason, errorMsg, result });
 
     // M5 / T5-3：动态等待 defer（§7 L2）。任务在运行中被 team_wait 登记为 waiting（store 状态为准），
     // waitTask 会主动 abort 当前 run 以释放槽位——这个 abort 是 **defer 语义而非失败**，
@@ -482,9 +485,9 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         waitingOn: deferred.waitingOn || [], waitDeadlineAt: deferred.waitDeadlineAt || null });
       deps.emit?.({ type: 'task_activity', groupId: group.group_id, taskId: task.taskId, name, kind: 'wait',
         textKey: 'runtime.workerWaiting', textParams: { name, deps: (deferred.waitingOn || []).join(', ') } });
-      // 与「重试重新领取」同型：本次运行的隔离副本不再有意义（唤醒后会以新副本重跑），清理不泄漏。
+      // 隔离副本不再有意义（唤醒后新副本重跑），清理不泄漏；不 resolveEffect（任务未终态）。
       if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {});
-      // 不 resolveEffect：任务尚未终态（等待中），副作用账本保持 uncertain 直至真正完成。
+      memberSession.saveWaiting(sessionKey, group, task, deferred, result); // P1：等待即打轻量断点
       schedule(); // 槽位已释放，让泵立刻去领别的任务
       return;
     }
@@ -527,6 +530,7 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
         const incomplete = /已主动停止|任务未完全完成|任务尚未完成/.test(String(result.summary || ''));
         if (incomplete) {
           const { retried } = deps.store.handleFailure(group.group_id, task.taskId, 'Agent 未完成收尾（重复失败熔断或预算耗尽）', { summary: result.summary, artifacts: result.artifacts });
+          teamTrace.incomplete({ runKey, group, task, retried, result });
           deps.emit?.({ type: 'task_update', groupId: group.group_id, taskId: task.taskId, status: retried ? 'queued' : 'failed', error: 'Agent 未完成收尾' });
           maybePauseOnCritical(group.group_id, task, retried);
           if (retried) { if (entry?.iso) await workerIsolation.discardIsolated({ iso: entry.iso }).catch(() => {}); }
@@ -603,7 +607,10 @@ async function runWorkerTask({ group, task, runKey, controller, name, runCwd, gr
     // 只有「全部 waiting_on 目标都已终态」的等待者才被放行（部分满足不提前放行）。
     let settledStatus = null;
     try {
-      settledStatus = deps.store.getTask?.(group.group_id, task.taskId)?.status || null;
+      const finalTask = deps.store.getTask?.(group.group_id, task.taskId);
+      settledStatus = finalTask?.status || null;
+      if (settledStatus === 'failed' || settledStatus === 'skipped') teamTrace.cascadeSkip(deps, group, task, finalTask?.error || '依赖任务未完成，已跳过');
+      teamTrace.settle({ runKey, group, task, finalTask, status: settledStatus });
       const woken = deps.store.settleWaitingTasks?.(group.group_id, task.taskId) || [];
       broadcastWoken(deps, group.group_id, woken);
       if (settledStatus && ['done', 'failed', 'skipped'].includes(settledStatus)) {
@@ -663,6 +670,14 @@ function abortTask(groupId, taskId) {
       schedule();
       return true;
     }
+    // T6-4（§5.1）：quota_suspend 不在 activeRuns，强制关闭直接落 skipped（状态机合法边）。
+    if (t?.status === 'quota_suspend') {
+      deps.store.setTaskStatus(groupId, taskId, 'skipped', { error: '配额暂停中的任务已被手动强制关闭' });
+      deps.emit?.({ type: 'task_update', groupId, taskId, status: 'skipped' });
+      deps.emit?.({ type: 'board_task_settled', groupId, taskId, status: 'skipped' });
+      schedule();
+      return true;
+    }
   } catch (e) {
     console.warn('[workerPool] 等待中任务强制关闭失败:', e.message);
   }
@@ -684,9 +699,8 @@ function abortGroup(groupId) {
   }
   let skipped = 0;
   try {
-    // M5 / T5-3：**先**取消等待中的任务。为什么必须先于下面的 queued/pending 清扫：
-    // cancelWaiting 会把 waiting → skipped 并级联唤醒「等它们的任务」（→ queued）；若顺序反过来，
-    // 被唤醒的任务不在本轮 queued/pending 快照里，会残留成永不派发的孤儿。
+    // M5 / T5-3：**先**取消等待中的任务——cancelWaiting 会 waiting → skipped 并级联唤醒等待者（→ queued）；
+    // 若顺序反过来，被唤醒的任务不在本轮 queued/pending 快照里，会残留成永不派发的孤儿。
     // 放在前面则它们变成 queued 后，正好被下面的清扫一并置 skipped。
     const cancelledWaiting = deps.store.cancelWaiting?.(groupId, { error: '组已被用户强制停止' }) || [];
     for (const c of cancelledWaiting) {
@@ -696,7 +710,8 @@ function abortGroup(groupId) {
       deps.emit?.({ type: 'board_task_settled', groupId, taskId: c.taskId, status: 'skipped' });
     }
     for (const t of deps.store.listTasks(groupId)) {
-      if (t.status === 'queued' || t.status === 'pending') {
+      // T6-4（§5.1）：quota_suspend 必须一并落 skipped，否则组收尾判定（计入该态）永不成立。
+      if (t.status === 'queued' || t.status === 'pending' || t.status === 'quota_suspend') {
         try {
           deps.store.setTaskStatus(groupId, t.taskId, 'skipped', { error: '组已被用户强制停止', force: true });
           skipped += 1;
@@ -762,28 +777,22 @@ function finalizeGroup(groupId) {
   groupBudget.clear(groupId);
   const g = deps.store.getGroup(groupId);
   if (!g) return;
-  const subResults = g.tasks.map((t) => ({
-    taskId: t.taskId, title: t.title, critical: t.critical,
-    ok: t.status === 'done', result: t.result, error: t.error,
-  }));
+  const subResults = g.tasks.map((t) => ({ taskId: t.taskId, title: t.title, critical: t.critical, ok: t.status === 'done', result: t.result, error: t.error }));
   const anyCriticalFailed = subResults.some((r) => r.critical && !r.ok);
   const aggregation = aggregateGroup(subResults);
   const result = {
-    summary: aggregation.merged.summary,
-    artifacts: aggregation.merged.artifacts,
-    warnings: aggregation.warnings,
+    summary: aggregation.merged.summary, artifacts: aggregation.merged.artifacts, warnings: aggregation.warnings,
     failed: aggregation.failed.map((f) => ({ taskId: f.taskId, title: f.title, error: f.error })),
   };
-  const status = anyCriticalFailed ? 'failed' : 'done';
-  deps.store.setGroupStatus(groupId, status, {
-    error: anyCriticalFailed ? `存在失败的关键任务（${result.failed.length} 个）` : null,
-    result,
-  });
+  // 2026-10-21 真机事故：预算跳过 / 任一任务失败都不得用 done 掩盖（含非关键失败）。
+  const skippedError = teamTrace.finalizeNote(g, result);
+  const status = (anyCriticalFailed || skippedError) ? 'failed' : 'done';
+  const finalizeError = anyCriticalFailed ? `存在失败的关键任务（${result.failed.length} 个）` : skippedError;
+  teamTrace.finalize({ groupId, status, error: finalizeError, subResults, g, result, skippedNote: skippedError });
+  deps.store.setGroupStatus(groupId, status, { error: finalizeError, result });
   deps.emit?.({ type: 'group_update', groupId, status, result });
   // 终态事件：main 层据此触发 auto 组的自动重规划
   deps.emit?.({ type: 'group_finalized', groupId, status });
 }
-
-// 产物路径粗提取：实现见 workerText.js（规则单一事实来源）
 
 module.exports = { initWorkerPool, runGroup, setMaxConcurrent, getMaxConcurrent, activeCount, finalizeGroup, schedule, abortTask, abortGroup, listActive, waitTask };

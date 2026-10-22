@@ -891,6 +891,62 @@ export const TEAM_TOOLS = [
   } },
 ];
 
+// DS Bots / T6-6：工件协同能力说明——**仅在宿主注入 artifactContext（会话/成员绑定项目）时**并入 base。
+// 与 TEAM_PROMPT_SECTION 同纪律：没接上下文时告诉模型有工件工具，只会诱导它调用一个不存在的工具。
+const ARTIFACT_PROMPT_SECTION = '\n\n## 项目工件（共享文档）\n'
+  + '本次运行绑定了一个项目工件（长文档/方案/报告）。正文只存在工件库里，消息与上下文只放索引与引用：\n'
+  + '- artifact_index：先看章节树、当前版本与每章字数（不含正文）。开工前必看一次。\n'
+  + '- artifact_get_section：按 section_key 读正文片段（可用 offset/max_chars 翻页，version 读历史版本）。'
+  + '每次只读你真正要改的那一章，不要整篇通读。\n'
+  + '- artifact_patch_section：按章节增量写。必须带 base_version（取自 artifact_index 的当前版本），'
+  + '版本不匹配会返回冲突与 diff——按 diff 改完重试，不要盲目覆盖。写回执只有版本与字数，不含正文。\n'
+  + '- artifact_get_diff：对比两个版本（可限定单章），确认改动范围。\n'
+  + '纪律：不要凭空重写整章（先 get_section）；不要把自己的产出只留在对话里——要沉淀就写进工件章节。';
+
+// 运行时条件追加的工件工具 schema（与 TEAM_TOOLS 同构：不进 BASE_TOOLS 静态清单）。
+export const ARTIFACT_TOOLS = [
+  { type: 'function', function: {
+    name: 'artifact_index',
+    description: '读取当前项目工件的结构索引（只读）：标题、当前版本、章节树（key/标题/字数/版本）与最近变更。'
+      + '不含正文；需要正文请用 artifact_get_section。开工前先调一次，拿到准确的 section_key 与 base_version。',
+    parameters: { type: 'object', properties: {
+      project_id: { type: 'string', description: '项目 id（可选；只能填当前会话绑定的项目，用于一致性校验）' },
+    }, required: [] },
+  } },
+  { type: 'function', function: {
+    name: 'artifact_get_section',
+    description: '读取工件某一章节的正文片段（只读，单次最多 8000 字符）。'
+      + 'truncated=true 时用 nextOffset 继续读；传 version 可读历史版本。',
+    parameters: { type: 'object', properties: {
+      section_key: { type: 'string', description: '章节标识（取自 artifact_index 的 outline[].key）' },
+      version: { type: 'string', description: '版本号（如 V3.2，可选；缺省读当前最新）' },
+      offset: { type: 'number', description: '起始字符偏移（翻页用，默认 0）' },
+      max_chars: { type: 'number', description: '本次最多读取字符数（默认 8000，上限 8000）' },
+    }, required: ['section_key'] },
+  } },
+  { type: 'function', function: {
+    name: 'artifact_patch_section',
+    description: '按章节增量写入工件（返回新版本号与字数，不含正文）。必须带 base_version（乐观锁）：'
+      + '版本不一致会返回 VERSION_CONFLICT 与 diff，按 diff 修改后重试。单次正文最多 16k 字符。',
+    parameters: { type: 'object', properties: {
+      section_key: { type: 'string', description: '要写的章节标识（取自 artifact_index）' },
+      content: { type: 'string', description: '该章节的完整新正文（整章替换，不是追加）' },
+      base_version: { type: 'string', description: '写入所基于的版本号（取自 artifact_index 的 currentVersion）' },
+      change_summary: { type: 'string', description: '一句话变更说明（≤200 字符，会记入版本历史）' },
+    }, required: ['section_key', 'content', 'base_version'] },
+  } },
+  { type: 'function', function: {
+    name: 'artifact_get_diff',
+    description: '对比工件两个版本的行级差异（只读，输出最多 4000 字符）。'
+      + '传 section_key 只看单章；不传则按大纲拼接全工件对比。',
+    parameters: { type: 'object', properties: {
+      from_version: { type: 'string', description: '起始版本号（如 V1.0）' },
+      to_version: { type: 'string', description: '目标版本号（如 V2.3）' },
+      section_key: { type: 'string', description: '只看这一章（可选）' },
+    }, required: ['from_version', 'to_version'] },
+  } },
+];
+
 // 从 SKILL.md 正文里取 description：优先 frontmatter 的 description，其次首个非标题正文行。
 // 这是**结构解析**（确定性文本提取），不涉及语义理解，故用规则而非 LLM。
 export function skillDescriptionOf(skill) {
@@ -919,6 +975,8 @@ export const READONLY_PARALLEL = new Set([
   'git_status', 'git_diff', 'git_log', 'git_branch',
   'pr_list', 'pr_view', 'pr_diff',
   'web_search', 'web_fetch',
+  // DS Bots / T6-6：工件读取三工具是只读查询（索引/片段/差异），可安全并行
+  'artifact_index', 'artifact_get_section', 'artifact_get_diff',
 ]);
 
 // 子代理提前停止时的可行动提示（给父代理的模型看，不是给用户看的）。
@@ -970,6 +1028,41 @@ const TOKEN_COMPACTION_TRIGGER = 0.7;
 //   · 预算压力 + 上下文很小 → **只开新预算窗口、不压缩**（小上下文压缩纯亏）；
 //   · 窗口用尽且救援用尽 → 暂停（断点续跑）。
 export const TOKEN_COMPACT_MIN_RATIO = 0.35;
+
+// ── 2026-10-21 P0：上下文策略参数化（DS Bot 式「两套策略可开关、可配置」）──
+// 此前阈值全是散落常量（0.7 / 0.8 / 0.25 / 0.15 / 0.45 / keepRecent 3），
+// 宿主无法按团队/任务调整，也无法对「大工具输出优先裁剪」建策略。
+// 统一收口为一份策略对象：函数内默认取 DEFAULT_COMPACT_POLICY，调用方经
+// `runOpts.compactPolicy` 覆盖（宿主可按团队/任务下发）；所有比例都会夹到安全区间。
+export const DEFAULT_COMPACT_POLICY = Object.freeze({
+  triggerRatio: 0.7,            // 常规压缩触发（窗口体积占比）
+  aggressiveRatio: 0.8,         // 激进压缩触发
+  keepTailRatio: 0.25,          // 常规档尾部保留
+  aggressiveKeepTailRatio: 0.15,// 激进档尾部保留
+  trimTargetRatio: 0.45,        // 硬截断目标
+  keepRecentRounds: 8,          // 硬截断至少保留最近轮数（入口裁剪沿用历史值 8；调用方可显式覆盖）
+  toolShrinkChars: 2000,        // 单条工具输出超过此长度 → 优先裁剪（策略 A）
+});
+
+const clampRatio = (v, lo, hi, fallback) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(Math.max(n, lo), hi) : fallback;
+};
+/** 合并 + 夹紧策略：非法值静默回落默认（配置错误绝不能把压缩闸弄失效）。 */
+export function resolveCompactPolicy(input) {
+  const p = input && typeof input === 'object' ? input : {};
+  const d = DEFAULT_COMPACT_POLICY;
+  const trigger = clampRatio(p.triggerRatio, 0.3, 0.95, d.triggerRatio);
+  return {
+    triggerRatio: trigger,
+    aggressiveRatio: clampRatio(p.aggressiveRatio, trigger + 0.01, 0.98, d.aggressiveRatio),
+    keepTailRatio: clampRatio(p.keepTailRatio, 0.05, 0.5, d.keepTailRatio),
+    aggressiveKeepTailRatio: clampRatio(p.aggressiveKeepTailRatio, 0.03, 0.5, d.aggressiveKeepTailRatio),
+    trimTargetRatio: clampRatio(p.trimTargetRatio, 0.2, 0.9, d.trimTargetRatio),
+    keepRecentRounds: Math.max(1, Math.min(20, Number(p.keepRecentRounds) || d.keepRecentRounds)),
+    toolShrinkChars: Math.max(200, Math.min(20000, Number(p.toolShrinkChars) || d.toolShrinkChars)),
+  };
+}
 
 // ── P0-1⑤：上下文窗口兜底单点（此前 :724 / :820 / :1667 各写一个数，彼此不一致）──
 //
@@ -1094,7 +1187,9 @@ const APPROVAL_TOOLS = new Set(['shell', 'write_file', 'edit_file', 'apply_patch
   // 需透传 approvalMode/conversationId 进主进程审批闸
   'latex_compile',
   // G-CUA：模型侧桌面自动化（L1 恒逐次确认），需透传 approvalMode/conversationId 进主进程审批中心
-  'computer_use']);
+  'computer_use',
+  // DS Bots / T6-6：工件章节写入（approval.js 分级 L2）——需透传 approvalMode/conversationId
+  'artifact_patch_section']);
 
 // V01：宿主治理保留字段——这些字段决定审批/沙箱/执行根/会话归属，
 // 只能由宿主（runAgent 参数）注入，模型工具参数里出现即剥离（见工具执行循环）。
@@ -1166,6 +1261,12 @@ const TOOL_HANDLER_NAMES = {
   team_wait: 'teamWait',
   // B-04（2026-10-21）：模型侧读消息——补上总线的「读」半边，question/handoff 才不是死语义
   team_read_messages: 'teamReadMessages',
+  // DS Bots / T6-6：工件协同四工具（通道名须同步登记到 engineProcess/registry.js，
+  // 否则子进程路径会报「未知工具: artifact_*」）
+  artifact_index: 'artifactIndex',
+  artifact_get_section: 'artifactGetSection',
+  artifact_patch_section: 'artifactPatchSection',
+  artifact_get_diff: 'artifactGetDiff',
 };
 
 // 粗略 token 估算：中日韩字符约 1 token/字，其余约 1 token/4 字符
@@ -1349,17 +1450,18 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
     ? Number(opts.window)
     : effectiveWindowOf(declaredWindow, opts.knownTokens);
   const est = typeof opts.knownTokens === 'number' ? opts.knownTokens : estimateMessagesTokens(convo);
+  const policy = resolveCompactPolicy(opts.policy);
   // 触发只看体积：此前的 `|| convo.length <= 8` 会让「消息少但内容大」的历史永不压缩
   // （/compact 压平后、单条超长粘贴都会踩到）。条数少到无可裁内容时，下面
   // `body.length <= keepTail` 与「无收益即放弃」两道闸会兜住，不会白付一次摘要调用。
-  if (!opts.force && est <= contextWindow * 0.7) return convo;
+  if (!opts.force && est <= contextWindow * policy.triggerRatio) return convo;
 
   // P2-4：激进档门槛 0.85 → 0.80。0.85 只给压缩留 15% 余量（128k 窗口 ≈ 19k），
   // 一次工具回包就能撞顶；0.80 给 20%，也更贴合 keepTail 的 0.15/0.25 分档。
-  const aggressive = est > contextWindow * AGGRESSIVE_RATIO;
-  // T2：尾部保留区按体积预算（窗口的 25% / 激进档 15%），不再按条数。
+  const aggressive = est > contextWindow * policy.aggressiveRatio;
+  // T2：尾部保留区按体积预算（窗口的 25% / 激进档 15%，可由 compactPolicy 覆盖），不再按条数。
   // 条数制在「一轮并发多工具」时会退化成「整段保留 → 压缩放弃」。
-  const keepTailTokens = Math.floor(contextWindow * (aggressive ? 0.15 : 0.25));
+  const keepTailTokens = Math.floor(contextWindow * (aggressive ? policy.aggressiveKeepTailRatio : policy.keepTailRatio));
   // 固定头必须含专家 system 与原始需求：压缩结果会回写 convo（C2），丢一次就永久丢。
   const { systems, firstUser, from } = splitFixedHead(convo);
   const body = convo.slice(from);
@@ -1409,11 +1511,15 @@ export async function compactHistory(convo, model, chatFn, opts = {}) {
       baseUrl: chatModel.provider.base_url,
       // 结构化摘要模板（复盘文档 P1-2 采纳）：固定四段式，细节（文件路径/函数名/结论）
       // 必须保留——LLM 需要更多细节时按路径按需重读，平衡 token 消耗与信息完整性
-      messages: [{ role: 'user', content: `将以下对话历史压缩为一份结构化摘要，严格按此格式输出（300 字以内）：
+      messages: [{ role: 'user', content: `将以下对话历史压缩为一份结构化摘要，严格按此格式输出（400 字以内）：
+【顶层目标】用户最初要求的目标，必须原样保留、不可丢失
 【已完成】列出已完成的工作与验证结果（一句话一项）
 【关键发现】重要结论、发现的文件路径/函数名/关键变量，后续轮次必须能凭此定位
 【待办】当前进行到哪一步、接下来要做什么（含断点位置）
 【约束】用户原始需求中不可丢失的约束
+
+顶层目标（不可丢失，来自首条用户消息）：
+${contentToPlainText(firstUser?.content || '').slice(0, 1200) || '（未提供）'}
 
 对话历史：
 ${transcript}` }],
@@ -1448,7 +1554,10 @@ ${transcript}` }],
       // 传**纯摘要**（clamped）而非带前缀的 summary——前缀「[早期对话摘要]」与尾部提示是给模型的，
       // 作为记忆内容只会是噪音。钩子异常绝不影响压缩结果（与 onTrace 同纪律）。
       try {
-        opts.onCompacted?.({ summary: clamped, aggressive, rounds: toCompact.length });
+        opts.onCompacted?.({
+          summary: clamped, aggressive, rounds: toCompact.length,
+          droppedMessages: toCompact.length, keptTailTokens: keepTailTokens,
+        });
       } catch { /* 归档钩子异常绝不影响主流程 */ }
       return next;
     }
@@ -1477,21 +1586,43 @@ function TRIM_NOTICE(dropped, tokens) {
     + '需要细节时用 read_file / grep 重新读取，不要凭记忆假设。';
 }
 
-export function trimHistoryForRun(convo, { contextWindow, targetRatio = 0.45, keepRecent = 8 } = {}) {
+export function trimHistoryForRun(convo, { contextWindow, targetRatio, keepRecent, policy } = {}) {
+  const p = resolveCompactPolicy(policy);
+  const ratio = Number(targetRatio) > 0 ? Number(targetRatio) : p.trimTargetRatio;
+  const minRounds = Number(keepRecent) > 0 ? Number(keepRecent) : p.keepRecentRounds;
   const msgs = Array.isArray(convo) ? convo : [];
   const beforeTokens = estimateMessagesTokens(msgs);
   // P0-1⑤：入口裁剪的有效窗口下限收敛为常量（此前是内联的 16000 魔法数字）。
   // 下限本身是刻意的：单测用 1000~1300 的小窗口强制走压缩路径，入口裁剪不得抢跑；
   // 生产侧真实窗口远大于它，不受影响。
   const effectiveWindow = Math.max(Number(contextWindow) || 0, TRIM_MIN_EFFECTIVE_WINDOW);
-  const budget = Math.floor(effectiveWindow * targetRatio);
+  const budget = Math.floor(effectiveWindow * ratio);
   const unchanged = { convo: msgs, trimmed: false, dropped: 0, beforeTokens, afterTokens: beforeTokens };
   if (msgs.length <= 3 || beforeTokens <= budget) return unchanged;
 
   // 必留固定头：全部前导 system + 首条 user（与 compactHistory 同一份实现，防两处规则漂移）
   const { systems, firstUser, from, head } = splitFixedHead(msgs);
-  const body = msgs.slice(from);
-  if (body.length <= 1) return unchanged;
+  const bodyRaw = msgs.slice(from);
+  if (bodyRaw.length <= 1) return unchanged;
+
+  // 策略 A（2026-10-21）：大工具输出优先裁剪——保留首尾与「已落盘」事实，不丢决策。
+  // 只有超预算时才付出改写成本；裁完已回到预算内则不做整轮丢弃（保留更多上下文）。
+  const shrinkTool = (m) => {
+    if (m?.role !== 'tool') return m;
+    const s = String(m.content || '');
+    if (s.length <= p.toolShrinkChars) return m;
+    return { ...m, content: `[工具输出已裁剪：原 ${s.length} 字符，保留首尾；完整原文可由引擎按需重新读取]
+${s.slice(0, 800)}
+…
+${s.slice(-400)}` };
+  };
+  const body = bodyRaw.map(shrinkTool);
+  if (body.some((m, i) => m !== bodyRaw[i])) {
+    const shrunkTokens = estimateMessagesTokens([...head, ...body]);
+    if (shrunkTokens <= budget) {
+      return { convo: [...head, ...body], trimmed: true, dropped: 0, beforeTokens, afterTokens: shrunkTokens };
+    }
+  }
 
   // 按「轮」分组（与压缩共用 groupRounds）。切点恒落在组边界，
   // 组内绝不拆开 assistant(tool_calls) 与它的 tool 结果——孤儿 tool 消息会直接 400。
@@ -1505,8 +1636,8 @@ export function trimHistoryForRun(convo, { contextWindow, targetRatio = 0.45, ke
   for (let g = groups.length - 1; g >= 0; g -= 1) {
     const grp = body.slice(groups[g].start, groups[g].end);
     const t = estimateMessagesTokens(grp);
-    // 至少留 keepRecent 轮（再预算紧张也不裁到 0 轮），之后按预算从尾部向前收
-    if (keptRounds >= keepRecent && headRoom + keepTokens + t > budget) break;
+    // 至少留 minRounds 轮（再预算紧张也不裁到 0 轮），之后按预算从尾部向前收
+    if (keptRounds >= minRounds && headRoom + keepTokens + t > budget) break;
     cut = groups[g].start;
     keepTokens += t;
     keptRounds += 1;
@@ -2047,6 +2178,12 @@ export const TOOL_TIMEOUT_OVERRIDES = {
   // B-04：读消息同样是主进程内的短查询（一次 SQLite SELECT）
   team_read_messages: 30000,
   team_wait: 60000,
+  // DS Bots / T6-6：工件工具是主进程内的 SQLite 短事务 + 行级 diff（无网络/无子进程）。
+  // patch 的上限文本 16k 字符 + 全工件体积复算，给 60s 覆盖大工件 diff 的 CPU 抖动。
+  artifact_index: 30000,
+  artifact_get_section: 30000,
+  artifact_patch_section: 60000,
+  artifact_get_diff: 60000,
 };
 
 export function withTimeout(promise, ms, label) {
@@ -2252,6 +2389,11 @@ export const AGENT_HARD_ROUND_CAP = 120;
 // 「模型不知道怎么纠正，只会原样重试」——此时再跑就是纯烧 token 与用户等待时间。
 export const REPEAT_FAIL_WARN = 2;
 export const REPEAT_FAIL_STOP = 4;
+// 2026-10-21 真机事故补线：模型换参数重试同一工具时，签名熔断永远不触发
+// （用户实测 t2 用 shell 换命令重试 20 轮、烧 257k tokens）。这里再加一道
+// 「同一工具连续失败（不看参数）」的快速熔断：6 次足以判定空转，又不会误伤
+// 「探索时读了几个不存在的路径」这类正常失败。
+export const TOOL_FAIL_STOP = 6;
 
 // Phase 3-2：文件读取缓存门槛——内容小于该值的文件重复读取直接放行（小文件不值得缓存）
 export const FILE_CACHE_MIN_CHARS = 4000;
@@ -2359,6 +2501,8 @@ export async function runAgent({
   // 无人值守通道（定时任务/Worker）：收尾文案里不能出现「发送继续」——那边没有人能发。
   unattended = false,
   resumeContext = '',
+  // 2026-10-21 P0：上下文策略（DS Bot 式可配置）。宿主按团队/任务下发；缺省用 DEFAULT_COMPACT_POLICY。
+  compactPolicy = null,
   // T0-4 看门狗：单轮模型调用（含重试链）与每个工具执行的 wall-clock 上限；
   // T0-5 trace：结构化运行事件透出（run_start/model/tool/run_end，含耗时与用量）。
   // 两者超时/上报均可由调用方覆盖（测试注入小值加速）；onTrace 异常绝不影响主流程。
@@ -2385,6 +2529,11 @@ export async function runAgent({
   // 非空 ⇒ 本次 run 是团队成员任务：追加 TEAM_TOOLS 与协同提示词段；null/缺省 ⇒
   // 四个 schema 与提示词段都不出现（主会话/定时任务/普通编排组零回归）。
   teamContext = null,
+  // DS Bots / T6-6：项目工件上下文——{ projectId, artifactId?, teamId?, runId?, memberId? }。
+  // 非空 ⇒ 本次 run 绑定项目工件：追加 ARTIFACT_TOOLS 与工件提示词段；
+  // null/缺省 ⇒ 四个 schema 与提示词段都不出现（未绑定项目的会话零回归）。
+  // 项目身份由宿主经会话绑定反查后注入，模型参数里的 project_id 只做一致性校验。
+  artifactContext = null,
   // P1-4：稳定前缀区段序开关（A/B 回滚用；见 PROMPT_SECTIONS）
   enablePrefixOrder = true,
 } = {}) {
@@ -2431,7 +2580,7 @@ export async function runAgent({
     // 保证通道级追加（定时任务/Worker 产出契约）仍是 system 尾部不变量
     //（见 test/append-system-prompt.test.mjs）。styleSection 为每 run 定值，用户不改设置时
     // 字节稳定；BASE_PROMPT 本身仍是完整前缀，prompt cache 不受影响。
-    base: `${customSystemPrompt || BASE_PROMPT}${computerUseEnabled && !customSystemPrompt ? CUA_PROMPT_SECTION : ''}${teamContext && !customTools ? TEAM_PROMPT_SECTION : ''}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
+    base: `${customSystemPrompt || BASE_PROMPT}${computerUseEnabled && !customSystemPrompt ? CUA_PROMPT_SECTION : ''}${teamContext && !customTools ? TEAM_PROMPT_SECTION : ''}${artifactContext && !customTools ? ARTIFACT_PROMPT_SECTION : ''}\n\n${styleSection}${appendSystemPrompt ? `\n\n${String(appendSystemPrompt).slice(0, 8000)}` : ''}`,
     role: '',    // S2 每 run 定：数字员工角色设定
     tools: '',   // S2 每 run 定：工具表说明（工具 schema 本身经 allTools 下发，这里留位以备补充说明）
     skills: '',  // S2/S3：启用技能提示 + 技能索引（summary）或技能正文（full）
@@ -2578,7 +2727,7 @@ export async function runAgent({
       sysSections.memory = wrapped.text;
     }
   }
-  // 断点恢复注入（Phase 3-1）：上一任务因预算触顶暂停，恢复时把断点摘要放进 system——
+  // 断点恢复注入（Phase 3-1）：上一任务暂停（预算触顶或等待依赖），恢复时把断点摘要放进 system——
   // 只进 system 消息不进持久化历史（与续期指令同语义），模型据此接续待办而非重读全部文件
   if (resumeContext) {
     // 断点摘要同源于**模型自己的输出**（暂停时 summary = 当时的 finalText），而模型输出
@@ -2588,7 +2737,7 @@ export async function runAgent({
     const safeResume = wrapUntrusted(String(resumeContext).slice(0, 6000), {
       source: 'resume', label: '断点恢复（上一任务暂停时的摘要）',
     });
-    sysSections.resume = `## 断点恢复（上一任务因预算触顶暂停，以下是断点摘要）\n${safeResume.text}\n\n请从「待办」处接续执行，已完成部分不要重做；需要细节时按摘要中的文件路径按需重读。`;
+    sysSections.resume = `## 断点恢复（上一任务已暂停：预算触顶或等待依赖；以下是断点摘要）\n${safeResume.text}\n\n请从「待办」处接续执行，已完成部分不要重做；需要细节时按摘要中的文件路径按需重读。`;
   }
   // 段序即契约：空段不产生空行（否则「有没有记忆」会平移后续所有内容的字节偏移）
   let systemPrompt = PROMPT_SECTIONS
@@ -2616,6 +2765,8 @@ export async function runAgent({
     // P1-6：技能正文加载是纯只读（只能读 ~/.mjcode/skills 内已安装技能的 SKILL.md），
     // 规划阶段需要它读技能正文才能给出可行计划
     'load_skill',
+    // DS Bots / T6-6：工件读取三工具同样是纯只读（写入口 artifact_patch_section 不在列）
+    'artifact_index', 'artifact_get_section', 'artifact_get_diff',
   ]);
   // P1-6：summary 模式下额外通告 load_skill（只在宿主提供了 loadSkill 通道时；
   // BASE_TOOLS 条数由 test/web-todo-tools.test.js 的工具总数断言钉死——该测试另有防复发断言，
@@ -2635,6 +2786,10 @@ export async function runAgent({
   // 只在宿主显式注入 teamContext 时出现，故非团队通道的工具面与提示词字节完全不变。
   if (teamContext && !customTools) {
     effectiveBaseTools = [...effectiveBaseTools, ...TEAM_TOOLS];
+  }
+  // DS Bots / T6-6：绑定项目工件的 run 追加四个工件工具（同一纪律：不进静态清单）。
+  if (artifactContext && !customTools) {
+    effectiveBaseTools = [...effectiveBaseTools, ...ARTIFACT_TOOLS];
   }
   // ── B2 移交项（F-007 定义侧闸门的**消费方**）──
   // shared/mcpToolDefs.mjs 用不可枚举的 `__blocked__`（原因字符串）标记 schema 超限的 MCP 工具，
@@ -2928,7 +3083,7 @@ export async function runAgent({
   // 现在与压缩闸同阈值（0.7）：小于 70% 谁都不许动历史。
   const trimBeforeTokens = estimateMessagesTokens(convo);
   const trimRes = trimBeforeTokens > declaredWindow * TRIM_TRIGGER_RATIO
-    ? trimHistoryForRun(convo, { contextWindow: declaredWindow })
+    ? trimHistoryForRun(convo, { contextWindow: declaredWindow, policy: compactPolicy })
     : { convo, trimmed: false, dropped: 0, beforeTokens: trimBeforeTokens, afterTokens: trimBeforeTokens };
   if (trimRes.trimmed) {
     convo = trimRes.convo;
@@ -3004,8 +3159,11 @@ export async function runAgent({
   // 直到 120 轮硬顶耗尽——用户侧表现就是「改完了还卡着转好几分钟」。
   // 因此按「工具名 + 参数」签名统计连续失败：先旁路警示，达到硬阈值即熔断收尾并如实说明。
   const failStreak = new Map();
+  // 同一工具「连续失败」计数（不看参数）：换命令/换路径重试也会累计，成功后清零。
+  const toolFailStreak = new Map();
   let repeatFailTool = '';
   let repeatFailCount = 0;
+  let repeatFailMode = 'signature'; // 'signature' = 同参数；'tool' = 同工具连续失败
 
   // Phase 3-2：run 内文件读取缓存——绝对路径 → { mtimeMs, size, len, round }。
   // 同一文件 mtime/size 未变时重复全量读取不再注入全文（长任务每轮重复读上下文
@@ -3050,6 +3208,7 @@ export async function runAgent({
     onStream?.('');
     const compacted = await compactHistory(convo, model, chatFn, {
       knownTokens: lastPromptTokens, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
+      policy: compactPolicy,
       onCompacted: emitCompactedMemory,
     });
     // 压缩结果必须回写：此前只用于本次 outbound，下一轮仍按「已被压缩的 prompt_tokens」判阈值
@@ -3123,6 +3282,7 @@ export async function runAgent({
         console.warn(`[agent] 疑似上下文超限（${msg.slice(0, 200)}），强制压缩历史后重试`);
         convo = await compactHistory(convo, model, chatFn, {
           knownTokens: lastPromptTokens, force: true, window: runCtxWindow, chatModel: compactModel, ledger: rewriteLedger,
+          policy: compactPolicy,
           onCompacted: emitCompactedMemory,
         });
         continue;
@@ -3221,6 +3381,7 @@ export async function runAgent({
         ? convo
         : await compactHistory(convo, model, chatFn, {
           knownTokens: lastPromptTokens, force: true, window: ctxWindow, chatModel: compactModel, ledger: rewriteLedger,
+          policy: compactPolicy,
           onCompacted: emitCompactedMemory,
         });
       if (convo !== beforeConvo) {
@@ -3233,7 +3394,7 @@ export async function runAgent({
       // 旧实现不看压缩是否发生，照样 `tokenWindowSpent = 0` → 每 5 轮空转一次、
       // 一分钱不省，直到把预算烧穿（线上 21 轮 1.6M tokens 就是这么来的）。
       // 降级一：硬截断（丢早期轮，保留最近 3 轮工作现场）。
-      const trimmedRun = trimHistoryForRun(convo, { contextWindow: ctxWindow, targetRatio: 0.45, keepRecent: 3 });
+      const trimmedRun = trimHistoryForRun(convo, { contextWindow: ctxWindow, targetRatio: 0.45, keepRecent: 3, policy: compactPolicy });
       if (trimmedRun.trimmed) {
         console.warn(`[agent] 压缩无收益，改走硬截断：${trimmedRun.beforeTokens} → ${trimmedRun.afterTokens} tokens（丢弃 ${trimmedRun.dropped} 条早期消息）`);
         convo = trimmedRun.convo;
@@ -3722,9 +3883,19 @@ export async function runAgent({
         if (isToolFailure(toolResult)) {
           const n = (failStreak.get(failKey) || 0) + 1;
           failStreak.set(failKey, n);
+          const m = (toolFailStreak.get(tc.function.name) || 0) + 1;
+          toolFailStreak.set(tc.function.name, m);
           if (n >= REPEAT_FAIL_STOP) {
             repeatFailTool = tc.function.name;
             repeatFailCount = n;
+            repeatFailMode = 'signature';
+            budgetExhausted = true;
+            budgetKind = 'repeat';
+          } else if (m >= TOOL_FAIL_STOP) {
+            // 换参数重试同一工具同样算空转：签名不同也拦（t2 事故的 20 轮就是这样来的）。
+            repeatFailTool = tc.function.name;
+            repeatFailCount = m;
+            repeatFailMode = 'tool';
             budgetExhausted = true;
             budgetKind = 'repeat';
           } else if (n >= REPEAT_FAIL_WARN) {
@@ -3735,6 +3906,7 @@ export async function runAgent({
           }
         } else {
           failStreak.delete(failKey); // 同签名一旦成功即清零，正常重试不受影响
+          toolFailStreak.delete(tc.function.name); // 该工具一旦成功，「连续失败」重新计数
         }
         onToolCall?.({ name: tc.function.name, args: toolArgs, result: toolResult });
         // P1-B：截断带标记；对象结果逐字段裁剪保持 JSON 完整，不在中间下刀
@@ -3774,8 +3946,11 @@ export async function runAgent({
   if (budgetExhausted) {
     console.warn(`[agent] 运行结束（${budgetKind} 熔断）：轮数=${roundsUsed}，累计 ${usage.prompt_tokens + usage.completion_tokens} tokens`);
     if (budgetKind === 'repeat') {
-      finalText = `${finalText || ''}\n\n（已主动停止：工具 \`${repeatFailTool}\` 用相同参数连续失败 ${repeatFailCount} 次，`
-        + '判定为无效重试而非任务不可完成，继续跑只会空转。请根据上述失败原因调整，或换个说法让我重新尝试。）'.trim();
+      const why = repeatFailMode === 'tool'
+        ? `工具 \`${repeatFailTool}\` 连续失败 ${repeatFailCount} 次（参数不同也判为空转）`
+        : `工具 \`${repeatFailTool}\` 用相同参数连续失败 ${repeatFailCount} 次`;
+      finalText = `${finalText || ''}\n\n（已主动停止：${why}，`
+        + '继续跑只会空转。请根据上述失败原因调整，或换个说法让我重新尝试。）'.trim();
     } else {
       finalText = buildExhaustedNotice({
         finalText, budgetKind, wallClockHit, runWallClockMs, tokenRescues, usage,

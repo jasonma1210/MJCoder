@@ -18,6 +18,9 @@ export const TASK_STATUS_KEY = {
   done: 'teams.streamTaskDone',
   failed: 'teams.streamTaskFailed',
   skipped: 'teams.streamTaskSkipped',
+  // T6-4（§5.1）：配额暂停是独立状态词，不能复用「等待中」——等待是在等别人，暂停是在等额度，
+  // 两者的用户动作完全不同（前者无需干预，后者可追加额度或取消）。
+  quota_suspend: 'teams.streamTaskQuotaSuspend',
 };
 
 /**
@@ -44,6 +47,20 @@ export function timeLabel(ts) {
   const d = new Date(ts);
   const p = (n) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/**
+ * token 数量的紧凑展示（预算条与任务行共用）。
+ * 用 k / M 而不是「万」——中英两个语言包共用同一份格式化，语言无关才不会出现
+ * 英文界面里冒出中文量词。目标是一眼比较量级，不做精确到个位的展示。
+ * @param {number} n
+ * @returns {string}
+ */
+export function formatTokens(n) {
+  const v = Math.max(0, Number(n) || 0);
+  if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+  return String(Math.round(v));
 }
 
 /** 引用是否像文件路径：只有路径才能点击打开（纯 id / 标识保持只读文本）。 */

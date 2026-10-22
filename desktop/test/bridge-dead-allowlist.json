@@ -1,5 +1,5 @@
 {
-  "reviewedAt": "2026-10-21",
+  "reviewedAt": "2026-10-22",
   "policy": "桥面暴露但渲染层未引用的方法必须显式登记在此（C-05 收口）。新增死方法 = 红；台账里的条目被启用后必须删除台账项 = 红。移除动作暂缓：每一项都可能是外部调用方（插件/脚本/旧版本渲染层）仍在使用的兼容面。",
   "dead": [
     "applyPatch",
@@ -41,6 +41,10 @@
     "onCuaApprovalRequest",
     "onCuaApprovalSettled",
     "onCuaEvent",
+    "projectsCreate",
+    "projectsGet",
+    "projectsList",
+    "projectsUpdateStatus",
     "resolveCuaApproval",
     "serverHealth",
     "tasksAutoRun",
@@ -49,7 +53,6 @@
     "teamsArchive",
     "teamsCreateLead",
     "teamsSetMemberEnabled",
-    "teamsUpdate",
     "webSearchSetConfig",
     "writeFile"
   ]

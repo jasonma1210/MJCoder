@@ -14,7 +14,7 @@ import Button from './ui/Button';
 import { toast } from './feedback';
 import { useI18n } from '../i18n';
 import { IconChevronDown, IconFile } from './icons';
-import { TASK_STATUS_KEY, taskEventText, timeLabel, isPathLike } from '../../../shared/teamTrace.mjs';
+import { TASK_STATUS_KEY, taskEventText, timeLabel, isPathLike, formatTokens } from '../../../shared/teamTrace.mjs';
 
 // 任务处理轨迹（与对话内协同卡同一份投影口径）
 export interface TeamBoardEvent {
@@ -44,6 +44,18 @@ export interface TeamBoardTask {
   dependsOn?: string[];
   critical?: boolean;
   waitingOn?: string[];
+  // 预算可视化：该任务已结算消耗（运行中为 0）
+  tokensUsed?: number;
+}
+
+// 组预算视图（与对话卡同源，见 shared/teamStream.mjs budgetInfoOf）
+export interface TeamBoardBudget {
+  maxTokens: number;
+  maxRounds: number;
+  maxWallMs: number;
+  usedTokens: number;
+  remainingTokens: number;
+  percent: number;
 }
 
 export interface TeamBoardMember {
@@ -61,18 +73,23 @@ export interface TeamBoardCard {
   goal: string;
   status: string;
   progress: { total?: number } & Record<string, number>;
+  // 无预算的组为 null，看板不画预算区
+  budget?: TeamBoardBudget | null;
   tasks: TeamBoardTask[];
   members?: TeamBoardMember[];
 }
 
 // 列顺序 = 任务生命周期顺序；failed 列合并 skipped（两者都是「没产出」的终态）
-const COLUMNS = ['pending', 'running', 'waiting', 'done', 'failed'] as const;
+// T6-4（§5.1）：quota_suspend 独立成列（不并入「待开始」）——它需要用户注意（追加额度或取消），
+// 混进待开始会让「为什么不动了」变成黑盒。
+const COLUMNS = ['pending', 'running', 'waiting', 'quota_suspend', 'done', 'failed'] as const;
 type ColumnKey = typeof COLUMNS[number];
 
 const COLUMN_STATUS: Record<ColumnKey, string[]> = {
   pending: ['pending', 'queued'],
   running: ['running'],
   waiting: ['waiting'],
+  quota_suspend: ['quota_suspend'],
   done: ['done'],
   failed: ['failed', 'skipped'],
 };
@@ -81,6 +98,7 @@ const COLUMN_LABEL: Record<ColumnKey, string> = {
   pending: 'teams.boardPending',
   running: 'teams.boardRunning',
   waiting: 'teams.boardWaiting',
+  quota_suspend: 'teams.boardQuotaSuspend',
   done: 'teams.boardDone',
   failed: 'teams.boardFailed',
 };
@@ -89,50 +107,46 @@ const COLUMN_TONE: Record<ColumnKey, string> = {
   pending: 'text-text2',
   running: 'text-accent',
   waiting: 'text-warn',
+  quota_suspend: 'text-warn',
   done: 'text-success',
   failed: 'text-danger',
 };
 
-export default function TeamBoard({ card, onClose, onOpenFile }: {
-  card: TeamBoardCard | null;
-  onClose: () => void;
+/**
+ * 看板主体（无弹层）：T6-10 的工件侧面板「待办」与弹层看板共用同一份渲染，
+ * 避免面板另写一套列/轨迹/中断逻辑，导致两处状态口径漂移。
+ */
+export function TeamBoardBody({ card, onOpenFile }: {
+  card: TeamBoardCard;
   onOpenFile?: (path: string) => void;
 }) {
   const { t } = useI18n();
 
   const titleById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const task of card?.tasks || []) map.set(task.taskId, task.title || task.taskId);
+    for (const task of card.tasks || []) map.set(task.taskId, task.title || task.taskId);
     return map;
   }, [card]);
 
   const leadIds = useMemo(
-    () => new Set((card?.members || []).filter((m) => m.roleKind === 'lead').map((m) => m.id)),
+    () => new Set((card.members || []).filter((m) => m.roleKind === 'lead').map((m) => m.id)),
     [card],
   );
 
   const columns = useMemo(() => {
     const map = new Map<ColumnKey, TeamBoardTask[]>(COLUMNS.map((key) => [key, []]));
-    for (const task of card?.tasks || []) {
+    for (const task of card.tasks || []) {
       const key = COLUMNS.find((c) => COLUMN_STATUS[c].includes(task.status)) || 'pending';
       map.get(key)?.push(task);
     }
     return map;
   }, [card]);
 
-  const p = card?.progress || {};
+  const p = card.progress || {};
   const nameOf = (ids?: string[]) => (ids || []).map((id) => titleById.get(id) || id).join(', ');
 
   return (
-    <Modal
-      open={!!card}
-      onClose={onClose}
-      title={t('teams.boardTitle')}
-      size="settings"
-      className="max-w-6xl"
-    >
-      {card && (
-        <div className="space-y-3">
+    <div className="space-y-3">
           <div className="space-y-1">
             <div className="text-xs text-text2 break-words">
               <span className="text-text">{card.teamName}</span>
@@ -143,12 +157,39 @@ export default function TeamBoard({ card, onClose, onOpenFile }: {
               <span className="text-success">{t('teams.boardDone')} {p.done || 0}</span>
               <span className="text-accent">{t('teams.boardRunning')} {p.running || 0}</span>
               <span className="text-warn">{t('teams.boardWaiting')} {p.waiting || 0}</span>
+              <span className="text-warn">{t('teams.boardQuotaSuspend')} {p.quota_suspend || 0}</span>
               <span className="text-danger">{t('teams.boardFailed')} {p.failed || 0}</span>
             </div>
           </div>
 
+          {/* 预算可视化（2026-10-21）：用量 = 已结算任务 + 主进程内存账本取大者，
+              阈值与对话卡一致（70% 黄 / 90% 红），改阈值两处必须同步。 */}
+          {card.budget && card.budget.maxTokens > 0 && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-caption text-text2">
+                <span>{t('teams.budgetLabel')}</span>
+                <span className="tabular-nums">
+                  {t('teams.budgetUsed', {
+                    used: formatTokens(card.budget.usedTokens),
+                    max: formatTokens(card.budget.maxTokens),
+                    pct: card.budget.percent,
+                  })}
+                  {' · '}
+                  {t('teams.budgetRemaining', { remaining: formatTokens(card.budget.remainingTokens) })}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-border overflow-hidden">
+                <div
+                  className={`h-full ${card.budget.percent >= 90 ? 'bg-danger'
+                    : card.budget.percent >= 70 ? 'bg-warn' : 'bg-accent'}`}
+                  style={{ width: `${card.budget.percent}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
-            <div className="grid grid-cols-5 gap-2 min-w-[900px]">
+            <div className="grid grid-cols-6 gap-2 min-w-[1080px]">
               {COLUMNS.map((key) => {
                 const items = columns.get(key) || [];
                 return (
@@ -180,7 +221,25 @@ export default function TeamBoard({ card, onClose, onOpenFile }: {
             </div>
           </div>
         </div>
-      )}
+  );
+}
+
+/** 弹层形态（对话内协同卡的「看板」入口）：主体复用 TeamBoardBody。 */
+export default function TeamBoard({ card, onClose, onOpenFile }: {
+  card: TeamBoardCard | null;
+  onClose: () => void;
+  onOpenFile?: (path: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <Modal
+      open={!!card}
+      onClose={onClose}
+      title={t('teams.boardTitle')}
+      size="settings"
+      className="max-w-6xl"
+    >
+      {card && <TeamBoardBody card={card} onOpenFile={onOpenFile} />}
     </Modal>
   );
 }
@@ -247,7 +306,14 @@ function TaskCard({ task, runId, teamId, lead, dependsText, waitingText, onOpenF
           <div className="flex items-center gap-1 text-caption text-text2">
             <span className="truncate">{task.ownerName || t('teams.streamUnclaimed')}</span>
             {lead && <span className="shrink-0 text-danger">{t('teams.boardLead')}</span>}
-            <span className="ml-auto shrink-0">{statusKey ? t(statusKey) : task.status}</span>
+            {(task.tokensUsed || 0) > 0 && (
+              <span className="ml-auto shrink-0 tabular-nums">
+                {t('teams.taskTokens', { n: formatTokens(task.tokensUsed || 0) })}
+              </span>
+            )}
+            <span className={`shrink-0 ${(task.tokensUsed || 0) > 0 ? '' : 'ml-auto'}`}>
+              {statusKey ? t(statusKey) : task.status}
+            </span>
           </div>
           {dependsText && (
             <div className="text-caption text-text2 break-words">{t('teams.boardDeps')} · {dependsText}</div>

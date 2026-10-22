@@ -124,7 +124,10 @@ function ensureSubscribed() {
         sharedState.agents.set(key, { ...prev, waiting: false, waitingOn: [], waitDeadlineAt: null });
         changed = true;
       }
-    } else if (evt.type === 'task_update' && ['done', 'failed', 'skipped'].includes(evt.status)) {
+    } else if (evt.type === 'task_update' && ['done', 'failed', 'skipped', 'quota_suspend'].includes(evt.status)) {
+      // T6-4（§5.1）：quota_suspend 也走「出列」分支——它不是失败（不登记失败清单），
+      // 但该任务本轮已退出调度，若留在坞内会永远显示转圈（用户以为还在跑）。
+      // 恢复后重新派发会再发 task_update running，卡片自然回到坞内。
       // R6：失败任务登记进组的失败清单，供「任务组」区展示重试入口；
       // 标题优先取坞内既有卡片（failed 事件不携带 title）
       if (evt.status === 'failed') {

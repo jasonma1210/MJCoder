@@ -4,7 +4,129 @@
 版本号规范：`主版本.次版本.修订号`（语义化版本），配套 git tag `v主.次.修订`（如 `v1.0.0`）。
 desktop / server / renderer 三个 package.json 的 version 必须保持一致，发版时同步提升。
 
-## [未发布]
+## [0.7.0-beta] - 2026-10-22
+
+### 调整（R-15 派活入口分流：目标条 + 发送按钮语义切换，2026-10-22）
+第九轮产品边界审查的落地修复——审查结论：单会话 / 自动编排 / MJ 军团三线在能力层已实质分离，但**入口层共用同一个发送按钮**让用户感到「太像」。本版不改引擎结构（共用 `orchestrator.planGoal → workerPool` DAG 底座是上下层关系，不拆），只修入口与呈现：
+- **派活目标条**（`Composer.tsx`）：选中团队后输入区上方出现常驻目标条——团队名 + 成员数 + 预算档 + ✕ 一键取消，替代原 10rem 截断小 chip（成员一多即被截断看不见）；发送按钮军团态切换为派活语义（`IconUsers` 图标 + 专用提示），placeholder 同步切换。不新增按钮、不弹表单、不建页面（军团设计文档 v1.5「对话内协同」定稿）
+- **轮末接力分流**（`useAgentRun.ts` + `ChatArea.jsx`）：`relayRef` latest-ref 模式，排队消息在轮末按「当前是否选中团队」分流到 `teamsDispatch` 或普通发送——闭 R-5「入队消息归属」
+- **Worker 成员身份段**（新增 `main/workerIdentity.js`，从 `workerPool.js` 拆出以守 800 行软档）：有成员归属的 worker system prompt 追加「你是「成员名」」身份段，两条原文逐字保留；非军团路径字节不变
+- **任务面板军团徽标**（`TaskSummaryPanel.tsx`）：group 行加 `IconUsers` 徽标（复用既有 `mj.teamsListThreadRuns` 桥，零新 IPC），「这是军团 run」在任务面板可辨
+- **守护测试**：新增 `worker-identity`（13 项：零回归字节判据逐字锁死两条原文 + 身份段行为 + 接线 + 长度自检）与 `team-dispatch-entry`（10 项：四层分流 + i18n 双语 JSON 行为断言）；`queued-message` 接力断言升 relayRef 口径；`layout-tokens` 半档收敛（1.5→2 / 0.5→1，含存量 `PlusMenu.jsx` 一处）
+
+### 修复（建项目后团队不开工 + 组摘要 `[object Object]` + 预算误报 100%，T6-13…T6-16，2026-10-22）
+- **建项目「0 token 直接结束」（T6-13，用户真机）**：内置团队新建项目后只出现一条「项目已创建，目标已锁定」的系统消息、标注 0 tokens，`teams:listThreadRuns` 返回 `runs: 0`——团队从未开工。根因：创建链路只落 system 消息、不落 user 消息也不触发派活（团队 run 本身不产 assistant 消息）。修复：`ProjectCreateModal.onCreated` 回传 `{thread, team, project}`，宿主先落 user 消息 → 切会话 → `teamsDispatch`（失败 toast）；system 消息改渲染为居中提示条（notice），不再混入 assistant 轮次显示「MJ Coder · 0 tokens」；派活工作目录优先级改为「本次会话项目目录优先」（`payload.projectPath || team.projectPath`），避免老团队自带旧目录吞掉新项目目录
+- **组摘要 `[object Object]`（T6-16，用户真机）**：`aggregator/merge.js` 的 `merged.summary` 是 `[{taskId,title,text}]` 对象数组，投影层 `String()` 后变成 `[object Object]`。修复：投影层新增 `summaryTextOf()` 统一归一（字符串 / 对象数组 / 字符串数组三种历史形态），组摘要与任务摘要都走它；`orchestrator/invoke.js` 重规划提示词同口径归一；存储结构不动，历史 run 无需迁移即修复
+- **结果落页（T6-16）**：最新一次 run 无论终态与否默认展开，卡片顶部新增「最终交付」区（限高滚动）——此前终态即折叠，用户看到 5/5 完成却看不到任何结论
+- **预算软上限语义（T6-16）**：超额时显示实际倍数（`4.2×`）与「Token 为软上限，任务继续执行」，不再画红色 100% + 「剩余 0」——token 越界只告警一次并继续派发（2026-10-21 裁决），硬闸只有墙钟与 `max_rounds`，1.2M/256k 属设计内超限
+- **命名收敛（T6-14/T6-15）**：「军团」全站统一改名为「团队编制」（英文 `Team roster`）：+ 菜单入口（新增副标题「管理数字员工与编队」）、侧边栏一级入口、团队页标题、指路文案、设置页团队记忆开关。仅改用户可见文案，`teams:*` 通道、数据表与代码标识不动
+- **守护测试**：`project-store` 新增 createSpace 自建目录 3 条；`project-switch` 断言改按轮次编号；`team-stream` 新增结构化摘要归一 2 条 + 展开策略与最终交付区断言
+
+### 新增（DS Bots 项目空间 / 工件库 / 滑动配额协同：T6-1…T6-12，2026-10-22）
+对标 DS Bot 插件的多 Bot 长期协同能力落地：把「单项目 = 单会话、多角色同会话、工件与消息解耦、跨 run 成本配额」四件事包进既有编排层——**agent-core 零改动**，压缩仍走 `compactHistory`，调度仍走 `orchestrator → workerPool`。设计稿：`docs/MJCode-DSBots项目空间与配额工件协同-设计与落地-2026-10-22.md`（17 章 + 3 附录）。
+- **项目空间（T6-1/T6-2，迁移 v14）**：新增 `project_spaces` 表，项目身份用稳定 ID（`prj_...`）而非 cwd/thread——记忆归档曾因拿临时工作目录当空间键导致项目级记忆无法召回，`project_id` 是唯一关联键，cwd / thread_id / team_id / artifact_id 都只是它的属性；一项目一 thread 由数据库 UNIQUE 约束兜底，约束异常翻译成结构化错误码，不用有竞态的「先查后插」
+- **工件库（T6-5/T6-6）**：`project_artifacts` / `artifact_sections` / `artifact_section_versions` 四表 + 四个原生工具 `artifact_index` / `artifact_get_section` / `artifact_patch_section` / `artifact_get_diff`。三条硬语义全部收敛在 `artifactStore.js`：① 章节正文只进库不进消息链（写回执只给 `{version, chars}`）；② 版本 = 只存变更章节的增量快照（`Vn` 由「version ≤ Vn 的最新历史行」重建，不存全文副本，超 `retain_versions` 置 archived 可恢复）；③ 并发 = `base_version` 乐观锁（CAS），版本不等一律 409 语义并附 diff，事务外不做任何写入。工具侧四道闸：单次 patch ≤16000 字符、单章节 ≤64KB、全工件 ≤2MB、单次读取 ≤8000 字符；项目上下文缺失 → `NO_PROJECT_CONTEXT`，跨项目读取 → `PROJECT_FORBIDDEN`
+- **滑动配额账本（T6-3）**：新增 `quota_buckets` / `quota_consumptions`，`available = total_limit − Σ(窗口内消耗) − Σ(内存预留)`——**唯一**判定入口 `quotaLedger.beforeDispatch`。老化是查询口径不是数据操作（消耗永不删除、保留审计）；预留防超发（grant 即扣、settle 释放写实际值）；时钟回拨以库内最新扣费时间为基准保证账本单调。与既有 `groupBudget` 分工：本模块 = 跨 run / 跨天的项目额度，groupBudget = 单次派活的成本信封，派发预算取三者最小值（项目剩余 / 组剩余 / 200k）
+- **暂停是状态不是失败（T6-4/T6-7）**：任务状态新增非终态 `quota_suspend`；`quotaGate.js` 只做三件接线（泵前置闸把 queued 转暂停、开跑前 `beginRun` 预留、后台 60s 老化 + 每轮 ≤2 小批量恢复），不新增任何判定规则；暂停不消耗重试次数、不改任务内容、文档/任务/消息全部保留；无项目绑定的普通编排组一律 fail-open，调度行为与之前完全一致
+- **单 Bot 熔断（T6-8）**：`memberBreaker.js` 按 `projectId × memberId` 聚合 10 分钟窗口（≥30% 桶量且 ≥100k → open），half-open 单探针；**不建 breaker 表**——状态可由消耗流水推导，落表就是第二事实源；某成员熔断只锁它自己的任务，同组其他成员照常派发
+- **项目创建与初始化（T6-9）**：`projectSpaceInit.js` 七步初始化（项目 → 工件 → 配额桶 → 会话 → 团队 → 首条系统消息 → 快照）+ LIFO 补偿栈，任一步失败逆序回放不留半成品；配额档位 1M/2h、3M/6h、10M/24h 与自定义；`ProjectCreateModal.tsx` 就地表单 + 内联校验，cwd 留空时自建 `~/Documents/.MJCoder/<日期戳>`，建不出来明确失败
+- **侧面板与上下文装配（T6-10/T6-11）**：`ipc/artifacts.js` 四条只读通道（越权校验 + 正文按章节分页）；`ArtifactPanel.tsx` 文档/版本/待办三视图；`projectContext.js` 跨天冷启动只装配四项——固定目标 ≤800 字符 + 上次迭代摘要 ≤1500 字符 + 未完成待办 ≤40 条 + 工件索引 ≤1200 字符（≈1.2k tokens），**工件正文永不进装配**，模型需要内容时按需调 `artifact_get_section`；引擎压缩只发 `memory_saved` 事件，摘要由宿主落 `project_runs.summary_json`，读写同源
+- **端到端演练（T6-12）**：`project-e2e.test.js` 用「自定义小额度 + 可注入时钟」把 3M/6h 寿命压缩到毫秒级（判定链路一字不改）：落 V0.01/V0.02 → 消耗 190k 打满 → 全部任务转 `quota_suspend`（无 failed、重试 0、任务 id 不变）→ 写摘要 → 时钟 +61s → 两批放行 → 续写 V0.03 版本连续 → 装配含四段且不含正文哨兵
+- **守护测试**：新增 `artifact-store` / `artifact-tools`(36) / `project-store` / `project-context`(23) / `project-space-schema` / `project-e2e`(29) / `quota-gate` / `quota-ledger` / `task-quota-suspend` 九套；`tool-registration-matrix` 改实跑工厂取键集；`MJcoder-技术流程功能文档.md` 工具数同步（`TOOL_CHANNELS` 56→61、`TOOL_HANDLER_NAMES` 55→60、工具并集 57→62）
+- **验证**：`npm test` **275 套件全绿**（总计 280 · 通过 277 · 失败 0 · 跳过 3，3 项为 Linux/macOS 沙箱平台限制）；`typecheck` 0 error；`lint` 0 error / 158 warning（阈值 159）；`doc-fact-check` / `harness-r7`（76/76）/ `legacy-ledger`（20/20）全绿
+
+### 修复（移除 DAG 人工 fan-in 上限 + 团队派活拆解自动修复重试，2026-10-21）
+- **现象（用户真机）**：目标「各位帮我设计一份基于 Java Spring Boot 的商城系统的设计文档来」派活失败——`dispatch/plan_failed {"error":"任务 t6 依赖数超过 4"}` → `teams:dispatch` 返回 `PLAN_FAILED`，`tasks:0`，一个任务都没派
+- **根因 1**：`main/orchestrator/dag.js` 的 `MAX_DEPS = 4` 把「汇总任务依赖 5 个章节任务」判为非法并**整份拒绝**；该上限从未写进拆解提示词，模型无从遵守，属误杀契约
+- **根因 2**：团队派活只调一次 `planGoal`，与 `autoOrchestrate` 的「校验失败带 `repairHint` 自动修复重试一次」策略不一致，一次非法拆解即整次失败
+- **修复**：
+  - `main/orchestrator/dag.js`：删除 `MAX_DEPS` 与「依赖数超过 N」拒绝分支；保留依赖存在性 / 自依赖 / 环三类真校验（fan-in 的自然上界由 `MAX_TASKS=8` 给出，≤7）
+  - `main/ipc/teams.js`：入参提为 `planOpts` 复用；首次 `planGoal` 返回 `ok:false` 且带 `raw` 且非预设任务时，带 `repairHint` 重试一次并记 `dispatch/plan_retry`；两次都失败才落 `PLAN_FAILED`（重试结果用独立变量承接，避免 `require-atomic-updates` 告警）
+  - `docs/harness-r7/04-test/check.mjs`：A14e 原地重写为「不再设人工 fan-in 上限」，文件头【契约变更台账】留痕（总数仍 76）
+- **守护测试**：`dag` 17/17（新增 6 依赖汇总任务通过校验 + 拓扑落层）；`orchestrator` 10/10；`team-lead-dispatch` 39/39；`team-e2e-invariants` 14/14；`team-waves` 56/56；`lint` 0 error / 158 warning（阈值 159）；`max-lines` 3/3（`ipc/teams.js` 795 行）；`doc-fact-check` 绿；`harness-r7` PASS=76 / FAIL=0
+
+### 修复（组预算回归主流软上限：删除「人均 token 份额」硬杀，2026-10-21）
+- **现象（用户真机，4 名成员全员失败）**：看板 4 个任务全 failed，文案均为「组预算额度已用尽（本任务 58273 ≥ 授予 44000 tokens）」「25490 ≥ 20881」「28690 ≥ 26770」——每个成员都在自己的额度处被宿主掐断
+- **根因**：上一版 `groupBudget.planForTask` 按「组剩余额度 ÷ 未终态任务数 × 余量系数」给每个任务切一份**人均硬份额**，`workerPool.onUsage` 每轮累加用量，一旦达到该份额即 `controller.abort()`，任务直接落 failed。组预算被误当成「人均配额」，导致成员越多、单人额度越小，最后没人能写完
+- **修复（主流口径：组预算是成本信封，不是人均配额）**：
+  - `main/groupBudget.js`：删除 `MIN_TASK_TOKENS` / `TASK_TOKEN_HEADROOM` / `reserved` / `usageAbort` / `tokenLimit`；`planForTask` 不再按人头切分，单任务引擎预算取**组剩余额度**（耗尽回落历史默认值 200000，避免拿 0 额度被立刻掐断）；`settle` 改为幂等结算；`max_tokens` 越界仅发一次告警并继续派发（软上限）；`max_wall_ms` 保留为**硬闸**（停派 + 未开始任务置 skipped），避免泵以 1s 超时续派把剩余任务全拖成超时失败
+  - `main/workerPool.js`：删除 `budgetAbort` 与逐轮 `controller.abort()` 分支，`onUsage` 只记账（写入 `result.tokensUsed` 供看板角标）；硬闸收敛为引擎侧 `maxRounds` 与 `runWallClockMs`
+  - `main/teamWorkerTrace.js`：删除随之失效的 `settleBudgetAbort`
+- **守护测试**：`group-budget` 21/21（新增「无 `tokenLimit` 字段」「`tokenBudget` 取组剩余额度」「token 越界不停派不跳任务」「墙钟越界停派且只跳未开始任务」「全员 done、组 done」）；全量 267 总 / 264 通过 / 0 失败 / 3 跳过；`typecheck` 0 error；`lint` 0 error / 158 warning（阈值 159）；`max-lines` 3/3（`workerPool.js` 791 行 / `groupBudget.js` 213 行）
+
+### 修复（新建任务默认目录 + 团队「报数」过度工程化 + 顶栏图2化，2026-10-21）
+- **新建任务默认目录**（`renderer/src/components/ChatArea.jsx`）：团队派活路径此前直接用残留 `activeProject` 的 `cwd` / `project_path`，导致不选文件夹时落到旧工作区（界面「工作区 10-13」）。现与单 bot 路径对齐：新会话且未主动选目录时先 `window.mjcode.createProject({ name: '' })` 建时间戳目录，成功则同时用于 `createThread` 与 `teamsDispatch.projectPath`；创建失败直接阻断派活并给出可见错误，不回落旧目录
+- **顶栏按图2 简化**（`renderer/src/App.jsx`）：移除筛选状态（`threadFilter` / `filterOpen` / `filterRef`）、点击外部关闭 effect、筛选按钮与下拉菜单、工作区名文字及 `IconCheck` / `IconFilter` 导入；顶栏只保留交通灯位、左右侧栏开关与搜索
+- **对话型目标旁路**（`main/teamDispatchPlan.js`）：新增窄规则判据 `isChatOnlyGoal`（报数 / 轮流说 / 每人各说一句 / 一人一句）与反向排除词表（程序/脚本/代码/实现/开发/命令行/文件/项目/应用）；新增 `buildChatTasks({ roster })`，按名册序为每人生成「角色名：序号」任务，prompt 明确禁工具/文件/命令；`buildDispatchPlan` 增加 `chatOnly`，写入 `runMeta.chatOnly`，对话型放宽类型闸并在 `select` 模式仍保留预置指派
+- **编排器预设旁路**（`main/orchestrator/index.js`）：新增 `normalizePresetTasks` 与 `presetTasks` 入参，给定清单时跳过 LLM 拆解与工具能力门，直接按预设任务建组
+- **派活接线**（`main/ipc/teams.js`）：`isChatOnlyGoal(goal)` → `buildChatTasks({ roster })` → `planGoal({ presetTasks })` → `buildDispatchPlan({ chatOnly })`
+- **Worker 真实收口**（`main/workerPool.js`）：读取 `runMeta.chatOnly` 后直用任务 prompt、下发 `tools: []`、`maxRounds` 压到 ≤2、切换为「只说一句话」系统提示词；同时压缩注释使文件回到 799 行（< 800 软档）
+- **守护测试**：`team-dispatch-plan` 29/29（新增 ⑦ 对话型旁路块与 Worker/IPC 接线断言）；全量 267 总 / **264 通过 / 0 失败** / 3 跳过；`typecheck` 0 error；`lint` 0 error / 158 warning（阈值 159）；`doc-fact-check` 绿；`legacy-ledger` 20/20（裸 button 基线 258→256）
+
+### 调整（团队 Token 优化：任务粒度 + 精简 Prompt + 预算可视化，2026-10-21）
+- **粒度按轮次收敛**（`main/orchestrator/index.js`）：`ORCHESTRATOR_SYSTEM` 规则 2 重写——任务数由复杂度决定，**单任务必须能在 8 轮工具调用内完成**；简单查询/计数/单文件改动 2~3 个任务；超规模时按「核心实现 → 补边界与参数 → 运行验证」拆串行子任务并用 `dependsOn` 串联；明确禁止协议定义、QA 复核、终检等仪式性步骤
+- **Prompt 四段 + 禁自检**（同文件）：新增规则 5（只写目标/要求/输出格式含路径与长度上限/一条验收标准，禁止重复组级公共上下文）、规则 6（禁止每写完一步 `ls` 确认或回读全文，验收只做最后一次）、规则 7（跨任务产物用工作区文件路径传递，禁止全文抄进 prompt）；原 JSON 输出规则顺延为 8
+- **组级同口径**（`main/ipc/teams.js`）：`buildTeamContext` 追加「公共上下文已在本块给出，子任务 prompt 不得重复；产物用文件路径传递」，与编排器提示词对齐
+- **预算可视化（数据层）**：`shared/teamStream.mjs` 新增 `budgetInfoOf(full, live)` —— 上限取 `dag.runMeta.budget`，已用取任务 `result.tokensUsed` 汇总并与内存账本 `live.tokens` 取大，输出剩余/百分比/耗时/按任务分项；新增 `normalizeBudgetView` 做类型归一与 0~100 夹紧；`assembleThreadRuns` 新增 `getBudgetLive` 注入口
+- **预算可视化（主进程）**：`ipc/teams.js` 注入 `getBudgetLive: (runId) => groupBudget.snapshotOf(runId)`（复用既有内存账本，不新增持久化）
+- **预算可视化（界面）**：`TeamRunStream.tsx` 新增 `BudgetMeter`、折叠态预算 chip、任务行 token 数；`TeamBoard.tsx` 头部新增预算条与任务 token chip，`ml-auto` 按 token 存在与否条件生效；两处阈值统一 70% warn / 90% danger
+- **展示口径**：`shared/teamTrace.mjs` 新增 `formatTokens`（M / k / 原值，刻意不用「万」以适配中英共用）
+- **i18n**：`zh-CN` / `en-US` 的 `teams.json` 各新增 `streamBudget`、`budgetLabel`、`budgetUsed`、`budgetRemaining`、`taskTokens`
+- **守护测试**：`team-stream` 83/83（新增预算投影、账本取大、超额夹紧、非法上限、装配透传、`formatTokens` 档位、双语 key 与双界面静态断言）；全量 267 总 / 264 通过 / 0 失败 / 3 跳过；`typecheck` 0 error；`lint` 158 warning（阈值 159）
+
+### 修复（macOS 27 沙箱导致 shell 全 SIGABRT + 组用 done 掩盖失败任务 + 成员参与不足，2026-10-21）
+- **现象（用户实测 run `tg-mvi4pm4r-3bf9ec`）**：「再来一次每人轮流报数」两个任务，t1 定位完成、t2 反复尝试 shell 全部失败，最终 99,380 + 71,494 tokens 后失败；组仍落 `done`；团队 4 人只启动了 2 个
+- **根因 1（macOS 27 沙箱不兼容）**：`(deny default)` 的 allowlist Seatbelt profile 在 macOS 27 上会让任何子进程**启动即 SIGABRT**（实测 `/usr/bin/sandbox-exec -f profile /bin/echo` 退出码 134）；旧探测用 `(allow default)` 探测，属于假阳性
+- **根因 2（假 done）**：`finalizeGroup` 只在关键任务失败时落 failed；非关键的 t2 失败后组仍是 `done`
+- **根因 3（成员闲置）**：DAG 只拆了 2 个任务，派活计划只用到 2 名成员，其余 2 人未参与
+- **修复**：
+  - `main/sandbox.js`：新增 **写限制档（deny-list）** `buildSeatbeltProfileDenyList` —— `allow default` + `deny network*` + 全盘 `deny file-write*` + 仅工作区/临时目录/`/dev/null` 可写 + `.git/.mjcode` carve-out；`seatbeltUsable()` 先探 allowlist、失败自动切 denylist（reason 写入诊断）；`buildSeatbeltProfileAuto` 供执行路径统一选择
+  - `main/tools/exec.js`：改用 `buildSeatbeltProfileAuto`，macOS 27 上 shell/python 恢复可用（实测 zsh + python3 正常，工作区外写入被拒）
+  - `main/teamWorkerTrace.js` + `main/workerPool.js`：组收尾由 `skippedNote` 改为 `finalizeNote` —— **任一任务 failed 或 skipped 都落 group failed**，并把失败任务写进 warnings
+  - `main/ipc/teams.js`：团队上下文新增「成员参与要求」——目标含每人/全员/轮流/各自/逐个时，任务数不得少于成员数
+- **守护测试**：`sandbox` 24/24（新增 denylist 四类断言）；`group-budget` 17/17（新增非关键失败→失败原因）；`workerPool` 28/28（更新为非关键失败/强制关闭/未完成收尾均落 group failed）；`team-e2e-invariants` 14/14
+
+### 新增（上下文策略参数化 + 等待即断点：P0 / P1，2026-10-21）
+- **P0 上下文策略参数化**（`agent-core`）：新增 `DEFAULT_COMPACT_POLICY` / `resolveCompactPolicy`，把此前散落的压缩阈值收口为一份可覆盖策略——触发比例（0.7）、激进比例（0.8）、尾部保留（0.25/0.15）、硬截断目标（0.45）、保留轮数（8）、工具输出裁剪阈值（2000 字符）；所有比例夹紧安全区间，非法值静默回落默认
+- **P0 目标锚定**：压缩摘要模板新增【顶层目标】，并把首条用户消息原文（≤1200 字）单独送入摘要请求——此前 `toCompact` 不含固定头，摘要器其实看不到原始目标
+- **P0 大工具输出优先裁剪**（策略 A）：硬截断前先把超长 tool 结果裁成「首 800 + 尾 400 字符 + 已裁剪标记」；裁完回到预算内则不再丢整轮，保留更多决策上下文
+- **P0 压缩事件可审计**：`onCompacted` 新增 `droppedMessages` / `keptTailTokens`，便于宿主与调试日志还原「压了多少、留了多少」
+- **P1 等待即打轻量断点**（`workerSession` + `workerPool`）：`team_wait` 导致任务中止并释放槽位时，写入 `kind='member-wait'` 断点（阶段结论 ≤4000 字 + waitingOn + 截止时刻）；唤醒重跑时经 `resumeContext` 接续，不再从零重跑；非成员任务不写，避免挤占 50 条 LRU
+- **断点恢复文案**：由「上一任务因预算触顶暂停」改为「已暂停：预算触顶或等待依赖」，让等待恢复不再被误述为预算中断
+- **守护测试**：`agent-core` 103/103（新增策略夹紧、默认值单一来源、策略 A 裁剪、摘要含顶层目标）；`worker-session` 19/19（等待断点 kind/等待边/阶段结论、非成员不写、唤醒可读）
+
+### 调整（团队预算改为 256k 软上限 + 可配置 + 工具失败快速熔断，2026-10-21）
+- **预算默认值**：`BUDGET_DEFAULTS.max_tokens` 200000 → **256000**（仍可在团队卡片「预算」入口调整）
+- **软上限语义**：`max_tokens` 越界后不再跳过剩余任务，只发一次可读告警并继续派发；单任务仍按授予份额逐轮硬中止，避免一个任务再次吃穿整组
+- **预算可配置（UI）**：团队卡片新增「预算」按钮，可编辑 `max_tokens`（1000~2000000）与 `max_rounds`（1~50），经既有 `teams:update` 落库（该桥由死转活）
+- **工具失败快速熔断**：`agent-core` 新增 `TOOL_FAIL_STOP = 6` —— 同一工具连续失败 6 次（**不看参数**）即收尾；解决「换命令/换路径重试导致签名熔断永不触发」的 20 轮空转（t2 事故形态）。收尾文案区分「同参数」与「同工具」
+- **依赖级联**：`taskStore.skipDependentsOf` —— 前置 failed/skipped 时把传递依赖置 skipped 并广播，避免依赖任务永久 pending、组悬挂转圈
+- **守护测试**：`group-budget` 16/16（软上限继续派发、授予份额、依赖级联）；`agent-core` 99/99；`bridge-parity` 7/7（`teamsUpdate` 移出死桥白名单）；存量台账同步为 49/229
+
+### 修复（组预算被单任务烧穿 + 组用 done 掩盖未执行任务，2026-10-21）
+- **现象（用户实测 run `tg-mvhz79es-8d4adc`）**：5 个任务的「报数」目标，t1/t2 显示完成，随后提示「组预算耗尽：token 已用 268161 ≥ 上限 200000，不再派生新任务」，t3/t4/t5 全部未执行；组最终落库 `done`，用户拿到的答案是错的
+- **根因 1（预算只停派生、不限在途）**：`groupBudget` 只在任务**结束后**入账、只在**派发前**判定；单个 t2 跑了 20 轮、烧掉 257688 tokens，把整组额度吃穿。引擎侧 `tokenBudget` 的救援/续窗口机制（最多 3 次救援 + 2 次自动重启）会让单任务实际用量远超授予值，宿主侧没有任何硬中止
+- **根因 2（假 done）**：`finalizeGroup` 只检查「关键任务失败」，被预算 skip 的非关键任务既不进 failed 也不影响状态 ⇒ 3 个任务没跑、组仍落 `done`
+- **根因 3（过度拆解）**：一个「每人报数 10 次」的简单目标被拆成 5 个任务（协议定义 / 脚本实现 / QA / 汇总 / 终检），把 200k 预算摊成每任务 40k
+- **修复**：
+  - `main/groupBudget.js`：新增**公平份额 + 在途预留**——派发时按「剩余额度 ÷ 未终态任务数 × 1.1 收尾余量」授予单任务份额并登记 `reserved`；`assess` 把「已结算 + 在途预留」一起纳入判定；新增 `usageAbort` 逐轮守卫
+  - `main/workerPool.js`：`tokenBudget` 改用授予份额（不再硬编码 200000）；`onUsage` 逐轮累计，达份额即 `controller.abort`；预算中止走 `failed + skipRetryCount`（不重试）、保留部分产出；结算移入 `finally`（异常/中止路径同样释放预留）
+  - `main/workerPool.js` + `main/teamWorkerTrace.js`：组收尾有任务 `skipped` 即落 `failed`，并把「有 N 个任务未执行：…」写进 `error` / `warnings` / 调试日志
+  - `main/orchestrator/index.js`：拆解提示新增「按目标实际复杂度取最小任务数」，禁止为凑数拆出协议定义/QA/终检等仪式性步骤
+- **守护测试**：`group-budget.test.js` 16/16（新增「单任务 tokenBudget 取授予份额」「超份额在途任务硬中止」「有未执行任务组落 failed」等 4 项断言）
+
+### 新增（团队操作全链路 Debug 日志 + 一键导出，2026-10-21）
+- **日志内核 `main/teamDebugLog.js`**：JSONL 按日切分（`team-debug-YYYY-MM-DD.jsonl`），单文件 20MB 轮转（`.1`）、保留 7 个文件；内存环形缓冲 2000 条供界面预览；默认开启且默认详细模式；密钥脱敏（`sk-` / `Bearer` / `ghp_` / `AKIA` 与敏感键名）；字符串 8KB / 数组 30 项 / 深度 6 层截断
+- **全链路埋点**：
+  - IPC 层（`main/teamIpcTrace.js`）：`teams:*` 请求 / 响应 / 异常，读接口 2s 节流
+  - 拆解层（`main/orchestrator/index.js`）：DAG 调用失败、原始输出（详细模式）、非法结构、组创建（tasks / levels / waves / assignments / roster）
+  - 执行层（`main/teamWorkerTrace.js`）：认领、派发、引擎启动与结果、未完成判定、终态、组收尾
+  - 批次层（`main/waveEngine.js`）：探活失败、撤员、等待挂接
+  - 协同工具（`main/teamTools.js`）：`team_*` 调用参数 / 耗时 / 结果
+  - 渲染层（`ChatArea.jsx`）：派活点击与派活返回，与主进程同一时间线
+- **IPC 与界面**：新增 `teams:debugSet/Tail/Append/Export/OpenDir` 五个通道（`main/ipc/teamDebug.js`）；团队页头部新增「调试日志」按钮，面板展示开关、详细模式、落盘路径与大小、最近 120 条预览（3s 自刷新），支持打开日志目录与导出 ZIP（`userData/diagnostics/team-debug-<ts>.zip`，导出后自动定位文件）
+- **架构纪律**：为守住 800 行软档，抽出 `main/teamIpcTrace.js`（`ipc/teams.js` 826 → 763）与 `main/teamWorkerTrace.js`（`workerPool.js` 919 → 798）；`teamsDebugStatus` 无渲染层调用方，合入前直接删除，不留死桥
+- **门禁与文档**：新增 `test/team-debug-log.test.mjs`（11 项）；`bridge-parity`（229 桥）/ `layout-tokens` / `max-lines` / `untracked-deps` / `legacy-ledger`（50/229）全绿；技术设计文档五项数字同步（262 套件 / 218 通道 / 229 桥 / 167 模块 / main.js raw 2049）
 
 ### 修复（军团任务「看板显示完成、实际没有产出」+ 成员技能全量注入导致上下文耗尽，2026-10-21）
 - **现象（用户实测 run `tg-mvhjxx0j-d44c21`）**：看板 4 个任务全部显示「完成」，但其中 2 个任务的结果是「任务尚未完成（上下文已到模型窗口，累计 69401 / 72889 tokens）」；数据库核对显示 4 个任务**都有 owner_member_id**（并非真的无人认领）

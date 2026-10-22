@@ -13,7 +13,7 @@
 //   ② 收窄逻辑自己出错时要**回退全量**而不是产出空名册（宁可多派一个人，也不要空跑一次）。
 const path = require('path');
 const {
-  buildDispatchPlan, pickParticipatingRoster, SELECT_MODE,
+  buildDispatchPlan, pickParticipatingRoster, SELECT_MODE, isChatOnlyGoal, buildChatTasks,
 } = require('../main/teamDispatchPlan');
 const { MAX_PER_TYPE_IN_RUN } = require('../main/teamWaves');
 
@@ -111,6 +111,39 @@ const mkTasks = (n) => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, t
     (() => { try { pickParticipatingRoster(null, null); return true; } catch { return false; } })());
 }
 
+// ── ⑦ 对话型目标旁路（2026-10-21 用户实测「只想让他们报数」）──
+// 判据必须窄：只认「每人说一句」类目标；明确要写程序/做文件的目标不得被误判。
+{
+  check('对话型判据：报数类目标命中', isChatOnlyGoal('大家报数'));
+  check('对话型判据：明确要写程序的目标不命中（避免把编码任务做丢）',
+    !isChatOnlyGoal('实现一个命令行报数程序'));
+  check('对话型判据：普通编码目标不命中', !isChatOnlyGoal('修复登录接口的空指针异常'));
+
+  const roster = [
+    mkMember('lead', { roleKind: 'lead' }),
+    mkMember('dev'), mkMember('qa'), mkMember('ops'),
+  ];
+  const tasks = buildChatTasks({ roster });
+  check('对话型任务：每人一个', tasks.length === roster.length, `tasks=${tasks.length}`);
+  check('对话型任务：按名册序编号（角色名：序号）',
+    tasks[0].title === 'lead：1' && tasks[3].title === 'ops：4',
+    tasks.map((t) => t.title).join(','));
+  check('对话型任务：prompt 显式禁工具/文件/命令',
+    tasks.every((t) => /不要调用任何工具/.test(t.prompt) && /不要读写文件/.test(t.prompt)));
+  // 同类型闸对「每人一句话」不生效：4 名同类型成员也必须都参与报数
+  const sameType = ['a', 'b', 'c', 'd'].map((id) => mkMember(id, { templateRef: 'tpl-dev' }));
+  const plan = buildDispatchPlan({
+    tasks: buildChatTasks({ roster: sameType }), roster: sameType, mode: SELECT_MODE, chatOnly: true,
+  });
+  check('对话型计划：同类型 4 人全部参与（类型闸不适用）',
+    plan.activeMemberIds.length === 4 && plan.deferredMembers.length === 0,
+    `active=${plan.activeMemberIds.join(',')}`);
+  check('对话型计划：select 模式仍预置指派（任务文本与成员一一对应）',
+    Object.keys(plan.assignments).length === 4, JSON.stringify(plan.assignments));
+  check('对话型计划：runMeta.chatOnly 落库（Worker 据此禁用工具/收紧轮次）',
+    plan.runMeta.chatOnly === true);
+}
+
 // ── ⑥ 接线：ipc/teams.js 必须调用本模块，且**不得**回退成全量快照 ──
 {
   const fs = require('fs');
@@ -118,6 +151,12 @@ const mkTasks = (n) => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, t
   check('B-05 接线：派活钩子调用 buildDispatchPlan', src.includes('buildDispatchPlan({'));
   // 反向：`roster: snapshotRoster(roster)` 是改前的全量快照形态，回来一个就说明修法被回退
   check('B-05 接线：已不存在「全量快照」旧写法', !/roster:\s*snapshotRoster\(roster\)\s*,/.test(src));
+  check('对话型接线：派活层把确定性任务交给编排器（跳过 LLM 拆解）',
+    src.includes('isChatOnlyGoal(goal)') && src.includes('buildChatTasks({ roster })')
+      && src.includes('presetTasks'));
+  const pool = fs.readFileSync(path.join(__dirname, '..', 'main', 'workerPool.js'), 'utf8');
+  check('对话型接线：Worker 读 runMeta.chatOnly 并下发空工具表',
+    pool.includes('runMeta.chatOnly') && pool.includes('tools: []'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

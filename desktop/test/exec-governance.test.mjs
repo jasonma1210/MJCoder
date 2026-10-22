@@ -25,7 +25,7 @@ function check(name, fn) {
 
 // ── ① 行为：sandboxPolicy 只能收紧，不能被载荷放宽 ──
 check('full-access 被钳制为 workspace-write（不做隔离的档位不得经直连 IPC 进入）', () => {
-  assert.equal(ipcGovernance({ sandboxPolicy: 'full-access' }).sandboxPolicy, 'workspace-write');
+  assert.equal(ipcGovernance({ sandboxPolicy: 'full-access', cwd: '/tmp/proj' }).sandboxPolicy, 'workspace-write');
 });
 check('read-only 保持 read-only（只收紧不放宽）', () => {
   assert.equal(ipcGovernance({ sandboxPolicy: 'read-only' }).sandboxPolicy, 'read-only');
@@ -33,9 +33,14 @@ check('read-only 保持 read-only（只收紧不放宽）', () => {
 check('workspace-write 原样保留', () => {
   assert.equal(ipcGovernance({ sandboxPolicy: 'workspace-write' }).sandboxPolicy, 'workspace-write');
 });
-check('未知 / 缺失 / 非字符串档位一律回落 workspace-write', () => {
+check('未知 / 缺失 / 非字符串档位一律回落 workspace-write（有 cwd）', () => {
   for (const v of [undefined, null, '', 'FULL-ACCESS', 'full_access', 123, {}]) {
-    assert.equal(ipcGovernance({ sandboxPolicy: v }).sandboxPolicy, 'workspace-write', `值 ${String(v)} 未被钳制`);
+    assert.equal(ipcGovernance({ sandboxPolicy: v, cwd: '/tmp/proj' }).sandboxPolicy, 'workspace-write', `值 ${String(v)} 未被钳制`);
+  }
+});
+check('无 cwd 时回落 read-only（无项目目录不得可写，2026-10-21）', () => {
+  for (const v of [undefined, null, 'full-access', 'bogus']) {
+    assert.equal(ipcGovernance({ sandboxPolicy: v }).sandboxPolicy, 'read-only', `值 ${String(v)} 未回落只读`);
   }
 });
 

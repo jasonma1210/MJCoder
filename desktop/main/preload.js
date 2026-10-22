@@ -345,6 +345,30 @@ contextBridge.exposeInMainWorld('mjcode', {
   // M5 / T5-10：中断任务 / 成员范围中断（§9.2）。权限矩阵与留痕在主进程 teamInterrupt 单一入口，
   // 渲染层只传定位参数；失败返回 { ok:false, code, error }，界面必须提示，不得静默。
   teamsInterrupt: (payload) => ipcRenderer.invoke('teams:interrupt', payload || {}),
+  // 2026-10-21 团队调试日志（排查「任务无人认领 / 假完成」的全链路事实来源）
+  // 只读状态 + 开关 + 最近日志 + 导出；日志本体始终留在主进程，渲染层不持有文件句柄。
+  teamsDebugSet: (payload) => ipcRenderer.invoke('teams:debugSet', payload || {}),
+  teamsDebugTail: (limit) => ipcRenderer.invoke('teams:debugTail', { limit }),
+  teamsDebugAppend: (entry) => ipcRenderer.invoke('teams:debugAppend', entry || {}),
+  teamsDebugExport: () => ipcRenderer.invoke('teams:debugExport'),
+  teamsDebugOpenDir: () => ipcRenderer.invoke('teams:debugOpenDir'),
+  // DS Bots / T6-2：项目空间（项目身份唯一事实来源）。
+  // get 支持二选一定位：projectId 直取，threadId 反查（跨天回到同一会话时的入口）。
+  projectsCreate: (payload) => ipcRenderer.invoke('projects:create', payload || {}),
+  // T6-9：完整项目空间初始化（项目 + 工件 + 配额桶 + 会话 + 团队 + 首条系统消息）
+  projectsCreateSpace: (payload) => ipcRenderer.invoke('projects:createSpace', payload || {}),
+  // T6-9：模板角色只读投影（渲染层展示「模板时只读」的角色清单，避免另存一份导致漂移）
+  projectsRoleTemplates: () => ipcRenderer.invoke('projects:roleTemplates'),
+  projectsList: (payload) => ipcRenderer.invoke('projects:list', payload || {}),
+  projectsGet: (payload) => ipcRenderer.invoke('projects:get', payload || {}),
+  projectsUpdateStatus: (projectId, status) => ipcRenderer.invoke('projects:updateStatus', { projectId, status }),
+  // T6-10：配额水位只读快照（运行卡徽标）。未绑定项目的会话返回 quota=null，不视为错误。
+  projectsQuota: (payload) => ipcRenderer.invoke('projects:quota', payload || {}),
+  // T6-10：工件只读域（侧面板）——写通道只有模型经 artifact_* 原生工具，渲染层无写入能力
+  artifactsForProject: (payload) => ipcRenderer.invoke('artifacts:forProject', payload || {}),
+  artifactsIndex: (payload) => ipcRenderer.invoke('artifacts:index', payload || {}),
+  artifactsSection: (payload) => ipcRenderer.invoke('artifacts:section', payload || {}),
+  artifactsVersions: (payload) => ipcRenderer.invoke('artifacts:versions', payload || {}),
   // Computer Use（M4-C）
   cuaStatus: () => ipcRenderer.invoke('cua:status'),
   cuaPermissionHelp: (payload) => ipcRenderer.invoke('cua:permission-help', payload),

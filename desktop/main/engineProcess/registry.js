@@ -42,6 +42,8 @@ const TOOL_CHANNELS = [
   // M5 / T5-8 军团协同工具（漏登记 → 子进程「未知工具: team_*」）
   // B-04（2026-10-21）补入 teamReadMessages：模型侧读消息
   'teamListMembers', 'teamSendMessage', 'teamBoard', 'teamWait', 'teamReadMessages',
+  // DS Bots / T6-6 工件协同四工具（漏登记 → 子进程「未知工具: artifact_*」）
+  'artifactIndex', 'artifactGetSection', 'artifactPatchSection', 'artifactGetDiff',
 ];
 // ── 作用域登记（第八轮 A-03）────────────────────────────────────────────────
 // 缺陷：三处登记（TOOL_CHANNELS / TOOL_HANDLER_NAMES / createToolHandlers）**全都有**，

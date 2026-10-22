@@ -67,6 +67,25 @@ function makeCheckpointStore(seed = {}) {
       ws.resolveOwnerMember({ dag: {} }, { taskId: 'x', seq: 1 }, [], null) === null);
   }
 
+  // ── P1（2026-10-21）：等待即打轻量断点（释放槽位后仍能接续）──
+  {
+    const ws = require('../main/workerSession');
+    const cp = makeCheckpointStore();
+    const ms = ws.createMemberSession({ getCheckpoint: cp.getCheckpoint, saveCheckpoint: cp.saveCheckpoint });
+    const ok = ms.saveWaiting('agent:m9', { group_id: 'g9', thread_id: 'c9', cwd: '/x' },
+      { taskId: 'a', title: '等待任务', ownerMemberId: 'm9' },
+      { waitingOn: ['b'], waitDeadlineAt: 123 }, { summary: '已完成一半' });
+    const saved = cp.map['agent:m9'];
+    check('P1：等待断点写入 kind / waitingOn / 阶段结论',
+      ok && saved.kind === 'member-wait' && saved.waitingOn.includes('b') && saved.waitDeadlineAt === 123
+        && saved.summary.includes('已完成一半') && saved.summary.includes('等待：b'),
+      JSON.stringify(saved).slice(0, 120));
+    check('P1：非成员任务不写等待断点',
+      ms.saveWaiting('agent:anon:g:a', { group_id: 'g' }, { taskId: 'a' }, {}, null) === false);
+    check('P1：唤醒时 resumeContext 可读到等待断点',
+      ms.read('agent:m9').includes('因等待依赖而暂停'));
+  }
+
   // ── 场景 1/2/3/4：军团组（有成员名册 + 有断点）──
   const roster = [{ id: 'm1', name: '架构师' }, { id: 'm2', name: '测试员' }];
   const cps = makeCheckpointStore({

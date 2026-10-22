@@ -44,7 +44,10 @@ const approvalSettings = require(path.join(ROOT, 'main/approvalSettings.js'));
   check('COMPUTER_USE_TOOL schema：required=[objective, app_name]，且 max_steps 上限文案在列',
     /name: 'computer_use'/.test(coreSrc)
     && /required: \['objective', 'app_name'\]/.test(coreSrc));
-  check('APPROVAL_TOOLS 含 computer_use（治理字段可注入）', /'computer_use'\]\)/.test(coreSrc));
+  // T6-6：APPROVAL_TOOLS 尾部新增了 artifact_patch_section，原先「'computer_use']) 必须在集合末尾」
+  // 的写法随之失效。改为在**集合字面量内部**检索，仍能守住「computer_use 在审批面里」这条事实。
+  check('APPROVAL_TOOLS 含 computer_use（治理字段可注入）',
+    /APPROVAL_TOOLS = new Set\(\[[\s\S]*?'computer_use'[\s\S]*?\]\)/.test(coreSrc));
   check('TOOL_TIMEOUT_OVERRIDES：computer_use = 900000（15min 兜底）',
     /computer_use: 900000,/.test(coreSrc));
   check('runAgent 新增 computerUseEnabled 参数并条件追加 COMPUTER_USE_TOOL',

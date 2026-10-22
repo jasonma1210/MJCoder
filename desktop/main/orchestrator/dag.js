@@ -7,7 +7,11 @@
 
 const MAX_TASKS = 8;
 const MIN_TASKS = 2;
-const MAX_DEPS = 4;
+// 不再设人工 fan-in 上限（原 MAX_DEPS=4，2026-10-21 移除）：
+// 「汇总任务依赖前面全部章节」是合法且常见的 DAG，旧上限会把整份拆解直接判失败
+// （真机：t6 依赖 5 个章节任务 → 「任务 t6 依赖数超过 4」→ PLAN_FAILED，一个任务都没派）。
+// fan-in 的自然上界由 MAX_TASKS 给出（≤7），再把 4 当契约只会误杀合法计划；
+// 真正需要守的只有：依赖存在性、自依赖、环。
 
 // P3 收口：单任务墙钟与组等待的数值必须在同一处（此前分居本文件与 invoke.js，互不知情）
 const {
@@ -58,9 +62,8 @@ function validateDag(raw) {
       ),
     });
   }
-  // 依赖引用存在性 + 自依赖 + 上限
+  // 依赖引用存在性 + 自依赖（fan-in 不设上限：合法 DAG 允许汇总任务依赖全部前置）
   for (const t of tasks) {
-    if (t.dependsOn.length > MAX_DEPS) return { ok: false, error: `任务 ${t.id} 依赖数超过 ${MAX_DEPS}` };
     for (const d of t.dependsOn) {
       if (d === t.id) return { ok: false, error: `任务 ${t.id} 依赖自身` };
       if (!seen.has(d)) return { ok: false, error: `任务 ${t.id} 依赖了不存在的任务：${d}` };

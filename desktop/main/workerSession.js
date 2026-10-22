@@ -87,7 +87,7 @@ function createMemberSession(deps = {}) {
   // 避免「这里放 2 万字、那里只注入 6000」的隐性截断。
   //
   // 与引擎恢复段的衔接（**保持 L2 引擎零改动**，§13.6）：engine 的恢复段是固定文案
-  // 「上一任务因预算触顶暂停……已完成部分不要重做」，且整段经 wrapUntrusted 隔离为数据。
+  // 「上一任务已暂停（预算触顶或等待依赖）……已完成部分不要重做」，且整段经 wrapUntrusted 隔离为数据。
   // 故此处把断点渲染成**成员工作记录**（事实陈述），与「已完成部分不要重做」一致；
   // 「待办」由本轮的 runOpts.messages（新子任务提示词）给出——两段不冲突。
   function read(sessionKey) {
@@ -103,7 +103,40 @@ function createMemberSession(deps = {}) {
     }
   }
 
-  return { memberSessionKey, pickOwnerMember, resolveOwnerMember, save, read };
+  // P1（2026-10-21）：等待即打**轻量断点**——任务因 team_wait 中止并释放槽位后，
+  // 唤醒重跑时能从「暂停前阶段结论 + 等待边」接续，而不是从零重跑。
+  // 只存摘要与元数据（≤4000 字），不存完整消息视图，避免挤占断点容量。
+  // 非成员任务（anon 键）不写：一次性隔离语义下写断点只会挤占 50 条 LRU。
+  function saveWaiting(sessionKey, group, task, deferred = {}, result = null) {
+    if (!task?.ownerMemberId) return false;
+    try {
+      const write = typeof deps.saveCheckpoint === 'function'
+        ? deps.saveCheckpoint : checkpointStore.saveCheckpoint;
+      const waitingOn = Array.isArray(deferred?.waitingOn) ? deferred.waitingOn.map(String) : [];
+      const partial = String(result?.summary || '').trim().slice(0, 4000);
+      write(sessionKey, {
+        kind: 'member-wait',
+        summary: `成员工作记录：子任务「${task.title || task.taskId}」因等待依赖而暂停`
+          + `${waitingOn.length ? `（等待：${waitingOn.join('、')}）` : ''}。\n`
+          + `${partial ? `暂停前的阶段结论：${partial}` : '尚无阶段结论。'}\n`
+          + '唤醒后请从上述阶段结论接续，已完成部分不要重做。',
+        threadId: group.thread_id || null,
+        runId: group.group_id,
+        taskId: task.taskId,
+        ownerMemberId: task.ownerMemberId,
+        cwd: group.cwd || '',
+        waitingOn,
+        waitDeadlineAt: deferred?.waitDeadlineAt || null,
+        phase: 'waiting',
+      }, { pinned: true });
+      return true;
+    } catch (e) {
+      console.warn('[workerPool] 等待断点保存失败（不影响调度）:', e.message);
+      return false;
+    }
+  }
+
+  return { memberSessionKey, pickOwnerMember, resolveOwnerMember, save, saveWaiting, read };
 }
 
 module.exports = {

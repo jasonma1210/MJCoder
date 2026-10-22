@@ -149,9 +149,34 @@ function check(name, ok, detail = '') {
     rosterDecl > 0 && snapRead > rosterDecl && liveRead > snapRead);
   // 快照之外的第二层保障：参与过 run 的成员下架只做软删（enabled=0 + removed_at），
   // 物理删除会让历史 run 的 owner_member_id 变成悬空引用、审计不可追溯。
+  //
+  // 口径收紧（2026-10-22 / T6-9）：原断言是全文扫描，等价于「teamStore 里一个
+  // DELETE FROM team_members 都不许有」。T6-9 的初始化失败补偿需要整体撤销刚建的团队
+  // （此刻该团队尚无任何 run，不存在悬空引用），故允许且仅允许 deleteTeam 方法体内物理删除。
+  // 三条断言替代原单条：
+  //   ① 下架路径 setMemberEnabled 必须仍是 UPDATE 软删；
+  //   ② 全文 DELETE FROM team_members 只能出现一次，且落在 deleteTeam 方法体内；
+  //   ③ deleteTeam 不得被 IPC / preload 暴露，保证只可能是初始化补偿调用。
   const teamStoreSrc = fs.readFileSync(path.join(__dirname, '../main/teamStore.js'), 'utf8');
-  check('编制下架不物理删除（源码无 DELETE FROM team_members）',
-    !/DELETE\s+FROM\s+team_members/i.test(teamStoreSrc));
+  const bodyOf = (marker) => {
+    const start = teamStoreSrc.indexOf(marker);
+    if (start < 0) return '';
+    const end = teamStoreSrc.indexOf('\n  }', start);
+    return end < 0 ? '' : teamStoreSrc.slice(start, end);
+  };
+  const setEnabledBody = bodyOf('setMemberEnabled(');
+  check('编制下架只做软删（setMemberEnabled 用 UPDATE 写 enabled/removed_at）',
+    setEnabledBody.includes('UPDATE team_members SET enabled = ?') && !/DELETE\s+FROM/i.test(setEnabledBody));
+  const delTeamStart = teamStoreSrc.indexOf('deleteTeam(');
+  const delTeamBody = bodyOf('deleteTeam(');
+  const delMemberSites = [...teamStoreSrc.matchAll(/DELETE\s+FROM\s+team_members/gi)].map((m) => m.index);
+  check('物理删除 team_members 仅限 deleteTeam（初始化失败补偿）',
+    delMemberSites.length === 1 && delMemberSites[0] >= delTeamStart && delTeamBody.includes('DELETE FROM team_members'),
+    `${delMemberSites.length} 处`);
+  const ipcTeamsSrc = fs.readFileSync(path.join(__dirname, '../main/ipc/teams.js'), 'utf8');
+  const preloadSrc = fs.readFileSync(path.join(__dirname, '../main/preload.js'), 'utf8');
+  check('deleteTeam 不暴露给 IPC / 渲染层（仅补偿调用）',
+    !ipcTeamsSrc.includes('deleteTeam') && !preloadSrc.includes('deleteTeam'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

@@ -277,7 +277,7 @@
   "memoryAutoCaptureDesc": "When on, each finished turn stores a \"question → conclusion\" summary into project memory (model-conclusion trust tier); off by default — use the /mem command to save explicitly.",
   "memoryAutoOn": "Auto-capture enabled",
   "memoryAutoOff": "Auto-capture disabled",
-  "memoryTeamAutoLabel": "Capture legion team memory",
+  "memoryTeamAutoLabel": "Capture team-level memory",
   "memoryTeamAutoDesc": "When a sub-task completes, its conclusion is stored as team memory (visible to this team only, capped at 200 entries). Independent from session auto-capture above: on by default; turning it off does not affect conversation memory, and vice versa.",
   "memoryTeamAutoOn": "Team capture enabled",
   "memoryTeamAutoOff": "Team capture disabled",

@@ -9,11 +9,15 @@
 
 const TASK_TRANSITIONS = {
   pending: ['queued', 'skipped'],
-  queued: ['running', 'pending', 'skipped'], // pending：取消排队回退
-  running: ['done', 'failed', 'queued', 'waiting'], // queued：崩溃恢复 / 重试；waiting：T5-3 动态等待
+  // T6-4（§5.1）：quota_suspend 是派发前被配额闸拦下的落点——任务退出可派发集合但**不是失败**。
+  queued: ['running', 'pending', 'skipped', 'quota_suspend'], // pending：取消排队回退
+  running: ['done', 'failed', 'queued', 'waiting', 'quota_suspend'], // queued：崩溃恢复 / 重试；waiting：T5-3 动态等待
   // M5 / T5-3（§7 L2）：waiting 是调度器的**唯一状态侵入点**。三条出边各有唯一语义：
   //   waiting → queued「被等待方终态唤醒，重新入队可派发」；→ failed「等待超时」；→ skipped「被取消」。
   waiting: ['queued', 'failed', 'skipped'],
+  // T6-4（§5.1）：恢复唯一入口 = queued（回到同一调度路径续跑）；取消 = skipped。
+  // 刻意不提供 → failed：配额不足不是执行失败，不允许消耗自动重试次数、不允许触发组 paused。
+  quota_suspend: ['queued', 'skipped'],
   done: [],
   failed: ['queued'],                        // 手动重试入口
   skipped: [],
@@ -182,6 +186,35 @@ class TaskStore {
     return this.getTask(groupId, taskId);
   }
 
+  /**
+   * 依赖级联（2026-10-21）：某任务终态 failed/skipped 时，把（传递）依赖它的未终态任务置 skipped。
+   * 为什么必须做：依赖集只认 done/skipped，failed 的前置永远不会让后续入队 ⇒ 后续任务永久 pending
+   * ⇒ isGroupSettled 永不成立 ⇒ 组悬挂转圈（预算软上限后 t2 失败、t3/t4 卡住就是这个形态）。
+   * 返回被跳过的 taskId 列表（调用方负责广播事件）。
+   */
+  skipDependentsOf(groupId, taskId, reason) {
+    const tasks = this.listTasks(groupId);
+    const dead = new Set([taskId]);
+    const out = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const t of tasks) {
+        if (['done', 'failed', 'skipped', 'cancelled'].includes(t.status) || dead.has(t.taskId)) continue;
+        if (!(t.dependsOn || []).some((d) => dead.has(d))) continue;
+        dead.add(t.taskId);
+        out.push(t.taskId);
+        changed = true;
+        try {
+          this.setTaskStatus(groupId, t.taskId, 'skipped', { error: reason, force: true });
+        } catch (e) {
+          console.warn(`[taskStore] 级联跳过失败（${t.taskId}）:`, e.message);
+        }
+      }
+    }
+    return out;
+  }
+
   // 入队：pending 且全部依赖已 done 的任务 → queued
   // M5 / T5-12：allowIds 是**批次门控**（wave）的唯一接入点——给定时只放行本批任务入队，
   // 后批任务保持 pending（不占槽位、不会被 claimNext 领走），批间因此天然串行。
@@ -222,6 +255,57 @@ class TaskStore {
       .run(String(ownerMemberId), groupId, taskId);
     this.touchGroup(groupId);
     return this.getTask(groupId, taskId);
+  }
+
+  /**
+   * T6-4（§5.1）：配额暂停——把可派发任务移出调度，但**不改写成失败**。
+   *
+   * 三条边界：
+   *   ① 只从 queued / running 进入（pending 尚未入队、waiting 在等别人、终态不可逆）；
+   *   ② 不消耗 retry_count、不写 finished_at（setTaskStatus 只对终态写）；
+   *   ③ result_json 不写——暂停不是产出，产出字段留给真正的执行结果。
+   * reason 只做二值语义：'quota'（窗口额度耗尽）/ 'breaker'（单成员熔断），落 error 列供界面解释。
+   * 幂等：已是 quota_suspend 时原样返回，避免同一任务被多轮 tick 反复迁移。
+   */
+  suspendTask(groupId, taskId, { reason = 'quota' } = {}) {
+    const t = this.getTask(groupId, taskId);
+    if (!t) return null;
+    if (t.status === 'quota_suspend') return t;
+    if (t.status !== 'queued' && t.status !== 'running') return null;
+    return this.setTaskStatus(groupId, taskId, 'quota_suspend', {
+      error: reason === 'breaker'
+        ? '配额熔断暂停（该成员消耗超限，其他成员不受影响）'
+        : '配额不足暂停（等待滑动窗口释放额度后自动续跑）',
+    });
+  }
+
+  /**
+   * T6-4（§5.1）：配额恢复——quota_suspend → queued，按 seq 升序**小批量**。
+   *
+   * 为什么带 limit：一次性把全部暂停任务放回队列，会瞬间抢空刚释放出的额度并再次触发暂停
+   * （恢复/暂停抖动）。小批量放行让额度随老化稳定释放，符合 §8「恢复要迟滞」的口径。
+   * 恢复只回队列，不直接派发：下一拍 pump 仍要过配额闸，闸不放行就再次暂停（不会绕过检查）。
+   *
+   * T6-8（§5.3）：allow(row) 用于跳过「成员仍在熔断中」的暂停任务——不能只按 seq 取前 N 个，
+   * 否则被熔断成员占住队首时，后面的正常任务永远轮不到恢复（SQL LIMIT 会把它们截掉）。
+   */
+  resumeSuspendedTasks(groupId, { limit = 2, allow } = {}) {
+    const cap = Math.min(50, Math.max(1, Math.trunc(Number(limit) || 2)));
+    const rows = this.db.prepare(`SELECT task_id, owner_member_id FROM sub_tasks
+      WHERE group_id = ? AND status = 'quota_suspend' ORDER BY seq ASC`).all(groupId);
+    const out = [];
+    for (const r of rows) {
+      if (out.length >= cap) break;
+      if (typeof allow === 'function' && !allow(r)) continue;
+      try {
+        // error 置空：恢复后不该继续展示「配额不足暂停」的旧理由
+        this.setTaskStatus(groupId, r.task_id, 'queued', { error: null });
+        out.push(r.task_id);
+      } catch (e) {
+        console.warn(`[taskStore] 配额恢复失败（${r.task_id}）:`, e.message);
+      }
+    }
+    return out;
   }
 
   // 失败处置：可重试 → 回 queued；不可重试 → failed（调用方决定组级动作）
@@ -473,9 +557,11 @@ class TaskStore {
   // 组是否已无待执行任务（收尾判定）
   // M5 / T5-3：`waiting` 必须计入「未结算」——等待中的任务尚未有结果，若把它当已结算，
   // 组会被提前聚合收尾，唤醒后的重跑就成了孤儿任务（永远不会再被调度）。
+  // T6-4（§5.1）：`quota_suspend` 同理必须计入——它是**非终态**，配额老化后会被恢复重跑；
+  // 若在收尾判定里漏掉，组会在暂停期间被误判完成并 finalize，恢复出来的任务成为孤儿。
   isGroupSettled(groupId) {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM sub_tasks
-      WHERE group_id = ? AND status IN ('pending','queued','running','waiting')`).get(groupId);
+      WHERE group_id = ? AND status IN ('pending','queued','running','waiting','quota_suspend')`).get(groupId);
     return row.n === 0;
   }
 

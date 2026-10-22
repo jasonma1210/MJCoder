@@ -5,6 +5,8 @@ const crypto = require('crypto');
 // P1-4：同时引入规模常量，让拆解提示与 DAG 校验共用同一口径（消除「提示说2~6、校验允8」的漂移）
 const { validateDag, topoLevels, MAX_TASKS, MIN_TASKS } = require('./dag');
 const { toChatRequest } = require('../modelShape');
+// 2026-10-21 团队调试日志：拆解是团队链路的第一现场（模型原始输出 / DAG 校验 / 批次计划）。
+const teamDebug = require('../teamDebugLog');
 
 const ORCHESTRATOR_SYSTEM = [
   '你是 MJ Coder 的任务编排器。把用户目标拆解为可独立执行的子任务 DAG，输出严格 JSON（不要输出任何其他文本）：',
@@ -15,10 +17,22 @@ const ORCHESTRATOR_SYSTEM = [
   // 会被提示与校验「双重口径」夹住——模型可能自我矛盾，或反复重试浪费轮次。
   // 现在两处同源引用 dag.js 的常量，从结构上消除不一致。
   `1. 任务数 ${MIN_TASKS}~${MAX_TASKS} 个；每个任务应可由一个独立 Agent 用工具（读文件/写文件/执行命令）完成；`,
-  '2. 没有数据/产物依赖的任务必须写 dependsOn:[] 并放进同一批次并行执行——仅在真正需要前置任务产出时才声明依赖；禁止把可并行的任务串成链；',
-  '3. critical:true 仅用于「失败后后续任务都无意义」的核心步骤（如初始化、编译基线），其余一律 false；',
-  '4. prompt 必须自包含：写清楚目标、涉及路径、验收方式；禁止引用对话上下文；',
-  '5. 输出只能是 JSON，以 { 开头以 } 结尾。',
+  // 2026-10-21 真机事故：一个「每人报数 10 次」的简单目标被拆成 5 个任务（协议定义/QA/终检），
+  // 单任务烧穿组预算、后 3 个任务被跳过，用户最终看到的答案是错的。规模必须随复杂度收敛。
+  '2. 任务数由复杂度决定，且每个任务必须能在 8 轮工具调用内完成：简单查询/计数/单文件改动给 2~3 个任务；'
+    + '任务明显超出该规模时（多文件编码、需要边写边验证），按阶段拆成串行子任务（如「核心实现 → 补边界与参数 → 运行验证」），'
+    + '用 dependsOn 串联；禁止为「看起来完整」拆出协议定义、QA 复核、终检等仪式性步骤；',
+  '3. 没有数据/产物依赖的任务必须写 dependsOn:[] 并放进同一批次并行执行——仅在真正需要前置任务产出时才声明依赖；禁止把可并行的任务串成链；',
+  '4. critical:true 仅用于「失败后后续任务都无意义」的核心步骤（如初始化、编译基线），其余一律 false；',
+  // 2026-10-21 用户实测：t1 只写一份规格却用了 7 轮 / 5.3 万 tokens。prompt 越长、验收要求越模糊，
+  // Worker 越容易反复回读与自我校验。固定四段结构 + 明确产出上限，是把轮次压回来的最直接手段。
+  '5. prompt 只写四段：目标（一句话）、要求（必要约束）、输出格式（文件路径 + 长度上限，如「docs/spec.md，不超过 30 行」）、验收标准（可执行的一条命令或一次检查）；'
+    + '删除背景介绍、修饰语、重复描述；禁止在 prompt 内重复项目目录、预算、成员清单等组级公共上下文；',
+  // 中间校验轮次是隐藏的 token 大头：逐个 ls / 反复回读文件，收益极低。
+  '6. 禁止在 prompt 里要求「每写完一步就 ls 确认 / 回读全文」；验收只做最后一次性检查；',
+  // 跨任务传递产物：全文塞进 prompt 会让下游任务每轮重发一份。
+  '7. 跨任务产物用工作区文件路径传递（上游写入文件，下游 prompt 只写「读取 <路径>」），不得把上游全文抄进 prompt；',
+  '8. 输出只能是 JSON，以 { 开头以 } 结尾。',
 ].join('\n');
 
 const NO_TOOL_CAPABILITY_ERROR = '当前模型被标记为不支持 tool calling，任务编排/子代理依赖工具调用，无法执行；'
@@ -68,8 +82,36 @@ async function askDag(userMessage) {
   return { content: res?.content || '' };
 }
 
+/**
+ * 归一化调用方给定的任务清单（对话型目标旁路）。
+ * 只做形状收敛与去重：非法条目丢弃、id 冲突重编号、超过 MAX_TASKS 截断。
+ * 不做业务判断——任务语义由调用方负责（团队派活方用确定性 builder 产出）。
+ */
+function normalizePresetTasks(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of list.slice(0, MAX_TASKS)) {
+    if (!item || typeof item !== 'object') continue;
+    const prompt = String(item.prompt == null ? '' : item.prompt).trim();
+    if (!prompt) continue;
+    let id = String(item.id == null ? '' : item.id).trim() || `t${out.length + 1}`;
+    if (seen.has(id)) id = `t${out.length + 1}`;
+    seen.add(id);
+    out.push({
+      id,
+      title: String(item.title || `子任务 ${out.length + 1}`),
+      prompt,
+      dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map(String) : [],
+      critical: item.critical === true,
+      maxRetry: Number.isFinite(Number(item.maxRetry)) ? Number(item.maxRetry) : 1,
+    });
+  }
+  return out;
+}
+
 // 拆解并建组。返回 { ok, groupId?, tasks?, levels?, waves?, error? }
-// opts：{ auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves }
+// opts：{ auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves, presetTasks }
 //   · repairHint：上一次输出非法 JSON 时回喂的错误（自动修复重试路径）
 //   · contextBlock：重规划时注入的「上次执行情况」（已完成结论 / 失败原因）
 //   · approvalMode/sandboxPolicy：V04 宿主治理快照（建组时刻的父上下文），随组持久化
@@ -77,36 +119,59 @@ async function askDag(userMessage) {
 //   · planWaves（M5 / T5-12）：批次计划钩子 `({ tasks }) => { waves }`，由团队派活方注入。
 //     编排器**不认识「团队」概念**（零侵入约束）：它只负责把自己的拆解结果交给回调，
 //     把回调产出的 waves 原样落进 dag_json。普通编排（autoOrchestrate 等）不传，行为完全不变。
-async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves } = {}) {
+//   · presetTasks（2026-10-21 对话型目标旁路）：调用方已经确定任务清单时（如团队「报数」），
+//     跳过 LLM 拆解与工具能力门，直接按给定任务建组——「把简单目标做成一个程序」的根因
+//     不在提示词，而在模型拆解这一步本身，必须由确定性输入绕开。
+async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, repairHint, contextBlock, approvalMode, sandboxPolicy, threadId, planWaves, presetTasks } = {}) {
   const g = String(goal || '').trim();
   if (!g) return { ok: false, error: '目标为空' };
   if (!deps) return { ok: false, error: 'Orchestrator 未初始化' };
+  const preset = normalizePresetTasks(presetTasks);
+  if (Array.isArray(presetTasks) && presetTasks.length && !preset.length) {
+    return { ok: false, error: '预设任务清单为空或缺少 prompt' };
+  }
   // B1-B-02（F-003）：能力门在**建组之前**（比拆解更早）：拆解成功但 Worker 无工具，
   // 用户会拿到一组注定空转的任务，比直接报错更糟（错误被伪装成进度）。
   // resolveModel 未配置时自己会抛明确错误，这里只判能力位，不改变它的报错语义。
-  try {
-    if (!modelSupportsToolCall(deps.resolveModel())) {
-      return { ok: false, error: NO_TOOL_CAPABILITY_ERROR, code: 'NO_TOOL_CAPABILITY' };
+  // 预设任务旁路不需要工具（对话型目标），跳过能力门——否则「不支持 tool calling」的
+  // 模型连一句报数都发不出去，属于把门装错了地方。
+  if (!preset.length) {
+    try {
+      if (!modelSupportsToolCall(deps.resolveModel())) {
+        return { ok: false, error: NO_TOOL_CAPABILITY_ERROR, code: 'NO_TOOL_CAPABILITY' };
+      }
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) };
     }
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
   }
 
-  const extra = repairHint
-    ? `【修复要求】上一次输出未通过校验，原因：${repairHint}\n请重新输出严格 JSON，以 { 开头以 } 结束。`
-    : contextBlock || '';
+  let dagTasks = preset;
+  if (!dagTasks.length) {
+    const extra = repairHint
+      ? `【修复要求】上一次输出未通过校验，原因：${repairHint}\n请重新输出严格 JSON，以 { 开头以 } 结束。`
+      : contextBlock || '';
 
-  let content = '';
-  try {
-    ({ content } = await askDag(buildUserMessage(g, cwd, extra)));
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err) };
+    let content = '';
+    try {
+      ({ content } = await askDag(buildUserMessage(g, cwd, extra)));
+    } catch (err) {
+      teamDebug.log('orchestrator', 'dag_call_failed', { goal: g, error: err });
+      return { ok: false, error: String(err?.message || err) };
+    }
+    // 模型原始输出是「拆解为什么不对」的唯一证据，完整落 verbose 日志（模块内统一截断 8KB）。
+    teamDebug.log('orchestrator', 'dag_raw', { goal: g, length: content.length, content }, { level: 'verbose' });
+
+    const dag = validateDag(content);
+    if (!dag.ok) {
+      teamDebug.log('orchestrator', 'dag_invalid', { goal: g, error: dag.error, raw: content.slice(0, 2000) });
+      return { ok: false, error: dag.error, raw: content.slice(0, 2000) };
+    }
+    dagTasks = dag.tasks;
+  } else {
+    teamDebug.log('orchestrator', 'dag_preset', { goal: g, tasks: preset.length });
   }
 
-  const dag = validateDag(content);
-  if (!dag.ok) return { ok: false, error: dag.error, raw: content.slice(0, 2000) };
-
-  const levels = topoLevels(dag.tasks);
+  const levels = topoLevels(dagTasks);
   // M5 / T5-12：批次计划（可选钩子）。失败/未注入一律降级为「无分批」——
   // 分批是调度优化，计划不出来也必须能按既有 DAG 跑完（fail-open）。
   let waves = null;
@@ -118,7 +183,7 @@ async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, r
   let runMetaSnapshot = null;
   if (typeof planWaves === 'function') {
     try {
-      const plan = planWaves({ tasks: dag.tasks, levels });
+      const plan = planWaves({ tasks: dagTasks, levels });
       if (plan && Array.isArray(plan.waves) && plan.waves.length) {
         waves = plan.waves;
         waveAssignments = plan.assignments || null;
@@ -139,11 +204,35 @@ async function planGoal({ goal, cwd, projectPath, auto, replanDepth, replanOf, r
   // 同上：只在钩子确实给了元数据时写入，普通编排组的 dag 形状保持原样。
   if (runMetaSnapshot) dagToStore.runMeta = runMetaSnapshot;
   deps.store.createGroup({
-    groupId, goal: g, cwd, projectPath, dag: dagToStore, tasks: dag.tasks,
+    groupId, goal: g, cwd, projectPath, dag: dagToStore, tasks: dagTasks,
     auto, replanDepth, replanOf, approvalMode, sandboxPolicy, threadId,
   });
-  deps.emit?.({ type: 'group_created', groupId, goal: g, tasks: dag.tasks, levels, replanOf: replanOf || null });
-  return { ok: true, groupId, tasks: dag.tasks, levels, waves, waveAssignments };
+  teamDebug.log('orchestrator', 'group_created', {
+    groupId,
+    goal: g,
+    cwd,
+    projectPath,
+    auto: !!auto,
+    replanOf: replanOf || null,
+    threadId: threadId || null,
+    // team=true 表示这是团队派活（planWaves 钩子在场）；普通编排组为 false
+    team: typeof planWaves === 'function',
+    tasks: dagTasks.map((t) => ({
+      id: t.id, title: t.title, dependsOn: t.dependsOn || [], critical: !!t.critical,
+      prompt: t.prompt,
+    })),
+    levels,
+    waves: Array.isArray(waves) ? waves : null,
+    assignments: waveAssignments || null,
+    roster: Array.isArray(rosterSnapshot)
+      ? rosterSnapshot.map((m) => ({ id: m.id, name: m.name, roleKind: m.roleKind, enabled: m.enabled }))
+      : null,
+    runMeta: runMetaSnapshot || null,
+    approvalMode: approvalMode || null,
+    sandboxPolicy: sandboxPolicy || null,
+  });
+  deps.emit?.({ type: 'group_created', groupId, goal: g, tasks: dagTasks, levels, replanOf: replanOf || null });
+  return { ok: true, groupId, tasks: dagTasks, levels, waves, waveAssignments };
 }
 
 // ── 自动编排（WorkBuddy 式主理人模式）──

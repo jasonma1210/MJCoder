@@ -24,6 +24,13 @@ const SLASH_COMMANDS = [
   { key: '/clear', hintKey: 'composer.slash.clear' },
 ];
 
+// token 量的紧凑展示（预算徽标用）：≥1000 折成 k，非法值回落 0
+function formatTokens(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.trunc(n));
+}
+
 export default function Composer({
   input, setInput, onSend, onStop, onPickFiles, loading, selectedModel, project,
   onOpenProjectPicker, agentsMd, providers, onSelectModel, approval, onApprovalChange,
@@ -55,13 +62,27 @@ export default function Composer({
   const taRef = useRef(null);
   const expert = extras?.expert || null;
   const voiceActive = voice?.state === 'recording' || voice?.state === 'transcribing';
-  // 会话级徽标是否非空：全空时整行不渲染，避免留一条空白行把输入框往下推
+  // R-15（2026-10-22 产品边界）：派活态 = 输入框上方常驻「目标条」回答「这一发发给谁」——
+  // 从原来 10rem 宽的小徽标升级为独立一行（团队名 + 成员数 + 预算 + 明显退出），
+  // 发送按钮语义随之切到「派活」。未选团队时本条不渲染（默认形态零变化）。
+  const teamMemberCount = activeTeam
+    ? (activeTeam.memberCount ?? (activeTeam.members || []).filter((m) => m.enabled !== false).length)
+    : 0;
+  const teamBudget = activeTeam?.budget && typeof activeTeam.budget === 'object' ? activeTeam.budget : null;
+  const teamBudgetLabel = teamBudget
+    ? t('composer.teamBudget', { tokens: formatTokens(teamBudget.max_tokens), rounds: teamBudget.max_rounds })
+    : t('composer.teamBudgetDefault');
+  const dispatchMode = Boolean(activeTeam) && !loading;
+  // 会话级徽标是否非空：全空时整行不渲染，避免留一条空白行把输入框往下推。
+  // activeTeam 不再参与本判定——它已升级为独立目标条（见上方），否则会出现空徽标行。
   const hasTaskBadges = Boolean(
-    planMode || expert || activeTeam
+    planMode || expert
     || (extras?.skillIds || []).length > 0
     || (extras?.mcpServers || []).length > 0,
   );
 
+  // 运行中且输入框有内容 → 发送按钮语义为「暂缓发送」（入队）；输入框为空才是红色停止。
+  const queueable = Boolean(loading) && Boolean(String(input || '').trim());
   // C10：Composer 自适应高度（1 行起步，最多 8 行，超出内部滚动）
   useEffect(() => {
     const ta = taRef.current;
@@ -190,6 +211,27 @@ export default function Composer({
           )}
         </div>
       )}
+      {/* R-15 产品边界：派活目标条——选中军团后常驻的一行「这一发发给谁」。
+          原 10rem 截断小徽标升级为独立行：团队名完整可见 + 成员数 + 预算，
+          ✕ 一键退出派活态。用 Button 原种关闭，不新增裸 button。
+          设计约束（军团设计文档 v1.5 / 2026-10-20 需求⑤）：对话内协同、直接发消息，
+          ⇒ 不做独立入口、不加确认弹窗、不建页面；区分度全部做在这条状态行与发送按钮语义上。 */}
+      {activeTeam && (
+        <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-accent/40 bg-accent-bg px-3 py-2 text-xs text-accent">
+          <IconUsers size={13} className="shrink-0" />
+          <span className="font-medium shrink-0">{t('composer.dispatchTo')}</span>
+          <span className="font-medium truncate min-w-0" title={activeTeam.name}>{activeTeam.name}</span>
+          <span className="text-text2 shrink-0 tabular-nums" title={activeTeam.description || ''}>
+            {t('composer.teamMembers', { n: teamMemberCount })}
+          </span>
+          <span className="text-text2 shrink-0 tabular-nums">· {teamBudgetLabel}</span>
+          <span className="ml-auto" />
+          {teamBusy && <IconSpinner size={11} className="animate-spin shrink-0" />}
+          <Button variant="ghost" size="xs" onClick={() => onClearTeam?.()} aria-label={t('composer.removeTeam')}>
+            <IconX size={11} />
+          </Button>
+        </div>
+      )}
       {hasTaskBadges && (
       <div className="flex items-center gap-3 px-4 pb-2 text-xs text-text2">
         {planMode && (
@@ -197,19 +239,7 @@ export default function Composer({
             {t('composer.planMode')}
           </span>
         )}
-        {/* 2026-10-20 需求⑤：军团选中徽标——`+` 菜单选中团队后显示团队名，
-            发送即自动派活给该团队；X 取消选中（用 Button 原语，不新增裸 button）。 */}
-        {activeTeam && (
-          <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
-            title={t('composer.teamTip', { desc: activeTeam.description || '' })}>
-            <IconUsers size={11} />
-            <span className="max-w-[10rem] truncate">{activeTeam.name}</span>
-            {teamBusy && <IconSpinner size={10} className="animate-spin" />}
-            <Button variant="ghost" size="xs" onClick={() => onClearTeam?.()} aria-label={t('composer.removeTeam')}>
-              <IconX size={10} />
-            </Button>
-          </span>
-        )}
+        {/* 2026-10-20 需求⑤：军团选中态已升级为上方独立目标条（R-15），此处不再重复渲染 */}
         {expert && (
           <span className="text-xs px-2 py-1 rounded bg-accent-bg text-accent shrink-0 flex items-center gap-1"
             title={t('composer.expertTip', { mission: expert.mission || '' })}>
@@ -462,7 +492,9 @@ export default function Composer({
           onPaste={handlePaste}
           placeholder={expert
             ? t('composer.workingWith', { name: expert.title_cn || expert.name })
-            : (loading ? t('composer.placeholderRunning') : t('composer.placeholderIdle'))}
+            : (activeTeam
+              ? t('composer.dispatchPlaceholder')
+              : (loading ? t('composer.placeholderRunning') : t('composer.placeholderIdle')))}
           className="w-full bg-transparent outline-none text-sm resize-none"
           rows="1"
         />
@@ -546,17 +578,33 @@ export default function Composer({
             />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {loading ? (
-              <button onClick={onStop} title={t('composer.stopGenTip')} aria-label={t('composer.stopGen')}
-                className="bg-danger-solid text-on-accent rounded-full w-8 h-8 flex items-center justify-center">
-                <IconSquare size={14} />
-              </button>
-            ) : (
-              <button onClick={() => onSend()} disabled={!input.trim() && !(attachments || []).length} title={t('composer.send')} aria-label={t('composer.send')}
-                className="bg-accent-solid text-on-accent rounded-full w-8 h-8 flex items-center justify-center disabled:opacity-50">
-                <IconArrowUp size={16} />
-              </button>
-            )}
+            {/* 运行中按钮按输入内容分档（主流 Agent 口径）：
+                · 输入框为空 → 红色停止（点击中止当前任务）
+                · 输入框有内容 → 发送箭头 = 暂缓发送（入队，当前轮正常结束后自动接力），
+                  不再用红色停止按钮吞掉用户想发的新消息。
+                单按钮 + 条件分支：避免新增裸 button 抬高 ui-conventions 基线。
+                R-15（产品边界）：选中军团且空闲时，同一按钮语义切为「派活」
+                （文案 + 图标讲清「这一发发给谁」；ChatArea 的 sendOrDispatch 负责分流）。 */}
+            <button
+              onClick={() => {
+                if (loading) {
+                  if (queueable) {
+                    const put = onQueue || onSteer;
+                    if (put) { put(input); setInput(''); }
+                    return;
+                  }
+                  onStop?.();
+                  return;
+                }
+                onSend();
+              }}
+              disabled={!loading && !input.trim() && !(attachments || []).length}
+              title={loading ? (queueable ? t('composer.queueSendTip') : t('composer.stopGenTip')) : (dispatchMode ? t('composer.dispatchTip') : t('composer.send'))}
+              aria-label={loading ? (queueable ? t('composer.queueSend') : t('composer.stopGen')) : (dispatchMode ? t('composer.dispatch') : t('composer.send'))}
+              className={`${loading && !queueable ? 'bg-danger-solid' : 'bg-accent-solid'} text-on-accent rounded-full w-8 h-8 flex items-center justify-center disabled:opacity-50`}
+            >
+              {loading && !queueable ? <IconSquare size={14} /> : (dispatchMode ? <IconUsers size={15} /> : <IconArrowUp size={16} />)}
+            </button>
           </div>
         </div>
       </div>

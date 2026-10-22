@@ -157,7 +157,7 @@ check('历史重放的 tool 卡片与运行中卡片一致', () => {
   const chat = read('components/MessageStream.tsx');
   assert.match(chat, /renderMessages\(visibleMessages,[^)]*toolCalls\)/,
     '运行态轨迹未并入最后一轮（应经 renderMessages 的 liveCalls 参数传入）');
-  assert.match(chat, /extraCalls=\{i === rounds\.length - 1 \? liveCalls : \[\]\}/,
+  assert.match(chat, /extraCalls=\{it\.no === lastRoundNo \? liveCalls : \[\]\}/,
     'RoundBlock 未接收最后一轮的 liveCalls');
   assert.doesNotMatch(chat, /<ToolTraceGroup calls=\{toolCalls\}/,
     '仍存在独立的运行态轨迹块（已并入最后一轮，不应在消息流底部重复渲染）');

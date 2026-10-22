@@ -38,6 +38,8 @@ const { MESSAGE_REFS_MAX, MESSAGE_REF_MAX } = require('./teamStore');
 // 再深只可能是把整棵数据结构塞进总线（该走 refs + 落盘文件）。
 const PAYLOAD_MAX_DEPTH = 4;
 
+const teamDebug = require('./teamDebugLog');
+
 function isPlainObject(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const proto = Object.getPrototypeOf(v);
@@ -331,7 +333,30 @@ function createTeamToolHandlers({
     };
   }
 
-  return { teamListMembers, teamSendMessage, teamBoard, teamWait, teamReadMessages };
+  // 2026-10-21 团队调试日志：协同工具是成员之间唯一的显式交互面，
+  // 统一包装即可覆盖全部工具（新增工具自动纳入观测，不会游离在日志之外）。
+  const handlers = { teamListMembers, teamSendMessage, teamBoard, teamWait, teamReadMessages };
+  for (const [name, fn] of Object.entries(handlers)) {
+    handlers[name] = (args = {}) => {
+      const t0 = Date.now();
+      let out = null;
+      try {
+        out = fn(args);
+      } catch (e) {
+        teamDebug.log('teamTool', name, { args, ms: Date.now() - t0, error: e });
+        throw e;
+      }
+      teamDebug.log('teamTool', name, {
+        args,
+        ms: Date.now() - t0,
+        ok: out?.ok !== false,
+        error: out?.error || null,
+        result: out,
+      }, { level: 'verbose' });
+      return out;
+    };
+  }
+  return handlers;
 }
 
 module.exports = { createTeamToolHandlers, MODEL_MESSAGE_KINDS };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import SubtaskTree, { type SubagentEvent } from './tools/SubtaskTree';
 import PanelEmpty from './PanelEmpty';
-import { IconBot } from './icons';
+import { IconBot, IconUsers } from './icons';
 import { useI18n } from '../i18n';
 
 // 任务摘要面板（对标 Codex 右栏「任务摘要」）：把「这一轮任务都干了什么」收成一屏。
@@ -28,6 +28,8 @@ interface TaskGroupRow {
   error?: string;
   thread_id?: string | null;
   cwd?: string;
+  // R-15/X-3：军团归属（渲染层渲染徽标用；主进程 teamsListThreadRuns 投影，run_id = group_id）
+  teamName?: string;
 }
 
 interface TasksListResult {
@@ -66,7 +68,21 @@ export default function TaskSummaryPanel({ threadId = null, cwd = '', events = [
       const mine = list.filter((g) => (g.thread_id
         ? String(g.thread_id) === String(threadId ?? '')
         : String(g.cwd || '') === String(cwd || '')));
-      setGroups(mine);
+      // R-15/X-3：军团 run 徽标——teamsListThreadRuns 是既有桥面（run_id = group_id 是
+      // 「run 属于哪个团队」的唯一事实来源），一次调用拿到本会话全部军团 run 的归属，
+      // 不新造 IPC 通道。查询失败按「无徽标」降级，绝不影响任务组主列表。
+      let teamByRun: Record<string, string> = {};
+      try {
+        const tr = await mj.teamsListThreadRuns?.({ threadId: threadId ?? '' }) as { runs?: Array<{ runId?: string; teamId?: string; teamName?: string }> } | undefined;
+        for (const run of tr?.runs || []) {
+          const rid = String(run?.runId || '');
+          if (rid && run?.teamId) teamByRun[rid] = String(run.teamName || run.teamId);
+        }
+      } catch { /* 团队归属查询失败：本面板降级为不显示军团徽标 */ }
+      setGroups(mine.map((g) => {
+        const team = teamByRun[String(g.group_id)];
+        return team ? { ...g, teamName: team } : g;
+      }));
     } catch (err) {
       console.warn('[taskSummary] load groups failed:', err);
     } finally {
@@ -108,6 +124,17 @@ export default function TaskSummaryPanel({ threadId = null, cwd = '', events = [
                 <span className={`text-caption shrink-0 ${statusTone(g.status)}`}>
                   {groupStatusKey(g.status) ? t(groupStatusKey(g.status)) : g.status}
                 </span>
+                {/* R-15/X-3：军团 run 徽标——同一个任务组列表里，军团派活与自动编排
+                    从此可区分（数据来自主进程团队归属投影，不新增判断逻辑） */}
+                {g.teamName && (
+                  <span
+                    className="text-caption shrink-0 px-2 py-1 rounded bg-accent-bg text-accent flex items-center gap-1"
+                    title={t('rightPane.teamRunBadgeTip', { team: g.teamName })}
+                  >
+                    <IconUsers size={10} />
+                    {t('rightPane.teamRunBadge')}
+                  </span>
+                )}
                 <span className="text-xs truncate flex-1" title={g.goal || g.group_id}>{g.goal || g.group_id}</span>
               </div>
               {g.error && <div className="text-caption text-warn break-all mt-1">{g.error}</div>}

@@ -6,10 +6,10 @@
     "deadBridgeMethods": {
       "source": "desktop/main/preload.js − desktop/renderer/src（口径同 test/bridge-parity.test.mjs）",
       "unit": "method",
-      "total": 224,
-      "referenced": 174,
-      "dead": 50,
-      "ratio": 0.2232,
+      "total": 240,
+      "referenced": 187,
+      "dead": 53,
+      "ratio": 0.2208,
       "groups": [
         {
           "prefix": "market",
@@ -32,7 +32,7 @@
           "disposition": "pending"
         },
         {
-          "prefix": "teams",
+          "prefix": "projects",
           "count": 4,
           "disposition": "pending"
         },
@@ -43,6 +43,11 @@
         },
         {
           "prefix": "tasks",
+          "count": 3,
+          "disposition": "pending"
+        },
+        {
+          "prefix": "teams",
           "count": 3,
           "disposition": "pending"
         },
@@ -116,8 +121,8 @@
     "rawButtons": {
       "source": "desktop/renderer/src（排除 components/ui/ 与 styles/，口径同 test/ui-conventions.test.js）",
       "unit": "button",
-      "total": 258,
-      "scannedFiles": 114,
+      "total": 255,
+      "scannedFiles": 117,
       "groups": [
         {
           "file": "components/Onboarding.jsx",
@@ -126,7 +131,7 @@
         },
         {
           "file": "components/Composer.tsx",
-          "count": 20,
+          "count": 19,
           "disposition": "pending"
         },
         {
@@ -175,11 +180,6 @@
           "disposition": "pending"
         },
         {
-          "file": "App.jsx",
-          "count": 7,
-          "disposition": "pending"
-        },
-        {
           "file": "components/AgentDock.jsx",
           "count": 6,
           "disposition": "pending"
@@ -197,6 +197,11 @@
         {
           "file": "components/tools/ToolTrace.tsx",
           "count": 6,
+          "disposition": "pending"
+        },
+        {
+          "file": "App.jsx",
+          "count": 5,
           "disposition": "pending"
         },
         {

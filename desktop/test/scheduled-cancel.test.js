@@ -178,12 +178,15 @@ const neverEnds = (url, init) => new Promise((resolve, reject) => {
     check('⑥ 两条无人值守通道（Worker + 定时任务）都把 signal 传给模型通道',
       chatHits.length === 2, `命中 ${chatHits.length} 处`);
 
-    const idxWorker = mainSrc.indexOf('createToolHandlers: ({ signal, cwd, teamContext })');
+    // T6-6：Worker 工厂新增 threadId 解构（工件上下文按会话反查），这里只锚定前缀避免签名细节漂移。
+    const idxWorker = mainSrc.indexOf('createToolHandlers: ({ signal, cwd');
     const idxScheduled = mainSrc.indexOf("conversationId: 'scheduled'");
     check('⑥ Worker 工具工厂区间可定位', idxWorker > 0);
     check('⑥ 定时任务装配区间可定位', idxScheduled > 0);
     if (idxWorker > 0 && idxScheduled > 0) {
-      const near = (base) => chatHits.some((m) => Math.abs(m.index - base) < 1200);
+      // 容差 2000：T6-6 起 Worker 工厂内先装配工件上下文与协同工具，chat 行距工厂头约 1.2k 字符
+      //（仍属同一装配段）。判据只要求「同一段内」，不放宽到能跨到定时任务那段（两段相隔 >10k）。
+      const near = (base) => chatHits.some((m) => Math.abs(m.index - base) < 2000);
       check('⑥ 两处 signal 透传分别落在 Worker / 定时任务装配段内',
         near(idxWorker) && near(idxScheduled),
         `worker=${near(idxWorker)} scheduled=${near(idxScheduled)}`);

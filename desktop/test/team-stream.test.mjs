@@ -21,8 +21,9 @@ const require = createRequire(import.meta.url);
 const DESKTOP = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const REPO = path.dirname(DESKTOP);
 
-const { projectTeamRuns, taskProgress, memberLabel, normalizeTeamMessage, assembleThreadRuns } =
+const { projectTeamRuns, taskProgress, memberLabel, normalizeTeamMessage, assembleThreadRuns, budgetInfoOf } =
   await import(path.join(DESKTOP, 'shared/teamStream.mjs'));
+const { formatTokens } = await import(path.join(DESKTOP, 'shared/teamTrace.mjs'));
 const { kindKey, messageText } = await import(path.join(DESKTOP, 'shared/teamLabels.mjs'));
 
 let pass = 0;
@@ -153,6 +154,23 @@ check('装配：输出按建组时间倒序（最新在前）',
 check('装配：聚合摘要取自 group.result.summary', assembled[1].summary === '聚合结论A');
 check('装配：waves 数取自 dag.waves', assembled[1].waves === 1);
 check('装配：任务结果摘要映射 result.summary', assembled[1].tasks[0].resultSummary === '干完了');
+// 2026-10-22 真机回归：aggregator 产出的结构化摘要数组曾被 String() 成 `[object Object]`。
+const structuredSummary = assembleThreadRuns({
+  groups: [{ ...groups[0], result: { summary: [{ taskId: 't1', title: '任务1', text: '结论甲' }] } }],
+  messages: [],
+  getGroup: () => ({
+    ...groups[0],
+    result: { summary: [{ taskId: 't1', title: '任务1', text: '结论甲' }] },
+    tasks: [{
+      taskId: 't1', title: '任务1', status: 'done', result: { summary: [{ title: '子项', text: '结论乙' }] },
+    }],
+  }),
+  getTeam: () => null,
+});
+check('装配：结构化组摘要归一为可读文本（不出现 [object Object]）',
+  structuredSummary[0].summary === '任务1：结论甲' && !structuredSummary[0].summary.includes('[object Object]'));
+check('装配：任务结构化摘要同样归一',
+  structuredSummary[0].tasks[0].resultSummary === '子项：结论乙');
 check('装配：任务产物路径从 result.artifacts 透传',
   assembled[2].tasks[0].artifacts.join(',') === '/tmp/a.md');
 check('装配：任务级轨迹进 task.events（按 taskId 过滤）',
@@ -171,6 +189,63 @@ check('装配：团队已删除 → 保留为 orchestration',
   })());
 check('装配：空输入安全返回空数组',
   assembleThreadRuns({ groups: [], messages: [], getGroup: () => null, getTeam: () => null }).length === 0);
+
+// ── ②b 预算可视化（2026-10-21 用户需求）──
+// 上限来自 dag.runMeta.budget（计划快照），用量来自任务结果 + 主进程内存账本（取大者）。
+check('预算：无 runMeta.budget 返回 null（普通编排组不画假预算条）',
+  budgetInfoOf({ dag: {} }, null) === null && budgetInfoOf(null, { tokens: 1 }) === null);
+const budgetFull = {
+  dag: { runMeta: { budget: { max_tokens: 100000, max_rounds: 8, max_wall_ms: 1000 } } },
+  tasks: [
+    { taskId: 'b1', status: 'done', result: { tokensUsed: 30000 } },
+    { taskId: 'b2', status: 'running', result: null },
+    { taskId: 'b3', status: 'done', result: { tokensUsed: 20000 } },
+  ],
+};
+const bv = budgetInfoOf(budgetFull, null);
+check('预算：用量按任务已结算汇总（运行中任务不贡献）', bv.usedTokens === 50000 && bv.byTask.b1 === 30000);
+check('预算：剩余量 / 百分比 / 上限透传',
+  bv.remainingTokens === 50000 && bv.percent === 50 && bv.maxRounds === 8 && bv.maxWallMs === 1000);
+check('预算：内存账本更大时以账本为准（含在途结算）',
+  budgetInfoOf(budgetFull, { tokens: 90000 }).usedTokens === 90000);
+check('预算：用量超出上限时百分比夹到 100（软上限不画超 100%）',
+  budgetInfoOf(budgetFull, { tokens: 150000 }).percent === 100
+  && budgetInfoOf(budgetFull, { tokens: 150000 }).remainingTokens === 0);
+check('预算：非法上限归零且不产生 NaN', (() => {
+  const r = budgetInfoOf({ dag: { runMeta: { budget: { max_tokens: 'x' } } }, tasks: [] }, null);
+  return r.maxTokens === 0 && r.percent === 0 && Number.isFinite(r.usedTokens) && Number.isFinite(r.percent);
+})());
+
+const budgetRun = assembleThreadRuns({
+  groups: [{ group_id: 'run-budget', status: 'running', created_at: 1 }],
+  messages: [],
+  getGroup: () => budgetFull,
+  getTeam: () => null,
+  getBudgetLive: () => ({ tokens: 60000, elapsedMs: 1234 }),
+});
+check('装配：预算随 run 下发（实时账本优先于已结算）',
+  budgetRun[0].budget.usedTokens === 60000 && budgetRun[0].budget.elapsedMs === 1234);
+check('装配：任务级 tokensUsed 透传（看板按任务显示消耗）',
+  budgetRun[0].tasks[0].tokensUsed === 30000 && budgetRun[0].tasks[1].tokensUsed === 0);
+check('装配：无预算组 budget 为 null', (() => {
+  const r = assembleThreadRuns({
+    groups: [{ group_id: 'run-nobudget', status: 'done', created_at: 1 }],
+    messages: [], getGroup: () => ({ dag: {}, tasks: [] }), getTeam: () => null,
+  });
+  return r[0].budget === null;
+})());
+
+const projectedBudget = projectTeamRuns([{
+  runId: 'r-budget', createdAt: 1,
+  budget: { maxTokens: 100000, usedTokens: 50000, remainingTokens: 50000, percent: 50 },
+  tasks: [{ taskId: 't1', status: 'done', tokensUsed: 12345 }],
+}, { runId: 'r-none', createdAt: 2 }]);
+check('投影：预算透传并归一为数字',
+  projectedBudget[0].budget.maxTokens === 100000 && projectedBudget[0].budget.percent === 50);
+check('投影：任务 tokensUsed 归一', projectedBudget[0].tasks[0].tokensUsed === 12345);
+check('投影：无预算 → null（界面不渲染预算条）', projectedBudget[1].budget === null);
+check('格式化：token 紧凑显示用 k/M（语言无关）',
+  formatTokens(999) === '999' && formatTokens(8655) === '8.7k' && formatTokens(1500000) === '1.5M');
 
 // ── ③ 真实 IPC handler（假 deps 真调一次，漏注入即 TypeError）──
 // electron stub：只捕获 ipcMain.handle 注册的处理器（与 tasks-ipc-wiring 同款）
@@ -243,12 +318,14 @@ check('接线：MessageStream 渲染 TeamRunStream 并传 threadId',
   && /<TeamRunStream threadId=\{threadId\}/.test(messageStreamSrc));
 check('接线：ChatArea 向 MessageStream 传会话 id',
   /<MessageStream[\s\S]*?threadId=\{thread\?\.id/.test(chatAreaSrc));
-// 展开策略（2026-10-20 真机反馈修订）：全折叠会让用户以为「派活后什么都没发生」。
-// 现行口径 = 仅最新一次、且仍在推进（ready/running/paused）的 run 默认展开，历史/终态折叠。
-check('UI：仅最新在跑的 run 默认展开，其余折叠',
+// 展开策略（2026-10-22 真机反馈修订）：终态卡片一律折叠会让用户看到「5/5 已完成」却看不到结果。
+// 现行口径 = 最新一次 run 始终默认展开（含 done/failed），历史卡片折叠。
+check('UI：最新一次 run 始终默认展开（含终态），历史折叠',
   /<details[\s\S]{0,200}open=\{open\}/.test(teamRunStreamSrc)
   && /useState\(defaultOpen\)/.test(teamRunStreamSrc)
-  && /\['ready',\s*'running',\s*'paused'\]\.includes\(card\.status\)/.test(teamRunStreamSrc));
+  && /defaultOpen=\{card\.runId === latestId\}/.test(teamRunStreamSrc));
+check('UI：终态 run 展示「最终交付」摘要区（不藏在任务行里）',
+  /streamFinalResult[\s\S]{0,200}card\.summary/.test(teamRunStreamSrc));
 check('UI：展开态才渲染任务轨迹与协同消息',
   /<\/summary>[\s\S]*streamTasks[\s\S]*streamMessages/.test(teamRunStreamSrc));
 // 2026-10-21 真机反馈：任务只显示「执行中」，看不到成员到底做了什么；
@@ -300,6 +377,17 @@ const groupStatusKeys = [...new Set([...teamRunStreamSrc.matchAll(/'(agentDock\.
 check('i18n：复用的 agentDock.groupStatus* 双语齐全',
   groupStatusKeys.length > 0
   && groupStatusKeys.every((k) => k.split('.')[1] in agentDockZh && k.split('.')[1] in agentDockEn));
+
+// 预算可视化（2026-10-21）：两处界面共用同一组 key，漏一个语言包就会出现裸 key。
+const teamBoardSrc = read('renderer/src/components/TeamBoard.tsx');
+const boardKeys = [...new Set([...teamBoardSrc.matchAll(/'(teams\.[A-Za-z0-9_.]+)'/g)].map((m) => m[1]))];
+check('i18n：TeamBoard 引用的 teams.* key 双语齐全',
+  boardKeys.length > 0 && boardKeys.every((k) => k.split('.')[1] in zh && k.split('.')[1] in en),
+  boardKeys.filter((k) => !(k.split('.')[1] in zh) || !(k.split('.')[1] in en)).join(','));
+check('UI：预算条同时出现在对话卡与看板（折叠态也给已用/上限）',
+  /budgetLabel/.test(teamRunStreamSrc) && /budgetLabel/.test(teamBoardSrc)
+  && /budgetUsed/.test(teamBoardSrc) && /formatTokens/.test(teamBoardSrc)
+  && /formatTokens/.test(teamRunStreamSrc));
 
 // ── ⑤ 存储层读入口（sql.js，真库）──
 const os = await import('node:os');

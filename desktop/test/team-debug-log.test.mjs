@@ -1,0 +1,157 @@
+// 团队调试日志门禁（2026-10-21）
+//
+// 背景：用户报告「团队任务无人认领」，但界面只给一张结果卡；开发者拿不到中间态。
+// 本套件守的是「日志通道本身可信」这件事：
+//   · 默认开启 + 详细模式默认开启（用户要「全打出来」）；
+//   · 落盘必须是可解析 JSONL，条目字段齐全；
+//   · 用户会直接把日志发给别人 ⇒ 密钥必须脱敏、敏感键名必须剔除；
+//   · 单条大字段必须截断，避免一次模型输出把文件撑爆；
+//   · 导出 zip 必须真的包含日志文件与 meta.json。
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+
+const require = createRequire(import.meta.url);
+const DESKTOP = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const teamDebug = require(path.join(DESKTOP, 'main/teamDebugLog.js'));
+
+let pass = 0, total = 0;
+function check(name, fn) {
+  total++;
+  try { fn(); console.log(`[PASS] ${name}`); pass++; }
+  catch (e) { console.error(`[FAIL] ${name} — ${e.message}`); process.exitCode = 1; }
+}
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mjcode-teamdebug-'));
+const logDir = path.join(tmp, 'logs');
+
+function readTodayLines() {
+  const names = fs.readdirSync(logDir).filter((n) => n.startsWith('team-debug-') && n.endsWith('.jsonl'));
+  const out = [];
+  for (const n of names) {
+    for (const line of fs.readFileSync(path.join(logDir, n), 'utf8').split('\n')) {
+      if (line.trim()) out.push(JSON.parse(line));
+    }
+  }
+  return out;
+}
+
+check('默认开启且详细模式开启（用户要「全打出来」）', () => {
+  assert.equal(teamDebug.isEnabled(), true);
+  assert.equal(teamDebug.isVerbose(), true);
+});
+
+teamDebug.initTeamDebugLog({ dir: logDir, meta: { version: 'test', platform: process.platform } });
+
+check('初始化后日志目录存在且写入 debug_started', () => {
+  assert.ok(fs.existsSync(logDir));
+  const lines = readTodayLines();
+  const started = lines.find((x) => x.scope === 'session' && x.event === 'debug_started');
+  assert.ok(started, '缺少 debug_started 条目');
+  assert.equal(started.data.meta.version, 'test');
+});
+
+check('基础日志落盘为可解析 JSONL，字段齐全', () => {
+  const entry = teamDebug.log('worker', 'task_claim', { taskId: 't1', owner: 'm1' });
+  assert.ok(entry && entry.seq > 0);
+  const lines = readTodayLines();
+  const hit = lines.find((x) => x.scope === 'worker' && x.event === 'task_claim' && x.data.taskId === 't1');
+  assert.ok(hit, '未落盘或字段丢失');
+  assert.equal(hit.level, 'basic');
+  assert.equal(typeof hit.ts, 'number');
+  assert.equal(typeof hit.iso, 'string');
+  assert.equal(hit.data.owner, 'm1');
+});
+
+check('关闭详细模式后 verbose 条目被过滤，basic 仍写入', () => {
+  teamDebug.setVerbose(false);
+  const v = teamDebug.log('orchestrator', 'dag_raw', { content: 'RAW' }, { level: 'verbose' });
+  assert.equal(v, null);
+  const b = teamDebug.log('worker', 'task_settle', { status: 'done' });
+  assert.ok(b);
+  assert.equal(readTodayLines().some((x) => x.event === 'dag_raw'), false);
+  teamDebug.setVerbose(true);
+});
+
+check('关闭记录后不写内存也不落盘', () => {
+  teamDebug.setEnabled(false);
+  const before = readTodayLines().length;
+  assert.equal(teamDebug.log('worker', 'dispatch', { a: 1 }), null);
+  assert.equal(readTodayLines().length, before);
+  teamDebug.setEnabled(true);
+});
+
+check('密钥脱敏：sk- / Bearer / ghp_ / AKIA 与敏感键名', () => {
+  teamDebug.log('ipc', 'secret_probe', {
+    note: 'key=sk-abcdefghijklmnop1234 auth=Bearer abc.def.ghi repo=ghp_abcdefghijklmnopqrstuv aws=AKIAIOSFODNN7EXAMPLE',
+    apiKey: 'plain-key-should-be-redacted',
+    nested: { authorization: 'Bearer nested-token' },
+  });
+  const hit = readTodayLines().find((x) => x.event === 'secret_probe');
+  assert.ok(hit);
+  const text = JSON.stringify(hit);
+  assert.equal(text.includes('sk-abcdefghijklmnop1234'), false);
+  assert.equal(text.includes('Bearer abc.def.ghi'), false);
+  assert.equal(text.includes('ghp_abcdefghijklmnopqrstuv'), false);
+  assert.equal(text.includes('AKIAIOSFODNN7EXAMPLE'), false);
+  assert.equal(text.includes('plain-key-should-be-redacted'), false);
+  assert.equal(text.includes('nested-token'), false);
+});
+
+check('大字符串截断到 8000 字符，数组截断到 30 项', () => {
+  const entry = teamDebug.log('worker', 'truncate_probe', {
+    big: 'x'.repeat(20000),
+    list: Array.from({ length: 50 }, (_, i) => i),
+  });
+  assert.equal(entry.data.big.length, 8000);
+  assert.equal(entry.data.list.length, 31); // 30 项 + `[+20 more]` 标记
+  assert.match(String(entry.data.list[30]), /\+20 more/);
+});
+
+check('tail 返回最近 N 条且不超过上限', () => {
+  teamDebug._resetRing();
+  for (let i = 0; i < 10; i += 1) teamDebug.log('worker', 'seq_probe', { i });
+  const tail = teamDebug.tail(3);
+  assert.equal(tail.length, 3);
+  assert.equal(tail[2].data.i, 9);
+  assert.equal(teamDebug.tail(99999).length, 10);
+});
+
+check('status 暴露开关、详细模式、目录与文件路径', () => {
+  const st = teamDebug.status();
+  assert.equal(st.ok, true);
+  assert.equal(st.enabled, true);
+  assert.equal(st.verbose, true);
+  assert.equal(st.dir, logDir);
+  assert.ok(st.file.startsWith(path.join(logDir, 'team-debug-')));
+  assert.ok(st.bytes > 0);
+  assert.ok(st.entries > 0);
+});
+
+check('导出 zip：包含日志文件与 meta.json，落 diagnostics 目录', () => {
+  const r = teamDebug.exportBundle();
+  assert.equal(r.ok, true, r.error);
+  assert.ok(r.files >= 1);
+  assert.ok(fs.existsSync(r.path));
+  assert.equal(path.dirname(r.path), path.join(tmp, 'diagnostics'));
+  const buf = fs.readFileSync(r.path);
+  assert.equal(buf.subarray(0, 2).toString(), 'PK', '不是 zip 头');
+  const asText = buf.toString('utf8');
+  assert.ok(asText.includes('meta.json'), '缺少 meta.json');
+  assert.ok(asText.includes('team-debug-'), '缺少日志文件条目');
+});
+
+check('appendFromRenderer 记录渲染层操作且 scope=renderer', () => {
+  const entry = teamDebug.appendFromRenderer({ action: 'open_board', threadId: 'th-1', detail: { runId: 'r1' } });
+  assert.ok(entry);
+  assert.equal(entry.scope, 'renderer');
+  assert.equal(entry.event, 'open_board');
+  assert.equal(entry.data.threadId, 'th-1');
+  assert.equal(teamDebug.appendFromRenderer({}), null, '空 action 必须拒绝');
+});
+
+console.log(`\n${pass}/${total} 通过`);
+fs.rmSync(tmp, { recursive: true, force: true });

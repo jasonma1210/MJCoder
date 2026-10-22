@@ -600,26 +600,48 @@ export function renderMessages(messages, suppressLastMeta = false, onOpenFile, l
   for (const m of messages) {
     if (m.role === 'tool') toolResults.set(m.tool_call_id || m.toolCallId, m);
   }
-  // 切轮：user 消息开新一轮；tool 消息由所属 assistant 经 Map 配对渲染，不独立成轮
-  const rounds = [];
-  let cur = null;
+  // 切轮：user 消息开新一轮；tool 消息由所属 assistant 经 Map 配对渲染，不独立成轮。
+  // system 消息（如项目创建时的「目标已锁定」）不是模型回复，单独渲染为居中提示：
+  // 此前它被当成 assistant 落到「MJ Coder」气泡里，还带上「共消耗 0 tokens」，
+  // 用户会误读成「运行了一次但什么都没有」（真机反馈）。
+  type RoundItem = { kind: 'round'; no: number; user: any; assistants: any[] };
+  const items: Array<RoundItem | { kind: 'notice'; m: any }> = [];
+  let cur: RoundItem | null = null;
+  let roundNo = 0;
   for (const m of messages) {
     if (m.role === 'tool') continue;
-    if (m.role === 'user') { cur = { user: m, assistants: [] }; rounds.push(cur); continue; }
-    if (!cur) { cur = { user: null, assistants: [] }; rounds.push(cur); } // 切片起点落在 assistant 上
+    if (m.role === 'system') { items.push({ kind: 'notice', m }); continue; }
+    if (m.role === 'user') {
+      roundNo += 1;
+      cur = { kind: 'round', no: roundNo, user: m, assistants: [] };
+      items.push(cur);
+      continue;
+    }
+    if (!cur) {
+      roundNo += 1;
+      cur = { kind: 'round', no: roundNo, user: null, assistants: [] };
+      items.push(cur);
+    }
     cur.assistants.push(m);
   }
-  return rounds.map((r, i) => (
+  const lastRoundNo = roundNo;
+  return items.map((it, i) => (it.kind === 'notice' ? (
+    <div key={it.m.id ?? `sys-${i}`} className="mb-4 flex justify-center">
+      <div className="max-w-2xl whitespace-pre-wrap break-words rounded-lg border border-border bg-hover px-3 py-2 text-caption text-text2">
+        {String(it.m.content || '')}
+      </div>
+    </div>
+  ) : (
     <RoundBlock
-      key={r.user?.id ?? `r-${i}`}
-      round={i + 1}
-      user={r.user}
-      assistants={r.assistants}
+      key={it.user?.id ?? `r-${i}`}
+      round={it.no}
+      user={it.user}
+      assistants={it.assistants}
       toolResults={toolResults}
-      isLast={i === rounds.length - 1}
-      suppressMeta={suppressLastMeta && i === rounds.length - 1}
-      extraCalls={i === rounds.length - 1 ? liveCalls : []}
+      isLast={it.no === lastRoundNo}
+      suppressMeta={suppressLastMeta && it.no === lastRoundNo}
+      extraCalls={it.no === lastRoundNo ? liveCalls : []}
       onOpenFile={onOpenFile}
     />
-  ));
+  )));
 }

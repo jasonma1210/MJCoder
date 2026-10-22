@@ -82,7 +82,7 @@ function byteLen(s) {
 
 // ── 预算默认值（G2 双终止条件的团队级缺省；派活时 T5-4 传入的 run 级预算可覆盖）──
 // 团队级 budget_json 本身可空（F2 的「预算上限」是派活时必填项，团队级只是默认值底座）。
-const BUDGET_DEFAULTS = { max_rounds: 8, max_tokens: 200000, max_wall_ms: 30 * 60 * 1000 };
+const BUDGET_DEFAULTS = { max_rounds: 8, max_tokens: 256000, max_wall_ms: 30 * 60 * 1000 };
 const BUDGET_LIMITS = {
   max_rounds: [1, 50],
   max_tokens: [1000, 2000000],
@@ -400,6 +400,22 @@ class TeamStore {
     this.db.prepare('UPDATE teams SET archived_at = ?, updated_at = ? WHERE id = ?')
       .run(archived ? this.now() : null, this.now(), String(id));
     return this.getTeam(id);
+  }
+
+  /**
+   * 物理删除团队（含成员与消息总线）——**仅用于项目初始化失败补偿**（T6-9）。
+   * 团队一经正常创建即永久保留（无归档/无删除入口），故本方法不暴露给 IPC / 界面。
+   * 删除顺序：先清引用方（messages / members），最后删 teams 行，避免留下一半编制。
+   */
+  deleteTeam(id) {
+    const tid = String(id || '').trim();
+    if (!tid) return false;
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM team_messages WHERE team_id = ?').run(tid);
+      this.db.prepare('DELETE FROM team_members WHERE team_id = ?').run(tid);
+      return this.db.prepare('DELETE FROM teams WHERE id = ?').run(tid).changes;
+    });
+    return !!tx();
   }
 
   // ── 成员（编制）──

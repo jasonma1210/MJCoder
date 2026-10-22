@@ -33,6 +33,17 @@ check('id 重复被拒', validateDag({ tasks: [{ id: 'a', title: 'x', prompt: 'y
 check('依赖不存在被拒', validateDag({ tasks: [{ id: 'a', title: 'x', prompt: 'y', dependsOn: ['ghost'] }, { id: 'b', title: 'z', prompt: 'y' }] }).ok === false);
 check('自依赖被拒', validateDag({ tasks: [{ id: 'a', title: 'x', prompt: 'y', dependsOn: ['a'] }, { id: 'b', title: 'z', prompt: 'y' }] }).ok === false);
 
+// 2026-10-21 真机 regression：设计文档类拆解常出现「汇总任务依赖全部章节」，
+// 旧 MAX_DEPS=4 会把整份拆解判失败（「任务 t6 依赖数超过 4」→ PLAN_FAILED，一个任务都没派）。
+const fanIn = validateDag({
+  tasks: ['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => ({ id, title: id, prompt: 'x' }))
+    .concat([{ id: 'sum', title: '汇总', prompt: 'y', dependsOn: ['s1', 's2', 's3', 's4', 's5', 's6'] }]),
+});
+check('fan-in 不设人工上限（6 个依赖的汇总任务通过校验）',
+  fanIn.ok === true && fanIn.tasks[6].dependsOn.length === 6);
+check('大 fan-in 汇总任务落在最后一层',
+  JSON.stringify(topoLevels(fanIn.tasks)) === JSON.stringify([['s1', 's2', 's3', 's4', 's5', 's6'], ['sum']]));
+
 // ── 循环依赖（Kahn 环检测）──
 const cycle = validateDag({ tasks: [
   { id: 'a', title: 'x', prompt: 'y', dependsOn: ['c'] },

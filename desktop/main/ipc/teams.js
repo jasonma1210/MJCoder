@@ -25,13 +25,18 @@
 //     不新起第二条编排实现——「主管拆解(复用 planGoal)」是设计稿 §6 F2 的明确要求。
 const { ipcMain } = require('electron');
 const guard = require('./payloadGuard');
+// 预算可视化：实时用量账本（内存态，仅当次进程有效）。历史 run 缺此账本时投影层自动
+// 回落「已结算任务用量」，因此这里不做持久化、也不制造第二事实源。
+const groupBudget = require('../groupBudget');
+// 2026-10-21 团队调试日志：团队操作全链路的可导出事实流（详见 main/teamDebugLog.js 头部注释）。
+const teamDebug = require('../teamDebugLog');
 const { resolveEmployeeById } = require('./ecosystem');
 const { buildEmployeeRuntimePreset, ROLE_TOOL_ALIASES } = require('../ecosystem');
 const { normalizeMemberInput, normalizeBudget, SYSTEM_RUN_ID, dispatchGate, MAX_MEMBERS_PER_TEAM } = require('../teamStore');
 // M5 / T5-12：批次编排（§13.4）——闸门取值仍取 teamWaves 这一份；计划装配本身
 // 已抽到 main/teamDispatchPlan.js（第八轮 B-05/B-08），运行期由 workerPool 消费 dag_json.waves。
 const { MAX_ACTIVE_MEMBERS, MAX_PER_TYPE_IN_RUN } = require('../teamWaves');
-const { buildDispatchPlan } = require('../teamDispatchPlan');
+const { buildDispatchPlan, isChatOnlyGoal, buildChatTasks } = require('../teamDispatchPlan');
 const { toChatRequest, resolveModelRef, decodeModelRef } = require('../modelShape');
 // M5 / T5-6：会话团队事件流的纯装配内核（与渲染层投影共用同一份 shared 模块）。
 //
@@ -240,6 +245,17 @@ function buildTeamContext(team, { mode, budget, memberIds } = {}) {
   }
   lines.push('拆解要求：优先把每个子任务分配给能力最匹配的成员；跨成员的数据依赖必须显式写 dependsOn，'
     + '禁止把可并行的任务串成链。');
+  // 2026-10-21 用户实测：t1 只写规格用了 7 轮 / 5.3 万 tokens。公共上下文（目录/预算/成员）
+  // 已在本块给出，子任务 prompt 再抄一遍会让每个 Worker 每轮重发同一段文字。
+  lines.push('公共上下文（项目目录、预算、成员清单）已在本块给出：子任务 prompt 不得重复这些内容，'
+    + '只写本任务的目标、要求、输出格式与验收标准；跨任务产物用工作区文件路径传递（上游写文件，下游只写「读取 <路径>」）。');
+  // 2026-10-21 真机反馈：团队 4 人却只启动了 2 个（DAG 只拆了 2 个任务）。
+  // 多人协作语义（每人/全员/轮流/各自）必须让每名成员都有独立产出，不能只拆 1~2 个任务让其余闲置。
+  if (picked.length > 1) {
+    lines.push(`成员参与要求：本团队有 ${picked.length} 名成员；若目标包含「每人 / 全员 / 轮流 / 各自 / 逐个」`
+      + `等多人协作语义，任务数不得少于 ${picked.length} 个，且每个任务都应在标题或 prompt 中写明由哪名成员负责；`
+      + '禁止只拆 1~2 个任务让其余成员闲置。');
+  }
   return lines.join('\n');
 }
 
@@ -248,8 +264,19 @@ function buildTeamContext(team, { mode, budget, memberIds } = {}) {
 const { snapshotRoster } = require('../teamRoster');
 // B-06：控制面（重置成员会话 / 中断）已抽至独立模块
 const { registerTeamControl } = require('./teamControl');
+// 2026-10-21 团队调试日志：IPC 统一埋点已抽到 ../teamIpcTrace（本文件守住 800 行软档）
+const { installTeamsIpcTracing } = require('../teamIpcTrace');
 
 function register() {
+  const restore = installTeamsIpcTracing(ipcMain);
+  try {
+    registerHandlers();
+  } finally {
+    restore();
+  }
+}
+
+function registerHandlers() {
   ipcMain.handle('teams:list', async (_, payload = {}) => {
     const store = deps.getTeamStore();
     if (!store) return { ok: false, error: '团队子系统不可用（初始化失败）', teams: [] };
@@ -552,9 +579,11 @@ function register() {
       const contextBlock = buildTeamContext(team, {
         mode, budget, memberIds,
       });
-      // 工作目录：优先团队自带的 project_path（绑定过项目的老团队保持原行为），
-      // 否则回落派活会话的项目路径（全局团队不携带 project_path）；两者皆空时编排器按「未指定」处理。
-      const projectPath = String(team.projectPath || payload.projectPath || '');
+      // 工作目录：优先本次派活会话的项目路径（用户刚建的项目空间就落在这里），
+      // 没有再回落团队自带 project_path（全局团队不携带 project_path）；
+      // 两者皆空时编排器按「未指定」处理。T6-13 真机反馈：此前团队路径优先，
+      // 建完项目仍跑到团队旧目录，产物看起来「没生成」。
+      const projectPath = String(payload.projectPath || team.projectPath || '');
       // M5 / T5-12（§13.4）：批次计划。参与名册 = 本次被选中的成员（受人数闸/类型闸约束），
       // 由 planWaves 决定「先起哪一小批」并把任务指派给成员；计划随 dag_json 落库，运行期读取。
       // 名册为空的极端情况（理论上 dispatchGate 已拦）由 planWaves 自己兜底，不影响拆解。
@@ -562,20 +591,62 @@ function register() {
       // 「类型闸 deferred 被运行期绕过」（快照收窄到参与成员）与「select 模式没有运行期分支」
       // （不预置指派表 ⇒ 走被动认领）。本文件只负责把结果交给编排器并留下可观测记录。
       const roster = (team.members || []).filter((m) => memberIds.includes(m.id));
+      // 2026-10-21 对话型目标旁路：如「每人报数」——不调模型拆解、不产出文件，
+      // 直接按名册每人一个「只输出一行」的任务（此前会被拆成「实现命令行报数程序」）。
+      const chatOnly = isChatOnlyGoal(goal);
+      const presetTasks = chatOnly ? buildChatTasks({ roster }) : null;
+      // 调试日志：派活入口的完整输入（谁派的、选了多少人、什么模式/预算）。
+      teamDebug.log('dispatch', 'start', {
+        teamId: payload.teamId,
+        teamName: team.name,
+        threadId: payload.threadId || null,
+        goal,
+        mode,
+        budget,
+        projectPath,
+        leadMemberId: team.leadMemberId || null,
+        memberIds,
+        roster: roster.map((m) => ({ id: m.id, name: m.name, roleKind: m.roleKind, enabled: m.enabled })),
+      });
       let dispatchPlan = null;
-      const r = await deps.orchestrator.planGoal({
+      const planOpts = {
         goal,
         cwd: projectPath,
         projectPath,
         contextBlock,
         threadId: payload.threadId,
+        // 对话型目标：任务清单由宿主确定，编排器跳过 LLM 拆解。
+        ...(presetTasks ? { presetTasks } : {}),
         // T5-9：批次计划与**编制快照**同批产出；快照随 dag_json 落库，运行期不再读实时名册。
         planWaves: ({ tasks }) => {
-          dispatchPlan = buildDispatchPlan({ tasks, roster, budget, mode });
+          dispatchPlan = buildDispatchPlan({ tasks, roster, budget, mode, chatOnly });
+          // 调试日志：批次 / 指派 / 被闸门挡下的成员与原因（「为什么某人没被派活」的第一现场）。
+          teamDebug.log('dispatch', 'plan', {
+            tasks: tasks.map((t) => ({ id: t.id, title: t.title, dependsOn: t.dependsOn || [] })),
+            waves: dispatchPlan.waves,
+            assignments: dispatchPlan.assignments,
+            activeMemberIds: dispatchPlan.activeMemberIds,
+            deferredMembers: dispatchPlan.deferredMembers,
+            rosterSnapshot: Array.isArray(dispatchPlan.roster)
+              ? dispatchPlan.roster.map((m) => ({ id: m.id, name: m.name, roleKind: m.roleKind, enabled: m.enabled }))
+              : null,
+          });
           return dispatchPlan;
         },
-      });
-      if (!r.ok) return { ok: false, code: 'PLAN_FAILED', error: `${DISPATCH_ERRORS.PLAN_FAILED}：${r.error}` };
+      };
+      const first = await deps.orchestrator.planGoal(planOpts);
+      let r = first;
+      // 拆解输出未过校验（r.raw 存在）→ 带错误原因自动修复重试一次，与 autoOrchestrate 同口径：
+      // 一次非法 DAG 不该让整次派活直接失败（真机：依赖数上限误杀合法计划 → 一个任务都没派）。
+      if (!first.ok && first.raw && !presetTasks) {
+        teamDebug.log('dispatch', 'plan_retry', { goal, error: first.error });
+        const repaired = await deps.orchestrator.planGoal({ ...planOpts, repairHint: first.error });
+        r = repaired;
+      }
+      if (!r.ok) {
+        teamDebug.log('dispatch', 'plan_failed', { goal, error: r.error, code: r.code || null });
+        return { ok: false, code: 'PLAN_FAILED', error: `${DISPATCH_ERRORS.PLAN_FAILED}：${r.error}` };
+      }
 
       // 派活消息入总线：run_id = groupId，这是「run 属于哪个团队」的唯一事实来源（不新增 group 列）。
       // G1：发言只由看板事件/主管指定触发——派活是「主管发起」，故用 kind='assign'。
@@ -613,13 +684,21 @@ function register() {
         deferred: dispatchPlan ? dispatchPlan.deferredMembers : [],
       });
       // 后台执行（不 await）：调用方立即拿回派活结果，执行进度经既有 tasks:event 流到 AgentDock。
+      teamDebug.log('dispatch', 'run_group_start', {
+        teamId: payload.teamId,
+        runId: r.groupId,
+        tasks: Array.isArray(r.tasks) ? r.tasks.map((t) => ({ id: t.id, title: t.title })) : null,
+        waves: Array.isArray(r.waves) ? r.waves : null,
+      });
       Promise.resolve(deps.workerPool.runGroup(r.groupId)).catch((e) => {
+        teamDebug.log('dispatch', 'run_group_failed', { runId: r.groupId, error: e });
         emitTeamsEvent({
           type: 'team_dispatch_failed', teamId: payload.teamId, runId: r.groupId, error: String(e?.message || e),
         });
       });
       return { ok: true, groupId: r.groupId, tasks: r.tasks.length };
     } catch (err) {
+      teamDebug.log('dispatch', 'error', { error: err, payload });
       return { ok: false, code: 'DISPATCH_FAILED', error: err.message };
     }
   });
@@ -667,6 +746,9 @@ function register() {
         events,
         getGroup: (runId) => (groupById.has(runId) ? taskStore.getGroup(runId) : null),
         getTeam: (teamId) => store.getTeam(teamId),
+        // 在途用量的唯一来源是 groupBudget 的内存账本；未 begun（历史 run）返回 null，
+        // 投影层自动回落任务已结算用量，不会出现 NaN / 假 0。
+        getBudgetLive: (runId) => groupBudget.snapshotOf(runId),
       });
       return { ok: true, runs };
     } catch (err) {

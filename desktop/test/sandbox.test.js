@@ -25,6 +25,17 @@ check('workspace-write 禁网', ww.includes('(deny network*)'));
 check('workspace-write 同样放行 /dev/null', ww.includes('(allow file-write* (literal "/dev/null"))'));
 check('含引号路径被转义', sandbox.buildSeatbeltProfile('workspace-write', '/tmp/a"b').includes('\\"'));
 
+// 2026-10-21 macOS 27 兼容档：deny-default 会让子进程 SIGABRT，改用 allow-default + 定向 deny
+const dl = sandbox.buildSeatbeltProfileDenyList('workspace-write', '/tmp/proj', ['/tmp/proj/.git']);
+check('兼容档：allow default + 禁网 + 全盘禁写',
+  dl.includes('(allow default)') && dl.includes('(deny network*)') && dl.includes('(deny file-write*)'));
+check('兼容档：工作区与 /dev/null 可写',
+  dl.includes('(subpath "/tmp/proj")') && dl.includes('(literal "/dev/null")'));
+check('兼容档：.git carve-out 在 allow 之后 deny',
+  dl.indexOf('(allow file-write*') < dl.indexOf('(deny file-write* (subpath "/tmp/proj/.git"))'));
+check('兼容档 read-only：仅 /dev/null 可写',
+  sandbox.buildSeatbeltProfileDenyList('read-only', '/tmp/proj').includes('(allow file-write* (literal "/dev/null"))'));
+
 // ── 决策逻辑 ──
 check('full-access 不沙箱', sandbox.shouldSandbox('full-access', '/tmp/p').use === false);
 check('darwin + sandbox-exec 可用时应沙箱', sandbox.shouldSandbox('workspace-write', '/tmp/p').use === (process.platform === 'darwin' && fs.existsSync(sandbox.SANDBOX_EXEC)));

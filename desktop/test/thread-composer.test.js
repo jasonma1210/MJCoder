@@ -141,7 +141,9 @@ check('queue（Tab 排队下一轮）已实现', () => {
 
 check('排队指令在本轮结束后自动接力', () => {
   const runHook = read('hooks/useAgentRun.ts');
-  assert.match(runHook, /if \(next\) setTimeout\(\(\) => send\(next, currentThread\), 0\)/);
+  // R-15/R-5（2026-10-22）：接力点经 relayRef 分流（选中军团时入队消息也派活），
+  // 未注入 relayRef 时回落 send——两种形态都算「自动接力」实现存在。
+  assert.match(runHook, /if \(next\) setTimeout\(\(\) => (?:\(relayRef\?\.current \|\| send\)\(next, currentThread\)|send\(next, currentThread\)), 0\)/);
 });
 
 check('发送时置线程状态为 running，完成后置 done', () => {

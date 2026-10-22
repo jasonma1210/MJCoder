@@ -54,6 +54,9 @@ export function toolNameCN(name: string): string {
     team_list_members: 'toolTrace.teamListMembers', team_send_message: 'toolTrace.teamSendMessage',
     team_board: 'toolTrace.teamBoard', team_wait: 'toolTrace.teamWait',
     team_read_messages: 'toolTrace.teamReadMessages',
+    // T6-6：工件协同四工具
+    artifact_index: 'toolTrace.artifactIndex', artifact_get_section: 'toolTrace.artifactGetSection',
+    artifact_patch_section: 'toolTrace.artifactPatchSection', artifact_get_diff: 'toolTrace.artifactGetDiff',
   };
   return map[name] ? tGlobal(map[name]) : name;
 }
@@ -266,6 +269,23 @@ function ParamSummary({ name, a }: { name: string; a: Obj }) {
       return <span className="text-text2">{t('toolTrace.teamWaitCount', { n: ids })}</span>;
     }
     case 'team_list_members': case 'team_board': return null;
+    // T6-6：工件——索引无参；读章节显示 key@version；写入显示目标章节与变更摘要；差异显示版本对
+    case 'artifact_index': return null;
+    case 'artifact_get_section': {
+      const key = s('section_key') || s('sectionKey');
+      const ver = s('version');
+      return <PathChip text={ver ? `${key} @ ${ver}` : key} />;
+    }
+    case 'artifact_patch_section': {
+      const key = s('section_key') || s('sectionKey');
+      const summary = s('change_summary') || s('changeSummary');
+      return <PathChip text={summary ? `${key} · ${summary.slice(0, 60)}` : key} />;
+    }
+    case 'artifact_get_diff': {
+      const from = s('from_version') || s('fromVersion');
+      const to = s('to_version') || s('toVersion');
+      return <span className="text-text2 truncate">{[from, to].filter(Boolean).join(' → ')}</span>;
+    }
     default: {
       // mcp__server__tool / 未知工具：给出首个字符串参数或参数个数
       const keys = Object.keys(a);
@@ -280,8 +300,9 @@ function toolIcon(name: string, failed: boolean) {
   if (name === 'shell' || name === 'code_exec' || name === 'sandbox_code_run' || name.startsWith('mcp__')) return <IconTerminal size={13} className={cls} />;
   if (name === 'read_file' || name === 'write_file' || name === 'list_dir' || name === 'sqlite'
     || name === 'doc_create' || name === 'xlsx_create' || name === 'pptx_create' || name === 'pdf_generate'
-    || name === 'latex_compile') return <IconFile size={13} className={cls} />;
-  if (name === 'edit_file' || name === 'apply_patch') return <IconFileDiff size={13} className={cls} />;
+    || name === 'latex_compile' || name === 'artifact_index' || name === 'artifact_get_section') return <IconFile size={13} className={cls} />;
+  if (name === 'edit_file' || name === 'apply_patch'
+    || name === 'artifact_patch_section' || name === 'artifact_get_diff') return <IconFileDiff size={13} className={cls} />;
   if (name === 'grep' || name === 'glob' || name === 'web_search' || name === 'deep_research') return <IconSearch size={13} className={cls} />;
   if (name === 'web_fetch' || name === 'http_request' || name.startsWith('browser_') || name.startsWith('chrome_')) return <IconGlobe size={13} className={cls} />;
   if (name.startsWith('git_')) return <IconEdit size={13} className={cls} />;

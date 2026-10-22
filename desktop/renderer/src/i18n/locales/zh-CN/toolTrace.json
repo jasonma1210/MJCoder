@@ -97,5 +97,9 @@
   "teamBoard": "团队看板",
   "teamWait": "团队等待",
   "teamReadMessages": "读取团队消息",
-  "teamWaitCount": "等待 {n} 个任务"
+  "teamWaitCount": "等待 {n} 个任务",
+  "artifactIndex": "工件索引",
+  "artifactGetSection": "读取工件章节",
+  "artifactPatchSection": "写入工件章节",
+  "artifactGetDiff": "工件版本差异"
 }

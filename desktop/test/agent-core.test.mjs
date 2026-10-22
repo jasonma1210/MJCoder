@@ -1,7 +1,7 @@
 // agent-core 直测：toolHandlers 注入式（无 window 依赖）
 // 覆盖：中间消息持久化 / cwd 注入 / usage 归属 / abort / 上下文压缩 /
 //       AGENTS.md 注入 / 子代理 / 预算 / session.jsonl 落盘 / CLI 冒烟
-import { runAgent, BASE_TOOLS, BUILTIN_SKILL_IDS, looksLargeTask, parsePlanResponse, chatWithRetry, isRetryableChatError, compactHistory, alignCutToRoundBoundary, truncateToolResult, AGENT_HARD_ROUND_CAP } from '../agent-core/index.js';
+import { runAgent, BASE_TOOLS, BUILTIN_SKILL_IDS, looksLargeTask, parsePlanResponse, chatWithRetry, isRetryableChatError, compactHistory, alignCutToRoundBoundary, truncateToolResult, AGENT_HARD_ROUND_CAP, resolveCompactPolicy, DEFAULT_COMPACT_POLICY, trimHistoryForRun } from '../agent-core/index.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -138,6 +138,34 @@ function reset() { chatScript = []; chatCalls = []; shellCalls.length = 0; gitSt
       && /第0轮问题/.test(String(msgs[firstNonSystem]?.content || '')); // 用户原始需求仍在
   })());
   check('压缩后正常完成', compactedDone?.t === '基于摘要的回复');
+  check('压缩摘要请求带顶层目标（首条用户需求不可丢）',
+    /【顶层目标】/.test(String(chatCalls[0]?.messages?.[0]?.content || ''))
+    && String(chatCalls[0]?.messages?.[0]?.content || '').includes('第0轮问题'));
+
+  // ── 2026-10-21 P0：上下文策略参数化（DS Bot 式可配置）──
+  {
+    const pol = resolveCompactPolicy({ triggerRatio: 0.55, keepTailRatio: 99, toolShrinkChars: 10 });
+    check('策略：比例越界被夹紧、非法值回落默认',
+      pol.triggerRatio === 0.55 && pol.keepTailRatio === 0.5 && pol.toolShrinkChars === 200,
+      JSON.stringify(pol));
+    check('策略：默认值来自单一事实来源',
+      DEFAULT_COMPACT_POLICY.triggerRatio === 0.7 && DEFAULT_COMPACT_POLICY.toolShrinkChars === 2000);
+
+    // 策略 A：大工具输出优先裁剪（保首尾），不丢首条 user 与决策消息
+    const trimInput = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '目标：修复报数错误' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'shell', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'z'.repeat(40000) },
+      { role: 'assistant', content: '关键决策：改 A 文件' },
+    ];
+    const tr = trimHistoryForRun(trimInput, { contextWindow: 1000, policy: { toolShrinkChars: 2000 } });
+    check('策略 A：大工具输出优先裁剪（保留首条 user 与决策）',
+      tr.trimmed && tr.dropped === 0
+      && String(tr.convo.find((m) => m.role === 'tool')?.content || '').includes('工具输出已裁剪')
+      && tr.convo.some((m) => String(m.content || '').includes('关键决策')),
+      `trimmed=${tr.trimmed} dropped=${tr.dropped}`);
+  }
 
   // ── 测试 4：AGENTS.md 注入 system prompt ──
   reset();

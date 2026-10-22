@@ -99,16 +99,19 @@ check('「删除」只摘队列，不再做别的', () => {
 });
 
 // ── 4. 轮末自动接力 ──
+// R-15/R-5（2026-10-22）：接力点改为经 relayRef 分流——选中军团时入队消息也走
+// sendOrDispatch（派活），未注入 relayRef 时回落 send（与从前逐字节一致）。
 check('本轮正常结束后自动发送队首（用户不必再点一次）', () => {
-  const i = hook.indexOf('// queue：排队指令在本轮结束后自动接力执行');
+  const i = hook.indexOf('// queue：排队指令本轮结束后自动接力');
   ok(i > 0, '找不到接力逻辑');
-  const seg = hook.slice(i, i + 260);
+  const seg = hook.slice(i, i + 320);
   ok(/q\[0\]/.test(seg), '没有取队首');
-  ok(/send\(/.test(seg), '没有接力发送');
+  ok(/relayRef\?\.current \|\| send/.test(seg), '接力没有走 relayRef 分流（选中军团时入队消息会静默降级成普通 send）');
+  ok(/currentThread/.test(seg), '接力丢失了会话归属参数');
 });
 
 check('用户主动停止时不接力（排队项保留，避免"点了停止还继续跑"）', () => {
-  const i = hook.indexOf('// queue：排队指令在本轮结束后自动接力执行');
+  const i = hook.indexOf('// queue：排队指令本轮结束后自动接力');
   const seg = hook.slice(i, i + 500);
   ok(/onThreadStatus\?\.\('idle'\)/.test(seg), '中止分支没有收敛线程状态');
 });

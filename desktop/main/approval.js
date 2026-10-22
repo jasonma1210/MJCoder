@@ -97,6 +97,10 @@ const REVERSIBILITY = {
   team_read_messages: { reversible: true, note: '只读查询，无任何副作用' },
   team_send_message: { reversible: false, note: '消息已进入团队总线，其它成员可能已读取并据此行动' },
   team_wait: { reversible: true, note: '仅登记本任务的等待边，依赖完成或超时后自动消解' },
+  artifact_index: { reversible: true, note: '只读查询，无任何副作用' },
+  artifact_get_section: { reversible: true, note: '只读查询，无任何副作用' },
+  artifact_get_diff: { reversible: true, note: '只读查询，无任何副作用' },
+  artifact_patch_section: { reversible: true, note: '章节历史版本仍在工件库中，可读取旧版本或再次写入覆盖回退' },
 };
 
 /**
@@ -325,6 +329,9 @@ const TOOL_LEVEL = {
   team_send_message: 'L2',
   // 动态等待只改本任务自己的等待边（登记后立刻收尾让出槽位），无外部副作用 ⇒ L2。
   team_wait: 'L2',
+  // T6-6：工件章节写入。设计稿 §7 的 L1 与本项目 L1（高危不可逆）语义相反，照字面登记会让无人
+  // 值守成员任务每次 patch 都被 deny；按本项目语义译为 L2（可撤销写、限本项目工件，同 write_file）。
+  artifact_patch_section: 'L2',
 };
 
 // 只读工具：任何档位都不询问
@@ -333,12 +340,11 @@ const READONLY_TOOLS = new Set([
   'git_status', 'git_diff', 'git_log', 'git_branch',
   // M5 / T5-8：军团协同——列表查询是只读，不触发审批询问
   'team_list_members', 'team_board',
-  // B-04（2026-10-21）：模型侧读消息同样是只读（读总线不改变任何状态）
-  'team_read_messages',
+  // B-04 / T6-6：读消息与工件读取三工具均为只读查询（读总线不改变任何状态）
+  'team_read_messages', 'artifact_index', 'artifact_get_section', 'artifact_get_diff',
 ]);
 
-// toolLevel() 在 `|| 'L2'` 兜底**之前**按工具名特判的工具（对应 toolLevel 里逐个 if 分支）。
-// ⚠ 本清单必须与 toolLevel() 的特判分支**保持同步，漏一个会让门禁误判**：
+// toolLevel() 在 `|| 'L2'` 兜底**之前**按工具名特判的工具（须与 toolLevel 分支同步，漏一个即门禁误判）：
 //   漏登记 → 门禁把该工具误判成「依赖 || 'L2' 兜底」；多登记 → 门禁放过一个其实没特判的工具。
 //   故 test/tool-registration-matrix.test.mjs 会从 toolLevel() 源码反解 `tool === 'x'` 分支做交叉校验。
 // 为什么不含 read_file 等 8 个只读工具：它们由上面的 READONLY_TOOLS 承担（toolLevel 第 1 个分支就是
@@ -349,14 +355,10 @@ const SPECIAL_CASED_TOOLS = new Set([
   'shell', 'code_exec', 'cua_action', 'latex_compile',
 ]);
 
-// P0-S1：危险命令规则不再在本文件手写副本，统一从 dangerousPatterns.js 导入。
-// 事故背景：本文件原有一份 10 条的 DANGEROUS_PATTERNS，注释声称「与主进程保持同步」，
-// 但主进程 sandbox.js 实际是 12 条且已漂移 —— 漂移导致审批层比沙箱层**更宽松**，
-// 于是 `curl xxx | sh` / `rm --recursive --force` 这类命令能同时绕过两层守卫，
-// 在默认 on-request 档下不弹任何审批直接执行。现改为单一事实来源，从根上消除漂移可能。
-// P1-2 / P2-8（2026-10-17）：Code Mode 危险代码判定与 CUA 强确认类目同样收敛到
-// dangerousPatterns.js（原 approval.js 内联的 isDangerousCode 正则、computerUse.js 的
-// 关键词矩阵各是一份手抄副本，任一侧加规则另一侧不生效）。
+// P0-S1：危险命令规则统一从 dangerousPatterns.js 导入（单一事实来源）。事故背景：本文件原有
+// 一份 10 条副本且注释声称与主进程同步，而 sandbox.js 实际 12 条已漂移 ⇒ 审批层比沙箱层更宽松，
+// `curl xxx | sh` / `rm --recursive --force` 在 on-request 档下不弹审批直接执行。
+// P1-2 / P2-8：Code Mode 危险代码与 CUA 强确认类目同样收敛到该模块（原各一份手抄副本）。
 const {
   DANGEROUS_PATTERNS, isDangerousCommand, matchDangerousPattern, isDangerousCode, cuaStrongConfirm,
 } = require('./dangerousPatterns');

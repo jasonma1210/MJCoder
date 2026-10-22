@@ -24,6 +24,8 @@ import MemberModelSelect, { toModelOptions, type ModelOption, type ProviderLike 
 // 2026-10-20 需求③：招募/自定义「加成员」弹窗已外迁为独立文件（守住单文件行数阈值）；
 // 同时复用其导出的 Field（建队表单必填标记）与 initial（成员头像首字）——同形态只此一份实现。
 import MemberModal, { Field, initial } from './TeamMemberModal';
+// 2026-10-21 团队调试日志：把「任务无人认领 / 看板完成但无产出」的全链路事实导出给开发者
+import TeamDebugPanel from './TeamDebugPanel';
 
 type TFunc = (key: string, params?: Record<string, string | number>) => string;
 
@@ -50,6 +52,8 @@ interface Team {
   leadMissing?: boolean;
   memberCount?: number;
   members?: TeamMember[];
+  // 2026-10-21：团队级预算（派活缺省来源）。max_tokens 是软上限，用户可在团队卡片里调整。
+  budget?: { max_tokens?: number; max_rounds?: number; max_wall_ms?: number } | null;
 }
 interface CreateForm { name: string; description: string; projectPath: string; }
 interface MemberModalState { teamId: string; teamName: string; mode: 'recruit' | 'custom'; }
@@ -107,6 +111,10 @@ export default function TeamsPage() {
   const [msgOpen, setMsgOpen] = useState<Record<string, boolean>>({});
   // T5-7：成员模型绑定选择项（本机供应商）。取不到时只显示「默认模型」，不阻塞其余编制操作
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  // 2026-10-21：团队调试日志面板开关（排查用，默认关闭，不影响正常编制操作）
+  const [debugOpen, setDebugOpen] = useState(false);
+  // 团队预算编辑（2026-10-21 用户裁决：默认 256k 且用户可自己调）
+  const [budgetTeam, setBudgetTeam] = useState<{ id: string; name: string; tokens: string; rounds: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -213,6 +221,26 @@ export default function TeamsPage() {
     }
   }
 
+  // ── 团队预算（2026-10-21）：默认 256k tokens；max_tokens 为软上限，越界继续执行只告警 ──
+  async function saveBudget() {
+    if (!budgetTeam) return;
+    const tokens = Number(budgetTeam.tokens);
+    const rounds = Number(budgetTeam.rounds);
+    if (!Number.isFinite(tokens) || tokens < 1000 || tokens > 2000000) { setError(t('teams.budgetInvalid')); return; }
+    setBusy('budget');
+    setError('');
+    try {
+      const patch = { budget: { max_tokens: Math.round(tokens), ...(Number.isFinite(rounds) && rounds > 0 ? { max_rounds: Math.round(rounds) } : {}) } };
+      const r = (await window.mjcode?.teamsUpdate(budgetTeam.id, patch)) as { ok?: boolean; error?: string } | undefined;
+      if (r?.ok) { setBudgetTeam(null); setNotice(t('teams.budgetSaved')); await load(); }
+      else setError(t('teams.budgetSaveFailed', { msg: r?.error || '' }));
+    } catch (err) {
+      setError(t('teams.budgetSaveFailed', { msg: (err as Error).message }));
+    } finally {
+      setBusy('');
+    }
+  }
+
   // ── 指定统筹（单一判据落在主进程：lead_member_id；全局唯一，不能多人）──
   async function makeLead(teamId: string, memberId: string) {
     setBusy(`lead:${memberId}`);
@@ -301,6 +329,10 @@ export default function TeamsPage() {
           <p className="text-text2 text-xs mt-1">{t('teams.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* 调试日志（2026-10-21）：团队链路排查入口，导出 JSONL 事实流交给开发者 */}
+          <Button variant="secondary" size="sm" onClick={() => setDebugOpen(true)}>
+            {t('teams.debugButton')}
+          </Button>
           <Button size="sm" onClick={() => { setCreateErr(''); setCreateForm({ name: '', description: '', projectPath: '' }); }}>
             {t('teams.newTeam')}
           </Button>
@@ -329,6 +361,12 @@ export default function TeamsPage() {
             onRecruit={() => { setError(''); setMemberModal({ teamId: team.id, teamName: team.name, mode: 'recruit' }); }}
             onCustom={() => { setError(''); setMemberModal({ teamId: team.id, teamName: team.name, mode: 'custom' }); }}
             onSetLead={(memberId: string) => makeLead(team.id, memberId)}
+            onEditBudget={() => setBudgetTeam({
+              id: team.id,
+              name: team.name,
+              tokens: String(team.budget?.max_tokens || 256000),
+              rounds: team.budget?.max_rounds ? String(team.budget.max_rounds) : '',
+            })}
             onRemove={(member: TeamMember) => removeMember(team.id, member)}
             onResetSession={(member: TeamMember) => resetMemberSession(team.id, member)}
             modelOptions={modelOptions}
@@ -397,6 +435,47 @@ export default function TeamsPage() {
         </Modal>
       )}
 
+      {budgetTeam && (
+        <Modal
+          open
+          onClose={() => setBudgetTeam(null)}
+          title={t('teams.budgetTitle', { name: budgetTeam.name })}
+          size="md"
+          footer={(
+            <>
+              <Button variant="secondary" size="md" onClick={() => setBudgetTeam(null)}>{t('teams.cancel')}</Button>
+              <Button size="md" loading={busy === 'budget'} onClick={saveBudget}>{t('teams.budgetSave')}</Button>
+            </>
+          )}
+        >
+          <div className="space-y-3">
+            {error && <InlineAlert type="error" onDismiss={() => setError('')}>{error}</InlineAlert>}
+            <Field label={t('teams.budgetTokensLabel')} hint={t('teams.budgetTokensHint')} required>
+              <input
+                type="number"
+                min={1000}
+                max={2000000}
+                step={1000}
+                value={budgetTeam.tokens}
+                onChange={(e) => setBudgetTeam((b) => (b ? { ...b, tokens: e.target.value } : b))}
+                className="w-full h-8 px-3 rounded-lg bg-input text-sm"
+              />
+            </Field>
+            <Field label={t('teams.budgetRoundsLabel')} hint={t('teams.budgetRoundsHint')}>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={budgetTeam.rounds}
+                onChange={(e) => setBudgetTeam((b) => (b ? { ...b, rounds: e.target.value } : b))}
+                placeholder="8"
+                className="w-full h-8 px-3 rounded-lg bg-input text-sm"
+              />
+            </Field>
+          </div>
+        </Modal>
+      )}
+
       {memberModal && (
         <MemberModal
           teamId={memberModal.teamId}
@@ -406,6 +485,9 @@ export default function TeamsPage() {
           onChanged={async () => { await load(); }}
         />
       )}
+
+      {/* 调试日志面板（2026-10-21）：独立弹窗，不参与编制流程的渲染与状态 */}
+      <TeamDebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} />
     </div>
   );
 }
@@ -416,12 +498,13 @@ function TeamCard(props: {
   messages: TeamMessage[]; msgOpen: boolean; onToggleMessages: () => void;
   onRecruit: () => void; onCustom: () => void;
   onSetLead: (memberId: string) => void; onRemove: (member: TeamMember) => void;
+  onEditBudget: () => void;
   onResetSession: (member: TeamMember) => void;
   modelOptions: ModelOption[];
   onBindModel: (member: TeamMember, model: { providerId: string; modelId: string } | null) => void;
 }) {
   const { team, busy, t, messages, msgOpen, onToggleMessages, onRecruit, onCustom, onSetLead, onRemove,
-    onResetSession, modelOptions, onBindModel } = props;
+    onResetSession, modelOptions, onBindModel, onEditBudget } = props;
   return (
     <div className="bg-surface border border-border rounded-xl p-4 mb-3">
       <div className="flex items-start justify-between gap-3">
@@ -444,6 +527,7 @@ function TeamCard(props: {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <Button variant="ghost" size="xs" onClick={onEditBudget}>{t('teams.budgetButton')}</Button>
           <Button variant="secondary" size="xs" onClick={onRecruit}>{t('teams.recruit')}</Button>
           <Button variant="secondary" size="xs" onClick={onCustom}>{t('teams.customCreate')}</Button>
         </div>

@@ -10,6 +10,7 @@
 //      `(deny file-write* (with no-log))` 的反向声明，使被拒操作可在系统日志追溯，
 //      便于用户排查「为什么某命令在沙箱里失败」。
 const fs = require('fs');
+const os = require('os');
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 
@@ -143,6 +144,44 @@ function buildSeatbeltProfile(policy, cwd, protectedPaths = []) {
   ].filter(Boolean).join('\n');
 }
 
+// ── 2026-10-21 macOS 27 兼容：写限制档（deny-list）──
+// 事故：macOS 27 上 `(deny default)` 的 allowlist profile 会让任何子进程**启动即 SIGABRT**
+// （实测 `/usr/bin/sandbox-exec -f profile /bin/echo` 退出码 134，连 echo 都跑不了）；
+// 而 `(allow default)` + 定向 deny 的 profile 正常。根因是系统收紧了 deny-default 下的
+// exec/read 通道，allowlist 不再可维护。
+//
+// 兼容档语义（与 workspace-write 的「读全盘、只限写」一致）：
+//   · allow default（读/执行不限制）；
+//   · deny network*；
+//   · deny file-write*（全盘禁写），再 allow 工作区 + 临时目录 + /dev/null；
+//   · protectedPaths（.git / .mjcode 等）在 allow 之后 deny，保持只读 carve-out。
+// 这是「可用性优先」的降级档：仍拦网络与工作区外写入，但不阻止执行任意程序。
+function buildSeatbeltProfileDenyList(policy, cwd, protectedPaths = []) {
+  const safeCwd = String(cwd || '').replace(/"/g, '\\"');
+  const tmpRules = ['/private/tmp', '/private/var/tmp', '/tmp'].map((p) => `(subpath "${p}")`).join(' ');
+  const writeAllow = policy === 'read-only'
+    ? '(literal "/dev/null")'
+    : `${safeCwd ? `(subpath "${safeCwd}") ` : ''}${tmpRules} (literal "/dev/null")`;
+  const protectedDeny = protectedPaths.length
+    ? `(deny file-write* ${protectedPaths.map((p) => `(subpath "${String(p).replace(/"/g, '\\"')}")`).join(' ')})`
+    : '';
+  return [
+    '(version 1)',
+    '(allow default)',
+    '(deny network*)',
+    '(deny file-write*)',
+    `(allow file-write* ${writeAllow})`,
+    protectedDeny,
+  ].filter(Boolean).join('\n');
+}
+
+/** 按探测结果选择 profile：allowlist 不通时自动用 deny-list（exec.js 统一走这里）。 */
+function buildSeatbeltProfileAuto(policy, cwd, protectedPaths = []) {
+  return seatbeltProbe && seatbeltProbe.mode === 'denylist'
+    ? buildSeatbeltProfileDenyList(policy, cwd, protectedPaths)
+    : buildSeatbeltProfile(policy, cwd, protectedPaths);
+}
+
 // 沙箱可用性：仅 darwin 且 sandbox-exec 存在
 function sandboxAvailable() {
   if (process.platform !== 'darwin') return false;
@@ -171,21 +210,36 @@ async function seatbeltUsable() {
     seatbeltProbe = { ok: false, reason: 'sandbox-exec 不存在' };
     return seatbeltProbe;
   }
+  const tryProfile = (profile) => new Promise((resolve, reject) => {
+    const { execFile } = require('child_process');
+    execFile(SANDBOX_EXEC, ['-p', profile, '/bin/echo', 'mjcode-probe'],
+      { timeout: 8000 }, (err) => (err ? reject(err) : resolve()));
+  });
+  const probeCwd = os.tmpdir();
+  let result;
   try {
-    await new Promise((resolve, reject) => {
-      const { execFile } = require('child_process');
-      execFile(SANDBOX_EXEC,
-        ['-p', '(version 1)(deny default)(allow default)(deny network*)', '/bin/echo', 'mjcode-probe'],
-        { timeout: 8000 },
-        (err) => (err ? reject(err) : resolve()));
-    });
-    seatbeltProbe = { ok: true, reason: '' };
-  } catch (e) {
-    const msg = String(e?.message || e);
-    seatbeltProbe = /Operation not permitted/i.test(msg)
-      ? { ok: false, reason: '当前进程自身已处于 OS 沙箱内（macOS 不允许嵌套沙箱）：Seatbelt 隔离无法生效，MJCode 不应在其他 Agent 平台的沙箱环境中运行' }
-      : { ok: false, reason: `sandbox-exec 探测失败：${msg.slice(0, 160)}` };
+    await tryProfile(buildSeatbeltProfile('workspace-write', probeCwd, []));
+    result = { ok: true, mode: 'allowlist', reason: '' };
+  } catch {
+    // 2026-10-21 macOS 27：deny-default 的 allowlist 会让子进程启动即 SIGABRT（exit 134），
+    // 但 allow-default + 定向 deny 的写限制档仍可用 → 自动降级，仍保留「禁网 + 工作区外禁写」。
+    try {
+      await tryProfile(buildSeatbeltProfileDenyList('workspace-write', probeCwd, []));
+      result = {
+        ok: true,
+        mode: 'denylist',
+        reason: 'allowlist profile 在本机不可用（macOS 27 收紧 deny-default），已切换为写限制档（禁网 + 工作区外禁写）',
+      };
+      console.warn(`[sandbox] ${result.reason}`);
+    } catch (e2) {
+      const msg = String(e2?.message || e2);
+      result = /Operation not permitted/i.test(msg)
+        ? { ok: false, mode: null, reason: '当前进程自身已处于 OS 沙箱内（macOS 不允许嵌套沙箱）：Seatbelt 隔离无法生效，MJCode 不应在其他 Agent 平台的沙箱环境中运行' }
+        : { ok: false, mode: null, reason: `sandbox-exec 探测失败：${msg.slice(0, 160)}` };
+      console.warn(`[sandbox] Seatbelt 探测失败（allowlist + denylist 均不可用）：${result.reason}`);
+    }
   }
+  seatbeltProbe = result;
   return seatbeltProbe;
 }
 
@@ -277,6 +331,7 @@ async function describeCapability() {
     return {
       backend: 'seatbelt',
       available: belt.ok,
+      mode: belt.mode || null,
       reason: belt.reason,
       nestedSandbox: /嵌套沙箱/.test(belt.reason),
     };
@@ -296,7 +351,7 @@ async function describeCapability() {
 // 生产零调用方不算死代码——本项目同类先例是 resetSeatbeltProbe（导出给宿主/测试用）。
 
 module.exports = {
-  buildSeatbeltProfile, sandboxAvailable, shouldSandbox, checkCommandGuard,
+  buildSeatbeltProfile, buildSeatbeltProfileDenyList, buildSeatbeltProfileAuto, sandboxAvailable, shouldSandbox, checkCommandGuard,
   FALLBACK_DANGEROUS, SANDBOX_EXEC,
   // 三平台分发（新增）
   detectBackend, osSandboxUsable,

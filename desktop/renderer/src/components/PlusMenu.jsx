@@ -274,8 +274,15 @@ export default function PlusMenu({
           <MenuRow Icon={IconPlug} label={tr('plusMenu.connectors')} hasSub
             badge={extras?.mcpServers?.length ? tr('plusMenu.connectorCount', { n: extras.mcpServers.length }) : null}
             onClick={() => setPanel('connectors')} />
-          {/* M5 / T5-4：军团派活（选团队 → 缺统筹补齐 → 派活三件 → 创建 run） */}
-          <MenuRow Icon={IconUsers} label={tr('plusMenu.legion')} hasSub onClick={() => setPanel('legion')} />
+          {/* M5 / T5-4：军团派活（选团队 → 缺统筹补齐 → 派活三件 → 创建 run）
+              T6-14：与「项目空间」并列会让用户误以为两个都是开工入口——
+              军团是「人」（编制/角色/模型/预算），项目空间是「事」（目标/工件/配额），
+              故改称「团队编制」并加一行说明，避免误读为可删除的重复功能。 */}
+          <MenuRow Icon={IconUsers} label={tr('plusMenu.legion')} sub={tr('plusMenu.legionHint')}
+            hasSub onClick={() => setPanel('legion')} />
+          {/* T6-9：项目空间（项目 + 工件 + 配额 + 团队 + 会话的七步初始化），弹窗由 App 承载 */}
+          <MenuRow Icon={IconFile} label={tr('plusMenu.projectSpace')} hasSub
+            onClick={() => { window.dispatchEvent(new CustomEvent('mjcode:new-project-space')); onClose?.(); }} />
           <div className="my-2 border-t border-border" />
           <MenuRow Icon={IconMic} label={tr('plusMenu.voiceInput')} hint="Ctrl+M" onClick={() => { onVoiceStart?.(); onClose?.(); }} />
         </div>
@@ -536,17 +543,20 @@ export default function PlusMenu({
   );
 }
 
-function MenuRow({ Icon, label, hasSub, badge, hint, disabled, disabledReason, onClick }) {
+function MenuRow({ Icon, label, sub, hasSub, badge, hint, disabled, disabledReason, onClick }) {
   return (
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       title={disabled ? disabledReason : undefined}
-      className="w-full flex items-center gap-3 px-3 h-9 text-left hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+      className={`w-full flex items-center gap-3 px-3 text-left hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed ${sub ? 'py-2 min-h-9' : 'h-9'}`}
       role="menuitem"
     >
       <Icon size={15} className="text-text2 shrink-0" />
-      <span className="text-xs flex-1 truncate">{label}</span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-xs truncate">{label}</span>
+        {sub && <span className="block text-caption text-text2 truncate">{sub}</span>}
+      </span>
       {badge && <span className="text-caption px-2 py-1 rounded bg-accent-bg text-accent shrink-0">{badge}</span>}
       {hint && <span className="text-caption text-text2 shrink-0">{hint}</span>}
       {hasSub && !disabled && <IconChevronRight size={12} className="text-text2 shrink-0" />}

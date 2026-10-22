@@ -97,5 +97,9 @@
   "teamBoard": "Team board",
   "teamWait": "Team wait",
   "teamReadMessages": "Read team messages",
-  "teamWaitCount": "Waiting on {n} task(s)"
+  "teamWaitCount": "Waiting on {n} task(s)",
+  "artifactIndex": "Artifact index",
+  "artifactGetSection": "Read artifact section",
+  "artifactPatchSection": "Write artifact section",
+  "artifactGetDiff": "Artifact version diff"
 }

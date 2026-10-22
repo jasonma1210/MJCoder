@@ -108,7 +108,10 @@ const valid = (type, data) => ({ runId: R, type, data });
   check('agentRunner 不含「契约未就绪则放行」的旧分支', !/if \(contract\) \{\s*const v = contract\.validateAgentRunPayload/.test(runnerSrc));
   check('未就绪时明确拒绝（fail-closed 文案）', /IPC 契约尚未就绪，已拒绝启动/.test(runnerSrc));
   const mainSrc = fs.readFileSync(pathMod.join(MAIN, 'main.js'), 'utf8');
-  check('agent:run 经 startAgentRunWhenReady（先等契约就绪）', /agent:run', \(event, payload\) => agentRunner\.startAgentRunWhenReady/.test(mainSrc));
+  // T6-6：agent:run 需要先注入 artifactContext 再转交运行器，故从单表达式改为块体。
+  // 判据仍锚定「最终交给 startAgentRunWhenReady」这一事实，不锁具体写法。
+  check('agent:run 经 startAgentRunWhenReady（先等契约就绪）',
+    /agent:run'[\s\S]{0,500}?startAgentRunWhenReady\(/.test(mainSrc));
 
   console.log(`\nipc-contract: ${pass}/${pass + fail} 通过`);
   if (fail) process.exitCode = 1;

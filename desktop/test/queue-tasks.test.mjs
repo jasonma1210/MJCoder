@@ -34,7 +34,9 @@ check('运行中发送 → 入队（不并发执行）', () => {
 });
 
 check('本轮正常结束后自动接力下一条（中止不接力）', () => {
-  const relay = hook.match(/if \(!aborted\) \{[\s\S]*?setQueued\(\(q\) => \{[\s\S]{0,200}?send\(next, currentThread\)/);
+  // R-15/R-5：接力调用形态为 `(relayRef?.current || send)(next, currentThread)`——
+  // 选中军团时经 sendOrDispatch 派活，未注入时回落 send；两种形态都满足「正常收尾才接力」。
+  const relay = hook.match(/if \(!aborted\) \{[\s\S]*?setQueued\(\(q\) => \{[\s\S]{0,200}?(?:relayRef\?\.current \|\| )?send\)?\(next, currentThread\)/);
   assert.ok(relay, '未找到「正常收尾才接力」的实现');
   // 中止分支不该接力：中止后用户可能还要看现场，自动开新任务会打断
   const abortedBranch = hook.match(/\} else \{\s*\/\/ 用户中止后线程状态必须收敛[\s\S]{0,200}?\}/);
@@ -45,7 +47,8 @@ check('本轮正常结束后自动接力下一条（中止不接力）', () => {
 check('立即执行：先 stop，再等 loading 归零后发送（不用定时器猜时长）', () => {
   assert.match(chatArea, /function runQueuedNow\(i\)[\s\S]{0,300}?stop\(\);\s*setPendingRun\(text\)/,
     'runQueuedNow 未按「先停、后挂起」的顺序实现');
-  assert.match(chatArea, /if \(!pendingRun \|\| loading\) return;[\s\S]{0,160}?send\(text\)/,
+  // R-15/R-5：挂起项发送改走 sendOrDispatch（选中军团时派活；未选中时内部回落 send）
+  assert.match(chatArea, /if \(!pendingRun \|\| loading\) return;[\s\S]{0,160}?send(?:OrDispatch)?\(text\)/,
     '缺少「挂起项就绪且已空闲才发送」的闸门');
   assert.doesNotMatch(chatArea, /runQueuedNow[\s\S]{0,200}?setTimeout\(/, '立即执行不该用定时器猜收尾时长');
 });

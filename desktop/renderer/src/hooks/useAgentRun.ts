@@ -42,7 +42,7 @@ export default function useAgentRun(d) {
     setToolCalls, setRunSummary, setRunUsage, setQueued, setStreamingText, setReasoningText, setRunFiles,
     setWindowStart, setCompacting, setPlanMode, setRunMode, setModeMsg, setWorktree,
     abortRef, activeThreadIdRef, activeRunIdRef, runStartRef, agentFilesRef, messagesRef, steerPendingRef,
-    onNewMessage, onThreadStatus, onAgentFilesChange, onThreadCreated, onAutoProject, onSubagentEvent,
+    onNewMessage, onThreadStatus, onAgentFilesChange, onThreadCreated, onAutoProject, onSubagentEvent, relayRef,
   } = d;
 
   // 停止 = 只中止「当前查看会话」的运行（注册表按 threadId 精确取 controller，
@@ -545,10 +545,10 @@ export default function useAgentRun(d) {
             model: selectedModel.model.model_id,
           });
         }
-        // queue：排队指令在本轮结束后自动接力执行（对标 Codex Tab 排队）
+        // queue：排队指令本轮结束后自动接力（对标 Codex Tab 排队）；R-15/R-5：经 relayRef（ChatArea 的 sendOrDispatch）分流，选中军团时入队消息也派活，未注入则与从前一致
         setQueued((q) => {
           const next = q[0];
-          if (next) setTimeout(() => send(next, currentThread), 0);
+          if (next) setTimeout(() => (relayRef?.current || send)(next, currentThread), 0);
           return q.slice(1);
         });
       } else {
